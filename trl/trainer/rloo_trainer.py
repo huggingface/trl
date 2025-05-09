@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
+from transformers.utils import is_rich_available
 
 from ..models.utils import unwrap_model_for_generation
 from ..trainer.utils import (
@@ -625,7 +626,8 @@ class RLOOTrainer(Trainer):
         df = pd.DataFrame(table)
 
         if self.accelerator.is_main_process:
-            print_rich_table(df.iloc[0 : 0 + 5])
+            if is_rich_available():
+                print_rich_table(df.iloc[0 : 0 + 5])
             if "wandb" in args.report_to:
                 import wandb
 

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -241,6 +241,11 @@ class CPOTrainer(Trainer):
             max_prompt_length = 128
         else:
             max_prompt_length = args.max_prompt_length
+
+        if not max_prompt_length < max_length:
+            raise ValueError(
+                f"max_prompt_length ({max_prompt_length}) should be strictly less than max_length ({max_length})."
+            )
 
         if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(

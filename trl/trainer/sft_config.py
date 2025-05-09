@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,6 +53,8 @@ class SFTConfig(TrainingArguments):
             `skip_prepare_dataset`.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        eos_token (`str` or `None`, *optional*, defaults to `None`):
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`.
         pad_token (`int` or `None`, *optional*, defaults to `None`):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
@@ -66,6 +68,8 @@ class SFTConfig(TrainingArguments):
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
             batch structure.
+        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
+            If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
@@ -74,6 +78,15 @@ class SFTConfig(TrainingArguments):
         learning_rate (`float`, *optional*, defaults to `2e-5`):
             Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
             [`~transformers.TrainingArguments`].
+        completion_only_loss (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
+            only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
+            `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
+            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
+            the full sequence for [language modeling](#language-modeling) datasets.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
     """
 
     # Parameters that control the model
@@ -117,6 +130,12 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
+    eos_token: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
+        },
+    )
     pad_token: Optional[str] = field(
         default=None,
         metadata={
@@ -148,6 +167,10 @@ class SFTConfig(TrainingArguments):
             "handle the flattened batch structure."
         },
     )
+    pad_to_multiple_of: Optional[int] = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
+    )
     eval_packing: Optional[bool] = field(
         default=None,
         metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
@@ -161,30 +184,24 @@ class SFTConfig(TrainingArguments):
             "`TrainingArguments`."
         },
     )
+    completion_only_loss: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": (
+                "Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is "
+                "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
+                "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
+                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
+                "language modeling datasets."
+            )
+        },
+    )
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
+    )
 
     # Deprecated parameters
-    dataset_batch_size: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. You can safely remove this "
-            "parameter from your configuration."
-        },
-    )
-    num_of_sequences: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. Use `max_length` instead, "
-            "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which referred "
-            "to string sequences."
-        },
-    )
-    chars_per_token: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.18.0. If you want to customize the "
-            "packing length, use `max_length`."
-        },
-    )
     max_seq_length: Optional[int] = field(
         default=None,
         metadata={
@@ -195,38 +212,9 @@ class SFTConfig(TrainingArguments):
     def __post_init__(self):
         super().__post_init__()
 
-        if self.dataset_batch_size is not None:
-            warnings.warn(
-                "`dataset_batch_size` is deprecated and will be removed in version 0.18.0. You can safely remove this "
-                "parameter from your configuration.",
-                DeprecationWarning,
-            )
-
-        if self.num_of_sequences is not None:
-            warnings.warn(
-                "`num_of_sequences` is deprecated and will be removed in version 0.18.0. Use `max_length` instead, "
-                "which specifies the maximum length of the tokenized sequence, unlike `num_of_sequences`, which "
-                "referred to string sequences.",
-                DeprecationWarning,
-            )
-
-        if self.chars_per_token is not None:
-            warnings.warn(
-                "`chars_per_token` is deprecated and will be removed in version 0.18.0. If you want to customize the "
-                "packing length, use `max_length`.",
-                DeprecationWarning,
-            )
-
         if self.max_seq_length is not None:
             warnings.warn(
                 "`max_seq_length` is deprecated and will be removed in version 0.20.0. Use `max_length` instead.",
                 DeprecationWarning,
             )
             self.max_length = self.max_seq_length
-
-        if self.use_liger is not None:
-            warnings.warn(
-                "`use_liger` is deprecated and will be removed in version 0.18.0. Use `use_liger_kernel` instead.",
-                DeprecationWarning,
-            )
-            self.use_liger_kernel = self.use_liger

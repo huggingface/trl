@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,14 +26,17 @@ from typing import Optional
 
 import torch
 import yaml
-from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
+from transformers.utils import is_rich_available
 
 from trl import TrlParser, init_zero_verbose
 from trl.trainer.utils import get_quantization_config
 
+
+if is_rich_available():
+    from rich.console import Console
+    from rich.live import Live
+    from rich.markdown import Markdown
 
 init_zero_verbose()
 
@@ -195,6 +198,9 @@ class ChatArguments:
 
 class RichInterface:
     def __init__(self, model_name=None, user_name=None):
+        if not is_rich_available():
+            raise ImportError("Rich is not available. Please install it with `pip install rich`.")
+
         self._console = Console()
         if model_name is None:
             self.model_name = "assistant"

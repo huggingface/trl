@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,18 +16,27 @@ import argparse
 import logging
 import os
 from collections.abc import Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from itertools import chain
+from multiprocessing import Pipe, Process
+from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
-import torch.distributed as dist
 
 from trl import TrlParser
-from trl.import_utils import is_fastapi_available, is_pydantic_available, is_uvicorn_available, is_vllm_available
+from trl.import_utils import (
+    is_fastapi_available,
+    is_pydantic_available,
+    is_uvicorn_available,
+    is_vllm_ascend_available,
+    is_vllm_available,
+)
 
 
 if is_fastapi_available():
-    from fastapi import BackgroundTasks, FastAPI
+    from fastapi import FastAPI
 
 
 if is_pydantic_available():
@@ -44,9 +53,11 @@ if is_vllm_available():
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
-    from vllm.worker.worker import Worker
-else:
-    Worker = object
+    from vllm.utils import get_open_port
+
+    if is_vllm_ascend_available():
+        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
+
 
 logger = logging.getLogger(__name__)
 
@@ -56,26 +67,18 @@ logger = logging.getLogger(__name__)
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
-class WeightSyncWorker(Worker):
+class WeightSyncWorkerExtension:
     """
-    A vLLM worker that enables weight synchronization between a client and multiple server workers.
+    A vLLM worker extension that enables weight synchronization between a client and multiple server workers.
 
     This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` to handle
     efficient GPU-based communication using NCCL. The primary purpose of this class is to receive updated model weights
     from a client process and distribute them to all worker processes participating in model inference.
     """
 
-    def __init__(self, *args, **kwargs):
-        if not is_vllm_available():
-            raise ImportError(
-                "vLLM is required to use the WeightSyncWorker. Please install it using `pip install vllm`."
-            )
-
-        super().__init__(*args, **kwargs)
-
-        # The following attributes are initialized when `init_communicator` method is called.
-        self.pynccl_comm = None  # Communicator for weight updates
-        self.client_rank = None  # Source rank for broadcasting updated weights
+    # The following attributes are initialized when `init_communicator` method is called.
+    pynccl_comm = None  # Communicator for weight updates
+    client_rank = None  # Source rank for broadcasting updated weights
 
     def init_communicator(self, host: str, port: int, world_size: int) -> None:
         """
@@ -126,7 +129,7 @@ class WeightSyncWorker(Worker):
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
         # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-        self.pynccl_comm.broadcast(weight, src=self.client_rank, stream=torch.cuda.current_stream())
+        self.pynccl_comm.broadcast(weight, src=self.client_rank)
         self.pynccl_comm.group.barrier()
 
         # Load the received weights into the model.
@@ -157,6 +160,8 @@ class ScriptArguments:
             Revision to use for the model. If not specified, the default branch will be used.
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
+        data_parallel_size (`int`, *optional*, defaults to `1`):
+            Number of data parallel workers to use.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
             Host address to run the server on.
         port (`int`, *optional*, defaults to `8000`):
@@ -176,9 +181,19 @@ class ScriptArguments:
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
+        enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
+            Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
+            model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        kv_cache_dtype (`str`, *optional*, defaults to `"auto"`):
+            Data type to use for KV cache. If set to `"auto"`, the dtype will default to the model data type.
+        log_level (`str`, *optional*, defaults to `"info"`):
+            Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
+            `"trace"`.
     """
 
-    model: str = field(metadata={"help": "Model name or path to load the model from."})
+    model: str = field(
+        metadata={"help": "Model name or path to load the model from."},
+    )
     revision: Optional[str] = field(
         default=None,
         metadata={"help": "Revision to use for the model. If not specified, the default branch will be used."},
@@ -186,6 +201,10 @@ class ScriptArguments:
     tensor_parallel_size: int = field(
         default=1,
         metadata={"help": "Number of tensor parallel workers to use."},
+    )
+    data_parallel_size: int = field(
+        default=1,
+        metadata={"help": "Number of data parallel workers to use."},
     )
     host: str = field(
         default="0.0.0.0",
@@ -226,6 +245,91 @@ class ScriptArguments:
             "hardware support this feature."
         },
     )
+    enforce_eager: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
+            "execute the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager "
+            "execution in hybrid."
+        },
+    )
+    kv_cache_dtype: str = field(
+        default="auto",
+        metadata={
+            "help": "Data type to use for KV cache. If set to 'auto', the dtype will default to the model data type."
+        },
+    )
+    log_level: str = field(
+        default="info",
+        metadata={
+            "help": "Log level for uvicorn. Possible choices: 'critical', 'error', 'warning', 'info', 'debug', "
+            "'trace'."
+        },
+    )
+
+
+def llm_worker(
+    script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
+) -> None:
+    # Set required environment variables for DP to work with vLLM
+    os.environ["VLLM_DP_RANK"] = str(data_parallel_rank)
+    os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
+    os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
+    os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
+
+    llm = LLM(
+        model=script_args.model,
+        revision=script_args.revision,
+        tensor_parallel_size=script_args.tensor_parallel_size,
+        gpu_memory_utilization=script_args.gpu_memory_utilization,
+        enforce_eager=script_args.enforce_eager,
+        dtype=script_args.dtype,
+        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
+        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
+        # This is particularly useful here because we generate completions from the same prompts.
+        enable_prefix_caching=script_args.enable_prefix_caching,
+        kv_cache_dtype=script_args.kv_cache_dtype,
+        max_model_len=script_args.max_model_len,
+        worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+    )
+
+    # Send ready signal to parent process
+    connection.send({"status": "ready"})
+
+    while True:
+        # Wait for commands from the parent process
+        try:
+            command = connection.recv()
+        except KeyboardInterrupt:
+            llm.collective_rpc(method="close_communicator")
+            break
+
+        # Handle commands
+        if command["type"] in ["call", "fire_and_forget"]:
+            method_name = command["method"]
+            args, kwargs = command.get("args", ()), command.get("kwargs", {})
+            method = getattr(llm, method_name)
+            result = method(*args, **kwargs)
+            if command["type"] == "call":
+                connection.send(result)
+        elif command["type"] == "shutdown":
+            break
+
+
+def chunk_list(lst: list, n: int) -> list[list]:
+    """
+    Split list `lst` into `n` evenly distributed sublists.
+
+    Example:
+        >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
+        [[1, 2, 3], [4, 5, 6]]
+        >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
+        [[1, 2], [3, 4], [5], [6]]
+        >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
+        [[1], [2], [3], [4], [5], [6], [], []]
+    """
+    k, r = divmod(len(lst), n)
+    return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
 
 def main(script_args: ScriptArguments):
@@ -247,21 +351,38 @@ def main(script_args: ScriptArguments):
     if not is_vllm_available():
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
-    llm = LLM(
-        model=script_args.model,
-        revision=script_args.revision,
-        tensor_parallel_size=script_args.tensor_parallel_size,
-        gpu_memory_utilization=script_args.gpu_memory_utilization,
-        dtype=script_args.dtype,
-        # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
-        # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
-        # This is particularly useful here because we generate completions from the same prompts.
-        enable_prefix_caching=script_args.enable_prefix_caching,
-        max_model_len=script_args.max_model_len,
-        worker_cls="trl.scripts.vllm_serve.WeightSyncWorker",
-    )
+    # Spawn dp workers, and setup pipes for communication
+    master_port = get_open_port()
+    connections = []
+    processes = []
+    for data_parallel_rank in range(script_args.data_parallel_size):
+        parent_connection, child_connection = Pipe()
+        process = Process(target=llm_worker, args=(script_args, data_parallel_rank, master_port, child_connection))
+        process.start()
+        connections.append(parent_connection)
+        processes.append(process)
 
-    app = FastAPI()
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # Wait for all workers to send "ready"
+        ready_connections = set()
+        while len(ready_connections) < script_args.data_parallel_size:
+            for connection in connections:
+                msg = connection.recv()
+                if isinstance(msg, dict) and msg.get("status") == "ready":
+                    ready_connections.add(connection)
+
+        yield
+
+        # Wait for processes to terminate
+        for process in processes:
+            process.join(timeout=10)  # Wait for 10 seconds for the process to terminate
+            if process.is_alive():
+                logger.warning(f"Process {process} is still alive after 10 seconds, attempting to terminate...")
+                process.terminate()
+                process.join()  # ensure process termination after calling terminate()
+
+    app = FastAPI(lifespan=lifespan)
 
     # Define the endpoints for the model server
     @app.get("/health/")
@@ -271,21 +392,21 @@ def main(script_args: ScriptArguments):
         """
         return {"status": "ok"}
 
-    @app.get("/get_tensor_parallel_size/")
-    async def get_tensor_parallel_size():
+    @app.get("/get_world_size/")
+    async def get_world_size():
         """
-        Retrieves the tensor parallel size from the LLM engine.
+        Retrieves the world size of the LLM engine, which is `tensor_parallel_size * data_parallel_size`.
 
         Returns:
             `dict`:
-                A dictionary containing the tensor parallel size.
+                A dictionary containing the world size.
 
         Example response:
         ```json
-        {"tensor_parallel_size": 8}
+        {"world_size": 8}
         ```
         """
-        return {"tensor_parallel_size": llm.llm_engine.parallel_config.tensor_parallel_size}
+        return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
@@ -342,7 +463,27 @@ def main(script_args: ScriptArguments):
             max_tokens=request.max_tokens,
             guided_decoding=guided_decoding,
         )
-        all_outputs = llm.generate(request.prompts, sampling_params=sampling_params)
+        # Evenly distribute prompts across DP ranks
+        chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+
+        # Send the prompts to each worker
+        for connection, prompts in zip(connections, chunked_prompts):
+            # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
+            # However, vLLM requires that we always send at least one prompt. So we send a placeholder prompt to comply
+            # with vLLM's requirement, and we later ignore the result.
+            if not prompts:
+                prompts = ["<placeholder>"]
+            kwargs = {"prompts": prompts, "sampling_params": sampling_params}
+            connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
+
+        # Receive results
+        all_outputs = [connection.recv() for connection in connections]
+
+        # Handle empty prompts (see above)
+        all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts) if prompts]
+
+        # Flatten and combine all results
+        all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         return {"completion_ids": completion_ids}
 
@@ -352,7 +493,7 @@ def main(script_args: ScriptArguments):
         world_size: int
 
     @app.post("/init_communicator/")
-    async def init_communicator(request: InitCommunicatorRequest, background_tasks: BackgroundTasks):
+    async def init_communicator(request: InitCommunicatorRequest):
         """
         Initializes the communicator for synchronizing model weights between a client and multiple server
         workers.
@@ -363,11 +504,15 @@ def main(script_args: ScriptArguments):
                 - `port` (`int`): Port number to be used for communication.
                 - `world_size` (`int`): Total number of participating processes in the group.
         """
-        background_tasks.add_task(
-            llm.collective_rpc,
-            "init_communicator",
-            args=(request.host, request.port, script_args.tensor_parallel_size + 1),
-        )
+        world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
+
+        # The function init_communicator is called this way: init_communicator(host, port, world_size)
+        # So with collective_rpc we need to call it this way:
+        # llm.collective_rpc(method="init_communicator", args=(host, port, world_size))
+        kwargs = {"method": "init_communicator", "args": (request.host, request.port, world_size)}
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
+
         return {"message": "Request received, initializing communicator"}
 
     class UpdateWeightsRequest(BaseModel):
@@ -376,7 +521,7 @@ def main(script_args: ScriptArguments):
         shape: list[int]
 
     @app.post("/update_named_param/")
-    async def update_named_param(request: UpdateWeightsRequest, background_tasks: BackgroundTasks):
+    async def update_named_param(request: UpdateWeightsRequest):
         """
         Updates the model weights with the provided tensor.
 
@@ -389,13 +534,13 @@ def main(script_args: ScriptArguments):
                 - `shape` (list of `int`): Shape of the weight
 
         """
-        # The function is called this way: update_named_param(name="name", dtype=torch.float32, shape=(10, 10))
-        # So with collect_rpc we need to call it this way:
+        # The function update_named_param is called this way: update_named_param("name", torch.float32, (10, 10))
+        # So with collective_rpc we need to call it this way:
         # llm.collective_rpc("update_named_param", args=("name", torch.float32, (10, 10)))
-        # And with background_tasks.add_task we need to call it this way:
-        # background_tasks.add_task(llm.collective_rpc, "update_named_param", args=("name", torch.float32, (10, 10)))
         dtype = torch.__getattribute__(request.dtype.split(".")[-1])
-        background_tasks.add_task(llm.collective_rpc, "update_named_param", args=(request.name, dtype, request.shape))
+        kwargs = {"method": "update_named_param", "args": (request.name, dtype, tuple(request.shape))}
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
         return {"message": "Request received, updating named parameter"}
 
@@ -404,7 +549,11 @@ def main(script_args: ScriptArguments):
         """
         Resets the prefix cache for the model.
         """
-        success = llm.llm_engine.reset_prefix_cache()
+        for connection in connections:
+            connection.send({"type": "call", "method": "reset_prefix_cache"})
+        # Wait for and collect all results
+        all_outputs = [connection.recv() for connection in connections]
+        success = all(output for output in all_outputs)
         return {"message": "Request received, resetting prefix cache status: " + str(success)}
 
     @app.post("/close_communicator/")
@@ -412,13 +561,13 @@ def main(script_args: ScriptArguments):
         """
         Closes the weight update group and cleans up associated resources.
         """
-        llm.collective_rpc("close_communicator")
+        kwargs = {"method": "close_communicator"}
+        for connection in connections:
+            connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
         return {"message": "Request received, closing communicator"}
 
     # Start the server
-    uvicorn.run(app, host=script_args.host, port=script_args.port)
-
-    dist.destroy_process_group()
+    uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):

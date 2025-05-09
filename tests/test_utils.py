@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,6 +38,8 @@ from trl.trainer.utils import (
     print_prompt_completions_sample,
     selective_log_softmax,
 )
+
+from .testing_utils import require_rich
 
 
 if is_peft_available():
@@ -93,6 +95,38 @@ class TestPad(unittest.TestCase):
                 [[5, 0], [0, 0]],
             ]
         )
+        self.assertTrue(torch.equal(output, expected))
+
+    def test_pad_to_multiple_of_1(self):
+        x = torch.tensor([1, 2, 3])
+        y = torch.tensor([4, 5])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]])
+        self.assertTrue(torch.equal(output, expected))
+
+    def test_pad_to_multiple_of_2(self):
+        x = torch.tensor([1, 2, 3, 4, 5])
+        y = torch.tensor([6, 7, 8])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0], [6, 7, 8, 0, 0, 0, 0, 0]])
+        self.assertTrue(torch.equal(output, expected))
+
+    def test_pad_to_multiple_of_side_left(self):
+        x = torch.tensor([1, 2, 3, 4, 5])
+        y = torch.tensor([6, 7, 8])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
+        expected = torch.tensor([[0, 0, 0, 1, 2, 3, 4, 5], [0, 0, 0, 0, 0, 6, 7, 8]])
+        self.assertTrue(torch.equal(output, expected))
+
+    def test_pad_to_multiple_of_no_extra_padding(self):
+        x = torch.tensor([1, 2, 3, 4])
+        y = torch.tensor([5, 6, 7, 8])
+        # Already multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
         self.assertTrue(torch.equal(output, expected))
 
 
@@ -480,6 +514,7 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
 
+@require_rich
 class TestPrintPromptCompletionsSample(unittest.TestCase):
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):

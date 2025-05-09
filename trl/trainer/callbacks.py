@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,11 +19,7 @@ import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import gather_object, is_comet_ml_available, is_deepspeed_available, is_wandb_available
-from rich.console import Console, Group
-from rich.live import Live
-from rich.panel import Panel
-from rich.progress import Progress
+from accelerate.utils import gather_object, is_wandb_available
 from transformers import (
     GenerationConfig,
     PreTrainedModel,
@@ -35,6 +31,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_utils import has_length
+from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_mergekit_available
@@ -44,11 +41,11 @@ from .judges import BasePairwiseJudge
 from .utils import log_table_to_comet_experiment
 
 
-if is_deepspeed_available():
-    import deepspeed
-
-if is_comet_ml_available():
-    pass
+if is_rich_available():
+    from rich.console import Console, Group
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.progress import Progress
 
 if is_wandb_available():
     import wandb
@@ -115,6 +112,8 @@ class SyncRefModelCallback(TrainerCallback):
     def sync_target_model(model, target_model, alpha):
         deepspeed_plugin = AcceleratorState().deepspeed_plugin
         if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            import deepspeed
+
             with deepspeed.zero.GatheredParameters(
                 list(model.parameters()) + list(target_model.parameters()), modifier_rank=0
             ):
@@ -138,6 +137,9 @@ class RichProgressCallback(TrainerCallback):
     """
 
     def __init__(self):
+        if not is_rich_available():
+            raise ImportError("RichProgressCallback requires the `rich` extra. To install, run `pip install rich`.")
+
         self.training_bar = None
         self.prediction_bar = None
 

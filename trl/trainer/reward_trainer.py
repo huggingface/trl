@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,7 +38,7 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
 from .reward_config import RewardConfig
@@ -350,7 +350,8 @@ class RewardTrainer(Trainer):
                 break
         df = pd.DataFrame(table)
         if self.accelerator.process_index == 0:
-            print_rich_table(df[:num_print_samples])
+            if is_rich_available():
+                print_rich_table(df[:num_print_samples])
             if "wandb" in self.args.report_to:
                 import wandb
 

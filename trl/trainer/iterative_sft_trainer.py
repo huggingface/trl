@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@ import torch
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
     DataCollatorForLanguageModeling,
@@ -36,6 +38,7 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available
 
 from ..core import PPODecorators
+from .iterative_sft_config import IterativeSFTConfig
 from .utils import generate_model_card, get_comet_experiment_url
 
 
@@ -52,39 +55,49 @@ class IterativeSFTTrainer(Trainer):
     The IterativeSFTTrainer can be used to finetune models with methods that requires some steps between optimization.
 
     Args:
-        model (`PreTrainedModel`):
-            Model to be optimized, either an 'AutoModelForCausalLM' or an 'AutoModelForSeq2SeqLM'.
-            Check the documentation of `PreTrainedModel` for more details.
-        args (`transformers.TrainingArguments`):
-            The arguments to use for training.
-        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
-            Processing class used to process the data. If provided, will be used to automatically process the inputs
-            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-            reuse the fine-tuned model.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
-            The optimizer and scheduler to use for training.
-        data_collator (Union[DataCollatorForLanguageModeling, DataCollatorForSeq2Seq], *optional*):
-            Data collator to be used for training and passed along the dataloader.
+        model (`Union[str, PreTrainedModel]`):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
+              a path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
+              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
+              in `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+        args ([`IterativeSFTConfig`], *optional*, defaults to `None`):
+            Configuration for this trainer. If `None`, a default configuration is used.
+        data_collator (`DataCollator`, *optional*):
+            Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
+            Will default to [`~transformers.default_data_collator`] if no `processing_class` is provided, an instance
+            of [`~transformers.DataCollatorWithPadding`] otherwise if the processing_class is a feature extractor or
+            tokenizer.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        max_length (`int`, defaults to `None`):
-            The maximum length of the input.
-        truncation_mode (`str`, defaults to `keep_end`):
-            The truncation mode to use, either `keep_end` or `keep_start`.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
+            Processing class used to process the data. If `None`, the processing class is loaded from the model's name
+            with [`~transformers.AutoTokenizer.from_pretrained`].
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
-        optimize_device_cache (`bool`, *optional*, defaults to `False`):
-            Optimize CUDA cache for slightly more memory-efficient training.
+        max_length (`int`, *optional*, deprecated):
+            Maximum length of the tokenized sequence. Use `args.max_length` instead.
+        truncation_mode (`str`, *optional*, deprecated):
+            The truncation mode to use. Use `args.truncation_mode` instead.
+        optimize_device_cache (`bool`, *optional*, deprecated):
+            Whether to optimize CUDA cache. Use `args.optimize_device_cache` instead.
     """
 
     _tag_names = ["trl", "iterative-sft"]
 
     def __init__(
         self,
-        model: Optional[PreTrainedModel] = None,
-        args: Optional[TrainingArguments] = None,
+        model: Union[str, PreTrainedModel],
+        args: Optional[Union[IterativeSFTConfig, TrainingArguments]] = None,
+        data_collator: Optional[DataCollator] = None,
+        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
@@ -92,35 +105,74 @@ class IterativeSFTTrainer(Trainer):
             None,
             None,
         ),
-        data_collator: Optional[DataCollator] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        max_length: Optional[int] = None,
-        truncation_mode: Optional[str] = "keep_end",
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
-        optimize_device_cache: Optional[bool] = False,
+        # Deprecated parameters
+        max_length: Optional[int] = None,
+        truncation_mode: Optional[str] = None,
+        optimize_device_cache: Optional[bool] = None,
     ):
-        # Step 0: check positional arguments validity
-        if not isinstance(processing_class, (PreTrainedTokenizerBase)):
-            raise ValueError(
-                f"processing_class must be a PreTrainedTokenizerBase like a PreTrainedTokenizer or a PreTrainedTokenizerFast, got {type(processing_class)}"
-            )
-        if not isinstance(model, PreTrainedModel):
-            raise ValueError(f"model must be a PreTrainedModel, got {type(model)}")
-        if not model.can_generate():
+        # Handle deprecated parameters
+        deprecated_params = {}
+        if max_length is not None:
+            deprecated_params["max_length"] = max_length
             warnings.warn(
-                f"The current model class {type(model)} is not compatible with `.generate()`"
-                "Please make sure that this is intended."
+                "The `max_length` parameter is deprecated and will be removed in version 0.20. "
+                "Pass it through the `args` parameter using `IterativeSFTConfig(max_length=...)` instead.",
+                DeprecationWarning,
             )
-        if optimizers[1] is None and args.max_steps == -1:
-            raise ValueError(
-                "When no scheduler is provided, you need to set the total number of training steps to perform `max_steps`"
+        if truncation_mode is not None:
+            deprecated_params["truncation_mode"] = truncation_mode
+            warnings.warn(
+                "The `truncation_mode` parameter is deprecated and will be removed in version 0.20. "
+                "Pass it through the `args` parameter using `IterativeSFTConfig(truncation_mode=...)` instead.",
+                DeprecationWarning,
+            )
+        if optimize_device_cache is not None:
+            deprecated_params["optimize_device_cache"] = optimize_device_cache
+            warnings.warn(
+                "The `optimize_device_cache` parameter is deprecated and will be removed in version 0.20  "
+                "Pass it through the `args` parameter using `IterativeSFTConfig(optimize_device_cache=...)` instead.",
+                DeprecationWarning,
             )
 
-        self.is_encoder_decoder = getattr(model.config, "is_encoder_decoder", False)
-        self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
+        # Args
+        model_id = model if isinstance(model, str) else model.config._name_or_path
+        if args is None:
+            model_name = model_id.split("/")[-1]
+            args = IterativeSFTConfig(f"{model_name}-IterativeSFT")
+        elif isinstance(args, TrainingArguments) and not isinstance(args, IterativeSFTConfig):
+            dict_args = args.to_dict()
+            dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
+            dict_args.pop("push_to_hub_token")
+            args = IterativeSFTConfig(**dict_args)
+
+        # Update args with deprecated parameters if provided
+        if deprecated_params:
+            for key, value in deprecated_params.items():
+                setattr(args, key, value)
+
+        # Handle the tokenizer
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(model_id)
+
+        # Model
+        if args.model_init_kwargs is not None and not isinstance(model, str):
+            warnings.warn(
+                "You passed model_init_kwargs to the `IterativeSFTConfig`, but your model is already instantiated. "
+                "The `model_init_kwargs` will be ignored."
+            )
+        if isinstance(model, str):
+            model = self._create_model_from_path(model, args)
+
+        # PEFT configuration and model wrapping
+        if is_peft_available() and isinstance(model, PeftModel):
+            self.is_peft_model = True
+        else:
+            self.is_peft_model = False
 
         self.processing_class = processing_class
+        self.is_encoder_decoder = getattr(model.config, "is_encoder_decoder", False)
 
         if data_collator is None:
             if self.is_encoder_decoder:
@@ -132,9 +184,9 @@ class IterativeSFTTrainer(Trainer):
         else:
             self.data_collator = data_collator
 
-        self.max_length = max_length
-        self.truncation_mode = truncation_mode
-        self.optimize_device_cache = optimize_device_cache
+        self.max_length = args.max_length
+        self.truncation_mode = args.truncation_mode
+        self.optimize_device_cache = args.optimize_device_cache
 
         super().__init__(
             model=model,
@@ -166,6 +218,11 @@ class IterativeSFTTrainer(Trainer):
             )
 
         PPODecorators.optimize_device_cache = self.optimize_device_cache
+
+    def _create_model_from_path(self, model_path: str, args: IterativeSFTConfig) -> PreTrainedModel:
+        """Creates a model from a path or model identifier."""
+        model_init_kwargs = args.model_init_kwargs or {}
+        return AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
 
     def prepare_model_inputs(self, input_ids: torch.Tensor, attention_mask: torch.Tensor, labels: torch.Tensor):
         if attention_mask is None:
