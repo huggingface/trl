@@ -17,6 +17,7 @@ import unittest
 
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
+from transformers.utils import is_rich_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import (
@@ -63,6 +64,13 @@ def require_mergekit(test_case):
     Decorator marking a test that requires mergekit. Skips the test if mergekit is not available.
     """
     return unittest.skipUnless(is_mergekit_available(), "test requires mergekit")(test_case)
+
+
+def require_rich(test_case):
+    """
+    Decorator marking a test that requires rich. Skips the test if rich is not available.
+    """
+    return unittest.skipUnless(is_rich_available(), "test requires rich")(test_case)
 
 
 def require_sklearn(test_case):

@@ -23,14 +23,85 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import CodeAgentEnvironment, GRPOConfig, GRPOTrainer, LocalExecuter
-from trl.trainer.grpo_trainer import RepeatSampler
+from trl import GRPOConfig, GRPOTrainer, CodeAgentEnvironment, LocalExecuter
+from trl.trainer.grpo_trainer import RepeatSampler, shuffle_tensor_dict, split_tensor_dict
 
 from .testing_utils import require_local_code_executer, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
+
+
+class SplitTensorDictTester(unittest.TestCase):
+    def test_split_equal_chunks(self):
+        x = torch.arange(12).reshape(6, 2)
+        y = torch.arange(6).reshape(6, 1)
+        tensor_dict = {"x": x, "y": y}
+
+        result = split_tensor_dict(tensor_dict, 3)
+
+        expected_x_chunks = torch.chunk(x, 3, dim=0)
+        expected_y_chunks = torch.chunk(y, 3, dim=0)
+        self.assertEqual(len(result), 3)
+        for i in range(3):
+            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
+            self.assertTrue(torch.equal(result[i]["y"], expected_y_chunks[i]))
+
+    def test_with_none_tensor(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": None}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        self.assertEqual(len(result), 2)
+        for i in range(2):
+            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
+            self.assertIsNone(result[i]["y"])
+
+
+class ShuffleTensorDictTester(unittest.TestCase):
+    def test_shuffle_preserves_shape(self):
+        x = torch.arange(6).reshape(3, 2)
+        y = torch.arange(3).reshape(3, 1)
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        self.assertEqual(shuffled["x"].shape, x.shape)
+        self.assertEqual(shuffled["y"].shape, y.shape)
+
+    def test_shuffle_consistent_across_tensors(self):
+        # Use known patterns to check alignment
+        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
+        y = torch.tensor([[1], [2], [3]])
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        # Build a reverse map from shuffled x rows to y values
+        for i in range(3):
+            x_row = shuffled["x"][i]
+            y_val = shuffled["y"][i].item()
+
+            if torch.equal(x_row, torch.tensor([10, 11])):
+                self.assertEqual(y_val, 1)
+            elif torch.equal(x_row, torch.tensor([20, 21])):
+                self.assertEqual(y_val, 2)
+            elif torch.equal(x_row, torch.tensor([30, 31])):
+                self.assertEqual(y_val, 3)
+            else:
+                self.fail("Unexpected x row in shuffled output.")
+
+    def test_none_tensor_remains_none(self):
+        x = torch.arange(6).reshape(3, 2)
+        tensor_dict = {"x": x.clone(), "y": None}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        self.assertIsNone(shuffled["y"])
+        self.assertEqual(shuffled["x"].shape, x.shape)
 
 
 class RepeatRandomSamplerTester(unittest.TestCase):

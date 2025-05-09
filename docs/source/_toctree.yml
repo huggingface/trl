@@ -53,8 +53,6 @@
     title: Training StackLlama
   - local: detoxifying_a_lm
     title: Detoxifying a Language Model
-  - local: learning_tools
-    title: Learning to Use Tools
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
   - local: training_vlm_sft
@@ -101,6 +99,8 @@
     title: Trainers
   - local: models
     title: Model Classes
+  - local: model_utils
+    title: Model Utilities
   - local: best_of_n
     title: Best of N Sampling
   - local: judges
@@ -109,8 +109,6 @@
     title: Callbacks
   - local: data_utils
     title: Data Utilities
-  - local: text_environments
-    title: Text Environments
   - local: script_utils
     title: Script Utilities
   - local: others
