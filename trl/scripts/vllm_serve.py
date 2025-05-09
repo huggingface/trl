@@ -190,10 +190,10 @@ class ScriptArguments:
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
         quantization (`str` or `None`, *optional*, defaults to `None`):
-            If set, all Linear modules (except for the final lm_head) have their weights quantized down
-            to the chosen precision with a per-tensor scale. Possible choices: 'awq', 'gptq', and 'fp8'(experimental).
-            If None, it first check the quantization_config attribute in the model config file. If that is None, it
-            assumes the model weights are not quantized and use dtype to determine the data type of the weights.
+            If set, all Linear modules (except for the final lm_head) have their weights quantized down to the chosen
+            precision with a per-tensor scale. Possible choices: `"awq"`, `"gptq"`, and `"fp8"` (experimental).
+            If `None`, it first checks the `quantization_config` attribute in the model config file. If that is` None`,
+            it assumes the model weights are not quantized and use dtype to determine the data type of the weights.
     """
 
     model: str = field(
@@ -274,10 +274,11 @@ class ScriptArguments:
     quantization: Optional[str] = field(
         default=None,
         metadata={
-            "help": "If set, all Linear modules (except for the final lm_head) have their weights quantized down"
-            "to the chosen precision with a per-tensor scale. Possible choices: 'awq', 'gptq', and 'fp8'(experimental)."
-            "If None, it first check the quantization_config attribute in the model config file. If that is None, it"
-            "assumes the model weights are not quantized and use dtype to determine the data type of the weights."
+            "help": "If set, all Linear modules (except for the final lm_head) have their weights quantized down to "
+            "the chosen precision with a per-tensor scale. Possible choices: 'awq', 'gptq', and 'fp8' (experimental). "
+            "If `None`, it first checks the `quantization_config` attribute in the model config file. If that is "
+            "`None`, it assumes the model weights are not quantized and use dtype to determine the data type of "
+            "the weights."
         },
     )
 
