@@ -16,7 +16,7 @@ import re
 
 
 def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> list[float]:
-    """
+    r"""
     Reward function that checks if the reasoning process is enclosed within `"<think>"` and `"</think>"` tags. The
     function returns a reward of 1.0 if the format is correct, otherwise 0.0.
 
@@ -32,6 +32,7 @@ def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> li
             A list of rewards, where each reward is 1.0 if the completion matches the expected format, otherwise 0.0.
 
     Example:
+        >>> from trl.rewards import think_format_reward
         >>> completions = [
         ...     [{"content": "<think>\nThis is my reasoning.\n</think>\nThis is my answer."}],
         ...     [{"content": "<think>\nThis is my reasoning.\nThis is my answer."}],
