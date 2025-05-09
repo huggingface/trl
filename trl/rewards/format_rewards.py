@@ -22,7 +22,7 @@ def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> li
 
     Args:
         completions (`list[list[dict[str, str]]]`):
-            List of completions to be evaluated. Each completion should be list of one message, ie a dictionary
+            List of completions to be evaluated. Each completion must be a list of one message, i.e. a dictionary
             containing the key `"content"` with the value being the text of the completion.
         **kwargs:
             Additional keyword arguments.
