@@ -32,13 +32,15 @@ def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> li
             A list of rewards, where each reward is 1.0 if the completion matches the expected format, otherwise 0.0.
 
     Example:
-        >>> from trl.rewards import think_format_reward
-        >>> completions = [
-        ...     [{"content": "<think>\nThis is my reasoning.\n</think>\nThis is my answer."}],
-        ...     [{"content": "<think>\nThis is my reasoning.\nThis is my answer."}],
-        ... ]
-        >>> think_format_reward(completions)
-        [1.0, 0.0]
+    ```python
+    >>> from trl.rewards import think_format_reward
+    >>> completions = [
+    ...     [{"content": "<think>\nThis is my reasoning.\n</think>\nThis is my answer."}],
+    ...     [{"content": "<think>\nThis is my reasoning.\nThis is my answer."}],
+    ... ]
+    >>> think_format_reward(completions)
+    [1.0, 0.0]
+    ```
     """
     pattern = r"^<think>(?!.*<think>)(.*?)</think>.*$"
     completion_contents = [completion[0]["content"] for completion in completions]
