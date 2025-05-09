@@ -15,8 +15,8 @@
 import atexit
 import logging
 import time
-from typing import Optional
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 from torch import nn
@@ -285,6 +285,7 @@ class VLLMClient:
             if response.status_code != 200:
                 raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
+
 @dataclass
 class VLLMClientGenerationConfig:
     """Configuration for VLLM client generation parameters"""
@@ -298,6 +299,7 @@ class VLLMClientGenerationConfig:
     max_tokens: int
     guided_decoding_regex: Optional[str] = None
     stop: Optional[list[str]] = None
+
 
 # Example usage
 if __name__ == "__main__":

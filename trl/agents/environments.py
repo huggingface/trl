@@ -13,12 +13,11 @@
 # limitations under the License.
 
 import abc
-from dataclasses import dataclass
 from typing import Any, Optional
 
-from ..extras.vllm_client import VLLMClientGenerationConfig
 from transformers import PreTrainedTokenizerBase
 
+from ..extras.vllm_client import VLLMClientGenerationConfig
 
 
 class Environment(abc.ABC):

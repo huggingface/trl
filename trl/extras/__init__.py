@@ -20,7 +20,6 @@ from ..import_utils import _LazyModule
 _import_structure = {
     "best_of_n_sampler": ["BestOfNSampler"],
     "vllm_client": ["VLLMClient", "VLLMClientGenerationConfig"],
-    
 }
 
 if TYPE_CHECKING:
