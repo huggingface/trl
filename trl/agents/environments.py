@@ -16,22 +16,9 @@ import abc
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from ..extras.vllm_client import VLLMClientGenerationConfig
 from transformers import PreTrainedTokenizerBase
 
-
-@dataclass
-class VLLMClientGenerationConfig:
-    """Configuration for VLLM client generation parameters"""
-
-    n: int
-    repetition_penalty: float
-    temperature: float
-    top_p: float
-    top_k: Optional[int]
-    min_p: float
-    max_tokens: int
-    guided_decoding_regex: Optional[str] = None
-    stop: Optional[list[str]] = None
 
 
 class Environment(abc.ABC):
