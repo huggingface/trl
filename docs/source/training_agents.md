@@ -1,6 +1,6 @@
 # Training Agents with Environments in TRL
 
-Environments in TRL provide a powerful way to customize the rollout process for reinforcement learning (RL) with language models, specifically when using vLLM as the backend. This enables advanced agent training workflows, such as allowing your model to interact with external tools or APIs during RL training.
+Environments in TRL provide a powerful way to customize the rollout process for reinforcement learning (RL) with language models. This enables advanced agent training workflows, such as allowing your model to interact with external tools or APIs during RL training.
 
 > **Note:**  
 > - Environments currently require vLLM as the backend.
@@ -24,9 +24,9 @@ TRL provides built-in environments, such as `CodeAgentEnvironment`, and you can 
 
 ## Using the Built-in CodeAgentEnvironment
 
-The `CodeAgentEnvironment` allows your agent to write and execute code during training, using a code interpreter like the E2B Code Interpreter. This is useful for tasks where the model needs to solve problems by running code.
+The `CodeAgentEnvironment` allows your agent to write and execute code during training, using a code interpreter like [E2B sandboxes](https://e2b.dev). This is useful for tasks where the model needs to solve problems by running code.
 
-You can also use the `run_agent` method to test and observe your agent's behavior outside of training.
+You can also use the `run_agent()` method to test and observe your agent's behavior outside of training.
 
 ### Example: Running the CodeAgent Environment
 
@@ -71,9 +71,9 @@ responses = my_env.run_agent(
 
 ## Writing a Custom Environment
 
-To create your own environment, subclass `Environment` and implement a `generate` method. This method receives the vLLM client, a generation config, and a list of prompts, and must return a list of tokenized completions (as lists of token IDs).
+To create your own environment, subclass `Environment` and implement a `generate()` method. This method receives the vLLM client, a generation config, and a list of prompts, and must return a list of tokenized completions (as lists of token IDs).
 
-The `generate` method is called by the GRPO training loop to perform rollouts.
+The `generate()` method is called by the GRPO training loop to perform rollouts.
 
 **Example:**
 
