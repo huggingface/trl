@@ -28,6 +28,7 @@ _import_structure = {
         "setup_chat_format",
         "unwrap_model_for_generation",
     ],
+    "ring_attn": ["register_ring_attn"],
 }
 
 try:
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from .activation_offloading import get_act_offloading_ctx_manager
     from .modeling_base import GeometricMixtureWrapper, PreTrainedModelWrapper, create_reference_model
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+    from .ring_attn import register_ring_attn
     from .utils import (
         SUPPORTED_ARCHITECTURES,
         prepare_deepspeed,
