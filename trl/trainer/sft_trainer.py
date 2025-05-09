@@ -359,14 +359,9 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as a padding token."
                 )
             data_collator = DataCollatorForLanguageModeling(
-                pad_token_id, sequence_parallel_degree=args.sequence_parallel_degree, pad_to_multiple_of=args.pad_to_multiple_of
-            )
-
-        # Model
-        if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
-                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
+                pad_token_id,
+                sequence_parallel_degree=args.sequence_parallel_degree,
+                pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
         # Dataset
