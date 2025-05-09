@@ -21,11 +21,11 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
-from trl.rewards import think_answer_format_reward
+from trl.rewards import think_format_reward
 
 
 reward_funcs_registry = {
-    "think_answer_format_reward": think_answer_format_reward,
+    "think_format_reward": think_format_reward,
 }
 
 
@@ -39,7 +39,7 @@ class GRPOScriptArguments(ScriptArguments):
             Reward model id of a pretrained model hosted inside a model repo on huggingface.co or local path to a
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
         reward_funcs (`list[str]` or `None`, *optional*, defaults to `None`):
-            Reward functions to use. It can be either one of  `"think_answer_format_reward"`; or a dotted import path "
+            Reward functions to use. It can be either one of  `"think_format_reward"`; or a dotted import path "
             (e.g., `'my_lib.rewards.custom_reward'`).
     """
 
@@ -53,7 +53,7 @@ class GRPOScriptArguments(ScriptArguments):
     reward_funcs: Optional[list[str]] = field(
         default=None,
         metadata={
-            "help": "Reward functions to use. It can be either one of  'think_answer_format_reward'; or a dotted "
+            "help": "Reward functions to use. It can be either one of  'think_format_reward'; or a dotted "
             "import path. (e.g., 'my_lib.rewards.custom_reward')."
         },
     )
