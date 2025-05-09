@@ -20,12 +20,12 @@ from ..import_utils import _LazyModule
 
 
 _import_structure = {
-    "format_rewards": ["think_answer_format_reward"],
+    "format_rewards": ["think_format_reward"],
 }
 
 
 if TYPE_CHECKING:
-    from .format_rewards import think_answer_format_reward
+    from .format_rewards import think_format_reward
 
 
 else:

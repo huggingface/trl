@@ -15,16 +15,15 @@
 import re
 
 
-def think_answer_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> list[float]:
+def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> list[float]:
     """
-    Reward function that checks if the reasoning process is enclosed within `"<think>"` and `"</think>"` tags, while
-    the final answer is enclosed within `"<answer>"` and `"</answer>"` tags. The function returns a reward of 1.0 if
-    the format is correct, otherwise 0.0.
+    Reward function that checks if the reasoning process is enclosed within `"<think>"` and `"</think>"` tags. The
+    function returns a reward of 1.0 if the format is correct, otherwise 0.0.
 
     Args:
         completions (`list[list[dict[str, str]]]`):
             List of completions to be evaluated. Each completion should be list of one message, ie a dictionary
-            containing the key "content" with the value being the text of the completion.
+            containing the key `"content"` with the value being the text of the completion.
         **kwargs:
             Additional keyword arguments.
 
@@ -34,13 +33,13 @@ def think_answer_format_reward(completions: list[list[dict[str, str]]], **kwargs
 
     Example:
         >>> completions = [
-        ...     [{"content": "<think>\nThis is my reasoning.\n</think>\n<answer>\nThis is my answer.\n</answer>"}],
         ...     [{"content": "<think>\nThis is my reasoning.\n</think>\nThis is my answer."}],
+        ...     [{"content": "<think>\nThis is my reasoning.\nThis is my answer."}],
         ... ]
-        >>> think_answer_format_reward(completions)
+        >>> think_format_reward(completions)
         [1.0, 0.0]
     """
-    pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
+    pattern = r"^<think>(?!.*<think>)(.*?)</think>.*$"
     completion_contents = [completion[0]["content"] for completion in completions]
     matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completion_contents]
     return [1.0 if match else 0.0 for match in matches]

@@ -4,6 +4,6 @@ This module contains some useful reward functions, primarily intended for use wi
 
 ## Format rewards
 
-### think_answer_format_reward
+### think_format_reward
 
-[[autodoc]] think_answer_format_reward
+[[autodoc]] think_format_reward
