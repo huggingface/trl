@@ -361,7 +361,9 @@ class SFTTrainer(Trainer):
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id,
                 sequence_parallel_degree=args.sequence_parallel_degree,
-                pad_to_multiple_of=args.pad_to_multiple_of,
+                pad_to_multiple_of=args.sequence_parallel_degree
+                if args.sequence_parallel_degree > 1
+                else args.pad_to_multiple_of,
             )
 
         # Dataset
