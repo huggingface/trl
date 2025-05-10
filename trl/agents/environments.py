@@ -41,24 +41,31 @@ class Environment(abc.ABC):
 class DefaultEnvironment(Environment):
     """Default environment that implements standard VLLM generation"""
 
-    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]) -> list:
+    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]) -> tuple[list, list]:
         """Generate responses using VLLM
-
+    
         Args:
             vllm_client: VLLM client instance
             generation_config: Configuration for generation parameters
             prompts: Input prompts for generation
-
+    
         Returns:
-            completion_ids: Generated token ids
+            tuple: (completion_ids, completion_mask) where:
+                - completion_ids: Generated token ids (list of lists)
+                - completion_mask: Mask with 1s for all tokens (list of lists with same shape)
         """
         if generation_config is None:
             raise ValueError("Generation config must be provided to the generate method")
-
-        return vllm_client.generate(
+    
+        completion_ids = vllm_client.generate(
             prompts=prompts,
             **vars(generation_config),
         )
+        
+        # Create a mask with all 1s matching the shape of completion_ids
+        completion_mask = [[1] * len(ids) for ids in completion_ids]
+        
+        return completion_ids, completion_mask
 
 
 class CodeAgentEnvironment(Environment):
@@ -85,7 +92,6 @@ class CodeAgentEnvironment(Environment):
         output_string_end: String marking the end of code output (default: "</output>").
     """
 
-    # ...existing code...
     def __init__(
         self,
         code_executer: Any,
