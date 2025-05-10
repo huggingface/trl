@@ -45,11 +45,12 @@ from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
+from ..agents.environments import DefaultEnvironment, Environment
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
-from ..extras.vllm_client import VLLMClient
+from ..extras.vllm_client import VLLMClient, VLLMClientGenerationConfig
 from ..import_utils import is_liger_kernel_available, is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models import create_reference_model, prepare_deepspeed,prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -335,6 +336,10 @@ class GRPOTrainer(Trainer):
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
+        environment (`Optional[Environment]`, *optional*, defaults to `None`):
+            Custom environment for generation. If `None`, uses the default environment.
+            This can be used to override the default generation behavior, for example to support
+            code execution or other custom logic during generation.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
@@ -378,6 +383,7 @@ class GRPOTrainer(Trainer):
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
+        environment: Optional[Environment] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -420,6 +426,14 @@ class GRPOTrainer(Trainer):
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
+        # Raise error if environment is provided but vllm is set to false
+        if environment is not None and not args.use_vllm:
+            raise ValueError(
+                "You provided an environment, but `use_vllm` is set to False. "
+                "Environments are only supported with vLLM. Please set `use_vllm` to True."
+            )
+        # Initialize the default environment if none provided
+        self.environment = environment if environment is not None else DefaultEnvironment()
 
         if peft_config is not None:
             if not is_peft_available():
@@ -1005,23 +1019,29 @@ class GRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
+                
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                    generation_config = VLLMClientGenerationConfig(
+                        n=self.num_generations,
+                        repetition_penalty=self.repetition_penalty,
+                        temperature=self.temperature,
+                        top_p=self.top_p,
+                        top_k=-1 if self.top_k is None else self.top_k,
+                        min_p=0.0 if self.min_p is None else self.min_p,
+                        max_tokens=self.max_completion_length,
+                        guided_decoding_regex=self.guided_decoding_regex,
+                        stop=None,
+                    )
                     with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
-                            prompts=ordered_set_of_prompts,
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                        )
+                       completion_ids = self.environment.generate(
+                        vllm_client=self.vllm_client,
+                        generation_config=generation_config,
+                        prompts=ordered_set_of_prompts,
+                    )
                 else:
                     completion_ids = [None] * len(all_prompts_text)
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its
