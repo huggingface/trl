@@ -1121,7 +1121,7 @@ class GRPOTrainer(Trainer):
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # We use a different completion_mask if we're using environments to mask tool outputs
-        if env_completion_masks is not None:
+        if 'env_completion_masks' in locals() and env_completion_masks is not None:
             max_len = completion_ids.size(1)  # Target length from the (padded) completion_ids
 
             processed_env_masks_list = [(sub_list + [0] * max_len)[:max_len] for sub_list in env_completion_masks]
