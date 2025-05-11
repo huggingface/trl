@@ -50,7 +50,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient, VLLMClientGenerationConfig
 from ..import_utils import is_liger_kernel_available, is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed,prepare_fsdp, unwrap_model_for_generation
+from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -1019,7 +1019,7 @@ class GRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
-                
+
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
@@ -1037,11 +1037,11 @@ class GRPOTrainer(Trainer):
                         stop=None,
                     )
                     with profiling_context(self, "vLLM.generate"):
-                       completion_ids = self.environment.generate(
-                        vllm_client=self.vllm_client,
-                        generation_config=generation_config,
-                        prompts=ordered_set_of_prompts,
-                    )
+                        completion_ids, env_completion_masks = self.environment.generate(
+                            vllm_client=self.vllm_client,
+                            generation_config=generation_config,
+                            prompts=ordered_set_of_prompts,
+                        )
                 else:
                     completion_ids = [None] * len(all_prompts_text)
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its
@@ -1119,6 +1119,14 @@ class GRPOTrainer(Trainer):
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # We use a different completion_mask if we're using environments to mask tool outputs
+        if env_completion_masks is not None:
+            max_len = completion_ids.size(1)  # Target length from the (padded) completion_ids
+
+            processed_env_masks_list = [(sub_list + [0] * max_len)[:max_len] for sub_list in env_completion_masks]
+
+            completion_mask = torch.tensor(processed_env_masks_list, device=device, dtype=torch.int)
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.

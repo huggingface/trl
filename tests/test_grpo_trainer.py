@@ -23,7 +23,7 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import GRPOConfig, GRPOTrainer, CodeAgentEnvironment, LocalExecuter
+from trl import CodeAgentEnvironment, GRPOConfig, GRPOTrainer, LocalExecuter
 from trl.trainer.grpo_trainer import RepeatSampler, shuffle_tensor_dict, split_tensor_dict
 
 from .testing_utils import require_local_code_executer, require_vllm

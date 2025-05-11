@@ -24,7 +24,9 @@ class Environment(abc.ABC):
     """Base environment that implements standard VLLM generation"""
 
     @abc.abstractmethod
-    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]) -> list:
+    def generate(
+        self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]
+    ) -> tuple[list, list]:
         """Generate responses using VLLM
 
         Args:
@@ -33,7 +35,9 @@ class Environment(abc.ABC):
             prompts: Input prompts for generation
 
         Returns:
-            completion_ids: Generated token ids
+            tuple: (completion_ids, completion_mask) where:
+                - completion_ids: Generated token ids (list of lists)
+                - completion_mask: Mask indicating which tokens to consider (list of lists)
         """
         pass
 
@@ -41,14 +45,15 @@ class Environment(abc.ABC):
 class DefaultEnvironment(Environment):
     """Default environment that implements standard VLLM generation"""
 
-    def generate(self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]) -> tuple[list, list]:
+    def generate(
+        self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]
+    ) -> tuple[list, list]:
         """Generate responses using VLLM
-    
         Args:
             vllm_client: VLLM client instance
             generation_config: Configuration for generation parameters
             prompts: Input prompts for generation
-    
+
         Returns:
             tuple: (completion_ids, completion_mask) where:
                 - completion_ids: Generated token ids (list of lists)
@@ -56,15 +61,15 @@ class DefaultEnvironment(Environment):
         """
         if generation_config is None:
             raise ValueError("Generation config must be provided to the generate method")
-    
+
         completion_ids = vllm_client.generate(
             prompts=prompts,
             **vars(generation_config),
         )
-        
+
         # Create a mask with all 1s matching the shape of completion_ids
         completion_mask = [[1] * len(ids) for ids in completion_ids]
-        
+
         return completion_ids, completion_mask
 
 
@@ -85,22 +90,22 @@ class CodeAgentEnvironment(Environment):
         code_executer: An object with an `execute` method that takes a list of code strings and returns a list of results.
             This is used to run the extracted code blocks (e.g., Localexecuter or E2BExecuter).
         tokenizer: A PreTrainedTokenizerBase instance for encoding and decoding text and completions.
-        parsing_string: String that marks the beginning of code blocks in the generated text (default: "<code>").
-        stop_string: String that marks the end of code blocks in the generated text (default: "</code>").
+        parsing_string: String that marks the beginning of code blocks in the generated text (default: " <code> ").
+        stop_string: String that marks the end of code blocks in the generated text (default: " </code> ").
         tools_script: Optional script to prepend to each extracted code block before execution.
-        output_string_start: String marking the beginning of code output to be inserted into the conversation (default: "<output>").
-        output_string_end: String marking the end of code output (default: "</output>").
+        output_string_start: String marking the beginning of code output to be inserted into the conversation (default: " <output> ").
+        output_string_end: String marking the end of code output (default: " </output> ").
     """
 
     def __init__(
         self,
         code_executer: Any,
         tokenizer: PreTrainedTokenizerBase,
-        parsing_string: str = "<code>",
-        stop_string: str = "</code>",
+        parsing_string: str = " <code> ",
+        stop_string: str = " </code> ",
         tools_script: Optional[str] = None,
-        output_string_start: str = "<output>",
-        output_string_end: str = "</output>",
+        output_string_start: str = " <output> ",
+        output_string_end: str = " </output> ",
     ):
         """Initialize the code agent environment
 
@@ -264,71 +269,91 @@ class CodeAgentEnvironment(Environment):
 
         return completed_conversations
 
-    def mask_tool_output(self, completion_ids_list: list[list[int]], output_string_start: str = None, 
-                        output_string_end: str = None, tokenizer: PreTrainedTokenizerBase = None) -> list[list[int]]:
+    def mask_tool_output(
+        self,
+        completion_ids_list: list[list[int]],
+        output_string_start: Optional[str] = None,
+        output_string_end: Optional[str] = None,
+        tokenizer: Optional[PreTrainedTokenizerBase] = None,
+    ) -> list[list[int]]:
         """
         Create a mask for token sequences, marking tokens that are part of tool outputs with 0s.
-        This includes the start marker, content between markers, and end marker.
-        
+        This version assumes the effective output_string_start and output_string_end each represent a single token.
+        It masks from the start token ID to the end token ID, inclusive.
+
         Args:
-            completion_ids_list: List of token ID sequences
-            output_string_start: String marking the beginning of tool output (defaults to self.output_string_start)
-            output_string_end: String marking the end of tool output (defaults to self.output_string_end)
-            tokenizer: Tokenizer to convert between strings and token IDs (defaults to self.tokenizer)
-        
+            completion_ids_list: List of token ID sequences.
+            output_string_start: Optional string marking the beginning of code output.
+                                    If None, defaults to self.output_string_start.
+            output_string_end: Optional string marking the end of code output.
+                                If None, defaults to self.output_string_end.
+            tokenizer: Tokenizer to convert strings to token IDs.
+                        Defaults to self.tokenizer.
+
         Returns:
-            List of mask lists (1s for tokens to keep, 0s for tokens to mask)
+            List of mask lists (1s for tokens to keep, 0s for tokens to mask).
         """
-        # Use instance variables if parameters are not provided
-        if output_string_start is None:
-            output_string_start = self.output_string_start
-        if output_string_end is None:
-            output_string_end = self.output_string_end
         if tokenizer is None:
             tokenizer = self.tokenizer
-            
-        # Get token IDs for the start and end markers
-        start_tokens = tokenizer.encode(output_string_start, add_special_tokens=False)
-        end_tokens = tokenizer.encode(output_string_end, add_special_tokens=False)
-        
+
+        current_output_string_start = (
+            output_string_start if output_string_start is not None else self.output_string_start
+        )
+        current_output_string_end = output_string_end if output_string_end is not None else self.output_string_end
+
+        if not current_output_string_start.strip():
+            raise ValueError("Effective output_string_start is empty or whitespace.")
+        encoded_start = tokenizer.encode(current_output_string_start, add_special_tokens=False)
+        if len(encoded_start) != 1:
+            raise ValueError(
+                f"Effective output_string_start '{current_output_string_start}' does not correspond to a single token. "
+                f"Encoded to: {encoded_start}. Ensure it's a single token."
+            )
+        output_start_token_id = encoded_start[0]
+
+        if not current_output_string_end.strip():
+            raise ValueError("Effective output_string_end is empty or whitespace.")
+        encoded_end = tokenizer.encode(current_output_string_end, add_special_tokens=False)
+        if len(encoded_end) != 1:
+            raise ValueError(
+                f"Effective output_string_end '{current_output_string_end}' does not correspond to a single token. "
+                f"Encoded to: {encoded_end}. Ensure it's a single token."
+            )
+        output_end_token_id = encoded_end[0]
+
         completion_masks = []
-        
         for completion_ids in completion_ids_list:
-            # Initialize with all 1s (keep all tokens by default)
             mask = [1] * len(completion_ids)
-            
-            # Find all occurrences of start and end marker tokens
+            if not completion_ids:
+                completion_masks.append(mask)
+                continue
+
             i = 0
-            while i <= len(completion_ids) - len(start_tokens):
-                # Check if current position matches start tokens
-                if completion_ids[i:i+len(start_tokens)] == start_tokens:
-                    start_pos = i  # Start at the beginning of the start marker
-                    found_end = False
-                    
-                    # Look for the matching end tokens after the start tokens
-                    j = start_pos + len(start_tokens)
-                    while j <= len(completion_ids) - len(end_tokens):
-                        if completion_ids[j:j+len(end_tokens)] == end_tokens:
-                            end_pos = j + len(end_tokens) - 1  # End at the end of the end marker
-                            
-                            # Mask everything from start marker to end marker (inclusive)
-                            for k in range(start_pos, end_pos + 1):
-                                mask[k] = 0
-                                
-                            # Move the index past the end token
-                            i = end_pos + 1
-                            found_end = True
+            while i < len(completion_ids):
+                if completion_ids[i] == output_start_token_id:
+                    # Found the start token
+                    start_marker_idx = i
+                    # Search for the end token
+                    j = i + 1
+                    found_end_marker = False
+                    while j < len(completion_ids):
+                        if completion_ids[j] == output_end_token_id:
+                            # Found the end token
+                            end_marker_idx = j
+                            # Mask from start_marker_idx to end_marker_idx (inclusive)
+                            for k_mask in range(start_marker_idx, end_marker_idx + 1):
+                                if k_mask < len(mask):  # Ensure index is within bounds
+                                    mask[k_mask] = 0
+                            i = end_marker_idx + 1  # Continue search after the masked segment
+                            found_end_marker = True
                             break
                         j += 1
-                    
-                    # If no end token was found, just continue from the next position
-                    if not found_end:
+                    if not found_end_marker:
+                        # End marker not found after a start marker, advance past the start marker
                         i += 1
                 else:
                     i += 1
-            
             completion_masks.append(mask)
-        
         return completion_masks
 
     def generate(
@@ -374,4 +399,9 @@ class CodeAgentEnvironment(Environment):
             completion_token_ids = self.tokenizer.encode(completion_text, add_special_tokens=False)
             completion_ids.append(completion_token_ids)
 
-        return completion_ids
+        # Generate the mask for the completions
+        completion_mask = self.mask_tool_output(
+            completion_ids_list=completion_ids,
+        )
+
+        return completion_ids, completion_mask
