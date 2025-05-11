@@ -90,22 +90,22 @@ class CodeAgentEnvironment(Environment):
         code_executer: An object with an `execute` method that takes a list of code strings and returns a list of results.
             This is used to run the extracted code blocks (e.g., Localexecuter or E2BExecuter).
         tokenizer: A PreTrainedTokenizerBase instance for encoding and decoding text and completions.
-        parsing_string: String that marks the beginning of code blocks in the generated text (default: " <code> ").
-        stop_string: String that marks the end of code blocks in the generated text (default: " </code> ").
+        parsing_string: String that marks the beginning of code blocks in the generated text (default: "<code>").
+        stop_string: String that marks the end of code blocks in the generated text (default: "</code>").
         tools_script: Optional script to prepend to each extracted code block before execution.
-        output_string_start: String marking the beginning of code output to be inserted into the conversation (default: " <output> ").
-        output_string_end: String marking the end of code output (default: " </output> ").
+        output_string_start: String marking the beginning of code output to be inserted into the conversation (default: "<output>").
+        output_string_end: String marking the end of code output (default: "</output>").
     """
 
     def __init__(
         self,
         code_executer: Any,
         tokenizer: PreTrainedTokenizerBase,
-        parsing_string: str = " <code> ",
-        stop_string: str = " </code> ",
+        parsing_string: str = "<code>",
+        stop_string: str = "</code>",
         tools_script: Optional[str] = None,
-        output_string_start: str = " <output> ",
-        output_string_end: str = " </output> ",
+        output_string_start: str = "<output>",
+        output_string_end: str = "</output>",
     ):
         """Initialize the code agent environment
 
