@@ -39,7 +39,7 @@ trl vllm-serve --model "Qwen/Qwen2.5-0.5B-Instruct"
 Then, use the environment and client in Python:
 
 ```python
-from trl import CodeAgentEnvironment, E2BExecutor, VLLMClientGenerationConfig, VLLMClient
+from trl import CodeAgentEnvironment, E2BExecuter, VLLMClientGenerationConfig, VLLMClient
 
 client = VLLMClient()
 gen_config = VLLMClientGenerationConfig(
@@ -52,9 +52,9 @@ gen_config = VLLMClientGenerationConfig(
     max_tokens=256,
 )
 tokenizer = ...  # Load your tokenizer here
-code_executor = E2BExecutor(api_key="YOUR_E2B_TOKEN")
+code_executer = E2BExecuter(api_key="YOUR_E2B_TOKEN")
 my_env = CodeAgentEnvironment(
-    code_executor=code_executor,
+    code_executer=code_executer,
     tokenizer=tokenizer,
     parsing_string="<code>",
     stop_string="</code>",

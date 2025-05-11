@@ -264,6 +264,73 @@ class CodeAgentEnvironment(Environment):
 
         return completed_conversations
 
+    def mask_tool_output(self, completion_ids_list: list[list[int]], output_string_start: str = None, 
+                        output_string_end: str = None, tokenizer: PreTrainedTokenizerBase = None) -> list[list[int]]:
+        """
+        Create a mask for token sequences, marking tokens that are part of tool outputs with 0s.
+        This includes the start marker, content between markers, and end marker.
+        
+        Args:
+            completion_ids_list: List of token ID sequences
+            output_string_start: String marking the beginning of tool output (defaults to self.output_string_start)
+            output_string_end: String marking the end of tool output (defaults to self.output_string_end)
+            tokenizer: Tokenizer to convert between strings and token IDs (defaults to self.tokenizer)
+        
+        Returns:
+            List of mask lists (1s for tokens to keep, 0s for tokens to mask)
+        """
+        # Use instance variables if parameters are not provided
+        if output_string_start is None:
+            output_string_start = self.output_string_start
+        if output_string_end is None:
+            output_string_end = self.output_string_end
+        if tokenizer is None:
+            tokenizer = self.tokenizer
+            
+        # Get token IDs for the start and end markers
+        start_tokens = tokenizer.encode(output_string_start, add_special_tokens=False)
+        end_tokens = tokenizer.encode(output_string_end, add_special_tokens=False)
+        
+        completion_masks = []
+        
+        for completion_ids in completion_ids_list:
+            # Initialize with all 1s (keep all tokens by default)
+            mask = [1] * len(completion_ids)
+            
+            # Find all occurrences of start and end marker tokens
+            i = 0
+            while i <= len(completion_ids) - len(start_tokens):
+                # Check if current position matches start tokens
+                if completion_ids[i:i+len(start_tokens)] == start_tokens:
+                    start_pos = i  # Start at the beginning of the start marker
+                    found_end = False
+                    
+                    # Look for the matching end tokens after the start tokens
+                    j = start_pos + len(start_tokens)
+                    while j <= len(completion_ids) - len(end_tokens):
+                        if completion_ids[j:j+len(end_tokens)] == end_tokens:
+                            end_pos = j + len(end_tokens) - 1  # End at the end of the end marker
+                            
+                            # Mask everything from start marker to end marker (inclusive)
+                            for k in range(start_pos, end_pos + 1):
+                                mask[k] = 0
+                                
+                            # Move the index past the end token
+                            i = end_pos + 1
+                            found_end = True
+                            break
+                        j += 1
+                    
+                    # If no end token was found, just continue from the next position
+                    if not found_end:
+                        i += 1
+                else:
+                    i += 1
+            
+            completion_masks.append(mask)
+        
+        return completion_masks
+
     def generate(
         self, vllm_client: Any, generation_config: VLLMClientGenerationConfig, prompts: list[str]
     ) -> list[list[int]]:
