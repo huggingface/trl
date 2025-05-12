@@ -1348,16 +1348,13 @@ class GRPOTrainer(Trainer):
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
-        # Two-sided GRPO clipping
-        # term1 = min(ratio, delta) * A_hat
-        # term2 = clip(ratio, 1-epsilon, 1+epsilon) * A_hat
-        # loss = -min(term1, term2)
+        # Conditionally apply the upper clipping bound (delta) if specified
+        if self.args.delta is not None:
+            per_token_loss1 = torch.min(coef_1, self.args.delta) * advantages.unsqueeze(1)
+        else:
+            # Original GRPO clipping (only lower bound implicitly applied by the final min)
+            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
 
-        # coef_1 is the ratio: pi_theta / pi_theta_old
-        # advantages is A_hat
-        # coef_2 is clip(ratio, 1-epsilon_low, 1+epsilon_high)
-
-        per_token_loss1 = torch.min(coef_1, self.args.delta) * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:

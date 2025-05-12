@@ -393,9 +393,9 @@ class GRPOConfig(TrainingArguments):
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
     )
-    delta: float = field(
-        default=2.0,
-        metadata={"help": "Delta value for the upper clipping bound in two-sided GRPO. Recommended to be > 1 + epsilon."},
+    delta: Optional[float] = field(
+        default=None,
+        metadata={"help": "If set to a float value (e.g., 2.0), enables the upper clipping bound in two-sided GRPO loss. If None (default), the standard GRPO clipping is used. Recommended to be > 1 + epsilon when enabled."},
     )
     epsilon_high: Optional[float] = field(
         default=None,
