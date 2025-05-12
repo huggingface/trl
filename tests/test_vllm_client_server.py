@@ -20,12 +20,12 @@ import unittest
 import psutil
 import pytest
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_torch_multi_gpu
+from transformers.testing_utils import require_torch_multi_accelerator, require_torch_multi_gpu, torch_device
 
 from trl.extras.vllm_client import VLLMClient
 from trl.scripts.vllm_serve import chunk_list
 
-from .testing_utils import require_3_gpus
+from .testing_utils import require_3_accelerators
 
 
 class TestChunkList(unittest.TestCase):
@@ -55,15 +55,16 @@ class TestChunkList(unittest.TestCase):
 
 
 @pytest.mark.slow
-@require_torch_multi_gpu
+@require_torch_multi_accelerator
 class TestVLLMClientServer(unittest.TestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
     def setUpClass(cls):
-        # We want the server to run on GPU 1, so we set CUDA_VISIBLE_DEVICES to "1"
+        # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
         env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = "1"  # Restrict to GPU 1
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1"
 
         # Start the server process
         cls.server_process = subprocess.Popen(
@@ -107,7 +108,7 @@ class TestVLLMClientServer(unittest.TestCase):
             self.assertLessEqual(len(seq), 32)
 
     def test_update_model_params(self):
-        model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map="cuda")
+        model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
 
     def test_reset_prefix_cache(self):
@@ -132,15 +133,16 @@ class TestVLLMClientServer(unittest.TestCase):
 
 
 @pytest.mark.slow
-@require_3_gpus
+@require_3_accelerators
 class TestVLLMClientServerTP(unittest.TestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
     def setUpClass(cls):
-        # We want the server to run on GPU 1 and 2, so we set CUDA_VISIBLE_DEVICES to "1,2"
+        # We want the server to run on accelerator 1 and 2, so we set VISIBLE_DEVICES to "1,2"
         env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = "1,2"  # Restrict to GPU 1 and 2
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1,2"
 
         # Start the server process
         cls.server_process = subprocess.Popen(
@@ -169,7 +171,7 @@ class TestVLLMClientServerTP(unittest.TestCase):
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
 
     def test_update_model_params(self):
-        model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map="cuda")
+        model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
 
     def test_reset_prefix_cache(self):
@@ -194,15 +196,16 @@ class TestVLLMClientServerTP(unittest.TestCase):
 
 
 @pytest.mark.slow
-@require_3_gpus
+@require_3_accelerators
 class TestVLLMClientServerDP(unittest.TestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
     def setUpClass(cls):
-        # We want the server to run on GPU 1 and 2, so we set CUDA_VISIBLE_DEVICES to "1,2"
+        # We want the server to run on accelerator 1 and 2, so we set VISIBLE_DEVICES to "1,2"
         env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = "1,2"  # Restrict to GPU 1 and 2
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1,2"
 
         # Start the server process
         cls.server_process = subprocess.Popen(
@@ -230,7 +233,7 @@ class TestVLLMClientServerDP(unittest.TestCase):
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
 
     def test_update_model_params(self):
-        model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map="cuda")
+        model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
         self.client.update_model_params(model)
 
     def test_reset_prefix_cache(self):
