@@ -1271,6 +1271,69 @@ class GRPOTrainer(Trainer):
         self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
+            
+        # <<< START DEBUG PRINT STATEMENTS >>>
+        if self.accelerator.is_main_process: # Print only on the main process to avoid clutter
+            print("\n--- Debugging _generate_and_score_completions (End of Method) ---")
+            
+            print("\n1. Raw completion_ids:")
+            print(completion_ids)
+            
+            print("\n2. Raw completion_mask:")
+            print(completion_mask)
+            
+            print("\n3. Decoded completion_ids (batch_decode, skip_special_tokens=False):")
+            decoded_completions_text_debug = self.processing_class.batch_decode(completion_ids, skip_special_tokens=False)
+            for i_debug, text_debug in enumerate(decoded_completions_text_debug):
+                print(f"  Sample {i_debug}: {text_debug}")
+
+            print("\n4. Type and Shape of completion_ids:")
+            print(f"  Type: {type(completion_ids)}")
+            if hasattr(completion_ids, 'shape'):
+                print(f"  Shape: {completion_ids.shape}")
+            else:
+                print(f"  Shape: N/A (not a tensor or array-like)")
+
+            print("\n5. Type and Shape of completion_mask:")
+            print(f"  Type: {type(completion_mask)}")
+            if hasattr(completion_mask, 'shape'):
+                print(f"  Shape: {completion_mask.shape}")
+            else:
+                print(f"  Shape: N/A (not a tensor or array-like)")
+
+            print("\n6. Zipped completion_ids (decoded token by token) and completion_mask:")
+            if hasattr(completion_ids, 'size') and hasattr(completion_mask, 'size') and \
+               completion_ids.dim() == 2 and completion_mask.dim() == 2 and \
+               completion_ids.size(0) == completion_mask.size(0) and \
+               completion_ids.size(1) == completion_mask.size(1):
+
+                for i_batch in range(completion_ids.size(0)): # Iterate over batch
+                    print(f"\n  --- Sample {i_batch} ---")
+                    print(f"  Full Decoded Text (skip_special_tokens=False): {self.processing_class.decode(completion_ids[i_batch], skip_special_tokens=False)}")
+                    print(f"  Full Decoded Text (skip_special_tokens=True): {self.processing_class.decode(completion_ids[i_batch], skip_special_tokens=True)}")
+                    print("  Token ID | Decoded Token   | Mask Value")
+                    print("  ---------------------------------------")
+                    for j_seq in range(completion_ids.size(1)): # Iterate over sequence length
+                        token_id_debug = completion_ids[i_batch, j_seq].item()
+                        try:
+                            # Decode individual token. Wrap in a list as some decoders expect iterables.
+                            decoded_token_debug = self.processing_class.decode([token_id_debug], skip_special_tokens=False).strip()
+                            # If decode results in empty (e.g. for some special tokens if not skipped), try to get the token string
+                            if not decoded_token_debug and hasattr(self.processing_class, 'convert_ids_to_tokens'):
+                                token_as_string = self.processing_class.convert_ids_to_tokens([token_id_debug])
+                                if token_as_string and token_as_string[0]:
+                                    decoded_token_debug = token_as_string[0]
+                                else:
+                                    decoded_token_debug = "[empty_decode]"
+                        except Exception:
+                            decoded_token_debug = "[DecodeErr]"
+                        
+                        mask_value_debug = completion_mask[i_batch, j_seq].item()
+                        print(f"  {token_id_debug:<8} | {decoded_token_debug:<15} | {mask_value_debug}")
+            else:
+                print("  Skipping detailed zip view: completion_ids or completion_mask is not a 2D tensor or dimensions mismatch.")
+            print("\n--- End Debugging ---")
+        # <<< END DEBUG PRINT STATEMENTS >>>
 
         return {
             "prompt_ids": prompt_ids,
