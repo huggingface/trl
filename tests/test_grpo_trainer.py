@@ -1147,3 +1147,133 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_two_sided_clipping_loss(self):
+        """
+        Tests the two-sided GRPO clipping logic with specific scenarios.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # model_id removed, will use self.model_id
+            # Using a minimal dataset, actual content won't matter due to mocking
+            dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train[:1]")
+
+            config = GRPOConfig(
+                output_dir=tmp_dir,
+                epsilon=0.2,
+                delta=2.0,  # delta > 1 + epsilon (1.2)
+                epsilon_high=0.2, # Corresponds to self.epsilon_high in trainer
+                beta=0.0,  # No KL divergence for this specific loss test
+                loss_type="bnpo", # Default, simplifies loss for single token
+                max_completion_length=1 # For dr_grpo, not used here but good practice
+            )
+
+            # tokenizer setup removed, will use self.tokenizer
+
+            trainer = GRPOTrainer(
+                model=self.model_id, # Changed to use self.model_id
+                args=config,
+                reward_funcs=lambda x, **y: [1.0] * len(x),  # Dummy reward
+                train_dataset=dataset,
+                processing_class=self.tokenizer, # Changed to use self.tokenizer
+            )
+            # Ensure epsilon_low and epsilon_high are set as expected by _compute_loss
+            # GRPOTrainer.__init__ handles this:
+            # self.epsilon_low = self.args.epsilon
+            # self.epsilon_high = self.args.epsilon_high if self.args.epsilon_high is not None else self.args.epsilon
+
+            # Dummy inputs for a single token prediction (batch_size=1, sequence_length=1)
+            # input_ids for _get_per_token_logps would be cat(prompt_ids, completion_ids)
+            # We will mock _get_per_token_logps, so actual token IDs don't deeply matter
+            # as long as the shapes are consistent for what _get_per_token_logps expects and returns.
+            # Let's assume _get_per_token_logps is mocked to return a (1,1) tensor for logps.
+
+            dummy_prompt_ids = torch.tensor([[101]], dtype=torch.long) # BOS token for example
+            dummy_completion_ids = torch.tensor([[500]], dtype=torch.long) # A single completion token
+            dummy_input_ids = torch.cat([dummy_prompt_ids, dummy_completion_ids], dim=1)
+            dummy_attention_mask = torch.ones_like(dummy_input_ids)
+
+
+            scenarios = [
+                # 1. Negative advantage, ratio > delta
+                # Expected: loss based on delta * advantage
+                # coef_1=2.5, adv=-1.0, delta=2.0, eps=0.2 (clip_eps=0.2 -> range [0.8, 1.2])
+                # term1 = min(2.5, 2.0) * -1.0 = -2.0
+                # term2 = clamp(2.5, 0.8, 1.2) * -1.0 = 1.2 * -1.0 = -1.2
+                # per_token_loss = -min(-2.0, -1.2) = -(-2.0) = 2.0
+                {"name": "Neg Adv, Ratio > Delta", "adv": -1.0, "ratio": 2.5, "expected_loss": 2.0},
+
+                # 2. Negative advantage, 1+epsilon < ratio < delta
+                # Expected: loss based on ratio * advantage
+                # coef_1=1.5, adv=-1.0, delta=2.0, eps=0.2
+                # term1 = min(1.5, 2.0) * -1.0 = -1.5
+                # term2 = clamp(1.5, 0.8, 1.2) * -1.0 = 1.2 * -1.0 = -1.2
+                # per_token_loss = -min(-1.5, -1.2) = -(-1.5) = 1.5
+                {"name": "Neg Adv, 1+eps < Ratio < Delta", "adv": -1.0, "ratio": 1.5, "expected_loss": 1.5},
+
+                # 3. Positive advantage, ratio > 1+epsilon (Standard PPO clip)
+                # coef_1=2.5, adv=1.0, delta=2.0, eps=0.2
+                # term1 = min(2.5, 2.0) * 1.0 = 2.0
+                # term2 = clamp(2.5, 0.8, 1.2) * 1.0 = 1.2
+                # per_token_loss = -min(2.0, 1.2) = -1.2
+                {"name": "Pos Adv, Ratio > 1+eps", "adv": 1.0, "ratio": 2.5, "expected_loss": -1.2},
+
+                # 4. Negative advantage, ratio < 1-epsilon (Standard PPO clip)
+                # coef_1=0.5, adv=-1.0, delta=2.0, eps=0.2 (clip_low = 0.8)
+                # term1 = min(0.5, 2.0) * -1.0 = -0.5
+                # term2 = clamp(0.5, 0.8, 1.2) * -1.0 = 0.8 * -1.0 = -0.8
+                # per_token_loss = -min(-0.5, -0.8) = -(-0.8) = 0.8
+                {"name": "Neg Adv, Ratio < 1-eps", "adv": -1.0, "ratio": 0.5, "expected_loss": 0.8},
+
+                # 5. Positive advantage, ratio < 1-epsilon
+                # coef_1=0.5, adv=1.0, delta=2.0, eps=0.2
+                # term1 = min(0.5, 2.0) * 1.0 = 0.5
+                # term2 = clamp(0.5, 0.8, 1.2) * 1.0 = 0.8 # This is coef_2 * adv
+                # per_token_loss = -min(0.5, 0.8) = -0.5
+                {"name": "Pos Adv, Ratio < 1-eps", "adv": 1.0, "ratio": 0.5, "expected_loss": -0.5},
+            ]
+
+            for scenario in scenarios:
+                with self.subTest(scenario_name=scenario["name"]):
+                    adv_tensor = torch.tensor([scenario["adv"]]) # Shape (batch_size,) -> (1,)
+                    # desired_ratio will be exp(per_token_logps - old_logps)
+                    # let old_logps be 0, then per_token_logps = log(desired_ratio)
+                    # _get_per_token_logps returns logps for completion tokens only.
+                    # So, if completion is 1 token, it returns (batch_size, 1)
+                    mock_per_token_logps = torch.log(torch.tensor([[scenario["ratio"]]])) # Shape (1,1)
+
+                    # Inputs for _compute_loss
+                    # old_per_token_logps shape should match per_token_logps, i.e., (batch_size, num_completion_tokens)
+                    old_logps_input = torch.zeros_like(mock_per_token_logps)
+
+                    inputs_dict = {
+                        "prompt_ids": dummy_prompt_ids,
+                        "prompt_mask": torch.ones_like(dummy_prompt_ids),
+                        "completion_ids": dummy_completion_ids,
+                        "completion_mask": torch.ones_like(dummy_completion_ids), # Mask for the single completion token
+                        "advantages": adv_tensor,
+                        "old_per_token_logps": old_logps_input,
+                        # per_token_logps is fetched by _get_per_token_logps
+                    }
+
+                    # Patch _get_per_token_logps for this call of _compute_loss
+                    # It's called with (model, input_ids, attention_mask, logits_to_keep)
+                    # logits_to_keep = completion_ids.size(1) = 1
+                    with patch.object(trainer, '_get_per_token_logps', return_value=mock_per_token_logps) as mock_get_logps:
+                        loss = trainer._compute_loss(trainer.model, inputs_dict)
+                        
+                        # Verify mock was called as expected.
+                        # The GRPOTrainer._get_per_token_logps is called with:
+                        # model, concatenated_input_ids, concatenated_attention_mask, logits_to_keep
+                        # For our single completion token, logits_to_keep will be 1.
+                        mock_get_logps.assert_called_once()
+                        call_args = mock_get_logps.call_args[0]
+                        self.assertIs(call_args[0], trainer.model) # model
+                        self.assertTrue(torch.equal(call_args[1], dummy_input_ids)) # input_ids
+                        self.assertTrue(torch.equal(call_args[2], dummy_attention_mask)) # attention_mask
+                        self.assertEqual(call_args[3], 1) # logits_to_keep
+
+
+                    # For loss_type="bnpo" (default) and single token with mask=1:
+                    # loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+                    #      = per_token_loss / 1 = per_token_loss
+                    self.assertAlmostEqual(loss.item(), scenario["expected_loss"], places=5, msg=f"Scenario: {scenario['name']}")
