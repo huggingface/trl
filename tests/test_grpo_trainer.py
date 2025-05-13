@@ -1209,7 +1209,6 @@ class GRPOTrainerTester(unittest.TestCase):
             # Create trainer
             trainer = self._make_delta_trainer(tmp_dir, tokenizer, dataset)
 
-            # Prepare inputs
             inputs = self._delta_inputs(trainer.accelerator.device)
             inputs.update(
                 {
