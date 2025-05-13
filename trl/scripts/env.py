@@ -36,6 +36,8 @@ def print_env():
     devices = None
     if torch.cuda.is_available():
         devices = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+    elif torch.backends.mps.is_available():
+        devices = ["MPS"]
     elif torch.xpu.is_available():
         devices = [torch.xpu.get_device_name(i) for i in range(torch.xpu.device_count())]
 
