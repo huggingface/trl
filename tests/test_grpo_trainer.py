@@ -1031,39 +1031,19 @@ class GRPOTrainerTester(unittest.TestCase):
     def test_training_with_mask_truncated_completions(self, mock_generate):
         """Test that training works with mask_truncated_completions=True parameter."""
 
-        # Initialize tokenizer locally for this test
-        model_id_for_tokenizer = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        tokenizer = AutoTokenizer.from_pretrained(model_id_for_tokenizer)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
         # We mock the generate method because the model's random weights make it extremely unlikely to produce a
         # sequence containing the EOS token within the allowed max_completion_length. As a result, all tokens are
         # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
         def fake_generate(prompt_ids, **kwargs):
-            batch_size = prompt_ids.shape[0]
-            max_completion_length = kwargs.get(
-                "generation_config"
-            ).max_new_tokens  # Get max_new_tokens from GenerationConfig
-
             # pad_token_id = 151643; eos_token_id = 151645
-            base_completions = torch.tensor(
+            completions_ids = torch.tensor(
                 [
-                    [1] * max_completion_length,  # Truncated example
-                    [9] * (max_completion_length // 2)
-                    + [tokenizer.eos_token_id]
-                    + [tokenizer.pad_token_id]
-                    * (max_completion_length - max_completion_length // 2 - 1),  # EOS example
-                    [12] * (max_completion_length - 1) + [tokenizer.eos_token_id],  # EOS at the end example
+                    [1, 2, 3, 4, 5, 6, 7, 8],  # this one is truncated
+                    [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
+                    [12, 13, 14, 15, 16, 17, 18, 151645],  # particular case, eos is generated just within the limit
                 ],
                 device=prompt_ids.device,
-                dtype=torch.long,
             )
-            # Repeat the base completions to match the required batch size
-            completions_ids = base_completions.repeat(
-                (batch_size + base_completions.shape[0] - 1) // base_completions.shape[0], 1
-            )[:batch_size]  # Ensure correct batch size
-
             return torch.cat([prompt_ids, completions_ids], dim=1)
 
         mock_generate.side_effect = fake_generate
@@ -1074,9 +1054,9 @@ class GRPOTrainerTester(unittest.TestCase):
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=3,  # keep batch size consistent with mock data pattern if possible
-                num_generations=3,  # kept for consistency with mock data pattern
-                max_completion_length=8,  # should match mock data length
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 mask_truncated_completions=True,  # Enable masking of truncated completions
                 report_to="none",
             )
@@ -1085,18 +1065,18 @@ class GRPOTrainerTester(unittest.TestCase):
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                processing_class=tokenizer,  # Use local tokenizer
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            # Check if the model parameters have changed
+
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
     def test_training_with_mask_truncated_completions_all_masked(self):
         """
         Test that when all generated completions are truncated (i.e., none contain an EOS token), and
