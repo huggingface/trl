@@ -1348,7 +1348,6 @@ class GRPOTrainer(Trainer):
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
-        # Conditionally apply the upper clipping bound (delta) if specified
         if self.args.delta is not None:
             # Use clamp instead of min to handle tensor-float comparison
             per_token_loss1 = torch.clamp(coef_1, max=self.args.delta) * advantages.unsqueeze(1)
