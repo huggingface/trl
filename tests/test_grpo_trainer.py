@@ -1077,6 +1077,7 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
     def test_training_with_mask_truncated_completions_all_masked(self):
         """
         Test that when all generated completions are truncated (i.e., none contain an EOS token), and
@@ -1147,181 +1148,89 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    def test_two_sided_clipping_loss(self):
-        """
-        Tests the two-sided GRPO clipping logic with specific scenarios.
-        Uses a completion length of 2 to ensure logp and loss masking work.
+    @staticmethod
+    def _make_delta_trainer(tmp_dir, tokenizer, dataset):
+        """Helper method to create a GRPOTrainer with specific delta clipping parameters."""
+        cfg = GRPOConfig(
+            output_dir=tmp_dir,
+            epsilon=0.20,
+            delta=2.0,
+            epsilon_high=0.20,
+            beta=0.0,
+            loss_type="bnpo",
+            max_completion_length=2,
+            report_to="none",
+        )
+        return GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=cfg,
+            reward_funcs=lambda x, **y: [1.0] * len(x),
+            train_dataset=dataset,
+            processing_class=tokenizer,
+        )
+
+    @staticmethod
+    def _delta_inputs(device):
+        """Helper method to create standard inputs for delta clipping tests."""
+        return {
+            "prompt_ids": torch.tensor([[101]], device=device),
+            "prompt_mask": torch.tensor([[1]], device=device),
+            "completion_ids": torch.tensor([[2000, 2001]], device=device),
+            "completion_mask": torch.tensor([[1, 1]], device=device),
+        }
+
+    @parameterized.expand(
+        [
+            # name, advantage, old_prob, new_prob, expected_loss
+            ("pos_ratio_in_clip", 2.0, 0.50, 0.55, -2.2),
+            ("pos_ratio_above_clip", 2.0, 0.40, 0.60, -2.4),
+            ("neg_ratio_in_clip", -2.0, 0.50, 0.45, 1.8),
+            ("neg_ratio_below_clip", -2.0, 0.50, 0.35, 1.6),
+            ("neg_ratio_above_delta", -2.0, 0.20, 0.50, 4.0),
+            ("neg_between_clip_delta", -2.0, 0.40, 0.60, 3.0),
+        ]
+    )
+    def test_two_sided_clipping_loss(self, name, advantage, old_prob, new_prob, expected_loss):
+        """Test two-sided GRPO clipping logic with different scenarios.
+
+        Args:
+            name: Test case name
+            advantage: Advantage value for the scenario
+            old_prob: Old policy probability
+            new_prob: New policy probability
+            expected_loss: Expected loss value
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
+            # Setup model and tokenizer
             model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            # Using a minimal dataset, actual content won't matter due to mocking
+            # Load minimal dataset
             dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train[:1]")
 
-            config = GRPOConfig(
-                output_dir=tmp_dir,
-                epsilon=0.2,
-                delta=2.0,  # delta > 1 + epsilon (1.2)
-                epsilon_high=0.2,  # Corresponds to self.epsilon_high in trainer
-                beta=0.0,  # No KL divergence for this specific loss test
-                loss_type="bnpo",  # Default, simplifies loss for single token
-                max_completion_length=2,  # Use completion length 2
-                report_to="none",
+            # Create trainer
+            trainer = self._make_delta_trainer(tmp_dir, tokenizer, dataset)
+
+            # Prepare inputs
+            inputs = self._delta_inputs(trainer.accelerator.device)
+            inputs.update(
+                {
+                    "advantages": torch.tensor([advantage], device=trainer.accelerator.device),
+                    "old_per_token_logps": torch.log(torch.tensor([[old_prob]], device=trainer.accelerator.device)),
+                }
             )
 
-            trainer = GRPOTrainer(
-                model=model_id,  # Use local model_id
-                args=config,
-                reward_funcs=lambda x, **y: [1.0] * len(x),  # Dummy reward always returning 1.0
-                train_dataset=dataset,
-                processing_class=tokenizer,  # Use local tokenizer
-            )
+            # Mock _get_per_token_logps to return predefined new log probabilities
+            with patch.object(trainer, "_get_per_token_logps") as mock_logps_func:
+                mock_logps_func.return_value = torch.log(torch.tensor([[new_prob]], device=trainer.accelerator.device))
 
-            # Mock necessary components to isolate loss calculation
-            # Mock data for completion_length = 2. Logps/Advantages apply to first generated token (index 1).
-            mock_inputs = {
-                "prompt_ids": torch.tensor([[101]], device=trainer.accelerator.device),
-                "prompt_mask": torch.tensor([[1]], device=trainer.accelerator.device),
-                # Shape: (batch_size, seq_len=2)
-                "completion_ids": torch.tensor([[2000, 2001]], device=trainer.accelerator.device),
-                "completion_mask": torch.tensor(
-                    [[1, 1]], device=trainer.accelerator.device
-                ),  # Mask for generated tokens
-                # Logps/Advantages shape: (batch_size, seq_len=1) - corresponding to the token at index 1
-                # --- Test Scenarios --- # Notes refer to the per_token_loss for the *single* token being considered.
-                # Scenario 1: Positive Advantage, ratio within clip bounds (1-eps, 1+eps) -> loss = -2.2
-                "scenario1_advantages": torch.tensor([2.0], device=trainer.accelerator.device),  # Shape (1,)
-                "scenario1_old_logps": torch.log(
-                    torch.tensor([[0.5]], device=trainer.accelerator.device)
-                ),  # Shape (1, 1)
-                "scenario1_new_logps": torch.log(
-                    torch.tensor([[0.55]], device=trainer.accelerator.device)
-                ),  # Shape (1, 1), ratio = 1.1
-                # Scenario 2: Positive Advantage, ratio above 1+eps -> loss = -2.4
-                "scenario2_advantages": torch.tensor([2.0], device=trainer.accelerator.device),
-                "scenario2_old_logps": torch.log(torch.tensor([[0.4]], device=trainer.accelerator.device)),
-                "scenario2_new_logps": torch.log(
-                    torch.tensor([[0.6]], device=trainer.accelerator.device)
-                ),  # ratio = 1.5
-                # Scenario 3: Negative Advantage, ratio within clip bounds (1-eps, 1+eps) -> loss = 1.8
-                "scenario3_advantages": torch.tensor([-2.0], device=trainer.accelerator.device),
-                "scenario3_old_logps": torch.log(torch.tensor([[0.5]], device=trainer.accelerator.device)),
-                "scenario3_new_logps": torch.log(
-                    torch.tensor([[0.45]], device=trainer.accelerator.device)
-                ),  # ratio = 0.9
-                # Scenario 4: Negative Advantage, ratio below 1-eps -> loss = 1.6
-                "scenario4_advantages": torch.tensor([-2.0], device=trainer.accelerator.device),
-                "scenario4_old_logps": torch.log(torch.tensor([[0.5]], device=trainer.accelerator.device)),
-                "scenario4_new_logps": torch.log(
-                    torch.tensor([[0.35]], device=trainer.accelerator.device)
-                ),  # ratio = 0.7
-                # Scenario 5: Negative Advantage, ratio above delta (2.0) -> loss = 4.0
-                "scenario5_advantages": torch.tensor([-2.0], device=trainer.accelerator.device),
-                "scenario5_old_logps": torch.log(torch.tensor([[0.2]], device=trainer.accelerator.device)),
-                "scenario5_new_logps": torch.log(
-                    torch.tensor([[0.5]], device=trainer.accelerator.device)
-                ),  # ratio = 2.5
-                # Scenario 6: Negative Advantage, ratio between 1+eps and delta -> loss = 3.0
-                "scenario6_advantages": torch.tensor([-2.0], device=trainer.accelerator.device),
-                "scenario6_old_logps": torch.log(torch.tensor([[0.4]], device=trainer.accelerator.device)),
-                "scenario6_new_logps": torch.log(
-                    torch.tensor([[0.6]], device=trainer.accelerator.device)
-                ),  # ratio = 1.5
-            }
-
-            # Mock _get_per_token_logps to return predefined values based on scenario
-            def mock_get_logps_side_effect(model, input_ids, attention_mask, logits_to_keep, batch_size=None):
-                # The actual return value is controlled by setting .return_value before each call
-                # This side_effect is just a placeholder structure
-                if model == trainer.model:
-                    # This function is expected to return shape (batch_size, logits_to_keep)
-                    # In our case, logits_to_keep = completion_ids.shape[1] - 1 = 2 - 1 = 1
-                    # So, shape should be (1, 1)
-                    return torch.zeros(
-                        (input_ids.shape[0], logits_to_keep), device=trainer.accelerator.device
-                    )  # Placeholder
-                return torch.zeros_like(
-                    input_ids[:, 1:], dtype=torch.float, device=input_ids.device
-                )  # Match expected output shape
-
-            with patch.object(trainer, "_get_per_token_logps") as mock_logps_func:  # Removed side_effect here
-                # --- Run Scenarios --- #
-                base_inputs = {  # Inputs common to all scenarios
-                    "prompt_ids": mock_inputs["prompt_ids"],
-                    "prompt_mask": mock_inputs["prompt_mask"],
-                    "completion_ids": mock_inputs["completion_ids"],
-                    "completion_mask": mock_inputs["completion_mask"],
-                }
-
-                # Scenario 1
-                inputs_sc1 = {
-                    **base_inputs,
-                    "advantages": mock_inputs["scenario1_advantages"],
-                    "old_per_token_logps": mock_inputs["scenario1_old_logps"],
-                }
-                mock_logps_func.return_value = mock_inputs["scenario1_new_logps"]  # Set mock return for this call
-                loss1 = trainer.compute_loss(trainer.model, inputs_sc1)
-                self.assertAlmostEqual(loss1.item(), -2.2, delta=1e-5, msg="Scenario 1 Failed")
-
-                # Scenario 2
-                inputs_sc2 = {
-                    **base_inputs,
-                    "advantages": mock_inputs["scenario2_advantages"],
-                    "old_per_token_logps": mock_inputs["scenario2_old_logps"],
-                }
-                mock_logps_func.return_value = mock_inputs["scenario2_new_logps"]
-                loss2 = trainer.compute_loss(trainer.model, inputs_sc2)
+                # Compute loss and verify
+                loss = trainer.compute_loss(trainer.model, inputs)
                 self.assertAlmostEqual(
-                    loss2.item(), -2.4, delta=1e-5, msg="Scenario 2 Failed"
-                )  # Loss = -min(3.0, 2.4) = -2.4
-
-                # Scenario 3
-                inputs_sc3 = {
-                    **base_inputs,
-                    "advantages": mock_inputs["scenario3_advantages"],
-                    "old_per_token_logps": mock_inputs["scenario3_old_logps"],
-                }
-                mock_logps_func.return_value = mock_inputs["scenario3_new_logps"]
-                loss3 = trainer.compute_loss(trainer.model, inputs_sc3)
-                self.assertAlmostEqual(
-                    loss3.item(), 1.8, delta=1e-5, msg="Scenario 3 Failed"
-                )  # Loss = -min(-1.8, -1.8) = 1.8
-
-                # Scenario 4
-                inputs_sc4 = {
-                    **base_inputs,
-                    "advantages": mock_inputs["scenario4_advantages"],
-                    "old_per_token_logps": mock_inputs["scenario4_old_logps"],
-                }
-                mock_logps_func.return_value = mock_inputs["scenario4_new_logps"]
-                loss4 = trainer.compute_loss(trainer.model, inputs_sc4)
-                self.assertAlmostEqual(
-                    loss4.item(), 1.6, delta=1e-5, msg="Scenario 4 Failed"
-                )  # Loss = -min(-1.4, -1.6) = 1.6
-
-                # Scenario 5
-                inputs_sc5 = {
-                    **base_inputs,
-                    "advantages": mock_inputs["scenario5_advantages"],
-                    "old_per_token_logps": mock_inputs["scenario5_old_logps"],
-                }
-                mock_logps_func.return_value = mock_inputs["scenario5_new_logps"]
-                loss5 = trainer.compute_loss(trainer.model, inputs_sc5)
-                self.assertAlmostEqual(
-                    loss5.item(), 4.0, delta=1e-5, msg="Scenario 5 Failed"
-                )  # Loss = -min(-4.0, -2.4) = 4.0
-
-                # Scenario 6
-                inputs_sc6 = {
-                    **base_inputs,
-                    "advantages": mock_inputs["scenario6_advantages"],
-                    "old_per_token_logps": mock_inputs["scenario6_old_logps"],
-                }
-                mock_logps_func.return_value = mock_inputs["scenario6_new_logps"]
-                loss6 = trainer.compute_loss(trainer.model, inputs_sc6)
-                self.assertAlmostEqual(
-                    loss6.item(), 3.0, delta=1e-5, msg="Scenario 6 Failed"
-                )  # Loss = -min(-3.0, -2.4) = 3.0
+                    loss.item(),
+                    expected_loss,
+                    delta=1e-5,
+                    msg=f"Scenario {name} failed: expected {expected_loss}, got {loss.item()}",
+                )
