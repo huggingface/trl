@@ -54,6 +54,7 @@ from .utils import (
     OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
+    empty_cache,
     exact_div,
     first_true_indices,
     forward,
@@ -437,7 +438,7 @@ class PPOTrainer(Trainer):
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
                     logprob = selective_log_softmax(logits, response)
                     del logits
-                    torch.cuda.empty_cache()
+                    empty_cache()
 
                     if ref_policy is None:
                         with self.null_ref_context():
@@ -448,7 +449,7 @@ class PPOTrainer(Trainer):
                     ref_logits /= args.temperature + 1e-7
                     ref_logprob = selective_log_softmax(ref_logits, response)
                     del ref_output, ref_logits
-                    torch.cuda.empty_cache()
+                    empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
@@ -484,7 +485,7 @@ class PPOTrainer(Trainer):
                 scores = torch.cat(scores, 0)
                 values = torch.cat(values, 0)
                 del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
-                torch.cuda.empty_cache()
+                empty_cache()
                 gc.collect()
 
                 # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
@@ -531,7 +532,7 @@ class PPOTrainer(Trainer):
                 returns = advantages + values
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
-                torch.cuda.empty_cache()
+                empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
@@ -612,7 +613,7 @@ class PPOTrainer(Trainer):
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,
                     )
                     # fmt: on
-                    torch.cuda.empty_cache()
+                    empty_cache()
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
@@ -649,12 +650,12 @@ class PPOTrainer(Trainer):
                 self._save_checkpoint(model, trial=None)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
-            torch.cuda.empty_cache()
+            empty_cache()
             gc.collect()
 
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
-                torch.cuda.empty_cache()
+                empty_cache()
             del (
                 query_responses,
                 responses,
@@ -674,7 +675,7 @@ class PPOTrainer(Trainer):
                 advantages,
                 returns,
             )
-            torch.cuda.empty_cache()
+            empty_cache()
 
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
