@@ -137,7 +137,7 @@ class GRPOConfig(TrainingArguments):
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
         delta: (`float`, *optional*, defaults to `None`):
-            Delta value for the upper clipping bound in two-sided GRPO. Recommended to be > 1 + epsilon.
+            Delta value for the upper clipping bound in two-sided GRPO. Recommended to be > 1 + epsilon. This method was introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
