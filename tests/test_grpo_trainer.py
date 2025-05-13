@@ -1096,11 +1096,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    def test_training_with_peft(self):
-        # This method is not provided in the original file or the new file
-        # It's assumed to exist as it's called in the test_training_with_mask_truncated_completions method
-        pass
-
     def test_training_with_mask_truncated_completions_all_masked(self):
         """
         Test that when all generated completions are truncated (i.e., none contain an EOS token), and
