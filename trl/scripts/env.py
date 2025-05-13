@@ -27,6 +27,7 @@ from ..import_utils import (
     is_diffusers_available,
     is_liger_kernel_available,
     is_llm_blender_available,
+    is_sglang_available,
     is_vllm_available,
 )
 from .utils import get_git_commit_hash
@@ -69,6 +70,7 @@ def print_env():
         "OpenAI version": version("openai") if is_openai_available() else "not installed",
         "PEFT version": version("peft") if is_peft_available() else "not installed",
         "vLLM version": version("vllm") if is_vllm_available() else "not installed",
+        "SGLang version": version("sglang") if is_sglang_available() else "not installed",
     }
 
     info_str = "\n".join([f"- {prop}: {val}" for prop, val in info.items()])
