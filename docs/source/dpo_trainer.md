@@ -14,7 +14,7 @@ The first step is to train an SFT model, to ensure the data we train on is in-di
 
 Then, fine-tuning a language model via DPO consists of two steps and is easier than [PPO](ppo_trainer):
 
-1. **Data collection**: Gather a [preference dataset](dataset_formats#preference) with positive and negative selected pairs of generation, given a prompt.
+1. **Data collection**: Gather a [preference dataset](dataset_formats.md#preference) with positive and negative selected pairs of generation, given a prompt.
 2. **Optimization**: Maximize the log-likelihood of the DPO loss directly.
 
 This process is illustrated in the sketch below (from [Figure 1 of the DPO paper](https://huggingface.co/papers/2305.18290)):
@@ -81,13 +81,13 @@ The best programming language based on these factors is subjective and depends o
 
 ## Expected dataset type
 
-DPO requires a [preference dataset](dataset_formats#preference). The [`DPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+DPO requires a [preference dataset](dataset_formats.md#preference). The [`DPOTrainer`] supports both [conversational](dataset_formats.md#conversational) and [standard](dataset_formats.md#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
-Although the [`DPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
+Although the [`DPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats.md#preference) section.
 
 ### Special considerations for vision-language models
 
-The [`DPOTrainer`] supports fine-tuning vision-language models (VLMs). For these models, a vision dataset is required. To learn more about the specific format for vision datasets, refer to the [Vision dataset format](dataset_formats#vision-datasets) section.
+The [`DPOTrainer`] supports fine-tuning vision-language models (VLMs). For these models, a vision dataset is required. To learn more about the specific format for vision datasets, refer to the [Vision dataset format](dataset_formats.md#vision-datasets) section.
 
 Additionally, unlike standard text-based models where a `tokenizer` is used, for VLMs, you should replace the `tokenizer` with a `processor`.
 

@@ -312,8 +312,8 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
    - Depending on the dataset format, the input will vary:
-     - For [standard format](dataset_formats#standard), `prompts` and `completions` will be lists of strings.
-     - For [conversational format](dataset_formats#conversational), `prompts` and `completions` will be lists of message dictionaries.
+     - For [standard format](dataset_formats.md#standard), `prompts` and `completions` will be lists of strings.
+     - For [conversational format](dataset_formats.md#conversational), `prompts` and `completions` will be lists of message dictionaries.
 
 2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
 
@@ -391,7 +391,7 @@ You can test this function as follows:
 #### Example 3: Reward completions based on a reference
 
 Below is an example of a reward function that checks if the completion is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
-This example is designed for [standard format](dataset_formats#standard), where the dataset contains a column named `ground_truth`.
+This example is designed for [standard format](dataset_formats.md#standard), where the dataset contains a column named `ground_truth`.
 
 ```python
 import re
