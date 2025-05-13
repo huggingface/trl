@@ -1201,7 +1201,6 @@ class GRPOTrainerTester(unittest.TestCase):
             expected_loss: Expected loss value
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            # Setup model and tokenizer
             model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
             tokenizer = AutoTokenizer.from_pretrained(model_id)
 
