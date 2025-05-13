@@ -156,9 +156,6 @@ class CodeAgentEnvironment(Environment):
         if self.tools_script:
             code_parts = f"{self.tools_script}\n{code_parts}"
 
-        # Basic cleaning
-        code_parts = code_parts.strip()
-
         return code_parts if code_parts else None
 
     def run_agent(

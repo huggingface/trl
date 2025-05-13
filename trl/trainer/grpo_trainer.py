@@ -432,6 +432,13 @@ class GRPOTrainer(Trainer):
                 "You provided an environment, but `use_vllm` is set to False. "
                 "Environments are only supported with vLLM. Please set `use_vllm` to True."
             )
+        # Environments aren't supported with vllm colocate mode
+        if environment is not None and args.use_vllm and args.vllm_mode == "colocate":
+            raise ValueError(
+                "You provided an environment with vLLM in 'colocate' mode."
+                "Environments are not supported in this mode. Please set `vllm_mode` to 'server'."
+            )
+        
         # Initialize the default environment if none provided
         self.environment = environment if environment is not None else DefaultEnvironment()
 
