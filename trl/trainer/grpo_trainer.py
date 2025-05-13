@@ -1350,7 +1350,8 @@ class GRPOTrainer(Trainer):
 
         # Conditionally apply the upper clipping bound (delta) if specified
         if self.args.delta is not None:
-            per_token_loss1 = torch.min(coef_1, self.args.delta) * advantages.unsqueeze(1)
+            # Use clamp instead of min to handle tensor-float comparison
+            per_token_loss1 = torch.clamp(coef_1, max=self.args.delta) * advantages.unsqueeze(1)
         else:
             # Original GRPO clipping (only lower bound implicitly applied by the final min)
             per_token_loss1 = coef_1 * advantages.unsqueeze(1)
