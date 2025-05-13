@@ -258,7 +258,7 @@ You can get the system information by running the following command:
 trl env
 ```
 
-This will print out the system information including the GPU information, the CUDA version, the PyTorch version, the transformers version, and the TRL version, and any optional dependencies that are installed.
+This will print out the system information, including the GPU information, the CUDA version, the PyTorch version, the transformers version, the TRL version, and any optional dependencies that are installed.
 
 ```txt
 Copy-paste the following information when reporting an issue:
@@ -297,6 +297,7 @@ Copy-paste the following information when reporting an issue:
 - LLM-Blender version: 0.0.2
 - OpenAI version: 1.46.0
 - PEFT version: 0.12.0
+- vLLM version: not installed
 ```
 
-This information are required when reporting an issue.
+This information is required when reporting an issue.
