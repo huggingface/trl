@@ -21,7 +21,7 @@ from abc import ABC, abstractmethod
 import torch
 from torch import nn
 
-from ..import_utils import is_requests_available, is_vllm_available
+from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
 
 if is_requests_available():
@@ -32,6 +32,9 @@ if is_requests_available():
 if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
     from vllm.distributed.utils import StatelessProcessGroup
+
+    if is_vllm_ascend_available():
+        from vllm_ascend.distributed.device_communicators.pyhccl import PyHcclCommunicator as PyNcclCommunicator
 
 
 logger = logging.getLogger(__name__)
@@ -76,6 +79,7 @@ class VLLMClient(ABC):
 
         >>> from transformers import AutoModelForCausalLM
         >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map="cuda")
+        >>> client.init_communicator()
         >>> client.update_model_params(model)
         ```
     """
@@ -93,8 +97,6 @@ class VLLMClient(ABC):
         self.server_port = server_port
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
-        self.init_communicator()
-        atexit.register(self.close_communicator)  # when the client object is deleted, close the weight update group
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -172,16 +174,16 @@ class VLLMClient(ABC):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
         """
-        # Get the tensor parallel size from the server
-        url = f"http://{self.host}:{self.server_port}/get_tensor_parallel_size/"
+        # Get the world size from the server
+        url = f"http://{self.host}:{self.server_port}/get_world_size/"
         response = requests.get(url)
         if response.status_code == 200:
-            tensor_parallel_size = response.json()["tensor_parallel_size"]
+            vllm_world_size = response.json()["world_size"]
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        world_size = tensor_parallel_size + 1
-        self.rank = tensor_parallel_size  # The client's rank is the last process
+        world_size = vllm_world_size + 1  # add the client to the world
+        self.rank = vllm_world_size  # the client's rank is the last process
 
         # Initialize weight update group
         url = f"http://{self.host}:{self.server_port}/init_communicator/"
@@ -190,9 +192,17 @@ class VLLMClient(ABC):
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
+        # Brief delay to allow server initialization. While not strictly required (client socket will retry on
+        # connection failure), this prevents log warnings like:
+        # [W416 23:24:57.460001114 socket.cpp:204] [c10d] The hostname of the client socket cannot be retrieved. err=-3
+        time.sleep(0.1)
+
         # Set up the communication group for weight broadcasting
         pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device="cuda:0")
+        self.pynccl_comm = PyNcclCommunicator(pg, device=0)
+
+        # When the client object is deleted, close the weight update group
+        atexit.register(self.close_communicator)
 
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
@@ -211,7 +221,7 @@ class VLLMClient(ABC):
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         # Broadcast the weights to the other processes
-        self.pynccl_comm.broadcast(weights, src=self.rank, stream=torch.cuda.current_stream())
+        self.pynccl_comm.broadcast(weights, src=self.rank)
         self.pynccl_comm.group.barrier()
 
     def update_model_params(self, model: nn.Module):
@@ -323,6 +333,7 @@ if __name__ == "__main__":
     from vllm import SamplingParams
 
     client = VLLMClient()
+    client.init_communicator()
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())

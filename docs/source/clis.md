@@ -1,104 +1,225 @@
 # Command Line Interfaces (CLIs)
 
-You can use TRL to fine-tune your language model with methods like Supervised Fine-Tuning (SFT) or Direct Policy Optimization (DPO) using the command line interface (CLI).
+TRL provides a powerful command-line interface (CLI) to fine-tune large language models (LLMs) using methods like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and more. The CLI abstracts away much of the boilerplate, letting you launch training jobs quickly and reproducibly.
 
-Currently supported CLIs are:
+Currently supported commands are:
 
-#### Training commands
+#### Training Commands
 
 - `trl dpo`: fine-tune a LLM with DPO
 - `trl grpo`: fine-tune a LLM with GRPO
 - `trl kto`: fine-tune a LLM with KTO
 - `trl sft`: fine-tune a LLM with SFT
 
-#### Other commands
+#### Other Commands
 
 - `trl env`: get the system information
+- `trl vllm-serve`: serve a model with vLLM
 
-## Fine-tuning with the CLI
+## Fine-Tuning with the TRL CLI
 
-Before getting started, pick up a Language Model from Hugging Face Hub. Supported models can be found with the filter "text-generation" within models. Also make sure to pick up a relevant dataset for your task.
+### Basic Usage
 
-Before using the `sft` or `dpo` commands make sure to run:
+You can launch training directly from the CLI by specifying required arguments like the model and dataset:
+
+<hfoptions id="command_line">
+<hfoption id="SFT">
+
 ```bash
-accelerate config
+trl sft \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name stanfordnlp/imdb
 ```
-and pick up the right configuration for your training setup (single / multi-GPU, DeepSpeed, etc.). Make sure to complete all steps of `accelerate config` before running any CLI command.
 
-We also recommend you passing a YAML config file to configure your training protocol. Below is a simple example of a YAML file that you can use for training your models with `trl sft` command.
+</hfoption>
+<hfoption id="DPO">
+
+```bash
+trl dpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name anthropic/hh-rlhf
+```
+
+</hfoption>
+</hfoptions>
+
+### Using Configuration Files
+
+To keep your CLI commands clean and reproducible, you can define all training arguments in a YAML configuration file:
+
+<hfoptions id="config_file">
+<hfoption id="SFT">
 
 ```yaml
-model_name_or_path:
-  Qwen/Qwen2.5-0.5B
-dataset_name:
-  stanfordnlp/imdb
-report_to:
-  none
-learning_rate:
-  0.0001
-lr_scheduler_type:
-  cosine
+# sft_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: stanfordnlp/imdb
 ```
 
-Save that config in a `.yaml` and get started immediately! An example CLI config is available as `examples/cli_configs/example_config.yaml`. Note you can overwrite the arguments from the config file by explicitly passing them to the CLI, e.g. from the root folder:
+Launch with:
 
 ```bash
-trl sft --config examples/cli_configs/example_config.yaml --output_dir test-trl-cli --lr_scheduler_type cosine_with_restarts
+trl sft --config sft_config.yaml
 ```
 
-Will force-use `cosine_with_restarts` for `lr_scheduler_type`.
+</hfoption>
+<hfoption id="DPO">
 
-### Supported Arguments 
+```yaml
+# dpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: anthropic/hh-rlhf
+```
 
-We do support all arguments from `transformers.TrainingArguments`, for loading your model, we support all arguments from `~trl.ModelConfig`:
-
-[[autodoc]] ModelConfig
-
-You can pass any of these arguments either to the CLI or the YAML file.
-
-### Supervised Fine-tuning (SFT)
-
-Follow the basic instructions above and run `trl sft --output_dir <output_dir> <*args>`: 
+Launch with:
 
 ```bash
-trl sft --model_name_or_path facebook/opt-125m --dataset_name stanfordnlp/imdb --output_dir opt-sft-imdb
+trl dpo --config dpo_config.yaml
 ```
 
-The SFT CLI is based on the `trl/scripts/sft.py` script.
+</hfoption>
+</hfoptions>
 
-### Direct Policy Optimization (DPO)
+### Scaling Up with Accelerate
 
-To use the DPO CLI, you need to have a dataset in the TRL format such as 
+TRL CLI natively supports [🤗 Accelerate](https://huggingface.co/docs/accelerate), making it easy to scale training across multiple GPUs, machines, or use advanced setups like DeepSpeed — all from the same CLI.
 
-* TRL's Anthropic HH dataset: https://huggingface.co/datasets/trl-internal-testing/hh-rlhf-helpful-base-trl-style
-* TRL's OpenAI TL;DR summarization dataset: https://huggingface.co/datasets/trl-internal-testing/tldr-preference-trl-style
+You can pass any `accelerate launch` arguments directly to `trl`, such as `--num_processes`. For more information see [Using accelerate launch](https://huggingface.co/docs/accelerate/en/basic_tutorials/launch#using-accelerate-launch).
 
-These datasets always have at least three columns `prompt, chosen, rejected`:
-
-* `prompt` is a list of strings.
-* `chosen` is the chosen response in [chat format](https://huggingface.co/docs/transformers/main/en/chat_templating)
-* `rejected` is the rejected response [chat format](https://huggingface.co/docs/transformers/main/en/chat_templating) 
-
-
-To do a quick start, you can run the following command:
+<hfoptions id="launch_args">
+<hfoption id="SFT inline">
 
 ```bash
-trl dpo --model_name_or_path facebook/opt-125m --output_dir trl-hh-rlhf --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style
+trl sft \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name stanfordnlp/imdb \
+  --num_processes 4
 ```
 
+</hfoption>
+<hfoption id="SFT w/ config file">
 
-The DPO CLI is based on the `trl/scripts/dpo.py` script.
+```yaml
+# sft_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: stanfordnlp/imdb
+num_processes: 4
+```
 
-
-#### Custom preference dataset
-
-Format the dataset into TRL format (you can adapt the `examples/datasets/anthropic_hh.py`):
+Launch with:
 
 ```bash
-python examples/datasets/anthropic_hh.py --push_to_hub --hf_entity your-hf-org
+trl sft --config sft_config.yaml
 ```
 
-## Chat interface
+</hfoption>
+<hfoption id="DPO inline">
+
+```bash
+trl dpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name anthropic/hh-rlhf \
+  --num_processes 4
+```
+
+</hfoption>
+<hfoption id="DPO w/ config file">
+
+```yaml
+# dpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: anthropic/hh-rlhf
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl dpo --config dpo_config.yaml
+```
+</hfoption>
+</hfoptions>
+
+### Using `--accelerate_config` for Accelerate Configuration
+
+The `--accelerate_config` flag lets you easily configure distributed training with [🤗 Accelerate](https://github.com/huggingface/accelerate). This flag accepts either:
+
+* the name of a predefined config profile (built into TRL), or
+* a path to a custom Accelerate YAML config file.
+
+#### Predefined Config Profiles
+
+TRL provides several ready-to-use Accelerate configs to simplify common training setups:
+
+| Name         | Description                         |
+| ------------ | ----------------------------------- |
+| `fsdp1`      | Fully Sharded Data Parallel Stage 1 |
+| `fsdp2`      | Fully Sharded Data Parallel Stage 2 |
+| `zero1`      | DeepSpeed ZeRO Stage 1              |
+| `zero2`      | DeepSpeed ZeRO Stage 2              |
+| `zero3`      | DeepSpeed ZeRO Stage 3              |
+| `multi_gpu`  | Multi-GPU training                  |
+| `single_gpu` | Single-GPU training                 |
+
+To use one of these, just pass the name to `--accelerate_config`. TRL will automatically load the corresponding config file from `trl/accelerate_config/`.
+
+#### Example Usage
+
+<hfoptions id="accelerate_config">
+<hfoption id="SFT inline">
+
+```bash
+trl sft \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name stanfordnlp/imdb \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+</hfoption>
+<hfoption id="SFT w/ config file">
+
+```yaml
+# sft_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: stanfordnlp/imdb
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl sft --config sft_config.yaml
+```
+
+</hfoption>
+<hfoption id="DPO inline">
+
+```bash
+trl dpo \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name anthropic/hh-rlhf \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+</hfoption>
+<hfoption id="DPO w/ config file">
+
+```yaml
+# dpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: anthropic/hh-rlhf
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl dpo --config dpo_config.yaml
+```
+</hfoption>
+</hfoptions>
+
+## Chat Interface
 
 <Tip warning={true}>
 
@@ -129,7 +250,7 @@ Besides talking to the model there are a few commands you can use:
 - `save` or `save {SAVE_NAME}`: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
 - `exit`: closes the interface
 
-## Getting the system information
+## Getting the System Information
 
 You can get the system information by running the following command:
 
@@ -137,7 +258,7 @@ You can get the system information by running the following command:
 trl env
 ```
 
-This will print out the system information including the GPU information, the CUDA version, the PyTorch version, the transformers version, and the TRL version, and any optional dependencies that are installed.
+This will print out the system information, including the GPU information, the CUDA version, the PyTorch version, the transformers version, the TRL version, and any optional dependencies that are installed.
 
 ```txt
 Copy-paste the following information when reporting an issue:
@@ -145,7 +266,7 @@ Copy-paste the following information when reporting an issue:
 - Platform: Linux-5.15.0-1048-aws-x86_64-with-glibc2.31
 - Python version: 3.11.9
 - PyTorch version: 2.4.1
-- CUDA device: NVIDIA H100 80GB HBM3
+- accelerator(s): NVIDIA H100 80GB HBM3
 - Transformers version: 4.45.0.dev0
 - Accelerate version: 0.34.2
 - Accelerate config: 
@@ -176,6 +297,7 @@ Copy-paste the following information when reporting an issue:
 - LLM-Blender version: 0.0.2
 - OpenAI version: 1.46.0
 - PEFT version: 0.12.0
+- vLLM version: not installed
 ```
 
-This information are required when reporting an issue.
+This information is required when reporting an issue.

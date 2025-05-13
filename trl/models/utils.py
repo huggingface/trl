@@ -16,9 +16,9 @@ import itertools
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
-from accelerate.utils import is_deepspeed_available
+import torch.nn as nn
 from packaging import version
 from transformers import PreTrainedModel, PreTrainedTokenizer
 
@@ -30,12 +30,10 @@ SUPPORTED_ARCHITECTURES = (
     AutoModelForSeq2SeqLMWithValueHead,
 )
 
-if is_deepspeed_available():
-    import deepspeed
-
 if TYPE_CHECKING:
     from accelerate import Accelerator
     from deepspeed.runtime.engine import DeepSpeedEngine
+    from torch.nn import Module
     from torch.nn.parallel.distributed import DistributedDataParallel
 
 
@@ -167,6 +165,8 @@ def iter_params(module, recurse=False):
 
 def add_hooks(model: "DeepSpeedEngine") -> None:
     """Adds the optimizer hooks from a DeepSpeed ZeRO-3 model."""
+    import deepspeed
+
     if not hasattr(model, "optimizer"):  # before the first training step, the model has no optimizer
         return
     if model.optimizer is not None and hasattr(model.optimizer, "parameter_offload"):
@@ -214,6 +214,8 @@ def unwrap_model_for_generation(
         if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
         else:
+            import deepspeed
+
             with deepspeed.zero.GatheredParameters(model.parameters()):
                 remove_hooks(model)
                 yield accelerator.unwrap_model(model)
@@ -222,8 +224,13 @@ def unwrap_model_for_generation(
         yield unwrapped_model
 
 
-def prepare_deepspeed(model, accelerator):
-    # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
+    """Prepares the model for DeepSpeed inference or evaluation by initializing it with the appropriate configuration.
+
+    Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+    """
+    import deepspeed  # local import (instead of top-level) to avoid DS init interfering with other backends (like vllm): https://github.com/deepspeedai/DeepSpeed/issues/7252
+
     deepspeed_plugin = accelerator.state.deepspeed_plugin
     config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
     stage = config_kwargs["zero_optimization"]["stage"]
@@ -266,7 +273,7 @@ def prepare_fsdp(model, accelerator):
         accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
         fsdp_plugin = accelerator.state.fsdp_plugin
         kwargs = {
-            "sharding_strategy": fsdp_plugin.sharding_strategy,
+            "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
             "cpu_offload": fsdp_plugin.cpu_offload,
             "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
             "mixed_precision": fsdp_plugin.mixed_precision_policy,
@@ -282,3 +289,53 @@ def prepare_fsdp(model, accelerator):
         model = FSDP(model, **kwargs)
     model.eval()
     return model
+
+
+class _ForwardRedirection:
+    """Implements the `forward-redirection`.
+
+    Taken from Pytorch-lightning: https://github.com/Lightning-AI/pytorch-lightning/blob/02311d03fb982560246eead7c08104481fac9579/src/lightning/pytorch/strategies/strategy.py#L602
+
+    A method call to a wrapped module gets rerouted through the wrapper's `forward` method instead.
+
+    """
+
+    def __call__(
+        self, wrapper_module: nn.Module, original_module: nn.Module, method: callable, *args: Any, **kwargs: Any
+    ):
+        """Reroutes a method call through the `wrapper_module`'s `forward` method.
+
+        Args:
+            wrapper_module: The module that has `original_module` wrapped.
+            original_module: The module that was wrapped inside `wrapper_module`.
+            method_name: The name of the method that should be called on the `original_module` after inputs get
+                redirected through the `wrapper_module`'s `forward` method.
+            *args: The positional arguments to the method `method_name`. They will get passed to a patched
+                `forward` method instead.
+            **kwargs: The keyword arguments to the method `method_name`. They will get passed to a patched
+                `forward` method instead.
+
+        """
+        original_forward = original_module.forward
+
+        def wrapped_forward(*_args: Any, **_kwargs: Any) -> Any:
+            # Unpatch ourselves immediately before calling the method `method_name`
+            # because itself may want to call the real `forward`
+            original_module.forward = original_forward  # type: ignore[method-assign]
+            # Call the actual method e.g. `.training_step(...)`
+            out = method(*_args, **_kwargs)
+            self.on_after_inner_forward(wrapper_module, original_module)
+            return out
+
+        # Patch the original_module's forward so we can redirect the arguments back to the real method
+        original_module.forward = wrapped_forward  # type: ignore[method-assign]
+
+        wrapper_output = wrapper_module(*args, **kwargs)
+        self.on_after_outer_forward(wrapper_module, original_module)
+        return wrapper_output
+
+    def on_after_inner_forward(self, wrapper_module: nn.Module, original_module: nn.Module) -> None:
+        pass
+
+    def on_after_outer_forward(self, wrapper_module: nn.Module, original_module: nn.Module) -> None:
+        pass

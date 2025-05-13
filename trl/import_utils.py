@@ -22,7 +22,7 @@ from packaging import version
 from transformers.utils.import_utils import _is_package_available
 
 
-LIGER_KERNEL_MIN_VERSION = "0.5.6"
+LIGER_KERNEL_MIN_VERSION = "0.5.8"
 
 # Use same as transformers.utils.import_utils
 _deepspeed_available = _is_package_available("deepspeed")
@@ -33,11 +33,11 @@ _llm_blender_available = _is_package_available("llm_blender")
 _mergekit_available = _is_package_available("mergekit")
 _pydantic_available = _is_package_available("pydantic")
 _requests_available = _is_package_available("requests")
-_rich_available = _is_package_available("rich")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
 _uvloop_available = _is_package_available("uvloop")
 _vllm_available = _is_package_available("vllm")
+_vllm_ascend_available = _is_package_available("vllm_ascend")
 _joblib_available = _is_package_available("joblib")
 
 
@@ -73,10 +73,6 @@ def is_requests_available() -> bool:
     return _requests_available
 
 
-def is_rich_available() -> bool:
-    return _rich_available
-
-
 def is_unsloth_available() -> bool:
     return _unsloth_available
 
@@ -91,6 +87,10 @@ def is_uvloop_available() -> bool:
 
 def is_vllm_available() -> bool:
     return _vllm_available
+
+
+def is_vllm_ascend_available() -> bool:
+    return _vllm_ascend_available
 
 
 def is_joblib_available() -> bool:
