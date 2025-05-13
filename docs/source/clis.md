@@ -258,7 +258,7 @@ You can get the system information by running the following command:
 trl env
 ```
 
-This will print out the system information including the GPU information, the CUDA version, the PyTorch version, the transformers version, and the TRL version, and any optional dependencies that are installed.
+This will print out the system information, including the GPU information, the CUDA version, the PyTorch version, the transformers version, the TRL version, and any optional dependencies that are installed.
 
 ```txt
 Copy-paste the following information when reporting an issue:
@@ -266,7 +266,7 @@ Copy-paste the following information when reporting an issue:
 - Platform: Linux-5.15.0-1048-aws-x86_64-with-glibc2.31
 - Python version: 3.11.9
 - PyTorch version: 2.4.1
-- CUDA device: NVIDIA H100 80GB HBM3
+- accelerator(s): NVIDIA H100 80GB HBM3
 - Transformers version: 4.45.0.dev0
 - Accelerate version: 0.34.2
 - Accelerate config: 
@@ -297,6 +297,7 @@ Copy-paste the following information when reporting an issue:
 - LLM-Blender version: 0.0.2
 - OpenAI version: 1.46.0
 - PEFT version: 0.12.0
+- vLLM version: not installed
 ```
 
-This information are required when reporting an issue.
+This information is required when reporting an issue.
