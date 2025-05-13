@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from itertools import chain
-from multiprocessing import Pipe, Process, set_start_method
+from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 from typing import Optional
 
@@ -352,7 +352,6 @@ def main(script_args: ScriptArguments):
         raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
 
     # Spawn dp workers, and setup pipes for communication
-    set_start_method('spawn')
     master_port = get_open_port()
     connections = []
     processes = []
