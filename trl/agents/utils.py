@@ -32,12 +32,17 @@ from inspect import getsource
 from pathlib import Path
 from typing import Callable
 
-from ..import_utils import is_e2b_available
+from ..import_utils import is_e2b_available, is_modal_available
 from .local_code_executer import PythonREPL  # used for local code execution
 
 
 if is_e2b_available():
     from e2b_code_interpreter import AsyncSandbox  # used for E2B async code execution
+
+if is_modal_available():
+    from concurrent.futures import ThreadPoolExecutor
+
+    import modal  # used for modal sandboxed code execution
 
 
 default_system_prompt = "You can answer questions and solve problems. If running code helps, write it inside <code> </code>, and you will see the result. Example: To calculate 2 + 2, write <code> print(2 + 2) </code>."
@@ -147,6 +152,115 @@ class E2BExecuter:
         else:
             # We're in a regular Python environment
             return loop.run_until_complete(run_batch())
+
+
+class ModalCodeExecuter:
+    """
+    Executes Python code within a Modal Sandbox environment,
+    handling concurrent execution of multiple code strings using ThreadPoolExecutor.
+    Before using make sure you authenticate with `modal setup`
+    Example usage:
+        image = (modal.Image.debian_slim(python_version="3.12").pip_install("torch"))
+        app = modal.App.lookup("my-app", create_if_missing=True)
+        executer = ModalCodeExecuter(image=image, app=app,gpu="T4", max_workers=16)
+        result = executer.execute([code_string1, code_string2,...]) # List of code strings
+    """
+
+    def __init__(self, app, image=None, secrets=None, gpu=None, max_workers=32):
+        """
+        Initializes the ModalCodeExecuter.
+        Args:
+            image: The modal.Image to use for the sandbox.
+            app: The modal.App associated with the sandbox.
+            gpu: The GPU configuration for the sandbox (default: None).
+            max_workers: The maximum number of threads (and thus concurrent sandboxes)
+                         to use (default: 10). Adjust based on expected load and
+                         Modal plan limits.
+        """
+        self.app = app
+        self.image = image
+        self.secrets = secrets
+        self.gpu = gpu
+        self.max_workers = max_workers
+        # Run a test code to validate connection
+        validation_code = "print('Modal connection test successful')"
+        result = self.execute([validation_code])[0]
+        # Check if the result contains the expected output
+        if "successful" not in result:
+            raise ConnectionError(f"Modal connection test failed. Response: {result}")
+
+    def _execute_single_sync(self, code_string: str):
+        """
+        Executes a single Python code string in a dedicated Modal Sandbox (Synchronous).
+        Args:
+            code_string: The Python code to execute.
+        Returns:
+            The raw standard output bytes if not empty, otherwise the
+            raw standard error bytes. Returns empty bytes if both are empty,
+            or an Exception object on failure.
+        """
+        sb = None
+        # print(f"Thread starting execution for: {code_string[:20]}...") # Debug print
+        try:
+            # Create sandbox - This is a blocking call
+            sb = modal.Sandbox.create(
+                app=self.app,
+                image=self.image,
+                secrets=self.secrets,
+                gpu=self.gpu,
+                timeout=60,  # Added a timeout for safety
+            )
+
+            # Execute code - This is a blocking call until sb.exec returns
+            p = sb.exec("python", "-c", code_string)
+
+            # Wait for the process to complete - This is a blocking call
+            p.wait()
+
+            # Read stdout first
+            result_bytes = p.stdout.read()
+
+            if result_bytes:
+                # If stdout has content, return the raw bytes
+                # print(f"Thread finished (stdout): {code_string[:20]}...") # Debug print
+                return result_bytes
+            else:
+                # If stdout is empty, read and return raw stderr bytes
+                error_bytes = p.stderr.read()
+                # print(f"Thread finished (stderr/empty): {code_string[:20]}...") # Debug print
+                return error_bytes  # Return stderr bytes (could be empty bytes b'')
+
+        except Exception as e:
+            # Catch potential exceptions during sandbox creation or execution
+            # print(f"Thread finished (exception): {code_string[:20]}... {e}") # Debug print
+            return e  # Return the exception itself
+        finally:
+            # Ensure sandbox is terminated even if errors occur
+            if sb:
+                # print(f"Terminating sandbox for: {code_string[:20]}...") # Debug print
+                sb.terminate()  # Blocking call
+
+    def execute(self, code_strings: list[str]):
+        """
+        Creates sandboxes, executes the provided Python code strings concurrently
+        using a ThreadPoolExecutor, terminates the sandboxes, and returns a list
+        of outputs (bytes) or errors.
+        Args:
+            code_strings: A list of Python code strings to execute.
+        Returns:
+            A list containing the raw standard output/error bytes or Exception objects
+            for each corresponding code string.
+        """
+        results = []
+        # Use ThreadPoolExecutor to manage concurrent threads
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # map submits tasks and returns results in the order of the input iterable
+            # It waits for all tasks to complete.
+            future_results = executor.map(self._execute_single_sync, code_strings)
+            # Convert map iterator to list to ensure all tasks are finished and get results
+            results = list(future_results)
+
+        return results
 
 
 def prepare_data_for_e2b_agent(

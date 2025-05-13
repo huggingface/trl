@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from .environments import CodeAgentEnvironment, DefaultEnvironment, Environment
-from .utils import E2BExecuter, LocalExecuter, prepare_data_for_e2b_agent, prepare_data_for_local_agent
+from .utils import E2BExecuter, ModalCodeExecuter, LocalExecuter, prepare_data_for_e2b_agent, prepare_data_for_local_agent
 
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     "DefaultEnvironment",
     "CodeAgentEnvironment",
     "E2BExecuter",
+    "ModalCodeExecuter",
     "LocalExecuter",
     "prepare_data_for_e2b_agent",
     "prepare_data_for_local_agent",

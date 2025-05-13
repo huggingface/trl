@@ -21,7 +21,7 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 _import_structure = {
     "agents.environments": ["Environment", "DefaultEnvironment", "CodeAgentEnvironment"],
-    "agents.utils": ["E2BExecuter", "LocalExecuter", "prepare_data_for_e2b_agent", "prepare_data_for_local_agent"],
+    "agents.utils": ["E2BExecuter", "ModalCodeExecuter", "LocalExecuter", "prepare_data_for_e2b_agent", "prepare_data_for_local_agent"],
     "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
     "data_utils": [
         "apply_chat_template",
@@ -119,7 +119,7 @@ else:
 
 if TYPE_CHECKING:
     from .agents.environments import CodeAgentEnvironment, DefaultEnvironment, Environment
-    from .agents.utils import E2BExecuter, LocalExecuter, prepare_data_for_e2b_agent, prepare_data_for_local_agent
+    from .agents.utils import E2BExecuter, ModalCodeExecuter,LocalExecuter, prepare_data_for_e2b_agent, prepare_data_for_local_agent
     from .data_utils import (
         apply_chat_template,
         extract_prompt,
