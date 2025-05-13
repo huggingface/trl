@@ -21,20 +21,23 @@ from accelerate.commands.config import default_config_file, load_config_from_fil
 from transformers import is_bitsandbytes_available
 from transformers.utils import is_openai_available, is_peft_available
 
-from .. import __version__
-from ..import_utils import (
+from trl import __version__
+from trl.import_utils import (
     is_deepspeed_available,
     is_diffusers_available,
     is_liger_kernel_available,
     is_llm_blender_available,
     is_vllm_available,
 )
-from .utils import get_git_commit_hash
+from utils import get_git_commit_hash
 
 
 def print_env():
+    devices = None
     if torch.cuda.is_available():
         devices = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+    elif torch.xpu.is_available():
+        devices = [torch.xpu.get_device_name(i) for i in range(torch.xpu.device_count())]
 
     accelerate_config = accelerate_config_str = "not found"
 
@@ -55,7 +58,7 @@ def print_env():
         "Python version": platform.python_version(),
         "TRL version": f"{__version__}+{commit_hash[:7]}" if commit_hash else __version__,
         "PyTorch version": version("torch"),
-        "CUDA device(s)": ", ".join(devices) if torch.cuda.is_available() else "not available",
+        "accelerator(s)": ", ".join(devices) if devices != None else "not available",
         "Transformers version": version("transformers"),
         "Accelerate version": version("accelerate"),
         "Accelerate config": accelerate_config_str,
