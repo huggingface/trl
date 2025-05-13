@@ -58,7 +58,7 @@ def print_env():
         "Python version": platform.python_version(),
         "TRL version": f"{__version__}+{commit_hash[:7]}" if commit_hash else __version__,
         "PyTorch version": version("torch"),
-        "accelerator(s)": ", ".join(devices) if devices != None else "not available",
+        "accelerator(s)": ", ".join(devices) if devices is not None else "cpu",
         "Transformers version": version("transformers"),
         "Accelerate version": version("accelerate"),
         "Accelerate config": accelerate_config_str,
