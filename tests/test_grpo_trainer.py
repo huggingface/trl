@@ -1204,8 +1204,6 @@ class GRPOTrainerTester(unittest.TestCase):
             # Setup model and tokenizer
             model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
             tokenizer = AutoTokenizer.from_pretrained(model_id)
-            if tokenizer.pad_token is None:
-                tokenizer.pad_token = tokenizer.eos_token
 
             # Load minimal dataset
             dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train[:1]")
