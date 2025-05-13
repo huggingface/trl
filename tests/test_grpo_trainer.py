@@ -1091,6 +1091,8 @@ class GRPOTrainerTester(unittest.TestCase):
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
             trainer.train()
 
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            
             # Check if the model parameters have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
