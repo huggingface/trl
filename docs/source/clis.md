@@ -266,7 +266,7 @@ Copy-paste the following information when reporting an issue:
 - Platform: Linux-5.15.0-1048-aws-x86_64-with-glibc2.31
 - Python version: 3.11.9
 - PyTorch version: 2.4.1
-- CUDA device: NVIDIA H100 80GB HBM3
+- accelerator(s): NVIDIA H100 80GB HBM3
 - Transformers version: 4.45.0.dev0
 - Accelerate version: 0.34.2
 - Accelerate config: 
