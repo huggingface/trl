@@ -20,7 +20,7 @@ import unittest
 import psutil
 import pytest
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_torch_multi_accelerator, require_torch_multi_gpu, torch_device
+from transformers.testing_utils import require_torch_multi_accelerator, torch_device
 
 from trl.extras.vllm_client import VLLMClient
 from trl.scripts.vllm_serve import chunk_list
