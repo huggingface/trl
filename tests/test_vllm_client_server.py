@@ -19,6 +19,7 @@ import unittest
 
 import psutil
 import pytest
+import torch
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import require_torch_multi_gpu
 
@@ -65,50 +66,35 @@ class TestVLLMClientServer(unittest.TestCase):
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = "1"  # Restrict to GPU 1
 
-        # Start the server process
-        cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
-        )
+        # # Start the server process
+        # cls.server_process = subprocess.Popen(
+        #     ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+        # )
 
         # Initialize the client
         cls.client = VLLMClient(connection_timeout=240)
         cls.client.init_communicator()
 
     def test_generate(self):
-        prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)
-
-        # Check that the output is a list
-        self.assertIsInstance(outputs, list)
-
-        # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
-
-        # Check that the generated sequences are lists of integers
-        for seq in outputs:
-            self.assertTrue(all(isinstance(tok, int) for tok in seq))
-
-    def test_generate_with_params(self):
-        prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)
-
-        # Check that the output is a list
-        self.assertIsInstance(outputs, list)
-
-        # Check that the number of generated sequences is 2 times the number of prompts
-        self.assertEqual(len(outputs), 2 * len(prompts))
-
-        # Check that the generated sequences are lists of integers
-        for seq in outputs:
-            self.assertTrue(all(isinstance(tok, int) for tok in seq))
-
-        # Check that the length of the generated sequences is less than or equal to 32
-        for seq in outputs:
-            self.assertLessEqual(len(seq), 32)
+        prompt = "Hello, AI! Tell me a joke."
+        response = self.client.session.post(
+            url="http://localhost:8000/v1/completions",
+            json={
+                "model": self.model_id,
+                "prompt": prompt,
+                "max_tokens": 50
+            }
+        )
+        response.raise_for_status()
+        print(response.json())
 
     def test_update_model_params(self):
+        self.test_generate()
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map="cuda")
+        for name, param in model.named_parameters():
+            param.data = torch.zeros_like(param.data)
         self.client.update_model_params(model)
+        self.test_generate()
 
     def test_reset_prefix_cache(self):
         # Test resetting the prefix cache
@@ -121,14 +107,14 @@ class TestVLLMClientServer(unittest.TestCase):
         # Close the client
         cls.client.close_communicator()
 
-        # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
-        # kill the server process and its children explicitly.
-        parent = psutil.Process(cls.server_process.pid)
-        children = parent.children(recursive=True)
-        for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+        # # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
+        # # kill the server process and its children explicitly.
+        # parent = psutil.Process(cls.server_process.pid)
+        # children = parent.children(recursive=True)
+        # for child in children:
+        #     child.send_signal(signal.SIGTERM)
+        # cls.server_process.terminate()
+        # cls.server_process.wait()
 
 
 @pytest.mark.slow

@@ -1,0 +1,93 @@
+    1  cd ..
+    2  cd workspace
+    3  git clone git@github.com:huggingface/trl.git
+    4  ssh-keygen
+    5  cat ~/.ssh/id_rsa.pub
+    6  git clone git@github.com:huggingface/trl.git
+    7  cd trl
+    8  uv venv
+    9  curl -LsSf https://astral.sh/uv/install.sh | sh
+   10  zsh
+   11  uv venv -p python3.12
+   12  source .venv/bin/activate
+   13  clear
+   14  uv pip install ".[vllm, test]"
+   15  clear
+   16  cd trl
+   17  nvidia-smi
+   18  pytest -s tests/test_vllm_client_server.py
+   19  uv pip install -r requirements.txt
+   20  pytest -s tests/test_vllm_client_server.py
+   21  python
+   22  python -m tests.test_vllm_client_server
+   23  zsh
+   24  pytest -s tests/test_vllm_client_server.py
+   25  nvidia-smi
+   26  pytest -v -m slow tests/test_vllm_client_server.py
+   27  nvidia-smi
+   28  clear
+   29  uv run
+   30  source .venv/bin/activate
+   31  pip
+   32  pip freeze | grep vllm
+   33  uv pip install vllm==0.8.5
+   34  uv pip install vllm==0.8.5.post1
+   35  python trl/scripts/vllm_serve_async.py --model Qwen/Qwen2.5-1.5B
+   36  uv pip install uvloop
+   37  uv pip install setuptools
+   38  python trl/scripts/vllm_serve_async.py --model Qwen/Qwen2.5-1.5B
+   39  CUDA_VISIBLE_DEVICES=1 python trl/scripts/vllm_serve_async.py --model Qwen/Qwen2.5-1.5B --max_model_len 512
+   40  nvidia-smi
+   41  curl http://localhost:8000/v1/completions -H "Content-Type: application/json" -d '{"model": "default", "prompt": "Hello, how are you?", "max_tokens": 50}'
+   42  curl http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "default", "prompt": "Hello, how are you?", "max_tokens": 50}'
+   43  clear
+   44  pytest -v -m slow tests/test_vllm_client_server.py
+   45  zsh
+   46  pytest -v -m slow tests/test_vllm_client_server.py
+   47  source .venv/bin/activate
+   48  pytest -v -m slow tests/test_vllm_client_server.py
+   49  cd trl
+   50  source .venv/bin/activate
+   51  CUDA_VISIBLE_DEVICES=1 python trl/scripts/vllm_serve_async.py --model Qwen/Qwen2.5-1.5B --max_model_len 512
+   52  pytest -v -m slow tests/test_vllm_client_server.py
+   53  CUDA_VISIBLE_DEVICES=1 python trl/scripts/vllm_serve_async.py --model Qwen/Qwen2.5-1.5B --max_model_len 512
+   54  cclear
+   55  clear
+   56  pytest -v -m slow tests/test_vllm_client_server.py
+   57  cd trl
+   58  source .venv/bin/activate
+   59  clear
+   60  cleatr
+   61  clear
+   62  CUDA_VISIBLE_DEVICES=1 python trl/scripts/vllm_serve_async.py --model Qwen/Qwen2.5-1.5B --max_model_len 512
+   63  source .venv/bin/activate
+   64  pytest -v -m slow tests/test_vllm_client_server.py
+   65  cd trl
+   66  source "\root\.cursor-server\cli\servers\Stable-0781e811de386a0c5bcb07ceb259df8ff8246a50\server\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration-rc.zsh"
+   67  . "\root\.cursor-server\cli\servers\Stable-0781e811de386a0c5bcb07ceb259df8ff8246a50\server\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration-bash.sh"
+   68  cd trlk
+   69  cd trl
+   70  source "\root\.cursor-server\cli\servers\Stable-0781e811de386a0c5bcb07ceb259df8ff8246a50\server\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration-rc.zsh"
+   71  source .venv/bin/activate
+   72  CUDA_VISIBLE_DEVICES=1 python trl/scripts/vllm_serve_async.py --model Qwen/Qwen2.5-1.5B --max_model_len 512
+   73  pytest -s tests/test_vllm_client_server.py::TestVLLMClientServer::test_generate
+   74  zsh
+   75  source .venv/bin/activate
+   76  pytest -s tests/test_vllm_client_server.py::TestVLLMClientServer::test_generate
+   77  pytest -s tests/test_vllm_client_server.py::TestVLLMClientServer::test_update_model_params
+   78  gs
+   79  git status
+   80  gd
+   81  git remote add fork git@github.com:ASSERT-KTH/trl.git
+   82  gs
+   83  gco -b async-weightsync-working
+   84  gs
+   85  git status
+   86  git add .
+   87  git commit -m "finally working"
+   88  git config --global user.email "bjarnihaukur11@gmail.com"
+   89  git config --global user.name "Bjarni Haukur"
+   90  git push --set-upstream origin fork
+   91  gs
+   92  git push --set-upstream fork async-weightsync-working
+   93  history

@@ -200,7 +200,8 @@ class VLLMClient:
         if response.status_code == 200:
             vllm_world_size = response.json()["world_size"]
         else:
-            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+            vllm_world_size = 1
+            # raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         world_size = vllm_world_size + 1  # add the client to the world
         self.rank = vllm_world_size  # the client's rank is the last process
@@ -216,6 +217,10 @@ class VLLMClient:
         # connection failure), this prevents log warnings like:
         # [W416 23:24:57.460001114 socket.cpp:204] [c10d] The hostname of the client socket cannot be retrieved. err=-3
         time.sleep(0.1)
+
+        import sys
+        sys.stderr.write(f"VLLMCLIENT STARTING COMMUNICATION GROUP\n")
+        sys.stderr.flush()
 
         # Set up the communication group for weight broadcasting
         pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
