@@ -266,7 +266,7 @@ class ModalCodeExecuter:
 def prepare_data_for_e2b_agent(
     dataset,
     tokenizer,
-    prompt_column: str = "prompt",
+    prompts_column: str = "prompts",
     system_prompt: str = default_system_prompt,
     environment_prompt: str = default_environment_prompt,
     tools_script_path: str = None,
@@ -280,7 +280,7 @@ def prepare_data_for_e2b_agent(
             A Hugging Face dataset object
         tokenizer (`PreTrainedTokenizer`):
             A tokenizer with an `apply_chat_template` method to process conversations
-        prompt_column (`str`, *optional*, defaults to `"prompt"`):
+        prompts_column (`str`, *optional*, defaults to `"prompts"`):
             Name of the column containing prompts.
         system_prompt (`str`, *optional*, defaults to `default_system_prompt`):
             The base system prompt.
@@ -294,7 +294,7 @@ def prepare_data_for_e2b_agent(
             Modified dataset with processed prompts in the prompt column
     """
     # Convert dataset prompts to conversational format
-    conversations = [[{"role": "user", "content": prompt}] for prompt in dataset[prompt_column]]
+    conversations = [[{"role": "user", "content": prompt}] for prompt in dataset[prompts_column]]
 
     # If a tools script path is provided, read its content and append with the environment prompt
     if tools_script_path:
@@ -316,7 +316,7 @@ def prepare_data_for_e2b_agent(
     processed_prompts = tokenizer.apply_chat_template(conversations, tokenize=False, add_generation_prompt=True)
 
     # Create a new dataset with processed prompts
-    return dataset.map(lambda x, idx: {prompt_column: processed_prompts[idx]}, with_indices=True)
+    return dataset.map(lambda x, idx: {prompts_column: processed_prompts[idx]}, with_indices=True)
 
 
 def prepare_data_for_local_agent(
