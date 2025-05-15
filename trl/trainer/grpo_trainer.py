@@ -336,7 +336,7 @@ class GRPOTrainer(Trainer):
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         vllm_client_cls (`Optional[Type[VLLMClient]]`, *optional*, defaults to `None`):
-            The vLLM client class to use (currently only for async vLLM). If `None`, the default vLLM client will be used.
+            (async WIP) The vLLM client class to use (currently only for async vLLM). If `None`, the default vLLM client will be used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
@@ -1047,9 +1047,40 @@ class GRPOTrainer(Trainer):
                 completion_ids = completion_ids[process_slice]
             elif self.vllm_mode == "async_server":
                 if self.accelerator.is_main_process:
-                    ...
+                    with profiling_context(self, "Async vLLM.generate"):
+                        outputs = self.vllm_client.generate(
+                            data=gather_object(inputs),
+                            repetition_penalty=self.repetition_penalty,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=-1 if self.top_k is None else self.top_k,
+                            min_p=0.0 if self.min_p is None else self.min_p,
+                            max_tokens=self.max_completion_length,
+                            # guided_decoding_regex=self.guided_decoding_regex,
+                        )
+                        prompts = [o["prompt"] for o in outputs]
+                        tools = [o["tools"] for o in outputs]  # should be included 
+                        completions = [o["completion"] for o in outputs]
+
+                        prompts_text = [
+                            self.processing_class.apply_chat_template(p, tools=t tokenize=False)
+                            for p, t in zip(prompts, tools)
+                        ]
+                        prompt_inputs = self.processing_class(
+                            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+                        )
+                        prompt_inputs = super()._prepare_inputs(prompt_inputs)
+                        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+                        completions_text = [self.processing_class.apply_chat_template(example, tokenize=False) for example in completions]
                 else:
                     completion_ids = [None] * len(prompts)
+
+                ...
+                extra_reward_kwargs = {k: v for k, v in outputs.items() if k not in ["prompt", "completion"]}
+                completion_lens = [len(ids) for ids in completion_ids]
+                ...
+                    
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
@@ -1110,12 +1141,19 @@ class GRPOTrainer(Trainer):
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+        if self.args.multi_turn and self.args.vllm_mode == "async_server": # TODO: Fix
+            # Create an integer mask based on completion lengths to mask right padding tokens
+            max_completion_len = completion_ids.size(1)
+            indices = torch.arange(max_completion_len, device=device).expand(completion_ids.size(0), -1)
+            completion_lens_tensor = torch.tensor(completion_lens, device=device).unsqueeze(1)
+            completion_mask = (indices < completion_lens_tensor).int()  # all except last eos which is supposed to be there
+        else:
+            # Mask everything after the first EOS token
+            is_eos = completion_ids == self.processing_class.eos_token_id
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.

@@ -86,8 +86,8 @@ class GRPOConfig(TrainingArguments):
             tokens.
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
-        multiturn (`bool`, *optional*, defaults to `False`):
-            Whether generations are multiturn. Controls how padding is masked in the generation.
+        multi_turn (`bool`, *optional*, defaults to `False`):
+            (async WIP) Whether generations are multiturn. Controls how padding is masked in the generation.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -100,8 +100,9 @@ class GRPOConfig(TrainingArguments):
 
             - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
               server is running (start with `trl vllm-serve`).
-            - `"async_server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
+            - (async WIP) `"async_server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
               server is running (start with `trl vllm-serve-async`).
+              The users writes their own .generate() methods by utilizing the openai-compatible API.
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
