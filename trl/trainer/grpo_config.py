@@ -86,18 +86,22 @@ class GRPOConfig(TrainingArguments):
             tokens.
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
+        multiturn (`bool`, *optional*, defaults to `False`):
+            Whether generations are multiturn. Controls how padding is masked in the generation.
 
         > Parameters that control generation acceleration powered by vLLM
 
-        use_vllm (`bool`, *optional*, defaults to `False`):
+        use_vllm (`bool`, *optional*, defaults to `False`, `use_sglang` must be set to `False`):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
             instead of the default model.generate(). Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"server"`):
-            Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
+            Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"`, `"async_server"`, or
             `"colocate"`.
 
             - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
               server is running (start with `trl vllm-serve`).
+            - `"async_server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
+              server is running (start with `trl vllm-serve-async`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
@@ -123,6 +127,16 @@ class GRPOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+
+        > Parameters that control generation acceleration powered by SGLang
+
+        use_sglang (`bool`, *optional*, defaults to `False`, `use_vllm` must be set to `False`):
+            Whether to use SGLang for generating completions. If set to `True`, the trainer will use SGLang for generation
+            instead of the default model.generate(). Requires `sglang` to be installed.
+
+        sglang_mode (`str`, *optional*, defaults to `"server"`):
+            Mode to use for SGLang integration when `use_sglang` is set to `True`. Must be one of `"server"` or
+            `"colocate"`.
 
         > Parameters that control the training
 
@@ -321,9 +335,10 @@ class GRPOConfig(TrainingArguments):
     vllm_mode: str = field(
         default="server",
         metadata={
-            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
-            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a "
-            "TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server`, "
+            "`async_server`, or `colocate`. `'server'`: The trainer will send generation requests to a separate vLLM "
+            "server. Make sure a TRL vLLM server is running (start with `trl vllm-serve`). `'async_server'`: The "
+            "TRL vLLM server is running (start with `trl vllm-serve-async`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
         },

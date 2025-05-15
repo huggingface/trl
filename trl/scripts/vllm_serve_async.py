@@ -48,7 +48,6 @@ standard OpenAI API calls) and synchronize weights (using the TRL-specific endpo
 
 import os
 import signal
-import argparse
 
 import torch
 
@@ -56,6 +55,7 @@ from trl.import_utils import (
     is_fastapi_available,
     is_pydantic_available,
     is_uvicorn_available,
+    is_uvloop_available,
     is_vllm_available,
 )
 
@@ -68,32 +68,34 @@ if is_pydantic_available():
     from pydantic import BaseModel
 
 
+if is_uvicorn_available():
+    import uvicorn
 
-import uvloop
+
+if is_uvloop_available():
+    import uvloop
 
 
-if not is_vllm_available():
-    raise ImportError("vLLM is required to run the vLLM serve script. Please install it using `pip install vllm`.")
-
-from vllm.logger import init_logger
-from vllm.utils import FlexibleArgumentParser, set_ulimit, is_valid_ipv6_address
-from vllm.v1.engine.async_llm import AsyncLLM
-from vllm.reasoning import ReasoningParserManager
-from vllm.entrypoints.openai.tool_parsers import ToolParserManager
-from vllm.entrypoints.openai.api_server import (
-    build_app,
-    build_async_engine_client,
-    serve_http,
-    init_app_state,
-    create_server_socket,
-    cli_env_setup,
-    make_arg_parser,
-)
-from vllm.entrypoints.openai.cli_args import (
-    make_arg_parser,
-    validate_parsed_serve_args,
-)
-from vllm.version import __version__ as VLLM_VERSION
+if is_vllm_available():
+    from vllm.logger import init_logger
+    from vllm.utils import FlexibleArgumentParser, set_ulimit, is_valid_ipv6_address
+    from vllm.v1.engine.async_llm import AsyncLLM
+    from vllm.reasoning import ReasoningParserManager
+    from vllm.entrypoints.openai.tool_parsers import ToolParserManager
+    from vllm.entrypoints.openai.api_server import (
+        build_app,
+        build_async_engine_client,
+        serve_http,
+        init_app_state,
+        create_server_socket,
+        cli_env_setup,
+        make_arg_parser,
+    )
+    from vllm.entrypoints.openai.cli_args import (
+        make_arg_parser,
+        validate_parsed_serve_args,
+    )
+    from vllm.version import __version__ as VLLM_VERSION
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
@@ -106,21 +108,23 @@ logger = init_logger(__name__)
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 def add_vllm_client_endpoints(app: FastAPI, llm: AsyncLLM):
-    @app.get("/get_tensor_parallel_size/")
-    async def get_tensor_parallel_size():
+    @app.get("/get_world_size/")
+    async def get_world_size():
         """
         Retrieves the tensor parallel size from the LLM engine.
 
         Returns:
             `dict`:
-                A dictionary containing the tensor parallel size.
+                A dictionary containing the world size.
 
         Example response:
         ```json
-        {"tensor_parallel_size": 8}
+        {"world_size": 8}
         ```
         """
-        return {"tensor_parallel_size": llm.vllm_config.parallel_config.tensor_parallel_size}
+        tp = llm.vllm_config.parallel_config.tensor_parallel_size
+        dp = llm.vllm_config.parallel_config.data_parallel_size
+        return {"world_size": tp * dp}
 
     class InitCommunicatorRequest(BaseModel):
         host: str
@@ -139,19 +143,13 @@ def add_vllm_client_endpoints(app: FastAPI, llm: AsyncLLM):
                 - `port` (`int`): Port number to be used for communication.
                 - `world_size` (`int`): Total number of participating processes in the group.
         """
-        import sys
-        sys.stderr.write(f"\n\n!!! ASYNC init_communicator START: host={request.host}, port={request.port}, world_size={request.world_size} !!!\n\n")
-        sys.stderr.flush()
-        
-
+        tp = llm.vllm_config.parallel_config.tensor_parallel_size
+        dp = llm.vllm_config.parallel_config.data_parallel_size
         background_tasks.add_task(
             llm.engine_core.collective_rpc_async,
             "init_communicator",
-            args=(request.host, request.port, llm.vllm_config.parallel_config.tensor_parallel_size + 1),
+            args=(request.host, request.port, tp * dp + 1)
         )
-        
-        sys.stderr.write("\n\n!!! ASYNC init_communicator BACKGROUND TASK ADDED !!!\n\n")
-        sys.stderr.flush()
         return {"message": "Request received, initializing communicator"}
 
     class UpdateWeightsRequest(BaseModel):
@@ -191,14 +189,9 @@ def add_vllm_client_endpoints(app: FastAPI, llm: AsyncLLM):
         """
         Resets the prefix cache for the model.
         """
-        import sys
-        sys.stderr.write("\n\n!!! ASYNC RESET_PREFIX_CACHE STARTED !!!\n\n")
-        sys.stderr.flush()
         background_tasks.add_task(
             llm.engine_core.reset_prefix_cache_async
         )
-        sys.stderr.write("\n\n!!! ASYNC RESET_PREFIX_CACHE BACKGROUND TASK ADDED !!!\n\n")
-        sys.stderr.flush()
         return {"message": "Request received, resetting prefix cache"}
 
     @app.post("/close_communicator/")
@@ -206,17 +199,10 @@ def add_vllm_client_endpoints(app: FastAPI, llm: AsyncLLM):
         """
         Closes the weight update group and cleans up associated resources.
         """
-        import sys
-        sys.stderr.write("\n\n!!! ASYNC close_communicator START !!!\n\n")
-        sys.stderr.flush()
-        
         background_tasks.add_task(
             llm.engine_core.collective_rpc_async,
             "close_communicator"
         )
-        
-        sys.stderr.write("\n\n!!! ASYNC close_communicator CALLED !!!\n\n")
-        sys.stderr.flush()
         return {"message": "Request received, closing communicator"}
 
 
@@ -234,6 +220,11 @@ async def run_server(args, **uvicorn_kwargs):
     if not is_uvicorn_available():
         raise ImportError(
             "Uvicorn is required to run the vLLM serve script. Please install it using `pip install uvicorn`."
+        )
+    
+    if not is_uvloop_available():
+        raise ImportError(
+            "Uvloop is required to run the vLLM serve script. Please install it using `pip install uvloop`."
         )
 
     logger.info("vLLM API server version %s", VLLM_VERSION)
@@ -273,13 +264,10 @@ async def run_server(args, **uvicorn_kwargs):
 
     async with build_async_engine_client(args) as engine_client:
         app = build_app(args)
-        add_vllm_client_endpoints(app, engine_client)
+
+        add_vllm_client_endpoints(app, engine_client)  # This is essentially the only difference from vllm original code
 
         vllm_config = await engine_client.get_vllm_config()
-        print("\n"*10)
-        print(f"VLLM version: {VLLM_VERSION}")
-        print(f"vllm_config type: {type(vllm_config)}")
-        print("\n"*10)
 
         await init_app_state(engine_client, vllm_config, app.state, args)
 
@@ -319,13 +307,17 @@ async def run_server(args, **uvicorn_kwargs):
         
 
 def main():
-    print("FUCKBACKGROUND"*1000)
     cli_env_setup()
     
     parser = FlexibleArgumentParser(description="vLLM OpenAI-Compatible RESTful API server with weight syncing.")
     parser = make_arg_parser(parser)
     args = parser.parse_args()
+    
+    # We can use the same worker extension class
     args.worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension"
+    # TODO: Actually support data parallelism, seems like there are no blockers but it crashes in testing
+    if args.data_parallel_size > 1:
+        raise ValueError("Data parallel size > 1 is not yet supported for async server")
     
     validate_parsed_serve_args(args)
 
