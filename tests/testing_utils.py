@@ -95,13 +95,6 @@ def require_no_wandb(test_case):
     return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
 
 
-def require_3_gpus(test_case):
-    """
-    Decorator marking a test that requires at least num_gpus GPUs. Skips the test if num_gpus is not available.
-    """
-    return unittest.skipUnless(torch.cuda.device_count() > 3, "test requires at least 3 GPUs")(test_case)
-
-
 def require_3_accelerators(test_case):
     """
     Decorator marking a test that requires at least 3 accelerators. Skips the test if 3 accelerators are not available.
