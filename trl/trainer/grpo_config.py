@@ -90,8 +90,8 @@ class GRPOConfig(TrainingArguments):
         > Parameters that control generation acceleration powered by vLLM
 
         use_vllm (`bool`, *optional*, defaults to `False`):
-            Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
-            instead of the default model.generate(). Requires `vllm` to be installed.
+            Whether to use vLLM for generating completions. If set to `True`, ensure that a GPU is kept unused for
+            training, as vLLM will require one for generation. vLLM must be installed (`pip install vllm`).
         vllm_mode (`str`, *optional*, defaults to `"server"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
@@ -104,12 +104,14 @@ class GRPOConfig(TrainingArguments):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
-
+        vllm_server_base_url (`str` or `None`, *optional*, defaults to `None`):
+            Base URL for the vLLM server (e.g., "http://localhost:8000"). If provided, vllm_server_host and
+            vllm_server_port are ignored.
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
-            Host of the vLLM server to connect to.
+            Host of the vLLM server to connect to. Ignored if `vllm_server_base_url` is provided.
         vllm_server_port (`int`, *optional*, defaults to `8000`):
-            Port of the vLLM server to connect to.
-        vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
+            Port of the vLLM server to connect to. Ignored if `vllm_server_base_url` is provided.
+        vllm_server_timeout (`float`, *optional*, defaults to `120.0`):
             Total timeout duration in seconds to wait for the vLLM server to be up. If the server is not up after the
             timeout, a `ConnectionError` is raised.
 
@@ -318,6 +320,13 @@ class GRPOConfig(TrainingArguments):
             "generation instead of the default model.generate(). Requires `vllm` to be installed."
         },
     )
+    vllm_server_base_url: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, vllm_server_host and "
+            "vllm_server_port are ignored."
+        },
+    )
     vllm_mode: str = field(
         default="server",
         metadata={
@@ -336,11 +345,11 @@ class GRPOConfig(TrainingArguments):
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
     vllm_server_host: str = field(
         default="0.0.0.0",
-        metadata={"help": "Host of the vLLM server to connect to."},
+        metadata={"help": "Host of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},
     )
     vllm_server_port: int = field(
         default=8000,
-        metadata={"help": "Port of the vLLM server to connect to."},
+        metadata={"help": "Port of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},
     )
     vllm_server_timeout: float = field(
         default=240.0,
