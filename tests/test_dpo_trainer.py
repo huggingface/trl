@@ -1344,13 +1344,15 @@ class DPOVisionTrainerTester(unittest.TestCase):
                         "trl-internal-testing/tiny-LlavaForConditionalGeneration",
                         "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
                     ] and (
-                        n.startswith("vision_tower.vision_model.encoder.layers.1")
-                        or n == "vision_tower.vision_model.post_layernorm.weight"
+                        "vision_tower.vision_model.encoder.layers.1" in n
+                        or "vision_tower.vision_model.post_layernorm.weight" in n
                     ):
                         # For some reason, these params are not updated. This is probably not related to TRL, but to
                         # the model itself. We should investigate this further, but for now we just skip these params.
                         continue
-                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+                    self.assertFalse(
+                        torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+                    )
 
 
 if __name__ == "__main__":
