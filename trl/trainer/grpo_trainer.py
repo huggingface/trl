@@ -18,7 +18,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Type, Union
 
 import datasets
 import torch
@@ -335,6 +335,8 @@ class GRPOTrainer(Trainer):
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
+        vllm_client_cls (`Optional[Type[VLLMClient]]`, *optional*, defaults to `None`):
+            (async WIP) The vLLM client class to use (currently only for async vLLM). If `None`, the default vLLM client will be used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
@@ -378,6 +380,7 @@ class GRPOTrainer(Trainer):
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
+        vllm_client_cls: Optional[Type[VLLMClient]] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -617,11 +620,19 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                if vllm_client_cls:
+                    raise ValueError("(WIP) vllm_client_cls must be None when vllm_mode is 'server'")
                 self.vllm_client = VLLMClient(
                     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
                 )
                 self.vllm_client.init_communicator()
-
+            elif self.vllm_mode == "async_server":
+                if not vllm_client_cls:
+                    raise ValueError("(WIP) vllm_client_cls must be provided when vllm_mode is 'async_server'")
+                self.vllm_client = vllm_client_cls(
+                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
+                )
+                self.vllm_client.init_communicator()
             elif self.vllm_mode == "colocate":
                 # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have
                 # the same number of ranks
@@ -917,7 +928,7 @@ class GRPOTrainer(Trainer):
                             continue
                         name = name.replace("modules_to_save.default.", "")
 
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                        if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
@@ -932,14 +943,14 @@ class GRPOTrainer(Trainer):
             else:
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                        if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                             llm_model.load_weights([(name, param.data)])
 
         # Reset cache on vLLM
-        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+        if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
         elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
@@ -983,6 +994,7 @@ class GRPOTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
+        # TODO: Find a non-breaking workaround, now async-server mode needs to add a `prompt` key to the inputs but does not use it
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
@@ -1032,6 +1044,65 @@ class GRPOTrainer(Trainer):
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
                 completion_ids = completion_ids[process_slice]
+            elif self.vllm_mode == "async_server":
+                if self.accelerator.is_main_process:
+                    with profiling_context(self, "Async vLLM.generate"):
+                        outputs = self.vllm_client.generate(
+                            data=gather_object(inputs),
+                            repetition_penalty=self.repetition_penalty,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=-1 if self.top_k is None else self.top_k,
+                            min_p=0.0 if self.min_p is None else self.min_p,
+                            max_tokens=self.max_completion_length,
+                            # guided_decoding_regex=self.guided_decoding_regex,
+                        )
+                else:
+                    outputs = [None] * len(inputs)
+
+                # Broadcast outputs to all processes
+                outputs = broadcast_object_list(outputs, from_process=0)
+
+                # Each process selects its own slice of the outputs
+                process_start = self.accelerator.process_index * len(inputs)
+                process_end = (self.accelerator.process_index + 1) * len(inputs)
+                outputs = outputs[process_start:process_end]
+
+                # Extract prompts, completions, and tools from outputs
+                prompts = [o["prompt"] for o in outputs]
+                completions = [o["completion"] for o in outputs]
+                tools = [o.get("tools", None) for o in outputs]
+
+                # Prepare prompt input tensors
+                prompts_text = [
+                    self.processing_class.apply_chat_template(p, tools=t, tokenize=False)
+                    for p, t in zip(prompts, tools)
+                ]
+                prompt_inputs = self.processing_class(
+                    text=prompts_text,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left",
+                    add_special_tokens=False,
+                )
+                prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+                # Prepare completion input tensors
+                completions_text = [
+                    self.processing_class.apply_chat_template(c, tokenize=False)
+                    for c in completions
+                ]
+                completion_ids = self.processing_class(completions_text)["input_ids"]
+                completion_lens = [len(ids) for ids in completion_ids]  # For masking right padding tokens
+
+                # Gather any extra keys for reward functions
+                extra_reward_kwargs = {}
+                if outputs:
+                    extra_reward_kwargs = {
+                        k: [o[k] for o in outputs]
+                        for k in outputs[0].keys()
+                        if k not in ["prompt", "completion", "tools"]
+                    }
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
@@ -1093,12 +1164,19 @@ class GRPOTrainer(Trainer):
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+        if self.args.multi_turn and self.args.vllm_mode == "async_server": # TODO: Fix
+            # Create an integer mask based on completion lengths to mask right padding tokens
+            max_completion_len = completion_ids.size(1)
+            indices = torch.arange(max_completion_len, device=device).expand(completion_ids.size(0), -1)
+            completion_lens_tensor = torch.tensor(completion_lens, device=device).unsqueeze(1)
+            completion_mask = (indices < completion_lens_tensor).int()  # all except last eos which is supposed to be there
+        else:
+            # Mask everything after the first EOS token
+            is_eos = completion_ids == self.processing_class.eos_token_id
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
@@ -1163,7 +1241,7 @@ class GRPOTrainer(Trainer):
                     keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
                     reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(
-                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs, **extra_reward_kwargs
                     )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
