@@ -63,7 +63,7 @@ The best programming language depends on personal preference, the complexity of 
 
 ## Expected dataset type
 
-Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Nash-MD requires a [prompt-only dataset](dataset_formats.md#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats.md#conversational) and [standard](dataset_formats.md#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 

@@ -44,7 +44,7 @@ accelerate launch train_cpo.py
 
 ## Expected dataset type
 
-CPO requires a [preference dataset](dataset_formats#preference). The [`CPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+CPO requires a [preference dataset](dataset_formats.md#preference). The [`CPOTrainer`] supports both [conversational](dataset_formats.md#conversational) and [standard](dataset_formats.md#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Example script
 

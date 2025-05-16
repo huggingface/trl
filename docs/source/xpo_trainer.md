@@ -62,7 +62,7 @@ The best programming language depends on individual preferences and familiarity 
 
 ## Expected dataset type
 
-XPO requires a [prompt-only dataset](dataset_formats#prompt-only). The [`XPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+XPO requires a [prompt-only dataset](dataset_formats.md#prompt-only). The [`XPOTrainer`] supports both [conversational](dataset_formats.md#conversational) and [standard](dataset_formats.md#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 

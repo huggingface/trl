@@ -96,10 +96,10 @@ It's a win!
 
 ## Expected dataset type
 
-PRM requires a [stepwise supervision](dataset_formats#stepwise-supervision).
+PRM requires a [stepwise supervision](dataset_formats.md#stepwise-supervision).
 The dataset should contain the following columns: `prompt`, `completions` and `labels`, where `completions` contains a list of reasoning steps and `labels` a list of booleans or floats indicating the correctness of each step.
 
-The [`PRMTrainer`] only supports [standard](dataset_formats#standard) dataset format.
+The [`PRMTrainer`] only supports [standard](dataset_formats.md#standard) dataset format.
 
 ## Example script
 

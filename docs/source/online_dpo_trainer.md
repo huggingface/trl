@@ -65,7 +65,7 @@ The best programming language depends on your specific needs and priorities. Som
 
 ## Expected dataset type
 
-Online DPO only requires a [prompt-only dataset](dataset_formats#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Online DPO only requires a [prompt-only dataset](dataset_formats.md#prompt-only) (unlike offline DPO, that expects [preference dataset](dataset_formats.md#preference)). The [`OnlineDPOTrainer`] supports both [conversational](dataset_formats.md#conversational) and [standard](dataset_formats.md#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 

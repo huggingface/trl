@@ -8,8 +8,8 @@ Check out a complete flexible example at [`examples/scripts/reward_modeling.py`]
 
 ## Expected dataset type
 
-The [`RewardTrainer`] requires a [*implicit prompt* preference dataset](dataset_formats#preference). It means that the dataset should only contain the columns `"chosen"` and `"rejected"` (and not `"prompt"`).
-The [`RewardTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+The [`RewardTrainer`] requires a [*implicit prompt* preference dataset](dataset_formats.md#preference). It means that the dataset should only contain the columns `"chosen"` and `"rejected"` (and not `"prompt"`).
+The [`RewardTrainer`] supports both [conversational](dataset_formats.md#conversational) and [standard](dataset_formats.md#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 You can also use a pretokenized dataset, in which case the dataset should contain the following columns: `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`.
 
