@@ -139,6 +139,10 @@ class DPOConfig(TrainingArguments):
             α parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper (v3), which controls the
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
             DPO loss. The paper recommends `rpo_alpha=1.0`.
+        ld_alpha (`float`, *optional*, defaults to `None`):
+            α parameter from the LD-DPO paper, which controls the verbose token logp in responses.
+            If `None`, no weighting is applied on the verbose part and the loss is the same as the DPO loss.
+            The paper recommends `ld_alpha` should be between `0.0` and `1.0`
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
@@ -344,6 +348,14 @@ class DPOConfig(TrainingArguments):
             "help": "α parameter from the RPO paper (v3), which controls the weighting of the NLL term in the loss. "
             "If `None`, no weighting is applied and the loss is the same as the DPO loss. The paper recommends "
             "`rpo_alpha=1.0`."
+        },
+    )
+    ld_alpha: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "α parameter from the LD-DPO paper, which controls the verbose token logp in responses. If "
+            "`None`, no weighting is applied on the verbose part and the loss is the same as the DPO loss. "
+            "The paper recommends `ld_alpha` should be between `0.0` and `1.0`"
         },
     )
     discopop_tau: float = field(
