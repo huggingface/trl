@@ -37,13 +37,14 @@ class ThinkFormatRewardTester(unittest.TestCase):
             "<think>This is my reasoning.\nThis is my answer.",  # No closing </think>
             "This is my reasoning. This is my answer.",  # No <think> tags
             "This is my reasoning.\nThis is my answer.",  # No <think> tags
-            "This is my reasoning</think>\nThis is my answer.",  # No opening <think>
-            "This is my reasoning</think>This is my answer.",  # No opening <think>
-            "<think>This is <think>my reasoning</think></think>This is my answer.",  # Nested <think> tags
-            "<think>This is</think>\nmy\n<think>reasoning</think>\nThis is my answer.",  # Multiline <think>
+            "This is my reasoning.</think>\nThis is my answer.",  # No opening <think>
+            "This is my reasoning.</think>This is my answer.",  # No opening <think>
+            "This<think>is my reasoning.</think>\nThis is my answer.",  # <think> tag in the middle
+            "<think>This is<think>my reasoning.</think></think>This is my answer.",  # Nested <think> tags
+            "<think>This is</think>\nmy\n<think>reasoning.</think>\nThis is my answer.",  # Multiline <think>
         ]
         completions = [[{"content": completion}] for completion in completions]
-        expected_rewards = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # All should be invalid
+        expected_rewards = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # All should be invalid
         rewards = think_format_reward(completions)
         self.assertEqual(rewards, expected_rewards)
 
