@@ -138,6 +138,8 @@ class GRPOConfig(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
+        delta: (`float`, *optional*, defaults to `None`):
+            Delta value for the upper clipping bound in two-sided GRPO. Recommended to be > 1 + epsilon. This method was introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
@@ -398,6 +400,12 @@ class GRPOConfig(TrainingArguments):
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
     )
+    delta: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "If set to a float value (e.g., 2.0), enables the upper clipping bound in two-sided GRPO loss. If None (default), the standard GRPO clipping is used. Recommended to be > 1 + epsilon when enabled."
+        },
+    )
     epsilon_high: Optional[float] = field(
         default=None,
         metadata={
@@ -545,3 +553,5 @@ class GRPOConfig(TrainingArguments):
                     "current global eval batch size, the valid values for the number of generations are: "
                     f"{possible_values}."
                 )
+        if self.delta is not None and self.use_liger_loss:
+            raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
