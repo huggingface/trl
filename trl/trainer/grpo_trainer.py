@@ -994,19 +994,17 @@ class GRPOTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        extra_reward_kwargs = {}
+        # prompts = [x["prompt"] for x in inputs]
+        # prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        # prompt_inputs = self.processing_class(
+        #     text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+        # )
+        # prompt_inputs = super()._prepare_inputs(prompt_inputs)
+        # prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
-        prompts = [x["prompt"] for x in inputs]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-        prompt_inputs = self.processing_class(
-            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
-        prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-        if self.max_prompt_length is not None:
-            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+        # if self.max_prompt_length is not None:
+        #     prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+        #     prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1058,29 +1056,53 @@ class GRPOTrainer(Trainer):
                             max_tokens=self.max_completion_length,
                             # guided_decoding_regex=self.guided_decoding_regex,
                         )
-                        prompts = [o["prompt"] for o in outputs]
-                        tools = [o["tools"] for o in outputs]  # should be included 
-                        completions = [o["completion"] for o in outputs]
-
-                        prompts_text = [
-                            self.processing_class.apply_chat_template(p, tools=t tokenize=False)
-                            for p, t in zip(prompts, tools)
-                        ]
-                        prompt_inputs = self.processing_class(
-                            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-                        )
-                        prompt_inputs = super()._prepare_inputs(prompt_inputs)
-                        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-                        completions_text = [self.processing_class.apply_chat_template(example, tokenize=False) for example in completions]
                 else:
-                    completion_ids = [None] * len(prompts)
+                    outputs = [None] * len(inputs)
 
-                ...
-                extra_reward_kwargs = {k: v for k, v in outputs.items() if k not in ["prompt", "completion"]}
-                completion_lens = [len(ids) for ids in completion_ids]
-                ...
-                    
+                # Broadcast outputs to all processes
+                outputs = broadcast_object_list(outputs, from_process=0)
+
+                # Each process selects its own slice of the outputs
+                process_start = self.accelerator.process_index * len(inputs)
+                process_end = (self.accelerator.process_index + 1) * len(inputs)
+                outputs = outputs[process_start:process_end]
+
+                # Extract prompts, completions, and tools from outputs
+                prompts = [o["prompt"] for o in outputs]
+                completions = [o["completion"] for o in outputs]
+                tools = [o.get("tools", None) for o in outputs]
+
+                # Prepare prompt input tensors
+                prompts_text = [
+                    self.processing_class.apply_chat_template(p, tools=t, tokenize=False)
+                    for p, t in zip(prompts, tools)
+                ]
+                prompt_inputs = self.processing_class(
+                    text=prompts_text,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left",
+                    add_special_tokens=False,
+                )
+                prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+                # Prepare completion input tensors
+                completions_text = [
+                    self.processing_class.apply_chat_template(c, tokenize=False)
+                    for c in completions
+                ]
+                completion_ids = self.processing_class(completions_text)["input_ids"]
+                completion_lens = [len(ids) for ids in completion_ids]  # For masking right padding tokens
+
+                # Gather any extra keys for reward functions
+                extra_reward_kwargs = {}
+                if outputs:
+                    extra_reward_kwargs = {
+                        k: [o[k] for o in outputs]
+                        for k in outputs[0].keys()
+                        if k not in ["prompt", "completion", "tools"]
+                    }
+
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
