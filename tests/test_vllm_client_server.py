@@ -250,7 +250,7 @@ class TestVLLMClientServerAsync(unittest.TestCase):
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["vllm-serve-async", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+            ["trl", "vllm-serve-async", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
 
         #Initialize the client
@@ -321,7 +321,7 @@ class TestVLLMClientAsyncServerTP(unittest.TestCase):
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id, "--tensor_parallel_size", "2"],
+            ["trl", "vllm-serve-async", "--model", cls.model_id, "--tensor_parallel_size", "2"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
@@ -391,7 +391,7 @@ class TestVLLMClientAsyncServerDP(unittest.TestCase):
 
         # Start the server process
         cls.server_process = subprocess.Popen(
-            ["trl", "vllm-serve", "--model", cls.model_id, "--data_parallel_size", "2"],
+            ["trl", "vllm-serve-async", "--model", cls.model_id, "--data_parallel_size", "2"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,16 +39,12 @@ TRL-Specific Additions & Differences from `trl/scripts/vllm_serve.py`:
   (e.g., `/v1/chat/completions`, `/v1/completions`) for inference and does *not*
   include the custom synchronous `/generate` endpoint previously found in
   `trl/scripts/vllm_serve.py`.
-
-Usage:
-This script is intended to be run as a standalone server process that TRL
-components can interact with via HTTP requests to perform inference (using
-standard OpenAI API calls) and synchronize weights (using the TRL-specific endpoints).
 """
 
 import os
 import signal
 import argparse
+import warnings
 
 import torch
 
@@ -315,13 +311,19 @@ def main():
     parser = FlexibleArgumentParser(description="vLLM OpenAI-Compatible RESTful API server with weight syncing.")
     parser = make_arg_parser(parser)
     args = parser.parse_args()
-    
+    validate_parsed_serve_args(args)
+
     # We can use the same worker extension class
     args.worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension"
-    # if args.data_parallel_size > 1:
-    #     raise ValueError("Data parallel size > 1 is not yet supported for async server")
     
-    validate_parsed_serve_args(args)
+    # We encounter the same problem as in vllm_serve.py
+    if args.tensor_parallel_size == 1 and args.data_parallel_size > 1:
+        warnings.warn(
+            "Detected configuration: tensor_parallel_size=1 and data_parallel_size>1. This setup is known to "
+            "cause a crash when using the `trl vllm-serve` CLI entry point. As a workaround, please run the "
+            "server using the module path instead: `python -m trl.scripts.vllm_serve`",
+            RuntimeWarning,
+        )
 
     uvloop.run(run_server(args))
 
