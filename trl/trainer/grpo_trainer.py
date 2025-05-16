@@ -994,17 +994,18 @@ class GRPOTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        # prompts = [x["prompt"] for x in inputs]
-        # prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-        # prompt_inputs = self.processing_class(
-        #     text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        # )
-        # prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        # prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+        # TODO: Find a non-breaking workaround, now async-server mode needs to add a `prompt` key to the inputs but does not use it
+        prompts = [x["prompt"] for x in inputs]
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        prompt_inputs = self.processing_class(
+            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+        )
+        prompt_inputs = super()._prepare_inputs(prompt_inputs)
+        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
-        # if self.max_prompt_length is not None:
-        #     prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-        #     prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+        if self.max_prompt_length is not None:
+            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:

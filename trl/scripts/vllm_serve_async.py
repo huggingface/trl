@@ -46,11 +46,13 @@ components can interact with via HTTP requests to perform inference (using
 standard OpenAI API calls) and synchronize weights (using the TRL-specific endpoints).
 """
 
+import argparse
 import os
 import signal
 
 import torch
 
+from trl import TrlParser
 from trl.import_utils import (
     is_fastapi_available,
     is_pydantic_available,
@@ -66,11 +68,6 @@ if is_fastapi_available():
 
 if is_pydantic_available():
     from pydantic import BaseModel
-
-
-if is_uvicorn_available():
-    import uvicorn
-
 
 if is_uvloop_available():
     import uvloop
@@ -304,7 +301,13 @@ async def run_server(args, **uvicorn_kwargs):
         await shutdown_task
     finally:
         sock.close()
-        
+
+def make_parser(subparsers: argparse._SubParsersAction = None):
+    if subparsers is not None:
+        parser = subparsers.add_parser("vllm-serve-async", add_help=False, help="Runs vLLM's OpenAI-compatible server with weight syncing.")
+    else:
+        parser = TrlParser()
+    return parser
 
 def main():
     cli_env_setup()
@@ -316,8 +319,8 @@ def main():
     # We can use the same worker extension class
     args.worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension"
     # TODO: Actually support data parallelism, seems like there are no blockers but it crashes in testing
-    if args.data_parallel_size > 1:
-        raise ValueError("Data parallel size > 1 is not yet supported for async server")
+    # if args.data_parallel_size > 1:
+    #     raise ValueError("Data parallel size > 1 is not yet supported for async server")
     
     validate_parsed_serve_args(args)
 

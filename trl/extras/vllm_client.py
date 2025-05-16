@@ -46,8 +46,8 @@ class GenerationResult(TypedDict, total=False):
     prompt: list[dict[str, str]]  # [{role: str, content: str}]
     # This comes after that, N different rollouts of the same prompt
     completion: list[dict[str, str]]  # [{role: str, content: str}]
-    # This is a bit overfit to my use case, but tool usage is a common thing
-    tools: list[dict[str, dict]]  # [{type: "function", "function": ...}]
+    # This may be a bit overfit to my use case, but tool usage is a common thing
+    # tools: list[dict[str, dict]]  # [{type: "function", "function": ...}]
     
     # Extra keys and values are forwarded to the user specified reward functions
     # These will often be "runtime" dependent, i.e. not something you can directly extract from the completion
