@@ -994,7 +994,14 @@ class GRPOTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        # TODO: Find a non-breaking workaround, now async-server mode needs to add a `prompt` key to the inputs but does not use it
+        # NOTE (WIP): `extra_reward_kwargs` is useful when reward functions need access to
+        # information beyond the raw prompt and completion strings. This is particularly
+        # relevant when using custom generation logic or external generation clients (e.g., async_server mode).
+        # Such structured data might include: `generated_diff` or `test_coverage` for coding agents, `program_runtime` for code optimization, `win_rate` for game-playing agents, other environment feedback,
+        # Using `extra_reward_kwargs` for such data avoids complex (and often infeasible) parsing of the completion text within the reward function.
+        extra_reward_kwargs = {}
+
+        # TODO: Find a non-breaking workaround, the async-server use case rarely has a simple "prompt" key, so currently I create a dummy "prompt" which is overwritten by the async_server
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
