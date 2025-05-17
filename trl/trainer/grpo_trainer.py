@@ -619,6 +619,9 @@ class GRPOTrainer(Trainer):
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
+            
+            if hasattr(model.config, "quantization_config"):
+                raise ValueError("vLLM weight syncing does not currently support quantized models. Please use a non-quantized model.")
 
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
                 if vllm_client_cls:
