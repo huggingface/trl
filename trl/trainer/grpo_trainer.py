@@ -1026,6 +1026,7 @@ class GRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
+                env_completion_masks = None 
 
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
@@ -1054,11 +1055,16 @@ class GRPOTrainer(Trainer):
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its
                 # corresponding slice.
                 completion_ids = broadcast_object_list(completion_ids, from_process=0)
+                env_completion_masks = broadcast_object_list(env_completion_masks, from_process=0)
+
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
                 completion_ids = completion_ids[process_slice]
+                if env_completion_masks is not None: 
+                    env_completion_masks = env_completion_masks[process_slice]
+
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
@@ -1128,7 +1134,8 @@ class GRPOTrainer(Trainer):
         completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # We use a different completion_mask if we're using environments to mask tool outputs
-        if "env_completion_masks" in locals() and env_completion_masks is not None:
+        if 'env_completion_masks' in locals() and env_completion_masks is not None:
+            
             max_len = completion_ids.size(1)  # Target length from the (padded) completion_ids
 
             processed_env_masks_list = [(sub_list + [0] * max_len)[:max_len] for sub_list in env_completion_masks]
