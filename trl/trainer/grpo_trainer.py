@@ -501,6 +501,7 @@ class GRPOTrainer(Trainer):
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
+        self.multi_turn = args.multi_turn
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
@@ -1172,7 +1173,7 @@ class GRPOTrainer(Trainer):
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        if self.args.multi_turn and self.args.vllm_mode == "async_server": # TODO: Fix
+        if self.multi_turn and self.vllm_mode == "async_server": # TODO: Fix
             # Create an integer mask based on completion lengths to mask right padding tokens
             max_completion_len = completion_ids.size(1)
             indices = torch.arange(max_completion_len, device=device).expand(completion_ids.size(0), -1)

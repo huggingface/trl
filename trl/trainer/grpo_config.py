@@ -324,6 +324,10 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
     )
+    multi_turn: bool = field(
+        default=False,
+        metadata={"help": "(WIP) Whether client does multi-turn generation."},
+    )
 
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: bool = field(
