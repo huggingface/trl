@@ -997,8 +997,8 @@ class GRPOTrainer(Trainer):
         # NOTE (WIP): `extra_reward_kwargs` is useful when reward functions need access to
         # information beyond the raw prompt and completion strings. This is particularly
         # relevant when using custom generation logic or external generation clients (e.g., async_server mode).
-        # Such structured data might include: `generated_diff` or `test_coverage` for coding agents, `program_runtime` for code optimization, `win_rate` for game-playing agents, other environment feedback,
-        # Using `extra_reward_kwargs` for such data avoids complex (and often infeasible) parsing of the completion text within the reward function.
+        # Such structured data might include: `generated_diff` or `test_coverage` for coding agents, `program_runtime` for code optimization, `win_rate` for game-playing agents, ...
+        # Feedback from the environment is often not present in the completion, but it is a valid reward signal.
         extra_reward_kwargs = {}
 
         # TODO: Find a non-breaking workaround, the async-server use case rarely has a simple "prompt" key, so currently I create a dummy "prompt" which is overwritten by the async_server
@@ -1092,6 +1092,7 @@ class GRPOTrainer(Trainer):
                     padding_side="left",
                     add_special_tokens=False,
                 )
+                prompt_inputs = super()._prepare_inputs(prompt_inputs)  # Needed? Or is .to(device) better?
                 prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
                 # Prepare completion input tensors
