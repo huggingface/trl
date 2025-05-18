@@ -59,6 +59,7 @@ from trl.trainer.utils import (
     exact_div,
     first_true_indices,
     forward,
+    empty_cache,
     generate_model_card,
     get_comet_experiment_url,
     get_reward,
@@ -188,7 +189,7 @@ class PPOComponents:
         self.returns = advantages + self.values
         advantages = masked_whiten(advantages, ~self.padding_mask)
         self.advantages = torch.masked_fill(advantages, self.padding_mask, 0)
-        torch.cuda.empty_cache()
+        empty_cache()
         gc.collect()
     
     def flush_unecessary_ppo_components_for_loss_computation(self)-> None:
@@ -716,7 +717,7 @@ class PPOTrainer(Trainer):
         logits = logitss[index : index + self.args.local_rollout_forward_batch_size]
         logprob = selective_log_softmax(logits, response)
         del logits
-        torch.cuda.empty_cache()
+        empty_cache()
 
         if self.ref_model is None:
             with self.null_ref_context():
@@ -727,7 +728,7 @@ class PPOTrainer(Trainer):
         ref_logits /= self.args.temperature + 1e-7
         ref_logprob = selective_log_softmax(ref_logits, response)
         del ref_output, ref_logits
-        torch.cuda.empty_cache()
+        empty_cache()
         return query, query_response, response, logprob, ref_logprob
 
     def get_ppo_handler(
@@ -787,7 +788,7 @@ class PPOTrainer(Trainer):
         if scores is None:
             scores = torch.cat(scores, 0)
         del (logprob, ref_logprob, full_value, value, score, unwrapped_value_model)
-        torch.cuda.empty_cache()
+        empty_cache()
         gc.collect()
 
         # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
@@ -855,7 +856,7 @@ class PPOTrainer(Trainer):
                 ppo_handler.flush_ppo_loss_components()
                 ppo_handler.flush_ppo_stats()
                 # fmt: on
-                torch.cuda.empty_cache()
+                empty_cache()
                 gc.collect()
 
                 minibatch_idx += 1
@@ -974,7 +975,7 @@ class PPOTrainer(Trainer):
             ppo_handler.compute_advantages_and_returns()
             del scores
             ppo_handler.flush_unecessary_ppo_components_for_loss_computation()
-            torch.cuda.empty_cache()
+            empty_cache()
         
         self.update_training_model(query_responses, ppo_handler)
         self.lr_scheduler.step()
@@ -1016,7 +1017,7 @@ class PPOTrainer(Trainer):
                     )
 
             self.step(queries, query_responses, query_responses_logitss=logitss)
-            torch.cuda.empty_cache()
+            empty_cache()
             gc.collect()
 
             self.control = self.callback_handler.on_step_end(self.args, self.state, self.control)
@@ -1026,7 +1027,7 @@ class PPOTrainer(Trainer):
 
             if self.args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
-                torch.cuda.empty_cache()
+                empty_cache()
 
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(self.args, self.state, self.control)
