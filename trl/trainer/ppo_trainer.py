@@ -46,20 +46,20 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_rich_available
 
-from trl.core import masked_mean, masked_whiten
-from trl.models import create_reference_model
-from trl.models.utils import unwrap_model_for_generation
-from trl.trainer.ppo_config import PPOConfig
-from trl.trainer.utils import (
+from ..core import masked_mean, masked_whiten
+from ..models import create_reference_model
+from ..models.utils import unwrap_model_for_generation
+from .ppo_config import PPOConfig
+from .utils import (
     OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
+    empty_cache,
     exact_div,
     first_true_indices,
     forward,
-    empty_cache,
     generate_model_card,
     get_comet_experiment_url,
     get_reward,
