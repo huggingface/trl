@@ -15,8 +15,7 @@
 import atexit
 import logging
 import time
-from typing import Optional, TypedDict
-from abc import ABC, abstractmethod
+from typing import Optional
 
 import torch
 from torch import nn
@@ -40,32 +39,7 @@ if is_vllm_available():
 logger = logging.getLogger(__name__)
 
 
-class GenerationResult(TypedDict, total=False):
-    """GRPO payload with required prompt/completion; extras allowed."""
-    # Shared inputs across N rollouts in GRPO (across many GenerationResults)
-    prompt: list[dict[str, str]]  # [{role: str, content: str}]
-    # This comes after that, N different rollouts of the same prompt
-    completion: list[dict[str, str]]  # [{role: str, content: str}]
-    # This may be a bit overfit to my use case, but tool usage is a common thing
-    # tools: list[dict[str, dict]]  # [{type: "function", "function": ...}]
-    
-    # Extra keys and values are forwarded to the user specified reward functions
-    # These will often be "runtime" dependent, i.e. not something you can directly extract from the completion
-    # e.g,
-    # - generated_diff: RL on a coding agent, verify correctness or closeness to oracle patch (run git diff after agent completes)
-    # - program_runtime: RL on a coding agent, reward how much it can optimize code
-    # - memory_usage: RL on a coding agent, reward lower memory consumption
-    # - test_coverage: RL on a coding agent, reward how much it can cover tests
-    # - win_rate: RL for game playing, measures the percentage of games won.
-    # - num_illegal_moves: 
-    # ...
-
-class Generates(ABC):
-    @abstractmethod
-    def generate(self, data: list[dict], **kwargs) -> list[GenerationResult]:
-        pass
-
-class VLLMClient(Generates):
+class VLLMClient:
     """
     A client class to interact with a vLLM server.
 
@@ -157,7 +131,6 @@ class VLLMClient(Generates):
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
 
-    # TODO: Unifying the generate methods is probably a good idea, but not yet
     def generate(
         self,
         prompts: list[str],
@@ -227,8 +200,7 @@ class VLLMClient(Generates):
         if response.status_code == 200:
             vllm_world_size = response.json()["world_size"]
         else:
-            vllm_world_size = 1
-            # raise Exception(f"Request failed: {response.status_code}, {response.text}")
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         world_size = vllm_world_size + 1  # add the client to the world
         self.rank = vllm_world_size  # the client's rank is the last process

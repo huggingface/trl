@@ -49,6 +49,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
+from ..logging_utils import build_html_table
 from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
@@ -79,6 +80,11 @@ if is_wandb_available():
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+# What we call a rollout function is a callable that takes in the data and sampling parameters and returns a list of
+# generation results. Those results must include "prompt" and "completion" field and can include an optional "tools"
+# field. Any extra fields are forwarded to the reward functions.
+RolloutFunc = Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]]
 
 
 class RepeatSampler(Sampler):
@@ -333,10 +339,12 @@ class GRPOTrainer(Trainer):
                   [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
+        rollout_func (`RolloutFunc`, *optional*, defaults to `None`):
+            Function to use for generating completions. It must take in the data and sampling parameters and return a list of
+            generation results. Those results must include "prompt" and "completion" field and can include optional "tools" field
+            and any other fields that are forwarded to the reward functions.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
-        vllm_client_cls (`Optional[Type[VLLMClient]]`, *optional*, defaults to `None`):
-            (async WIP) The vLLM client class to use (currently only for async vLLM). If `None`, the default vLLM client will be used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
             ignored. The format of the samples can be either:
@@ -380,7 +388,7 @@ class GRPOTrainer(Trainer):
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
-        vllm_client_cls: Optional[Type[VLLMClient]] = None,
+        rollout_func: Optional[RolloutFunc] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -605,6 +613,8 @@ class GRPOTrainer(Trainer):
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
+            "generated_diff": deque(maxlen=maxlen),
+            "patch": deque(maxlen=maxlen),
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
         }
 
@@ -622,18 +632,18 @@ class GRPOTrainer(Trainer):
             
             if hasattr(model.config, "quantization_config"):
                 raise ValueError("vLLM weight syncing does not currently support quantized models. Please use a non-quantized model.")
+            
+            # TODO: Temp hack?
+            if self.vllm_mode == "async_server":
+                if rollout_func is None:
+                    raise ValueError("rollout_func must be provided when vllm_mode is 'async_server'")
+                self.rollout_func = rollout_func
+            else:
+                if rollout_func is not None:
+                    raise ValueError("rollout_func must be None when vllm_mode is not 'async_server'")
 
-            if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                if vllm_client_cls:
-                    raise ValueError("(WIP) vllm_client_cls must be None when vllm_mode is 'server'")
+            if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
                 self.vllm_client = VLLMClient(
-                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
-                )
-                self.vllm_client.init_communicator()
-            elif self.vllm_mode == "async_server":
-                if not vllm_client_cls:
-                    raise ValueError("(WIP) vllm_client_cls must be provided when vllm_mode is 'async_server'")
-                self.vllm_client = vllm_client_cls(
                     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
                 )
                 self.vllm_client.init_communicator()
@@ -1058,7 +1068,7 @@ class GRPOTrainer(Trainer):
             elif self.vllm_mode == "async_server":
                 if self.accelerator.is_main_process:
                     with profiling_context(self, "Async vLLM.generate"):
-                        outputs = self.vllm_client.generate(
+                        outputs = self.rollout_func(  # more lightweight than having to extend the VLLMClient as previously suggested
                             data=gather_object(inputs),
                             repetition_penalty=self.repetition_penalty,
                             temperature=self.temperature,
@@ -1066,7 +1076,7 @@ class GRPOTrainer(Trainer):
                             top_k=-1 if self.top_k is None else self.top_k,
                             min_p=0.0 if self.min_p is None else self.min_p,
                             max_tokens=self.max_completion_length,
-                            # guided_decoding_regex=self.guided_decoding_regex,
+                            guided_decoding_regex=self.guided_decoding_regex,
                         )
                 else:
                     outputs = [None] * len(inputs)
@@ -1331,6 +1341,8 @@ class GRPOTrainer(Trainer):
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
+        self._textual_logs["generated_diff"].extend(gather_object(extra_reward_kwargs["generated_diff"]))
+        self._textual_logs["patch"].extend(gather_object(extra_reward_kwargs["patch"]))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
@@ -1523,15 +1535,13 @@ class GRPOTrainer(Trainer):
                 import pandas as pd
 
                 table = {
-                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
                     "prompt": self._textual_logs["prompt"],
                     "completion": self._textual_logs["completion"],
+                    "generated_diff": self._textual_logs["generated_diff"],
+                    "patch": self._textual_logs["patch"],
                     **self._textual_logs["rewards"],
                 }
-                df = pd.DataFrame(table)
-                if self.wandb_log_unique_prompts:
-                    df = df.drop_duplicates(subset=["prompt"])
-                wandb.log({"completions": wandb.Table(dataframe=df)})
+                wandb.log({"table": wandb.HTML(build_html_table(table))})
 
     def create_model_card(
         self,
