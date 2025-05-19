@@ -110,14 +110,21 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    print("loading: {0}".format(script_args.dataset_name))
-    
-    if os.path.exists(script_args.dataset_name) == True:
-        print("loading dataset from local file")
-        dataset = load_dataset("json", data_files=script_args.dataset_name)
+    if script_args.dataset_path is not None:
+        if os.path.exists(script_args.dataset_path) == True:
+            print("loading: {0}".format(script_args.dataset_path))
+            if os.path.isdir(script_args.dataset_path):
+                dataset = load_dataset("imagefolder", data_files=script_args.dataset_path)
+            else:
+                print("loading dataset from local file")
+                dataset = load_dataset("json", data_files=script_args.dataset_path)
     else:
-        print("loading dataset from online")
-        dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+        if script_args.dataset_path is not None:
+            print("loading dataset online")
+            dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+        else:
+            print("you must choose at least one argument between --dataset_path and dataset_name. Exiting.")
+        
 
     ################
     # Training

@@ -38,6 +38,8 @@ class ScriptArguments:
     Arguments common to all scripts.
 
     Args:
+        dataset_path (`str`):
+            
         dataset_name (`str`):
             Dataset name.
         dataset_config (`str` or `None`, *optional*, defaults to `None`):
@@ -52,7 +54,7 @@ class ScriptArguments:
             Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar
             type, inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
-
+    dataset_path: Optional[str] = field(default=None, metadata={"help": "Dataset path."})
     dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
     dataset_config: Optional[str] = field(
         default=None,
