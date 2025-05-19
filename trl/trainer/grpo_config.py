@@ -91,7 +91,7 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control generation acceleration powered by vLLM
 
-        use_vllm (`bool`, *optional*, defaults to `False`, `use_sglang` must be set to `False`):
+        use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
             instead of the default model.generate(). Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"server"`):
@@ -128,16 +128,6 @@ class GRPOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
-
-        > Parameters that control generation acceleration powered by SGLang
-
-        use_sglang (`bool`, *optional*, defaults to `False`, `use_vllm` must be set to `False`):
-            Whether to use SGLang for generating completions. If set to `True`, the trainer will use SGLang for generation
-            instead of the default model.generate(). Requires `sglang` to be installed.
-
-        sglang_mode (`str`, *optional*, defaults to `"server"`):
-            Mode to use for SGLang integration when `use_sglang` is set to `True`. Must be one of `"server"` or
-            `"colocate"`.
 
         > Parameters that control the training
 

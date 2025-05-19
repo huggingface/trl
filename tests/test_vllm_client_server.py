@@ -19,7 +19,6 @@ import unittest
 
 import psutil
 import pytest
-import torch
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import require_torch_multi_gpu
 
@@ -88,6 +87,24 @@ class TestVLLMClientServer(unittest.TestCase):
         # Check that the generated sequences are lists of integers
         for seq in outputs:
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
+
+    def test_generate_with_params(self):
+        prompts = ["Hello, AI!", "Tell me a joke"]
+        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)
+
+        # Check that the output is a list
+        self.assertIsInstance(outputs, list)
+
+        # Check that the number of generated sequences is 2 times the number of prompts
+        self.assertEqual(len(outputs), 2 * len(prompts))
+
+        # Check that the generated sequences are lists of integers
+        for seq in outputs:
+            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+
+        # Check that the length of the generated sequences is less than or equal to 32
+        for seq in outputs:
+            self.assertLessEqual(len(seq), 32)
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map="cuda")
