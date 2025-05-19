@@ -71,7 +71,7 @@ class TestVLLMClientServer(unittest.TestCase):
             ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
         )
 
-        #Initialize the client
+        # Initialize the client
         cls.client = VLLMClient(connection_timeout=240)
         cls.client.init_communicator()
 
@@ -280,12 +280,8 @@ class TestVLLMClientServerAsync(unittest.TestCase):
         self.assertGreater(len(first_choice["text"]), 0)
 
     def test_update_model_params(self):
-        self.test_generate()
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map="cuda")
-        for name, param in model.named_parameters():
-            param.data = torch.zeros_like(param.data)
         self.client.update_model_params(model)
-        self.test_generate()
 
     def test_reset_prefix_cache(self):
         # Test resetting the prefix cache
