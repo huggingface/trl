@@ -35,7 +35,6 @@ _pydantic_available = _is_package_available("pydantic")
 _requests_available = _is_package_available("requests")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
-_uvloop_available = _is_package_available("uvloop")
 _vllm_available = _is_package_available("vllm")
 _vllm_ascend_available = _is_package_available("vllm_ascend")
 _joblib_available = _is_package_available("joblib")
@@ -81,10 +80,6 @@ def is_uvicorn_available() -> bool:
     return _uvicorn_available
 
 
-def is_uvloop_available() -> bool:
-    return _uvloop_available
-
-
 def is_vllm_available() -> bool:
     return _vllm_available
 
@@ -104,9 +99,7 @@ class _LazyModule(ModuleType):
 
     # Very heavily inspired by optuna.integration._IntegrationModule
     # https://github.com/optuna/optuna/blob/master/optuna/integration/__init__.py
-    def __init__(
-        self, name, module_file, import_structure, module_spec=None, extra_objects=None
-    ):
+    def __init__(self, name, module_file, import_structure, module_spec=None, extra_objects=None):
         super().__init__(name)
         self._modules = set(import_structure.keys())
         self._class_to_module = {}
@@ -114,9 +107,7 @@ class _LazyModule(ModuleType):
             for value in values:
                 self._class_to_module[value] = key
         # Needed for autocompletion in an IDE
-        self.__all__ = list(import_structure.keys()) + list(
-            chain(*import_structure.values())
-        )
+        self.__all__ = list(import_structure.keys()) + list(chain(*import_structure.values()))
         self.__file__ = module_file
         self.__spec__ = module_spec
         self.__path__ = [os.path.dirname(module_file)]
