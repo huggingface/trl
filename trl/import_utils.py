@@ -35,6 +35,7 @@ _pydantic_available = _is_package_available("pydantic")
 _requests_available = _is_package_available("requests")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
+_uvloop_available = _is_package_available("uvloop")
 _vllm_available = _is_package_available("vllm")
 _vllm_ascend_available = _is_package_available("vllm_ascend")
 _joblib_available = _is_package_available("joblib")
@@ -78,6 +79,10 @@ def is_unsloth_available() -> bool:
 
 def is_uvicorn_available() -> bool:
     return _uvicorn_available
+
+
+def is_uvloop_available() -> bool:
+    return _uvloop_available
 
 
 def is_vllm_available() -> bool:
