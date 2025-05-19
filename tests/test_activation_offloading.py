@@ -17,7 +17,7 @@ import unittest
 import torch
 from torch import nn
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_peft, require_torch_accelerator
+from transformers.testing_utils import require_peft, require_torch_accelerator, torch_device
 from transformers.utils import is_peft_available
 
 from trl.models.activation_offloading import NoOpManager, OffloadActivations
@@ -33,7 +33,7 @@ class TestActivationOffloading(unittest.TestCase):
     def test_offloading_with_peft_models(self) -> None:
         """Test that activation offloading works with PEFT models."""
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id).cuda()
+        model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
         peft_config = LoraConfig(
             lora_alpha=16,
             lora_dropout=0.1,
@@ -43,7 +43,7 @@ class TestActivationOffloading(unittest.TestCase):
         )
 
         model = get_peft_model(model, peft_config)
-        inp = torch.randint(0, 100, (2, 10), device="cuda")
+        inp = torch.randint(0, 100, (2, 10), device=torch_device)
 
         # First forward-backward pass without offloading
         torch.manual_seed(42)
@@ -79,8 +79,8 @@ class TestActivationOffloading(unittest.TestCase):
     @require_torch_accelerator
     def test_noop_manager_with_offloading(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id).cuda()
-        inp = torch.randint(0, 100, (2, 10), device="cuda")
+        model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
+        inp = torch.randint(0, 100, (2, 10), device=torch_device)
 
         # Run with offloading but disable for specific section
         with OffloadActivations():
@@ -112,9 +112,9 @@ class TestActivationOffloading(unittest.TestCase):
         model = nn.Sequential(
             nn.Linear(5, 5),  # Small layer that shouldn't be offloaded
             nn.Linear(5, 1000),  # Large layer that should be offloaded
-        ).cuda()
+        ).to(torch_device)
 
-        inp = torch.randn(2, 5, device="cuda")
+        inp = torch.randn(2, 5, device=torch_device)
 
         with OffloadActivations(min_offload_size=1000):
             out = model(inp)
@@ -127,10 +127,10 @@ class TestActivationOffloading(unittest.TestCase):
     def test_real_hf_model(self):
         """Test with an actual HuggingFace model"""
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id).cuda()
+        model = AutoModelForCausalLM.from_pretrained(model_id).to(torch_device)
 
         # Create small input
-        inp = torch.randint(0, 100, (2, 10), device="cuda")
+        inp = torch.randint(0, 100, (2, 10), device=torch_device)
 
         # Baseline without offloading
         torch.manual_seed(42)
