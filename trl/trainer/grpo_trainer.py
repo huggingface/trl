@@ -49,7 +49,6 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
-from ..logging_utils import build_html_table
 from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
@@ -615,8 +614,6 @@ class GRPOTrainer(Trainer):
         self._textual_logs = {
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
-            "generated_diff": deque(maxlen=maxlen),
-            "patch": deque(maxlen=maxlen),
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
         }
 
@@ -1343,8 +1340,6 @@ class GRPOTrainer(Trainer):
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
-        self._textual_logs["generated_diff"].extend(gather_object(extra_reward_kwargs["generated_diff"]))
-        self._textual_logs["patch"].extend([x["patch"] for x in inputs])
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
@@ -1537,13 +1532,15 @@ class GRPOTrainer(Trainer):
                 import pandas as pd
 
                 table = {
+                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
                     "prompt": self._textual_logs["prompt"],
                     "completion": self._textual_logs["completion"],
-                    "generated_diff": self._textual_logs["generated_diff"],
-                    "patch": self._textual_logs["patch"],
                     **self._textual_logs["rewards"],
                 }
-                wandb.log({"table": wandb.Html(build_html_table(table))})
+                df = pd.DataFrame(table)
+                if self.wandb_log_unique_prompts:
+                    df = df.drop_duplicates(subset=["prompt"])
+                wandb.log({"completions": wandb.Table(dataframe=df)})
 
     def create_model_card(
         self,
