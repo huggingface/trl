@@ -81,6 +81,8 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+# (WIP) Allow users to have custom rollouts by making API calls to the trl vllm-serve server. This could e.g. be
+# ready-made AI products. 
 # What we call a rollout function is a callable that takes in the data and sampling parameters and returns a list of
 # generation results. Those results must include "prompt" and "completion" field and can include an optional "tools"
 # field. Any extra fields are forwarded to the reward functions.
@@ -1342,7 +1344,7 @@ class GRPOTrainer(Trainer):
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
         self._textual_logs["generated_diff"].extend(gather_object(extra_reward_kwargs["generated_diff"]))
-        self._textual_logs["patch"].extend(gather_object(extra_reward_kwargs["patch"]))
+        self._textual_logs["patch"].extend([x["patch"] for x in inputs])
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
@@ -1541,7 +1543,7 @@ class GRPOTrainer(Trainer):
                     "patch": self._textual_logs["patch"],
                     **self._textual_logs["rewards"],
                 }
-                wandb.log({"table": wandb.HTML(build_html_table(table))})
+                wandb.log({"table": wandb.Html(build_html_table(table))})
 
     def create_model_card(
         self,
