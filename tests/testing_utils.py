@@ -17,6 +17,7 @@ import unittest
 
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
+from transformers.testing_utils import torch_device
 from transformers.utils import is_rich_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
@@ -94,11 +95,14 @@ def require_no_wandb(test_case):
     return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
 
 
-def require_3_gpus(test_case):
+def require_3_accelerators(test_case):
     """
-    Decorator marking a test that requires at least num_gpus GPUs. Skips the test if num_gpus is not available.
+    Decorator marking a test that requires at least 3 accelerators. Skips the test if 3 accelerators are not available.
     """
-    return unittest.skipUnless(torch.cuda.device_count() > 3, "test requires at least 3 GPUs")(test_case)
+    torch_accelerator_module = getattr(torch, torch_device, torch.cuda)
+    return unittest.skipUnless(
+        torch_accelerator_module.device_count() > 3, f"test requires at least 3 {torch_device}s"
+    )(test_case)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
