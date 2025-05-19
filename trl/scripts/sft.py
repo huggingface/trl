@@ -52,6 +52,7 @@ python trl/scripts/sft.py \
 """
 
 import argparse
+import os
 
 from datasets import load_dataset
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -109,7 +110,14 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    print("loading: {0}".format(script_args.dataset_name))
+    
+    if os.path.exists(script_args.dataset_name) == True:
+        print("loading dataset from local file")
+        dataset = load_dataset("json", data_files=script_args.dataset_name)
+    else:
+        print("loading dataset from online")
+        dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     ################
     # Training
