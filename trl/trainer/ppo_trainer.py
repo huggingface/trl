@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import gc
 import math
 import os
@@ -100,17 +100,18 @@ class PolicyAndValueWrapper(nn.Module):
 class PPOStats:
     responses:float
     mean_kl:float
-    mean_entropy:float
+    objective_mean_entropy:float
     mean_non_score_reward: float
     rlhf_reward: float
     mean_scores: float
-    pg_loss: torch.FloatTensor
-    vf_loss: torch.FloatTensor
-    loss: torch.FloatTensor
-    pg_clipfrac: torch.FloatTensor
-    vf_clipfrac: torch.FloatTensor
-    ratio_mean: torch.FloatTensor
-    approxkl: torch.FloatTensor
+    policy_entropy_mean: Optional[torch.FloatTensor] = field(default=None)
+    pg_loss: Optional[torch.FloatTensor] = field(default=None)
+    vf_loss: Optional[torch.FloatTensor] = field(default=None)
+    loss: Optional[torch.FloatTensor] = field(default=None)
+    pg_clipfrac: Optional[torch.FloatTensor] = field(default=None)
+    vf_clipfrac: Optional[torch.FloatTensor] = field(default=None)
+    ratio_mean: Optional[torch.FloatTensor] = field(default=None)
+    approxkl: Optional[torch.FloatTensor] = field(default=None)
 
 @dataclass
 class PPOComponents:
@@ -128,7 +129,7 @@ class PPOComponents:
     sequence_lengths_p1: torch.FloatTensor
     args: PPOConfig
 
-    def process_ppo_components(self, postprocessed_responses: torch.IntTensor):
+    def process_ppo_components(self, postprocessed_responses: torch.IntTensor, eos_token_id: int) -> None:  
         """
         Processes the PPO components and initializes the necessary attributes.
 
@@ -137,7 +138,7 @@ class PPOComponents:
         """
         # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
         # Completions not passing that filter will receive a lower score.
-        contain_eos_token = torch.any(postprocessed_responses == self.eos_token_id, dim=-1)
+        contain_eos_token = torch.any(postprocessed_responses == eos_token_id, dim=-1)
         if self.args.missing_eos_penalty is not None:
             self.scores[~contain_eos_token] -= self.args.missing_eos_penalty
 
@@ -156,9 +157,9 @@ class PPOComponents:
         logr = self.ref_logprobs - self.logprobs
         kl = -logr if self.args.kl_estimator == "k1" else (logr.exp() - 1) - logr  # Else statement is k3
         non_score_reward = -self.args.kl_coef * kl
-        rewards = non_score_reward.clone()
-        actual_start = torch.arange(rewards.size(0), device=rewards.device)
-        actual_end = torch.where(self.sequence_lengths_p1 < rewards.size(1), self.sequence_lengths_p1, self.sequence_lengths)
+        self.rewards = non_score_reward.clone()
+        actual_start = torch.arange(self.rewards.size(0), device=self.rewards.device)
+        actual_end = torch.where(self.sequence_lengths_p1 < self.rewards.size(1), self.sequence_lengths_p1, self.sequence_lengths)
         self.rewards[[actual_start, actual_end]] += self.scores
         if self.args.whiten_rewards:
             self.rewards = masked_whiten(self.rewards, mask=~self.padding_mask_p1, shift_mean=False)
@@ -169,10 +170,11 @@ class PPOComponents:
         rlhf_reward = mean_non_score_reward + self.scores.mean()
         ppo_stats = PPOStats(
             mean_kl = kl.sum(1).mean(),
-            mean_entropy = (-self.logprobs).sum(1).mean(),
+            objective_mean_entropy = (-self.logprobs).sum(1).mean(),
             mean_non_score_reward = mean_non_score_reward,
             rlhf_reward = rlhf_reward,
-            mean_scores = self.scores.mean()
+            mean_scores = self.scores.mean(),
+            responses=self.responses,
         )
         return ppo_stats
 
@@ -256,7 +258,6 @@ class PPOHandler:
 
         self.ppo_components = PPOComponents(
             responses=responses,
-            postprocessed_responses=postprocessed_responses,
             logprobs=logprobs,
             ref_logprobs=ref_logprobs,
             values=values,
@@ -273,7 +274,7 @@ class PPOHandler:
         self.ppo_loss_components: PPOLossComponents = None
         self.ppo_stats: PPOStats = None
 
-        self.ppo_components.process_ppo_components(postprocessed_responses)
+        self.ppo_components.process_ppo_components(postprocessed_responses, self.eos_token_id)
     
     def get_stats(self) -> PPOStats:
         return self.ppo_stats
@@ -304,26 +305,23 @@ class PPOHandler:
         )
         vpred = vpred_temp[:, context_length - 1 : -1].squeeze(-1)
         vpred = torch.masked_fill(vpred, self.ppo_components.padding_mask_p1[micro_batch_inds], 0)
-        vpredclipped, vf_clipfrac = torch.clamp(
-            vpred,
-            mb_values - self.args.cliprange_value,
-            mb_values + self.args.cliprange_value,
-
-        )
+        vpredclipped = torch.clamp(
+                        vpred,
+                        mb_values - self.args.cliprange_value,
+                        mb_values + self.args.cliprange_value,
+                    )
+        prob_dist = torch.nn.functional.softmax(logits, dim=-1)
+        policy_entropy_mean = (torch.logsumexp(logits, dim=-1) - torch.sum(prob_dist * logits, dim=-1)).mean()
+        self.ppo_stats.policy_entropy_mean = policy_entropy_mean
         self.ppo_loss_components = PPOLossComponents(
+            micro_batch_inds=micro_batch_inds,
             vpred=vpred,
             vpredclipped=vpredclipped,
-            mb_logprobs=mb_logprobs,
             mb_return=mb_return,
+            mb_logprobs=mb_logprobs,
             mb_advantage=mb_advantage,
             logits=logits,
-            new_logprobs=new_logprobs,
-            pg_loss=None,
-            vf_loss=None,
-            pg_clipfrac=None,
-            vf_clipfrac=None,
-            ratio_mean=None,
-            approxkl=None,
+            new_logprobs=new_logprobs
         )
 
     def compute_loss(self)->None:
@@ -785,7 +783,7 @@ class PPOTrainer(Trainer):
         ref_logprobs = torch.cat(ref_logprobs, 0)
         sequence_lengths = torch.cat(sequence_lengths, 0)
         values = torch.cat(values, 0)
-        if scores is None:
+        if isinstance(scores, list):
             scores = torch.cat(scores, 0)
         del (logprob, ref_logprob, full_value, value, score, unwrapped_value_model)
         empty_cache()
@@ -807,19 +805,17 @@ class PPOTrainer(Trainer):
     
     def save_training_stats(self, ppo_handler: PPOHandler, ppo_epoch_idx: int, minibatch_idx: int, gradient_accumulation_idx: int) -> None:
         with torch.no_grad():
-            prob_dist = torch.nn.functional.softmax(ppo_handler.logits, dim=-1)
-            entropy_mean = (torch.logsumexp(ppo_handler.logits, dim=-1) - torch.sum(prob_dist * ppo_handler.logits, dim=-1)).mean()
-            self.approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.approxkl
+            self.approxkl_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.ppo_stats.approxkl
             self.pg_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                ppo_handler.pg_clipfrac
+                ppo_handler.ppo_stats.pg_clipfrac
             )
-            self.pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.pg_loss
-            self.vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.vf_loss
+            self.pg_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.ppo_stats.pg_loss
+            self.vf_loss_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.ppo_stats.vf_loss
             self.vf_clipfrac_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = (
-                ppo_handler.vf_clipfrac
+                ppo_handler.ppo_stats.vf_clipfrac
             )
-            self.entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = entropy_mean
-            self.ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.ratio_mean               
+            self.entropy_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.ppo_stats.policy_entropy_mean
+            self.ratio_stats[ppo_epoch_idx, minibatch_idx, gradient_accumulation_idx] = ppo_handler.ppo_stats.ratio_mean               
     
     def update_training_model(self, query_responses: torch.IntTensor, ppo_handler: PPOHandler) -> None:
         # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
@@ -854,7 +850,6 @@ class PPOTrainer(Trainer):
                     gradient_accumulation_idx += 1
                 # fmt: off
                 ppo_handler.flush_ppo_loss_components()
-                ppo_handler.flush_ppo_stats()
                 # fmt: on
                 empty_cache()
                 gc.collect()
@@ -862,18 +857,18 @@ class PPOTrainer(Trainer):
                 minibatch_idx += 1
 
 
-    def log_stats(self, ppo_stats: PPOStats):
+    def log_stats(self, ppo_handler: PPOHandler) -> None:
         with torch.no_grad():
             eps = int(self.state.episode / (time.time() - self.start_time))
             metrics = {}
             metrics["eps"] = eps
-            metrics["objective/kl"] = self.accelerator.gather_for_metrics(ppo_stats.mean_kl).mean().item()
-            metrics["objective/entropy"] = self.accelerator.gather_for_metrics(ppo_stats.mean_entropy).mean().item()
+            metrics["objective/kl"] = self.accelerator.gather_for_metrics(ppo_handler.ppo_stats.mean_kl).mean().item()
+            metrics["objective/entropy"] = self.accelerator.gather_for_metrics(ppo_handler.ppo_stats.objective_mean_entropy).mean().item()
             metrics["objective/non_score_reward"] = (
-                self.accelerator.gather_for_metrics(ppo_stats.mean_non_score_reward).mean().item()
+                self.accelerator.gather_for_metrics(ppo_handler.ppo_stats.mean_non_score_reward).mean().item()
             )
-            metrics["objective/rlhf_reward"] = self.accelerator.gather_for_metrics(ppo_stats.rlhf_reward).mean().item()
-            metrics["objective/scores"] = self.accelerator.gather_for_metrics(ppo_stats.mean_scores).mean().item()
+            metrics["objective/rlhf_reward"] = self.accelerator.gather_for_metrics(ppo_handler.ppo_stats.rlhf_reward).mean().item()
+            metrics["objective/scores"] = self.accelerator.gather_for_metrics(ppo_handler.ppo_stats.mean_scores).mean().item()
             metrics["policy/approxkl_avg"] = self.accelerator.gather_for_metrics(self.approxkl_stats).mean().item()
             metrics["policy/clipfrac_avg"] = self.accelerator.gather_for_metrics(self.pg_clipfrac_stats).mean().item()
             metrics["loss/policy_avg"] = self.accelerator.gather_for_metrics(self.pg_loss_stats).mean().item()
@@ -882,7 +877,7 @@ class PPOTrainer(Trainer):
             metrics["policy/entropy_avg"] = self.accelerator.gather_for_metrics(self.entropy_stats).mean().item()
             metrics["val/ratio"] = self.accelerator.gather_for_metrics(self.ratio_stats).mean().item()
             metrics["val/ratio_var"] = self.accelerator.gather_for_metrics(self.ratio_stats).var().item()
-            metrics["val/num_eos_tokens"] = (ppo_stats.responses == self.processing_class.eos_token_id).sum().item()
+            metrics["val/num_eos_tokens"] = (ppo_handler.ppo_stats.responses == self.processing_class.eos_token_id).sum().item()
             metrics["lr"] = self.lr_scheduler.get_last_lr()[0]
             metrics["episode"] = self.state.episode
             self.state.epoch = self.state.episode / self.train_dataset_len  # used by self.log
@@ -948,7 +943,7 @@ class PPOTrainer(Trainer):
             check_input_shape: Optional[bool] = True,
         ) -> None:
         
-        if self.state.episode == 0:
+        if not hasattr(self, "approxkl_stats"):
             self.initialize_training()
         device = self.accelerator.device
         self.state.episode += 1 * self.args.batch_size
@@ -978,8 +973,9 @@ class PPOTrainer(Trainer):
             empty_cache()
         
         self.update_training_model(query_responses, ppo_handler)
+        self.log_stats(ppo_handler)
         self.lr_scheduler.step()
-        self.log_stats(ppo_handler.get_stats())
+        ppo_handler.flush_ppo_stats()
         
 
     def train(self):
@@ -1001,7 +997,6 @@ class PPOTrainer(Trainer):
         self.initialize_training()
 
         for update in range(1, self.args.num_total_batches + 1):
-            self.state.episode += 1 * self.args.batch_size
             data = next(iter_dataloader)
             with torch.no_grad():
                 queries = data["input_ids"].to(device)

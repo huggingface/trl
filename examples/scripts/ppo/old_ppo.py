@@ -15,7 +15,6 @@
 import shutil
 
 import torch
-from transformers import set_seed
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
@@ -25,25 +24,28 @@ from transformers import (
     HfArgumentParser,
 )
 
+from transformers import set_seed
+
 from trl import (
     ModelConfig,
     PPOConfig,
-    PPOTrainer,
     ScriptArguments,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
 )
+
+from trl.trainer.old_ppo_trainer import PPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 """
-python -i examples/scripts/ppo/ppo.py \
+python -i examples/scripts/ppo/old_ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
     --output_dir models/minimal/ppo \
-    --per_device_train_batch_size 64 \
+    --per_device_train_batch_size 16 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
     --model_name_or_path EleutherAI/pythia-1b-deduped \
@@ -71,9 +73,9 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
+    set_seed(training_args.seed)
     # remove output_dir if exists
     shutil.rmtree(training_args.output_dir, ignore_errors=True)
-    set_seed(training_args.seed)
 
     ################
     # Model & Tokenizer
