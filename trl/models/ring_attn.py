@@ -38,7 +38,7 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int | None
     Create ring attention group and substitute flash attn with ring flash attn.
 
     Args:
-        sequence_parallel_degree: Sequence parallelism factor.
+        sequence_parallel_size: Sequence parallelism factor.
         heads_k_stride: Sequence parallelism K head stride size. Passed
             through to `ring_flash_attn.substitute_hf_flash_attn`. Defaults to 1.
     """
