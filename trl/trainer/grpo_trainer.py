@@ -987,6 +987,16 @@ class GRPOTrainer(Trainer):
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
+        prompt_inputs = self.processing_class(
+            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+        )
+        prompt_inputs = super()._prepare_inputs(prompt_inputs)
+        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+        if self.max_prompt_length is not None:
+            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             # First, update the vLLM weights if needed
@@ -1074,6 +1084,7 @@ class GRPOTrainer(Trainer):
             self.generation_config.block_size = 128
             self.generation_config.do_sample=False # logit processing issue for now
             self.generation_config.max_new_tokens = self.max_completion_length
+            previous_attn = self.model_wrapped.config._attn_implementation 
             if torch.cuda.is_available():
                 self.model_wrapped.config._attn_implementation = "paged_attention"
             else:
@@ -1097,16 +1108,8 @@ class GRPOTrainer(Trainer):
             prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_inputs.input_ids]
             prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            self.model_wrapped.config._attn_implementation = previous_attn
         else:
-            prompt_inputs = self.processing_class(
-                text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-            )
-            prompt_inputs = super()._prepare_inputs(prompt_inputs)
-            prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-            if self.max_prompt_length is not None:
-                prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-                prompt_mask = prompt_mask[:, -self.max_prompt_length :]
 
             # Regular generation path
             with unwrap_model_for_generation(
