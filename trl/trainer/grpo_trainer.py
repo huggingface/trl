@@ -1087,6 +1087,7 @@ class GRPOTrainer(Trainer):
                 FSDP.summon_full_params(self.model_wrapped, recurse=False)
                 if self.is_fsdp_enabled else nullcontext()
             ):
+                unwrapped_model.to(torch.bfloat16)
                 all_outputs = unwrapped_model.generate_batch(prompt_inputs.input_ids, generation_config=self.generation_config) 
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
