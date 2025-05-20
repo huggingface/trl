@@ -1069,9 +1069,14 @@ class GRPOTrainer(Trainer):
         
         elif self.use_transformers_paged:
             prompt_inputs = self.processing_class(text=prompts_text)
-            self.generation_config.max_batch_tokens = 512
+            self.generation_config.max_batch_tokens = self.num_generations 
             self.generation_config.num_blocks = 2048
-            self.generation_config.block_size = 64
+            self.generation_config.block_size = 128
+            self.generation_config.max_new_tokens = self.max_completion_length,
+            if torch.cuda.is_available():
+                self.model_wrapped.config._attn_implementation = "paged_attention"
+            else:
+                self.model_wrapped.config._attn_implementation = "sdpa_paged"
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1082,10 +1087,12 @@ class GRPOTrainer(Trainer):
                 FSDP.summon_full_params(self.model_wrapped, recurse=False)
                 if self.is_fsdp_enabled else nullcontext()
             ):
-                all_outputs = unwrapped_model.generate_batch(prompt_inputs, generation_config=self.generation_config, use_tqdm=False) 
-            completion_ids = [output.generated_tokens for outputs in all_outputs for output in outputs.outputs]
+                all_outputs = unwrapped_model.generate_batch(prompt_inputs.input_ids, generation_config=self.generation_config) 
+            completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_inputs.input_ids]
+            prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             prompt_inputs = self.processing_class(
