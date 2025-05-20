@@ -190,7 +190,6 @@ class TestNashMDTrainer(unittest.TestCase):
 
             trainer.train()
 
-            # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
