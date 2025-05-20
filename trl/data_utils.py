@@ -544,7 +544,7 @@ def greedy_knapsack(numbers: list[int], capacity: int) -> list[list]:
     return knapsacks, [[tup[1]] for tup in numbers]
 
 
-def pack_examples_smarter(examples: dict[str, list[list]], seq_length: int) -> dict[str, list[list]]:
+def pack_examples_knapsack(examples: dict[str, list[list]], seq_length: int) -> dict[str, list[list]]:
     """
     Pack examples smartly into chunks of size `seq_length`.
 
@@ -565,7 +565,7 @@ def pack_examples_smarter(examples: dict[str, list[list]], seq_length: int) -> d
     ...     "input_ids": [[1, 2, 3, 4, 5, 6, 7], [8, 9, 10]],
     ...     "attention_mask": [[0, 1, 1, 1, 1, 1, 1], [0, 0, 1]],
     ... }
-    >>> pack_examples_smarter(examples, seq_length=4)
+    >>> pack_examples_knapsack(examples, seq_length=4)
     {'input_ids': [[1, 2, 3, 4], [5, 6, 7] [8, 9, 10]], 'attention_mask': [[0, 1, 1, 1, 1], [1, 1, 1], [0, 0, 1]]}
     >>> pack_examples(examples, seq_length=4)
     {'input_ids': [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10]], 'attention_mask': [[0, 1, 1, 1], [1, 1, 1, 0], [0, 1]]}

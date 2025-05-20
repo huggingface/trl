@@ -47,7 +47,7 @@ from ..data_utils import (
     maybe_apply_chat_template,
     maybe_convert_to_chatml,
     pack_examples,
-    pack_examples_smarter,
+    pack_examples_knapsack,
 )
 from .sft_config import SFTConfig
 from .utils import ConstantLengthDataset, generate_model_card, get_comet_experiment_url, peft_module_casting_to_bf16
@@ -361,10 +361,9 @@ class SFTTrainer(Trainer):
         dataset: Union[Dataset, IterableDataset],
         processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
         args: SFTConfig,
-        packing: bool,
+        packing: Union[bool, str],
         formatting_func: Optional[Callable[[dict], str]],
-        dataset_name: str,
-        pack_smart: bool = False,
+        dataset_name: str
     ) -> Union[Dataset, IterableDataset]:
         # Convert the dataset to an IterableDataset if it is a ConstantLengthDataset
         if isinstance(dataset, ConstantLengthDataset):
@@ -446,9 +445,9 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
-                if pack_smart == True:
+                if packing == "knapsack":
                     dataset = dataset.map(
-                        pack_examples_smarter, batched=True, fn_kwargs={"seq_length": args.max_length}, **map_kwargs
+                        pack_examples_knapsack, batched=True, fn_kwargs={"seq_length": args.max_length}, **map_kwargs
                     )
                 else:
                     dataset = dataset.map(

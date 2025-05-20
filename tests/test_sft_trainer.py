@@ -1153,6 +1153,76 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertEqual(len(trainer.train_dataset["input_ids"]), len(self.conversational_lm_dataset["train"]))
             self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
+    def test_sft_trainer_knapsack_packing(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+                max_length=16,  # make sure there is at least 1 packed sequence
+                packing="knapsack",
+                report_to="none",
+            )
+            trainer = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.conversational_lm_dataset["train"],
+                eval_dataset=self.conversational_lm_dataset["test"],
+            )
+
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 53)  # w/ this dataset, we end up with 53 seqs
+            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 7 seqs
+
+    def test_sft_trainer_knapsack_packing_check_dataloss(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+                max_length=4,  # make sure there is at least 1 packed sequence
+                packing="knapsack",
+                report_to="none",
+            )
+            trainer_knapsack = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.conversational_lm_dataset["train"],
+                eval_dataset=self.conversational_lm_dataset["test"],
+            )
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                dataloader_drop_last=True,
+                eval_strategy="steps",
+                max_steps=4,
+                eval_steps=2,
+                save_steps=2,
+                per_device_train_batch_size=2,
+                gradient_checkpointing=True,
+                max_length=4,  # make sure there is at least 1 packed sequence
+                packing=True,
+                report_to="none",
+            )
+            trainer_no_knapsack = SFTTrainer(
+                model=self.model_id,
+                args=training_args,
+                train_dataset=self.conversational_lm_dataset["train"],
+                eval_dataset=self.conversational_lm_dataset["test"],
+            )
+            trainer_knapsack.train_dataset["input_ids"]
+            total1 = sum(sum(inner) for inner in trainer_knapsack.train_dataset["input_ids"])
+            total2 = sum(sum(inner) for inner in trainer_no_knapsack.train_dataset["input_ids"])
+            self.assertEqual(total1, total2) # Sum should be equal since they are just alternative packings.
+
     @require_vision
     def test_sft_trainer_skip_prepare_dataset(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
