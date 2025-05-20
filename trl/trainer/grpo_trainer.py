@@ -1089,6 +1089,7 @@ class GRPOTrainer(Trainer):
                 self.model_wrapped.config._attn_implementation = "paged_attention"
             else:
                 self.model_wrapped.config._attn_implementation = "sdpa_paged"
+            self.model_wrapped.eval()
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1096,7 +1097,7 @@ class GRPOTrainer(Trainer):
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model,
-                torch.inference_mode(),
+                torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False)
                 if self.is_fsdp_enabled else nullcontext()
             ):
@@ -1109,6 +1110,7 @@ class GRPOTrainer(Trainer):
             prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
             self.model_wrapped.config._attn_implementation = previous_attn
+            self.model_wrapped.train()
         else:
 
             # Regular generation path
