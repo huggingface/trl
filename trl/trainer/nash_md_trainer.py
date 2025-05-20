@@ -197,7 +197,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             if is_peft_available():
                 if isinstance(policy_model_for_gmw, PeftModel):
                     is_peft = True
-            
+
             if is_peft:
                 ref_model_for_gmw = policy_model_for_gmw.get_base_model()
             else:
@@ -207,12 +207,12 @@ class NashMDTrainer(OnlineDPOTrainer):
         else:
             # An explicit ref_model is provided. Unwrap it for DDP/FSDP.
             ref_model_for_gmw = self.accelerator.unwrap_model(self.ref_model)
-        
+
         # Both models given to GeometricMixtureWrapper (policy_model_for_gmw and ref_model_for_gmw) are DDP-unwrapped.
-        with torch.no_grad(): # Ensure no_grad context for mixture model generation
+        with torch.no_grad():  # Ensure no_grad context for mixture model generation
             mixture_model = GeometricMixtureWrapper(
-                model=policy_model_for_gmw,         
-                ref_model=ref_model_for_gmw,        
+                model=policy_model_for_gmw,
+                ref_model=ref_model_for_gmw,
                 generation_config=self.generation_config,
                 mixture_coef=self.mixture_coef,
                 device=self.accelerator.device,
