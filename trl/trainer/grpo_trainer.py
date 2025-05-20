@@ -488,6 +488,7 @@ class GRPOTrainer(Trainer):
             return features
 
         # Training arguments
+        self.use_transformers_paged = args.use_transformers_paged or True
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper

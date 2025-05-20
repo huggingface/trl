@@ -318,6 +318,14 @@ class GRPOConfig(TrainingArguments):
             "generation instead of the default model.generate(). Requires `vllm` to be installed."
         },
     )
+    use_transformers_paged: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
+            "`transformers` paged implementation will be used for generation instead of the default padded "
+            "implementation."
+        },
+    )
     vllm_mode: str = field(
         default="server",
         metadata={
