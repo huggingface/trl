@@ -14,8 +14,9 @@
 
 import atexit
 import logging
+import socket
 import time
-from typing import Optional, Union
+from typing import Optional
 from urllib.parse import urlparse
 
 import torch
@@ -48,8 +49,9 @@ class VLLMClient:
     weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
 
     Args:
-        base_url (`str`, *optional*, defaults to `None`):
-            Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, host and server_port are ignored.
+        base_url (`str` or `None`, *optional*, defaults to `None`):
+            Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `host` and `server_port` are
+            ignored.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
             IP address of the vLLM server. Ignored if `base_url` is provided.
         server_port (`int`, *optional*, defaults to `8000`):
@@ -70,25 +72,8 @@ class VLLMClient:
         INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
         ```
 
-        There are two ways to initialize the client:
-
-        1. Using base_url:
-        ```python
-        >>> from trl.extras.vllm_client import VLLMClient
-        >>> # Connect to a local server
-        >>> client = VLLMClient(base_url="http://localhost:8000")
-        >>> # Or connect to a remote server
-        >>> client = VLLMClient(base_url="http://192.168.1.100:8000")
-        ```
-        2. Using host and server_port:
-        ```python
-        >>> from trl.extras.vllm_client import VLLMClient
-        >>> # Connect to a local server
-        >>> client = VLLMClient(host="localhost", server_port=8000)
-        >>> # Or connect to a remote server
-        >>> client = VLLMClient(host="192.168.1.100", server_port=8000)
-        ```
         Use the client to generate completions and update model weights:
+
         ```python
         >>> from trl.extras.vllm_client import VLLMClient
         >>> client = VLLMClient()
@@ -101,6 +86,15 @@ class VLLMClient:
         >>> client.init_communicator()
         >>> client.update_model_params(model)
         ```
+
+        There are several ways to initialize the client:
+
+        ```python
+        VLLMClient(base_url="http://localhost:8000")
+        VLLMClient(base_url="http://192.168.1.100:8000")
+        VLLMClient(host="localhost", server_port=8000)
+        VLLMClient(host="192.168.1.100", server_port=8000)
+        ```
     """
 
     def __init__(
@@ -109,7 +103,7 @@ class VLLMClient:
         host: str = "0.0.0.0",
         server_port: int = 8000,
         group_port: int = 51216,
-        connection_timeout: float = 0.0
+        connection_timeout: float = 0.0,
     ):
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
@@ -121,6 +115,7 @@ class VLLMClient:
         if base_url is not None:
             # Parse the base_url to extract host and port
             parsed_url = urlparse(base_url)
+            self.host = socket.gethostbyname(parsed_url.hostname)
             scheme = parsed_url.scheme or "http"
             self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
         else:
@@ -152,19 +147,13 @@ class VLLMClient:
                 elapsed_time = time.time() - start_time
                 if elapsed_time >= total_timeout:
                     raise ConnectionError(
-                        f"The vLLM server can't be reached at {self.base_url} after {total_timeout} "
-                        "seconds. Make sure the server is running by running `trl vllm-serve`."
+                        f"The vLLM server can't be reached at {self.base_url} after {total_timeout} seconds. Make "
+                        "sure the server is running by running `trl vllm-serve`."
                     ) from exc
             else:
                 if response.status_code == 200:
                     if "X-Forwarded-For" in response.headers:
                         self.host = response.headers["X-Forwarded-For"]
-                    else:
-                        resp = requests.get(url, stream=True)
-                        resp.raise_for_status()
-                        sock = resp.raw._connection.sock
-                        ip, port = sock.getpeername()
-                        self.host = ip
                     logger.info("Server is up!")
                     return None
 
