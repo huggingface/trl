@@ -199,7 +199,7 @@ class NashMDTrainer(OnlineDPOTrainer):
                     is_peft = True
 
             if is_peft:
-                ref_model_for_gmw = policy_model_for_gmw.get_base_model()
+                ref_model_for_gmw = policy_model_for_gmw.disable_adapter()
             else:
                 # Not a PEFT model (or PEFT not available), or already a base model.
                 # Use the DDP-unwrapped policy model itself as the reference.
