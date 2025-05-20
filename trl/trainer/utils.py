@@ -1618,7 +1618,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
         experiment.log_table(tabular_data=table, filename=name)
 
 
-def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ..., int]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the left.
 
@@ -1660,28 +1660,29 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
             [5, 6, 0]])
     ```
     """
+    _, M = mask.shape
+
     # Create copy of mask and tensors
     mask = mask.clone()
     tensors = [t.clone() for t in tensors]
 
     # Shift non-zero values to the left
-    for i in range(mask.size(0)):
-        first_one_idx = torch.nonzero(mask[i])[0].item()
-        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
-        for tensor in tensors:
-            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+    f = mask.argmax(dim=1)
+    pos = torch.arange(M, device=mask.device).unsqueeze(0)
+    idx_roll = (pos + f.unsqueeze(1)) % M
+    mask_roll = mask.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
 
     # Get the first column idx that is all zeros and remove every column after that
-    empty_cols = torch.sum(mask, dim=0) == 0
-    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
-    mask = mask[:, :first_empty_col]
-    for i, tensor in enumerate(tensors):
-        tensors[i] = tensor[:, :first_empty_col]
+    col_sums = mask_roll.sum(dim=0)
+    empty_cols = col_sums == 0
+    first_empty = int(empty_cols.float().argmax()) if empty_cols.any() else M
+    flushed_mask = mask_roll[:, :first_empty]
+    flushed_tensors = [t[:, :first_empty] for t in rolled_tensors]
 
-    if not tensors:
-        return mask
-    else:
-        return mask, *tensors
+    if not flushed_tensors:
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
 
 
 def selective_log_softmax(logits, index):
