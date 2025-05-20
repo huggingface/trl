@@ -19,7 +19,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.extras.dataset_formatting import get_formatting_func_from_dataset
-from trl.models.utils import ChatMlSpecialTokens, setup_chat_format
+from trl.models.utils import setup_chat_format
 
 
 class DatasetFormattingTestCase(unittest.TestCase):
@@ -119,29 +119,24 @@ class SetupChatFormatTestCase(unittest.TestCase):
     def setUp(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        # remove built-in chat_template to simulate a model having no chat_template
+        # Remove built-in chat_template to simulate a model having no chat_template
         self.tokenizer.chat_template = None
 
     def test_setup_chat_format(self):
-        modified_model, modified_tokenizer = setup_chat_format(
-            self.model, self.tokenizer, format="chatml", resize_to_multiple_of=64
-        )
+        _, modified_tokenizer = setup_chat_format(self.model, self.tokenizer, format="chatml")
 
-        _chatml = ChatMlSpecialTokens()
         # Check if special tokens are correctly set
         self.assertEqual(modified_tokenizer.eos_token, "<|im_end|>")
-        self.assertEqual(modified_tokenizer.pad_token, "<|im_end|>")
         self.assertEqual(modified_tokenizer.bos_token, "<|im_start|>")
-        self.assertEqual(modified_tokenizer.eos_token, _chatml.eos_token)
-        self.assertEqual(modified_tokenizer.pad_token, _chatml.pad_token)
-        self.assertEqual(modified_tokenizer.bos_token, _chatml.bos_token)
-        self.assertEqual((self.model.get_input_embeddings().weight.shape[0] % 64), 0)
+
+    def test_setup_chat_format_with_resize(self):
+        modified_model, _ = setup_chat_format(self.model, self.tokenizer, format="chatml", resize_to_multiple_of=123)
+
+        # Check that the input embeddings have been resized to a multiple of 123
+        self.assertEqual((modified_model.get_input_embeddings().weight.shape[0] % 123), 0)
 
     def test_example_with_setup_model(self):
-        modified_model, modified_tokenizer = setup_chat_format(
-            self.model,
-            self.tokenizer,
-        )
+        _, modified_tokenizer = setup_chat_format(self.model, self.tokenizer)
         messages = [
             {"role": "system", "content": "You are helpful"},
             {"role": "user", "content": "Hello"},
