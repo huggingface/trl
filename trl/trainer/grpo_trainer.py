@@ -616,10 +616,12 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.accelerator.is_main_process:
-                base_url = args.vllm_server_base_url if args.vllm_server_base_url is not None else f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                if args.vllm_server_base_url is not None:
+                    base_url = args.vllm_server_base_url
+                else:
+                    base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                 self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-
                 self.vllm_client.init_communicator()
 
             elif self.vllm_mode == "colocate":
