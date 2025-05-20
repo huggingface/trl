@@ -1084,6 +1084,7 @@ class GRPOTrainer(Trainer):
                     self.accelerator,
                     gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model,
+                torch.inference_mode(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False)
                 if self.is_fsdp_enabled else nullcontext()
             ):
