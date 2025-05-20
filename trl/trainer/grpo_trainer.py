@@ -1072,7 +1072,7 @@ class GRPOTrainer(Trainer):
             self.generation_config.max_batch_tokens = 512
             self.generation_config.num_blocks = 1024 
             self.generation_config.block_size = 128
-            self.generation_config.max_new_tokens = self.max_completion_length,
+            self.generation_config.max_new_tokens = self.max_completion_length
             if torch.cuda.is_available():
                 self.model_wrapped.config._attn_implementation = "paged_attention"
             else:
