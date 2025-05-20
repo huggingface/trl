@@ -1072,6 +1072,7 @@ class GRPOTrainer(Trainer):
             self.generation_config.max_batch_tokens = 512
             self.generation_config.num_blocks = 1024 
             self.generation_config.block_size = 128
+            self.generation_config.do_sample=False # logit processing issue for now
             self.generation_config.max_new_tokens = self.max_completion_length
             if torch.cuda.is_available():
                 self.model_wrapped.config._attn_implementation = "paged_attention"
@@ -1089,7 +1090,7 @@ class GRPOTrainer(Trainer):
                 if self.is_fsdp_enabled else nullcontext()
             ):
                 unwrapped_model.to(torch.bfloat16)
-                all_outputs = unwrapped_model.generate_batch(prompt_inputs.input_ids.long(), generation_config=self.generation_config) 
+                all_outputs = unwrapped_model.generate_batch(prompt_inputs.input_ids, generation_config=self.generation_config) 
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
