@@ -1069,8 +1069,8 @@ class GRPOTrainer(Trainer):
         
         elif self.use_transformers_paged:
             prompt_inputs = self.processing_class(text=prompts_text)
-            self.generation_config.max_batch_tokens = self.num_generations 
-            self.generation_config.num_blocks = 2048
+            self.generation_config.max_batch_tokens = 512
+            self.generation_config.num_blocks = 1024 
             self.generation_config.block_size = 128
             self.generation_config.max_new_tokens = self.max_completion_length,
             if torch.cuda.is_available():
