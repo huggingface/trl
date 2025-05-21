@@ -39,7 +39,7 @@ class ScriptArguments:
 
     Args:
         dataset_path (`str`):
-            
+            Path to a local dataset.
         dataset_name (`str`):
             Dataset name.
         dataset_config (`str` or `None`, *optional*, defaults to `None`):
