@@ -36,6 +36,8 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
+from ..extras.vllm_client import VLLMClient
+from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
@@ -46,6 +48,8 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_comet_experiment_url,
+    maybe_apply_chat_template,
+    pad,
 )
 
 
@@ -54,6 +58,10 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+if is_vllm_available():
+    from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
 
 
 class GKDTrainer(SFTTrainer):
@@ -144,6 +152,38 @@ class GKDTrainer(SFTTrainer):
             and self.model.generation_config.eos_token_id is not None
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
+
+        # vLLM setup for teacher model if enabled
+        self.teacher_use_vllm = args.teacher_use_vllm
+        if self.teacher_use_vllm:
+            if not is_vllm_available():
+                raise ImportError(
+                    "vLLM is not available and teacher_use_vllm is set to True. Please install vLLM with "
+                    "`pip install vllm` to use it."
+                )
+            self.teacher_vllm_mode = args.teacher_vllm_mode
+            if self.teacher_vllm_mode == "server":
+                if self.accelerator.is_main_process:
+                    self.teacher_vllm_client = VLLMClient(
+                        args.teacher_vllm_server_host,
+                        args.teacher_vllm_server_port,
+                        connection_timeout=args.teacher_vllm_server_timeout,
+                    )
+                    # We don't need to call init_communicator here as it's for weight syncing
+            elif self.teacher_vllm_mode == "colocate":
+                teacher_model_name_or_path = args.teacher_model_name_or_path or args.model_name_or_path
+                self.teacher_llm = LLM(
+                    model=teacher_model_name_or_path,
+                    tensor_parallel_size=args.teacher_vllm_tensor_parallel_size,
+                    gpu_memory_utilization=args.teacher_vllm_gpu_memory_utilization,
+                    # Max num seqs can be a small number as we generate one by one during training
+                    max_num_seqs=self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps,
+                    max_model_len=args.max_length,  # Assuming max_length covers prompt + new tokens
+                    seed=args.seed,  # Use the global seed for consistency
+                )
+            else:
+                raise ValueError(f"Unknown teacher_vllm_mode: {self.teacher_vllm_mode}")
+            self.teacher_vllm_guided_decoding_regex = args.teacher_vllm_guided_decoding_regex
 
     def _prepare_dataset(self, dataset, *args):
         # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
@@ -275,6 +315,105 @@ class GKDTrainer(SFTTrainer):
 
         return generated_tokens, new_attention_mask, new_labels
 
+    def _generate_on_policy_outputs_vllm(self, inputs, generation_config, pad_token_id=None):
+        device = self.accelerator.device
+        prompts_text = [
+            maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs["messages"]
+        ]
+
+        max_new_tokens = generation_config.max_new_tokens
+        temperature = generation_config.temperature
+        # vLLM uses top_k=-1 for no top_k, transformers uses 0 or None.
+        top_k = generation_config.top_k if generation_config.top_k and generation_config.top_k > 0 else -1
+        # top_p, repetition_penalty, min_p are not directly in generation_config, get from trainer args
+        top_p = self.args.top_p if hasattr(self.args, "top_p") else 1.0
+        repetition_penalty = self.args.repetition_penalty if hasattr(self.args, "repetition_penalty") else 1.0
+        min_p = self.args.min_p if hasattr(self.args, "min_p") else 0.0
+
+        if self.teacher_vllm_mode == "server":
+            all_prompts_text = self.accelerator.gather_object(prompts_text)
+            if self.accelerator.is_main_process:
+                completion_ids = self.teacher_vllm_client.generate(
+                    prompts=all_prompts_text,
+                    n=1,  # In GKD, we generate 1 completion per prompt from teacher
+                    repetition_penalty=repetition_penalty,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
+                    max_tokens=max_new_tokens,
+                    guided_decoding_regex=self.teacher_vllm_guided_decoding_regex,
+                )
+            else:
+                completion_ids = [None] * len(all_prompts_text)
+            completion_ids = self.accelerator.broadcast_object_list(completion_ids, from_process=0)
+            process_slice = slice(
+                self.accelerator.process_index * len(prompts_text),
+                (self.accelerator.process_index + 1) * len(prompts_text),
+            )
+            completion_ids = completion_ids[process_slice]
+        elif self.teacher_vllm_mode == "colocate":
+            if self.teacher_vllm_guided_decoding_regex:
+                guided_decoding = GuidedDecodingParams(
+                    backend="outlines", regex=self.teacher_vllm_guided_decoding_regex
+                )
+            else:
+                guided_decoding = None
+            sampling_params = SamplingParams(
+                n=1,
+                repetition_penalty=repetition_penalty,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                max_tokens=max_new_tokens,
+                guided_decoding=guided_decoding,
+            )
+            all_outputs = self.teacher_llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
+            completion_ids = [output.token_ids for outputs_list in all_outputs for output in outputs_list.outputs]
+        else:
+            raise ValueError(f"Unknown teacher_vllm_mode: {self.teacher_vllm_mode}")
+
+        # We need to combine prompt and completion for new_input_ids
+        # Tokenize prompts again to get prompt_ids on the correct device and format
+        # Ensure add_special_tokens=False as vLLM typically handles prompts as raw text
+        prompt_tokenized = self.processing_class(
+            prompts_text,
+            return_tensors="pt",
+            padding="longest",
+            truncation=True,
+            max_length=self.args.max_length - max_new_tokens,
+            add_special_tokens=False,
+        ).to(device)
+        prompt_ids = prompt_tokenized.input_ids
+
+        completion_ids_tensors = [torch.tensor(ids, device=device) for ids in completion_ids]
+        # Pad completions before concatenating
+        padded_completion_ids = pad(
+            completion_ids_tensors, padding_value=pad_token_id, max_length=max_new_tokens, side="right"
+        )
+
+        # Ensure prompt_ids and padded_completion_ids are 2D
+        if prompt_ids.ndim == 1:
+            prompt_ids = prompt_ids.unsqueeze(0)
+        if padded_completion_ids.ndim == 1:
+            padded_completion_ids = padded_completion_ids.unsqueeze(0)
+
+        new_input_ids = torch.cat([prompt_ids, padded_completion_ids], dim=1)
+
+        new_attention_mask = torch.ones_like(new_input_ids, device=device)
+        new_labels = new_input_ids.clone()
+
+        if pad_token_id is not None:
+            new_labels[new_labels == pad_token_id] = -100
+            new_attention_mask[new_input_ids == pad_token_id] = 0
+
+        # Mask prompt tokens in labels
+        prompt_lengths = prompt_ids.shape[1]
+        new_labels[:, :prompt_lengths] = -100
+
+        return new_input_ids, new_attention_mask, new_labels
+
     def training_step(
         self, model: nn.Module, inputs: dict[str, Union[torch.Tensor, Any]], num_items_in_batch: Optional[int] = None
     ) -> torch.Tensor:
@@ -286,10 +425,31 @@ class GKDTrainer(SFTTrainer):
         which are then used for training instead of the original inputs.
         """
         if self.seq_kd:
-            with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
-                new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
-                    unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+            if self.teacher_use_vllm:
+                # We pass original inputs["messages"] to vLLM generation as it expects raw text prompts
+                # generation_config for teacher also needs to be created based on args
+                teacher_generation_config = GenerationConfig(
+                    max_new_tokens=self.args.max_new_tokens,  # Use GKDConfig's max_new_tokens for teacher
+                    temperature=self.args.temperature,  # Use GKDConfig's temperature
+                    do_sample=True,
+                    top_k=0,  # Default from SFTTrainer, can be adjusted if needed
+                    use_cache=False,  # No cache for vLLM generation during training step
+                    pad_token_id=self.processing_class.pad_token_id,
                 )
+                if (
+                    hasattr(self.teacher_model.generation_config, "eos_token_id")
+                    and self.teacher_model.generation_config.eos_token_id is not None
+                ):
+                    teacher_generation_config.eos_token_id = self.teacher_model.generation_config.eos_token_id
+
+                new_input_ids, new_attention_mask, new_labels = self._generate_on_policy_outputs_vllm(
+                    inputs, teacher_generation_config, self.processing_class.pad_token_id
+                )
+            else:
+                with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
+                    new_input_ids, new_attention_mask, new_labels = self.generate_on_policy_outputs(
+                        unwrapped_model, inputs, self.generation_config, self.processing_class.pad_token_id
+                    )
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
