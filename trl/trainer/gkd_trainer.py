@@ -48,9 +48,9 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_comet_experiment_url,
-    maybe_apply_chat_template,
     pad,
 )
+from ..data_utils import maybe_apply_chat_template
 
 
 if is_peft_available():
@@ -188,9 +188,16 @@ class GKDTrainer(SFTTrainer):
     def _prepare_dataset(self, dataset, *args):
         # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
         # need to keep the messages column as it is. We use the following workaround to keep the messages column.
-        dataset = dataset.add_column("_messages", dataset["messages"])
-        dataset = super()._prepare_dataset(dataset, *args)
-        dataset = dataset.rename_column("_messages", "messages")
+        # Only do this if a "prompt" column doesn't already exist from user script preprocessing
+        if "prompt" not in dataset.column_names:
+            if "messages" in dataset.column_names: # Check if "messages" column exists before trying to access it
+                dataset = dataset.add_column("_messages", dataset["messages"])
+                dataset = super()._prepare_dataset(dataset, *args)
+                dataset = dataset.rename_column("_messages", "messages")
+            else: # If "messages" is not there (e.g. user provided text/completion), just call super
+                dataset = super()._prepare_dataset(dataset, *args)
+        else: # If "prompt" column exists, assume user has preprocessed, just call super
+            dataset = super()._prepare_dataset(dataset, *args)
         return dataset
 
     @staticmethod
@@ -317,9 +324,16 @@ class GKDTrainer(SFTTrainer):
 
     def _generate_on_policy_outputs_vllm(self, inputs, generation_config, pad_token_id=None):
         device = self.accelerator.device
-        prompts_text = [
-            maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs["messages"]
-        ]
+        # Decode the tokenized prompts from inputs["prompts"]
+        # Ensure to skip special tokens and padding tokens during decoding
+        prompts_text = self.processing_class.batch_decode(
+            inputs["prompts"],
+            skip_special_tokens=True,
+            # clean_up_tokenization_spaces=False # Keep this commented unless specific issues arise
+        )
+        # Remove padding token text if it appears, as vLLM expects clean prompts
+        if self.processing_class.pad_token:
+            prompts_text = [p.replace(self.processing_class.pad_token, "") for p in prompts_text]
 
         max_new_tokens = generation_config.max_new_tokens
         temperature = generation_config.temperature
