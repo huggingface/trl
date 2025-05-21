@@ -1244,13 +1244,39 @@ class GRPOTrainer(Trainer):
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
+        # unpad the prompt and completion ids
+        unpadded_prompt_ids = []
+        unpadded_completion_ids = []
+        unpadded_per_token_logps = []
+        prompt_ids_length = prompt_ids.size(1)
+        # get the start and end indices of the attention_mask
+        for mask in attention_mask:
+            indices = torch.where(mask == 1)[0]
+            
+            if len(indices) > 0:
+                start = indices[0]
+                end = indices[-1] + 1
+                unpadded_prompt_ids.append(prompt_ids[0:end])
+                unpadded_completion_ids.append(completion_ids[prompt_ids_length:end])
+                assert mask[start:end].sum() == end - start
+                assert mask[start:end].sum() == end - start
+                unpadded_per_token_logps.append(old_per_token_logps[start:end])
+            else:
+                # case where the attention mask is all zeros, e.g. when mask_truncated_completions is enabled
+                unpadded_prompt_ids.append(None)
+                unpadded_completion_ids.append(None)
+                unpadded_per_token_logps.append(None)
+    
         return {
-            "prompt_ids": prompt_ids,
-            "prompt_mask": prompt_mask,
-            "completion_ids": completion_ids,
-            "completion_mask": completion_mask,
+            "unpadded_prompt_ids": unpadded_prompt_ids,
+            "unpadded_completion_ids": unpadded_completion_ids,
+            "unpadded_per_token_logps": unpadded_per_token_logps,
+            # "prompt_ids": prompt_ids,
+            # "prompt_mask": prompt_mask,
+            # "completion_ids": completion_ids,
+            # "completion_mask": completion_mask,
             "advantages": advantages,
-            "old_per_token_logps": old_per_token_logps,
+            # "old_per_token_logps": old_per_token_logps,
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1302,14 +1328,29 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        assert inputs["unpadded_completion_ids"].shape == inputs["unpadded_per_token_logps"].shape
+        
+        prompt_ids, prompt_mask = pad(inputs["unpadded_prompt_ids"], padding_value=self.processing_class.pad_token_id, padding_side="left")
+        completion_ids, completion_mask = pad(inputs["unpadded_completion_ids"], padding_value=self.processing_class.pad_token_id, padding_side="right")
+        if old_per_token_logps is None:
+            old_per_token_logps = pad(inputs["unpadded_per_token_logps"], padding_value=self.processing_class.pad_token_id, padding_side="right")
+        
+        padded_inputs = {
+            "prompt_ids": prompt_ids, 
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids, 
+            "completion_mask": completion_mask,
+            "advantages": inputs["advantages"],
+            "old_per_token_logps": inputs["old_per_token_logps"],   
+        }
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
         if self.use_liger_loss:
             # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
+            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, padded_inputs)
         else:
-            return self._compute_loss(model, inputs)
+            return self._compute_loss(model, padded_inputs)
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model

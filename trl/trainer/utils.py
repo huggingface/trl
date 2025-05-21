@@ -420,7 +420,8 @@ def pad(
     padding_value: int = 0,
     padding_side: str = "right",
     pad_to_multiple_of: Optional[int] = None,
-) -> torch.Tensor:
+    return_mask: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """
     Pads a list of tensors to the same shape along the first dimension.
 
@@ -461,7 +462,9 @@ def pad(
 
     # Create an output tensor filled with the padding value
     output = torch.full((len(tensors), *output_shape), padding_value, dtype=tensors[0].dtype, device=tensors[0].device)
-
+    # Initialize mask tensor if required
+    if return_mask:
+        mask = torch.zeros((len(tensors), output_shape[0]), dtype=torch.long, device=tensors[0].device)
     for i, t in enumerate(tensors):
         if padding_side == "left":
             seq_start = output_shape[0] - t.shape[0]
@@ -474,6 +477,10 @@ def pad(
         seq_slice = slice(seq_start, seq_start + t.shape[0])
         slices = (seq_slice,) + tuple(slice(0, s) for s in t.shape[1:])
         output[i][slices] = t
+        if return_mask:
+            mask[i, seq_slice] = 1
+    if return_mask:
+        return output, mask
 
     return output
 
