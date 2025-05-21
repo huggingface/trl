@@ -33,7 +33,6 @@ Fine-Tune Llama-7b on SE paired dataset
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, default="")
-    parser.add_argument("--dataset_path", type=str, default="lvwerra/stack-exchange-paired")
     parser.add_argument("--dataset_name", type=str, default="lvwerra/stack-exchange-paired")
     parser.add_argument("--subset", type=str, default="data/finetune")
     parser.add_argument("--split", type=str, default="train")
