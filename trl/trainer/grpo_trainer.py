@@ -215,7 +215,7 @@ def split_tensor_dict(
         ]
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
-    chunk_size = first_tensor.shape[0] // num_chunks
+    chunk_size = len(first_tensor) // num_chunks
     return [
         {
             key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
@@ -246,6 +246,22 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     permutation = torch.randperm(batch_size)
     return {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
 
+
+def shuffle_list_dict(tensor_dict: dict[str, Optional[list[Any]]]) -> dict[str, Optional[list[Any]]]:
+    """
+    Shuffles a dictionary of lists along the first dimension in unison.
+
+    Example:
+        >>> x = [1, 2, 3]
+        >>> y = [4, 5, 6]
+        >>> tensor_dict = {"x": x, "y": y}
+        >>> shuffle_list_dict(tensor_dict)
+        {'x': [2, 1, 3], 'y': [5, 4, 6]}
+    """
+    first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
+    batch_size = len(first_tensor)
+    permutation = torch.randperm(batch_size)
+    return {key: [tensor[i] for i in permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -967,8 +983,8 @@ class GRPOTrainer(Trainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
-                generation_batch = shuffle_tensor_dict(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
+                generation_batch_shuffled = shuffle_list_dict(generation_batch)
+                self._buffered_inputs = split_tensor_dict(generation_batch_shuffled, self.args.steps_per_generation)
             inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
             self._step += 1
         else:
@@ -1256,9 +1272,10 @@ class GRPOTrainer(Trainer):
             if len(indices) > 0:
                 start = indices[0]
                 end = indices[-1] + 1
-                unpadded_prompt_ids.append(prompt_ids[0:end])
-                unpadded_completion_ids.append(completion_ids[prompt_ids_length:end])
-                assert mask[start:end].sum() == end - start
+                assert prompt_ids_length < end
+                
+                unpadded_prompt_ids.append(prompt_ids[start:prompt_ids_length])
+                unpadded_completion_ids.append(completion_ids[:end-prompt_ids_length])
                 assert mask[start:end].sum() == end - start
                 unpadded_per_token_logps.append(old_per_token_logps[start:end])
             else:
