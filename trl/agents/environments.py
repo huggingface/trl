@@ -370,30 +370,29 @@ class CodeAgentEnvironment(Environment):
         # Get completed text responses from the agent logic
         completed_conversations = self.run_agent(vllm_client, generation_config, prompts)
 
-        # Recreate the list of original prompts expanded by 'n' to match the output count
-        expanded_prompts = []
-        for prompt in prompts:
-            expanded_prompts.extend([prompt] * generation_config.n)
-
-        if len(expanded_prompts) != len(completed_conversations):
-            # This indicates a potential issue in run_agent or prompt expansion
-            # Adjust the shorter list to match the longer one? Or raise error?
-            # For robustness, let's process based on the number of completed conversations
-            expanded_prompts = expanded_prompts[: len(completed_conversations)]
-
         completion_ids = []
-        for original_prompt, final_output in zip(expanded_prompts, completed_conversations):
-            # Ensure the final output actually starts with the prompt
-            if final_output.startswith(original_prompt):
-                completion_text = final_output[len(original_prompt) :]
-            else:
-                # Handle cases where the output might not perfectly match the start (e.g., due to tokenization differences)
-                # Or if the conversation somehow got corrupted. Fallback to using the whole output as completion?
-                completion_text = final_output  # Or potentially try a fuzzy match / diff?
+        extracted_completions = []
 
-            # Encode the completion text to get token IDs
-            # add_special_tokens=False is typical for training completions
-            completion_token_ids = self.tokenizer.encode(completion_text, add_special_tokens=False)
+        for final_output in completed_conversations:
+            # Check if any prompt from prompts exists in the completion
+            found_prompt = False
+            for prompt in prompts:
+                if prompt in final_output:
+                    # Extract everything after the prompt
+                    start_index = final_output.find(prompt) + len(prompt)
+                    completion_text = final_output[start_index:]
+                    found_prompt = True
+                    break
+            
+            if not found_prompt:
+                print(f"Warning: No matching prompt found in completion. Using full output.")
+                completion_text = final_output
+            
+            # Store the actual text completion for debugging
+            extracted_completions.append(completion_text)
+            
+            # Convert to token IDs
+            completion_token_ids = self.tokenizer.encode(completion_text, add_special_tokens=True)
             completion_ids.append(completion_token_ids)
 
         # Generate the mask for the completions
