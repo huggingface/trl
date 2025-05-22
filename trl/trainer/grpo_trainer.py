@@ -1106,11 +1106,12 @@ class GRPOTrainer(Trainer):
             [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
         ]
 
+        # Make a copy of the completion mask before any modifications
+        original_completion_mask = completion_mask.clone()
+
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             truncated_completions = ~is_eos.any(dim=1)
-            # Make a copy of the completion mask before modifying it
-            original_completion_mask = completion_mask.clone()
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
