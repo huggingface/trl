@@ -1266,7 +1266,7 @@ class GRPOTrainer(Trainer):
         unpadded_per_token_logps = []
         prompt_ids_length = prompt_ids.size(1)
         # get the start and end indices of the attention_mask
-        for mask in attention_mask:
+        for p_ids, c_ids, old_logps, mask in zip(prompt_ids, completion_ids, old_per_token_logps, attention_mask):
             indices = torch.where(mask == 1)[0]
             
             if len(indices) > 0:
@@ -1274,10 +1274,10 @@ class GRPOTrainer(Trainer):
                 end = indices[-1] + 1
                 assert prompt_ids_length < end
                 
-                unpadded_prompt_ids.append(prompt_ids[start:prompt_ids_length])
-                unpadded_completion_ids.append(completion_ids[:end-prompt_ids_length])
+                unpadded_prompt_ids.append(p_ids[start:prompt_ids_length])
+                unpadded_completion_ids.append(c_ids[:end-prompt_ids_length])
                 assert mask[start:end].sum() == end - start
-                unpadded_per_token_logps.append(old_per_token_logps[start:end])
+                unpadded_per_token_logps.append(old_logps[start:end])
             else:
                 # case where the attention mask is all zeros, e.g. when mask_truncated_completions is enabled
                 unpadded_prompt_ids.append(None)
@@ -1347,8 +1347,8 @@ class GRPOTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         assert inputs["unpadded_completion_ids"].shape == inputs["unpadded_per_token_logps"].shape
         
-        prompt_ids, prompt_mask = pad(inputs["unpadded_prompt_ids"], padding_value=self.processing_class.pad_token_id, padding_side="left")
-        completion_ids, completion_mask = pad(inputs["unpadded_completion_ids"], padding_value=self.processing_class.pad_token_id, padding_side="right")
+        prompt_ids, prompt_mask = pad(inputs["unpadded_prompt_ids"], padding_value=self.processing_class.pad_token_id, padding_side="left", return_mask=True)
+        completion_ids, completion_mask = pad(inputs["unpadded_completion_ids"], padding_value=self.processing_class.pad_token_id, padding_side="right", return_mask=True)
         if old_per_token_logps is None:
             old_per_token_logps = pad(inputs["unpadded_per_token_logps"], padding_value=self.processing_class.pad_token_id, padding_side="right")
         
