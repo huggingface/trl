@@ -1113,6 +1113,9 @@ class GRPOTrainer(Trainer):
             original_completion_mask = completion_mask.clone()
             truncated_completions = ~is_eos.any(dim=1)
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
+        else:
+            # When not masking truncated sequences, use the original mask directly
+            original_completion_mask = completion_mask
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
