@@ -1107,11 +1107,10 @@ class GRPOTrainer(Trainer):
             [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
         ]
 
-        # Make a copy of the completion mask before any modifications
-        original_completion_mask = completion_mask.clone()
-
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
+            # make a copy of completion_mask to use for logging
+            original_completion_mask = completion_mask.clone()
             truncated_completions = ~is_eos.any(dim=1)
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
 
