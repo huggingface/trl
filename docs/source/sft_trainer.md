@@ -56,7 +56,7 @@ The above snippets will use the default training arguments from the [`SFTConfig`
 
 ### Train on completions only
 
-To train on completions only, simply use a [prompt-completion](#prompt-completion) dataset. In this mode, loss is computed solely on the completion part.
+To train on completions only, simply use a [prompt-completion](https://huggingface.co/docs/trl/en/dataset_formats#prompt-completion) dataset. In this mode, loss is computed solely on the completion part.
 
 If you’d like to compute loss on both the prompt **and** the completion while still using a prompt-completion dataset, set `completion_only_loss=False` in the [`SFTConfig`]. This is equivalent to [converting the dataset to a language modeling](#from-prompt-completion-to-language-modeling-dataset) format.
 
