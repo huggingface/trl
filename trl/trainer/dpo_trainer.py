@@ -1218,6 +1218,28 @@ class DPOTrainer(Trainer):
         if self.loss_type == "ipo":
             all_logps = all_logps / loss_mask.sum(-1)
 
+        if self.args.ld_alpha is not None:
+            # Compute response lengths based on loss_mask
+            completion_lengths = loss_mask.sum(dim=1)
+
+            chosen_lengths = completion_lengths[:num_examples]
+            rejected_lengths = completion_lengths[num_examples:]
+            l_p = torch.min(chosen_lengths, rejected_lengths)
+            l_p = torch.cat([l_p, l_p], dim=0)
+
+            seq_len = per_token_logps.size(1)
+            position_ids = torch.arange(seq_len, device=per_token_logps.device).expand_as(per_token_logps)
+
+            ld_mask = position_ids < l_p.unsqueeze(1)
+            mask = position_ids < completion_lengths.unsqueeze(1)
+
+            front_mask = (ld_mask & mask).float()
+            rear_mask = (~ld_mask & mask).float()
+            front_logps = (per_token_logps * front_mask).sum(dim=1)
+            rear_logps = (per_token_logps * rear_mask).sum(dim=1)
+
+            all_logps = front_logps + self.args.ld_alpha * rear_logps
+
         output["chosen_logps"] = all_logps[:num_examples]
         output["rejected_logps"] = all_logps[num_examples:]
 
