@@ -1051,26 +1051,27 @@ class GRPOTrainer(Trainer):
                     guided_decoding=guided_decoding,
                 )
 
+                all_prompts_text = prompts_text
+
                 if self.vllm_tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group and flatten.
                     # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
                     orig_size = len(prompts_text)
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
-                    prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
                 if self.vllm_tensor_parallel_size > 1:
-                    # Slice prompt and completions for this rank within its TP group.
+                    # Slice completions for this rank within its TP group.
                     # Each rank generates all outputs — we keep only our share.
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
-                    prompts_text = prompts_text[tp_slice]
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
