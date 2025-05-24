@@ -1051,8 +1051,6 @@ class GRPOTrainer(Trainer):
                     guided_decoding=guided_decoding,
                 )
 
-                all_prompts_text = prompts_text
-
                 if self.vllm_tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group and flatten.
                     # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
