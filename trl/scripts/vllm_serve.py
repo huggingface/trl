@@ -418,6 +418,7 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         guided_decoding_regex: Optional[str] = None
+        stop: Optional[list[str]] = None
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
@@ -462,6 +463,7 @@ def main(script_args: ScriptArguments):
             min_p=request.min_p,
             max_tokens=request.max_tokens,
             guided_decoding=guided_decoding,
+            stop=request.stop,
         )
         # Evenly distribute prompts across DP ranks
         chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
