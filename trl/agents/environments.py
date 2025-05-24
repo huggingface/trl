@@ -171,12 +171,16 @@ class CodeAgentEnvironment(Environment):
         Returns:
             list[str]: Completed text responses with code execution results.
         """
-        completed_conversations = []
+        # Track conversations by prompt index and copy index
+        conversation_map = {}
         active_conversations = []
+        active_conversations_metadata = []  # Store (prompt_idx, copy_idx) for each active conversation
 
         # Expand initial prompts based on n
-        for prompt in prompts:
-            active_conversations.extend([prompt] * generation_config.n)
+        for prompt_idx, prompt in enumerate(prompts):
+            for copy_idx in range(generation_config.n):
+                active_conversations.append(prompt)
+                active_conversations_metadata.append((prompt_idx, copy_idx))
 
         # Ensure stop_string is always in the stop sequences for generation
         stop_sequences = [self.stop_string]
@@ -200,15 +204,18 @@ class CodeAgentEnvironment(Environment):
             outputs = vllm_client.generate(prompts=active_conversations, **vars(step_gen_config))
 
             next_active_conversations = []
+            next_active_conversations_metadata = []
             code_batch = []
             conversations_pending_code = []
+            pending_code_metadata = []  # Track metadata for conversations pending code execution
 
-            for i, generated_token_ids in enumerate(outputs):  # Assumes 'output' is directly the list of token IDs
+            for i, generated_token_ids in enumerate(outputs):
                 current_prompt = active_conversations[i]
+                current_metadata = active_conversations_metadata[i]
 
                 # Check if the generated_token_ids list is valid
                 if not isinstance(generated_token_ids, list):
-                    completed_conversations.append(current_prompt)
+                    conversation_map[current_metadata] = current_prompt
                     continue
 
                 # Decode the newly generated part
@@ -217,14 +224,10 @@ class CodeAgentEnvironment(Environment):
                 full_conversation_segment = current_prompt + generated_text
 
                 # Check if the generation stopped because of our specific code stop string
-                # Rely solely on the text ending with the stop string
                 stopped_by_code_tag = generated_text.rstrip().endswith(self.stop_string.rstrip())
 
                 # Check if code execution is requested IN THE NEWLY GENERATED TEXT
-                # Use rfind on the full segment to find the *last* code block start
                 last_code_start_in_segment = full_conversation_segment.rfind(self.parsing_string)
-                # Check if the *last* code block start is within the *newly generated* part
-                # Ensure last_code_start_in_segment is found before comparing index
                 is_code_in_new_text = last_code_start_in_segment != -1 and last_code_start_in_segment >= len(
                     current_prompt
                 )
@@ -234,14 +237,14 @@ class CodeAgentEnvironment(Environment):
                     code = self.extract_code(full_conversation_segment)
                     if code:
                         code_batch.append(code)
-                        # Store the conversation *including* the generated code block ending with stop_string
                         conversations_pending_code.append(full_conversation_segment)
+                        pending_code_metadata.append(current_metadata)
                     else:
                         # Parsing string found, but extraction failed. Treat as complete.
-                        completed_conversations.append(full_conversation_segment)
+                        conversation_map[current_metadata] = full_conversation_segment
                 else:
                     # Generation finished (max tokens, other stop word) or no code detected in the new part
-                    completed_conversations.append(full_conversation_segment)
+                    conversation_map[current_metadata] = full_conversation_segment
 
             # Execute code batch if any code was extracted
             if code_batch:
@@ -253,16 +256,30 @@ class CodeAgentEnvironment(Environment):
                         )
 
                     # Append results and add back to active conversations for the next round
-                    for conversation, result in zip(conversations_pending_code, execution_results):
+                    for i, (conversation, result, metadata) in enumerate(
+                        zip(conversations_pending_code, execution_results, pending_code_metadata)
+                    ):
                         updated_conversation = (
                             conversation + f"{self.output_string_start}{result}{self.output_string_end}"
                         )
                         next_active_conversations.append(updated_conversation)
+                        next_active_conversations_metadata.append(metadata)
                 except Exception:
-                    completed_conversations.extend(conversations_pending_code)  # Add pending as completed on error
+                    # Add pending as completed on error
+                    for conv, metadata in zip(conversations_pending_code, pending_code_metadata):
+                        conversation_map[metadata] = conv
 
             # Update the list of conversations for the next iteration
             active_conversations = next_active_conversations
+            active_conversations_metadata = next_active_conversations_metadata
+
+        # Reconstruct ordered list of completed conversations
+        completed_conversations = []
+        for prompt_idx in range(len(prompts)):
+            for copy_idx in range(generation_config.n):
+                metadata = (prompt_idx, copy_idx)
+                if metadata in conversation_map:
+                    completed_conversations.append(conversation_map[metadata])
 
         return completed_conversations
 
