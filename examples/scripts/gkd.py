@@ -109,7 +109,7 @@ if __name__ == "__main__":
     with PartialState().local_main_process_first():
         dataset = dataset.map(
             lambda x: {
-                "prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)
+                "prompt": tokenizer.apply_chat_template(x["messages"], tokenize=False, add_generation_prompt=True)
             },
             num_proc=training_args.dataset_num_proc,
         )
