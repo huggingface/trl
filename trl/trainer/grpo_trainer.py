@@ -754,7 +754,7 @@ class GRPOTrainer(Trainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
-    def _get_train_sampler(self) -> Sampler:
+    def _get_train_sampler(self, dataset: Optional[Dataset] = None) -> Sampler:
         # Returns a sampler that
         # 1. ensures each prompt is repeated across multiple processes. This guarantees that identical prompts are
         #    distributed to different GPUs, allowing rewards to be computed and normalized correctly within each prompt
@@ -780,9 +780,10 @@ class GRPOTrainer(Trainer):
         #                      2          4    12  12  13  13  14  14   <- Generate for the second `steps_per_generation` (prompts 12 to 23); store the completions; use the first slice to compute the loss
         #                      2          5    15  15  16  16  17  17   <- Take the stored generations and use the second slice to compute the loss
         #                                          ...
-
+        if dataset is None:
+            dataset = self.train_dataset
         return RepeatSampler(
-            data_source=self.train_dataset,
+            data_source=dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.generation_batch_size // self.num_generations,
             repeat_count=self.num_iterations * self.args.steps_per_generation,
