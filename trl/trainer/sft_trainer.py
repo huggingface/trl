@@ -123,7 +123,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     completion_only_loss: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
-    sequence_parallel_degree: int = 1
+    sequence_parallel_size: int = 1
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
@@ -153,7 +153,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             )
             output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
 
-        if self.sequence_parallel_degree > 1:
+        if self.sequence_parallel_size > 1:
             # Get local (start, end) for sequence parallelism slicing
             total_seq_len = output["input_ids"].shape[1]
             slice_size = total_seq_len // self.local_world_size
@@ -180,7 +180,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         return output
 
     def __post_init__(self):
-        if self.sequence_parallel_degree > 1:
+        if self.sequence_parallel_size > 1:
             from ..models.ring_attn import get_ring_attn_group
 
             # Get information about our position in the SP group
@@ -369,9 +369,9 @@ class SFTTrainer(Trainer):
                 )
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id,
-                sequence_parallel_degree=args.sequence_parallel_degree,
-                pad_to_multiple_of=args.sequence_parallel_degree
-                if args.sequence_parallel_degree > 1
+                sequence_parallel_size=args.sequence_parallel_size,
+                pad_to_multiple_of=args.sequence_parallel_size
+                if args.sequence_parallel_size > 1
                 else args.pad_to_multiple_of,
             )
 
@@ -438,9 +438,9 @@ class SFTTrainer(Trainer):
 
         # Register Ring Attention for Sequence Parallelism if configured
         if (
-            hasattr(self.args, "sequence_parallel_degree")
-            and self.args.sequence_parallel_degree
-            and self.args.sequence_parallel_degree > 1
+            hasattr(self.args, "sequence_parallel_size")
+            and self.args.sequence_parallel_size
+            and self.args.sequence_parallel_size > 1
         ):
             if not dist.is_initialized():
                 warnings.warn(
@@ -454,11 +454,11 @@ class SFTTrainer(Trainer):
 
                     self.log(
                         {
-                            "message": f"Attempting to register Ring Attention with sequence parallel degree: {self.args.sequence_parallel_degree}"
+                            "message": f"Attempting to register Ring Attention with sequence parallel size: {self.args.sequence_parallel_size}"
                         }
                     )
                     register_ring_attn(
-                        sequence_parallel_degree=self.args.sequence_parallel_degree,
+                        sequence_parallel_degree=self.args.sequence_parallel_size,
                         heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
                     )
                     self.log({"message": "Ring Attention registered successfully."})

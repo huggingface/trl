@@ -37,7 +37,7 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
-        sequence_parallel_degree (`int` or `None`, *optional*, defaults to `None`):
+        sequence_parallel_size (`int` or `None`, *optional*, defaults to `None`):
             Degree of sequence parallelism for ring attention.
         heads_k_stride (`int` or `None`, *optional*, defaults to `None`):
             Sequence parallelism K head stride size for ring attention. Defaults to 1 if sequence parallelism is enabled.
@@ -95,7 +95,7 @@ class SFTConfig(TrainingArguments):
             "the `SFTTrainer` is provided as a string."
         },
     )
-    sequence_parallel_degree: Optional[int] = field(
+    sequence_parallel_size: Optional[int] = field(
         default=None, metadata={"help": "Degree of sequence parallelism for ring attention."}
     )
     heads_k_stride: Optional[int] = field(
