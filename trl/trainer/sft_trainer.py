@@ -371,7 +371,7 @@ class SFTTrainer(Trainer):
                 pad_token_id,
                 sequence_parallel_size=args.sequence_parallel_size,
                 pad_to_multiple_of=args.sequence_parallel_size
-                if args.sequence_parallel_size > 1
+                if args.sequence_parallel_size is not None
                 else args.pad_to_multiple_of,
             )
 
