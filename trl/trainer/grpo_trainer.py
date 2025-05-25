@@ -1111,8 +1111,13 @@ class GRPOTrainer(Trainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
+            # make a copy of completion_mask to use for logging
+            original_completion_mask = completion_mask.clone()
             truncated_completions = ~is_eos.any(dim=1)
             completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
+        else:
+            # When not masking truncated sequences, use the original mask directly
+            original_completion_mask = completion_mask
 
         # Concatenate prompt_mask with completion_mask for logit computation
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
@@ -1214,8 +1219,8 @@ class GRPOTrainer(Trainer):
             self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
-        # log completion lengths, mean, min, max
-        agg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))
+        # log completion lengths, mean, min, max using the original mask
+        agg_completion_lengths = self.accelerator.gather_for_metrics(original_completion_mask.sum(1))
         self._metrics[mode]["completions/mean_length"].append(agg_completion_mask.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_mask.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_mask.float().max().item())
