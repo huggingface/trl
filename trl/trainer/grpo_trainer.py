@@ -1218,7 +1218,7 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # log completion lengths, mean, min, max using the original mask
-        agg_completion_mask = self.accelerator.gather_for_metrics(original_completion_mask.sum(1))
+        agg_completion_lengths = self.accelerator.gather_for_metrics(original_completion_mask.sum(1))
         self._metrics[mode]["completions/mean_length"].append(agg_completion_mask.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_mask.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_mask.float().max().item())
