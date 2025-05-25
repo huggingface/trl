@@ -29,6 +29,8 @@ from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
 from .scripts.vllm_serve import main as vllm_serve_main
 from .scripts.vllm_serve import make_parser as make_vllm_serve_parser
+from .scripts.vllm_serve_async import main as vllm_serve_async_main
+from .scripts.vllm_serve_async import make_parser as make_vllm_serve_async_parser
 
 
 def main():
@@ -45,6 +47,7 @@ def main():
     make_kto_parser(subparsers)
     make_sft_parser(subparsers)
     make_vllm_serve_parser(subparsers)
+    make_vllm_serve_async_parser(subparsers)
 
     # Parse the arguments; the remaining ones (`launch_args`) are passed to the 'accelerate launch' subparser.
     # Duplicates may occur if the same argument is provided in both the config file and CLI.
@@ -138,7 +141,13 @@ def main():
             )
 
         vllm_serve_main(script_args)
+    
+    elif args.command == "vllm-serve-async":
+        # Here we defer to vllm's argument parser, so that we don't have to reimplement all of its logic
+        sys.argv = ["trl/scripts/vllm_serve_async.py"] + launch_args
+        vllm_serve_async_main()
 
 
 if __name__ == "__main__":
     main()
+    
