@@ -201,9 +201,12 @@ def update_ring_attn_params(batch: dict[str, torch.Tensor]):
 
     input_ids = batch["input_ids"]
     position_ids = batch.get("position_ids")
+
     if position_ids is None:
+        # This should rarely happen if data collator is good
         seq_len = input_ids.shape[1]
         position_ids = torch.arange(0, seq_len, dtype=torch.long, device=input_ids.device).unsqueeze(0)
+        batch["position_ids"] = position_ids  # Add back to batch for model use
 
     cu_seqlens, _ = get_cu_seqlens_from_pos_ids(position_ids)
     cu_seqlens = cu_seqlens.squeeze().to(device=torch.cuda.current_device())

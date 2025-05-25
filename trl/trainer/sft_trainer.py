@@ -160,13 +160,22 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             start = self.local_rank * slice_size
             end = start + slice_size
 
-            from ..models.ring_attn import update_ring_attn_params
+            # Generate proper position IDs for this rank
+            if "position_ids" not in output:
+                batch_size = output["input_ids"].shape[0]
+                position_ids = torch.arange(start, end, dtype=torch.long, device=output["input_ids"].device)
+                output["position_ids"] = position_ids.unsqueeze(0).expand(batch_size, -1)
 
-            update_ring_attn_params(output)
+            # Slice all tensors
             keys_to_slice = ["input_ids", "attention_mask", "labels", "position_ids"]
             for key in keys_to_slice:
                 if key in output:
                     output[key] = output[key][:, start:end]
+
+            # Now update ring attention params with sliced data
+            from ..models.ring_attn import update_ring_attn_params
+
+            update_ring_attn_params(output)
 
         return output
 
