@@ -259,10 +259,10 @@ def unpair_preference_dataset(
 
     Example:
 
-    ```ipython
+    ```python
     >>> from datasets import Dataset
     >>> dataset_dict = {
-    ...     "prompt": ["The sky is", "The sun is"]
+    ...     "prompt": ["The sky is", "The sun is"],
     ...     "chosen": [" blue.", "in the sky."],
     ...     "rejected": [" green.", " in the sea."]
     ... }
