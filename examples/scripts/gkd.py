@@ -45,7 +45,6 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -105,14 +104,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            lambda x: {
-                "prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)
-            },
-            num_proc=training_args.dataset_num_proc,
-        )
 
     ################
     # Training
