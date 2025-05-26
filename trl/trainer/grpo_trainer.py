@@ -247,7 +247,7 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     return {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
 
 
-def shuffle_list_dict(tensor_dict: dict[str, Optional[list[Any]]]) -> dict[str, Optional[list[Any]]]:
+def shuffle_dict_list(tensor_dict: dict[str, Optional[list[Any]]]) -> dict[str, Optional[list[Any]]]:
     """
     Shuffles a dictionary of lists along the first dimension in unison.
 
@@ -983,7 +983,9 @@ class GRPOTrainer(Trainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
-                generation_batch_shuffled = shuffle_list_dict(generation_batch)
+                # we shuffle the generation batch to ensure that the order of prompts is randomized
+                # across different steps, onl relevant if the generation batch is larger than the optimization batch
+                generation_batch_shuffled = shuffle_dict_list(generation_batch)
                 self._buffered_inputs = split_tensor_dict(generation_batch_shuffled, self.args.steps_per_generation)
             inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
             self._step += 1
@@ -1260,7 +1262,7 @@ class GRPOTrainer(Trainer):
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
-        # unpad the prompt and completion ids
+        # Unpad the prompt and completion ids to optimise memory: https://github.com/huggingface/trl/pull/3495  
         unpadded_prompt_ids = []
         unpadded_completion_ids = []
         unpadded_per_token_logps = []
@@ -1272,11 +1274,20 @@ class GRPOTrainer(Trainer):
             if len(indices) > 0:
                 start = indices[0]
                 end = indices[-1] + 1
-                assert prompt_ids_length < end
+                if prompt_ids_length >= end:
+                    raise ValueError(
+                        f"End index {end} exceeds prompt_ids_length {prompt_ids_length}. "
+                        "This can happen if the attention mask is not correctly set."
+                    )
                 
+                # prompt ids were left padded
                 unpadded_prompt_ids.append(p_ids[start:prompt_ids_length])
+                # completion ids were right padded
                 unpadded_completion_ids.append(c_ids[:end-prompt_ids_length])
-                assert mask[start:end].sum() == end - start
+                if mask[start:end].sum() != end - start:
+                    raise ValueError(
+                        f"Attention mask from {start} to {end} does not match the expected length. "
+                    )
                 unpadded_per_token_logps.append(old_logps[:end-prompt_ids_length])
             else:
                 # case where the attention mask is all zeros, e.g. when mask_truncated_completions is enabled
@@ -1288,12 +1299,7 @@ class GRPOTrainer(Trainer):
             "unpadded_prompt_ids": unpadded_prompt_ids,
             "unpadded_completion_ids": unpadded_completion_ids,
             "unpadded_per_token_logps": unpadded_per_token_logps,
-            # "prompt_ids": prompt_ids,
-            # "prompt_mask": prompt_mask,
-            # "completion_ids": completion_ids,
-            # "completion_mask": completion_mask,
             "advantages": advantages,
-            # "old_per_token_logps": old_per_token_logps,
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):

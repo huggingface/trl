@@ -24,7 +24,7 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.grpo_trainer import RepeatSampler, shuffle_tensor_dict, split_tensor_dict
+from trl.trainer.grpo_trainer import RepeatSampler, shuffle_tensor_dict, split_tensor_dict, shuffle_dict_list
 
 from .testing_utils import require_vllm
 
@@ -103,6 +103,38 @@ class ShuffleTensorDictTester(unittest.TestCase):
         self.assertIsNone(shuffled["y"])
         self.assertEqual(shuffled["x"].shape, x.shape)
 
+class ShuffleDictListTester(unittest.TestCase):
+    def test_shuffle_preserves_length(self):
+        a = [1, 2, 3, 4]
+        b = ['a', 'b', 'c', 'd']
+        tensor_dict = {"a": a.copy(), "b": b.copy()}
+
+        shuffled = shuffle_dict_list(tensor_dict)
+
+        self.assertEqual(len(shuffled["a"]), len(a))
+        self.assertEqual(len(shuffled["b"]), len(b))
+
+    def test_shuffle_consistent_across_lists(self):
+        a = [10, 20, 30]
+        b = ['x', 'y', 'z']
+        tensor_dict = {"a": a.copy(), "b": b.copy()}
+
+        shuffled = shuffle_dict_list(tensor_dict)
+
+        mapping = dict(zip(shuffled["a"], shuffled["b"]))
+
+        self.assertEqual(mapping[10], 'x')
+        self.assertEqual(mapping[20], 'y')
+        self.assertEqual(mapping[30], 'z')
+
+    def test_none_list_remains_none(self):
+        a = [1, 2, 3]
+        tensor_dict = {"a": a.copy(), "b": None}
+
+        shuffled = shuffle_dict_list(tensor_dict)
+
+        self.assertIsNone(shuffled["b"])
+        self.assertEqual(len(shuffled["a"]), len(a))
 
 class RepeatRandomSamplerTester(unittest.TestCase):
     def test_sampler(self):
