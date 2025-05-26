@@ -352,8 +352,8 @@ class PPOTrainer(Trainer):
         ],
         model: nn.Module,
         ref_model: Optional[nn.Module],
-        reward_model: nn.Module,
-        train_dataset: Dataset,
+        reward_model: Optional[nn.Module]= None,
+        train_dataset: Optional[Dataset]= None,
         value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
@@ -979,6 +979,11 @@ class PPOTrainer(Trainer):
         
 
     def train(self):
+        if self.reward_model is None:
+            raise ValueError("`reward_model` must be provided for training.")
+        if self.train_dataset is None:
+            raise ValueError("`train_dataset` must be provided for training.")
+
         device = self.accelerator.device
 
         def repeat_generator():
