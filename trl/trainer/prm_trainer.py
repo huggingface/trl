@@ -59,8 +59,9 @@ class PRMTrainer(Trainer):
         args (`PRMConfig`):
             The arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DataCollatorForTokenClassification`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DataCollatorForTokenClassification`) will be used which will pad the sequences to the maximum length of
+            the sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -70,9 +71,11 @@ class PRMTrainer(Trainer):
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
+            The model initializer to use for training. If None is specified, the default model initializer will be
+            used.
         compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to `compute_accuracy`):
-            The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
+            The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`)
+            will be used.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -80,7 +83,8 @@ class PRMTrainer(Trainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
+            a PEFT model.
     """
 
     _tag_names = ["trl", "prm"]
@@ -234,7 +238,8 @@ class PRMTrainer(Trainer):
                 Whether to train only on the last step. If `True`, the labels are `-100` for all tokens except the last
                 token of the completion.
             is_eval (`bool`):
-                Whether the function is used to tokenize samples from a training or an evaluation dataset. Used only if `train_on_last_step_only` is set to `True`.
+                Whether the function is used to tokenize samples from a training or an evaluation dataset. Used only if
+                `train_on_last_step_only` is set to `True`.
 
         Returns:
             `dict[str, list[int]]`:
@@ -243,12 +248,16 @@ class PRMTrainer(Trainer):
         Example:
         ```python
         >>> from transformers import AutoTokenizer
+
         >>> tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B")
-        >>> features = {"prompt": "Which number is larger, 9.8 or 9.11?",
-        ...             "completions": ["11 is greater than 8.",
-        ...                             "Hence, 9.11 > 9.8."],
-        ...             "labels": [True, False]}
-        >>> PRMTrainer.tokenize_row(features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False, is_eval=False)
+        >>> features = {
+        ...     "prompt": "Which number is larger, 9.8 or 9.11?",
+        ...     "completions": ["11 is greater than 8.", "Hence, 9.11 > 9.8."],
+        ...     "labels": [True, False],
+        ... }
+        >>> PRMTrainer.tokenize_row(
+        ...     features, tokenizer, "\n", max_completion_length=None, train_on_last_step_only=False, is_eval=False
+        ... )
         {'input_ids': [23085, 1372, 374, 8131, 11, 220, 24, 13, 23, 476, 220, 24, 13, 16, 16, 30, 16, 16, 374, 7046, 1091, 220, 23, 13, 198, 39, 763, 11, 220, 24, 13, 16, 16, 861, 220, 24, 13, 23, 13, 198],
          'labels': [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0]}
         ```
@@ -327,10 +336,9 @@ class PRMTrainer(Trainer):
 
         citation = textwrap.dedent("""\
         @article{uesato2022solving,
-            title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
-            author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
-            year         = 2022,
-            journal      = {arXiv preprint arXiv:2211.14275}
+            title = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}}, author = {Uesato, Jonathan
+            and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia
+            and Irving, Geoffrey and Higgins, Irina}, year = 2022, journal = {arXiv preprint arXiv:2211.14275}
         }""")
 
         model_card = generate_model_card(

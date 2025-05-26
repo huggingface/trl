@@ -40,8 +40,9 @@ class ORPOConfig(TrainingArguments):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the relative ratio loss weight in the ORPO loss. In the [paper](https://huggingface.co/papers/2403.07691),
-            it is denoted by λ. In the [code](https://github.com/xfactlab/orpo), it is denoted by `alpha`.
+            Parameter controlling the relative ratio loss weight in the ORPO loss. In the
+            [paper](https://huggingface.co/papers/2403.07691), it is denoted by λ. In the
+            [code](https://github.com/xfactlab/orpo), it is denoted by `alpha`.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):

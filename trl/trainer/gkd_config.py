@@ -35,16 +35,16 @@ class GKDConfig(SFTConfig):
         max_new_tokens (`int`, *optional*, defaults to `128`):
             Maximum number of tokens to generate per completion.
         teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
-            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model
-            being trained.
+            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
+            trained.
         teacher_model_init_kwargs (`dict[str, Any]]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
         seq_kd (`bool`, *optional*, defaults to `False`):
-            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
-            on teacher-generated output).
+            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
+            teacher-generated output).
     """
 
     temperature: float = field(

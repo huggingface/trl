@@ -49,9 +49,11 @@ The chat interface is a simple tool to try out a chat model.
 Besides talking to the model there are several commands:
 - **clear**: clears the current conversation and start a new one
 - **example {NAME}**: load example named `{NAME}` from the config and use it as the user input
-- **set {SETTING_NAME}={SETTING_VALUE};**: change the system prompt or generation settings (multiple settings are separated by a ';').
+- **set {SETTING_NAME}={SETTING_VALUE};**: change the system prompt or generation settings (multiple settings are
+  separated by a ';').
 - **reset**: same as clear but also resets the generation configs to defaults if they have been changed by **set**
-- **save {SAVE_NAME} (optional)**: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
+- **save {SAVE_NAME} (optional)**: save the current chat and settings to file by default to
+  `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
 - **exit**: closes the interface
 """
 

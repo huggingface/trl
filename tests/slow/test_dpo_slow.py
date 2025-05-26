@@ -117,7 +117,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
     @require_peft
     def test_dpo_peft_model(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
         """
-        A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios of gradient checkpointing.
+        A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios
+        of gradient checkpointing.
         """
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)

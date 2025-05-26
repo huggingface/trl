@@ -98,8 +98,8 @@ class OnlineDPOTrainer(Trainer):
         model (`transformers.PreTrainedModel` or `torch.nn.Module`):
             The model to train, preferably an `AutoModelForCausalLM`.
         ref_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
-            The reference model to use for training. If None is specified, the reference model will be created from
-            the model.
+            The reference model to use for training. If None is specified, the reference model will be created from the
+            model.
         reward_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
@@ -107,8 +107,9 @@ class OnlineDPOTrainer(Trainer):
         args (`OnlineDPOConfig`):
             The online DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -120,8 +121,8 @@ class OnlineDPOTrainer(Trainer):
         peft_config (`dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -747,9 +748,8 @@ class OnlineDPOTrainer(Trainer):
     # Refer to https://github.com/huggingface/trl/pull/2288 for more details.
     def _determine_best_metric(self, metrics, trial):
         """
-        Determine if the model should be saved based on the evaluation metrics.
-        If args.metric_for_best_model is not set, the loss is used.
-        Returns:
+        Determine if the model should be saved based on the evaluation metrics. If args.metric_for_best_model is not
+        set, the loss is used. Returns:
             bool: True if a new best metric was found, else False
         """
         is_new_best_metric = False
@@ -818,10 +818,10 @@ class OnlineDPOTrainer(Trainer):
 
         citation = textwrap.dedent("""\
         @article{guo2024direct,
-            title        = {{Direct Language Model Alignment from Online AI Feedback}},
-            author       = {Shangmin Guo and Biao Zhang and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel},
-            year         = 2024,
-            eprint       = {arXiv:2402.04792}
+            title = {{Direct Language Model Alignment from Online AI Feedback}}, author = {Shangmin Guo and Biao Zhang
+            and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas
+            Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel}, year = 2024, eprint =
+            {arXiv:2402.04792}
         }""")
 
         model_card = generate_model_card(

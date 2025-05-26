@@ -71,8 +71,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         model (`transformers.PreTrainedModel`):
             The model to train, preferably an `AutoModelForCausalLM`.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
         reward_model (`transformers.PreTrainedModel`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
@@ -80,8 +81,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         args (`NashMDConfig`):
             The NashMD config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -93,8 +95,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         peft_config (`dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -518,12 +520,12 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         citation = textwrap.dedent("""\
         @inproceedings{munos2024nash,
-            title        = {{Nash Learning from Human Feedback}},
-            author       = {R{\'{e}}mi Munos and Michal Valko and Daniele Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot},
-            year         = 2024,
-            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
+            title = {{Nash Learning from Human Feedback}}, author = {R{\'{e}}mi Munos and Michal Valko and Daniele
+            Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and
+            Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin
+            and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot}, year =
+            2024, booktitle = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria,
+            July 21-27, 2024}, publisher = {OpenReview.net}, url = {https://openreview.net/forum?id=Y5AmNYiyCQ}
         }""")
 
         model_card = generate_model_card(

@@ -101,13 +101,14 @@ class RepeatSampler(Sampler):
 
     Example:
     ```python
-    >>> sampler = RepeatRandomSampler(["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4)
+    >>> sampler = RepeatRandomSampler(
+    ...     ["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4
+    ... )
     >>> list(sampler)
     [4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
-
      1, 1, 2, 2, 6, 6,
      1, 1, 2, 2, 6, 6,
      1, 1, 2, 2, 6, 6,
@@ -204,14 +205,10 @@ def split_tensor_dict(
     Splits a dictionary of tensors along the first dimension into `num_chunks` equal parts.
 
     Example:
-        >>> x = torch.arange(12).reshape(6, 2)
-        >>> y = torch.arange(6).reshape(6, 1)
-        >>> tensor_dict = {"x": x, "y": y}
-        >>> split_tensor_dict(tensor_dict, 3)
-        [
-            {"x": tensor([[0, 1], [2, 3]]), "y": tensor([[0], [1]])},
-            {"x": tensor([[4, 5], [6, 7]]), "y": tensor([[2], [3]])},
-            {"x": tensor([[ 8,  9], [10, 11]]), "y": tensor([[4], [5]])}
+        >>> x = torch.arange(12).reshape(6, 2) >>> y = torch.arange(6).reshape(6, 1) >>> tensor_dict = {"x": x, "y": y}
+        >>> split_tensor_dict(tensor_dict, 3) [
+            {"x": tensor([[0, 1], [2, 3]]), "y": tensor([[0], [1]])}, {"x": tensor([[4, 5], [6, 7]]), "y": tensor([[2],
+            [3]])}, {"x": tensor([[ 8, 9], [10, 11]]), "y": tensor([[4], [5]])}
         ]
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
@@ -230,16 +227,11 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     Shuffles a dictionary of tensors along the first dimension in unison.
 
     Example:
-        >>> x = torch.arange(6).reshape(3, 2)
-        >>> y = torch.arange(3).reshape(3, 1)
-        >>> tensor_dict = {"x": x, "y": y}
-        >>> shuffle_tensor_dict(tensor_dict)
-        {'x': tensor([[2, 3],
-                      [0, 1],
-                      [4, 5]]),
+        >>> x = torch.arange(6).reshape(3, 2) >>> y = torch.arange(3).reshape(3, 1) >>> tensor_dict = {"x": x, "y": y}
+        >>> shuffle_tensor_dict(tensor_dict) {'x': tensor([[2, 3],
+                      [0, 1], [4, 5]]),
          'y': tensor([[1],
-                      [0],
-                      [2]])}
+                      [0], [2]])}
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     batch_size = first_tensor.shape[0]
@@ -280,7 +272,8 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
-    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300).
+    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language
+    Models](https://huggingface.co/papers/2402.03300).
 
     Example:
 
@@ -290,9 +283,11 @@ class GRPOTrainer(Trainer):
 
     dataset = load_dataset("trl-lib/tldr", split="train")
 
+
     def reward_func(completions, **kwargs):
         # Dummy reward function that rewards completions with more unique letters.
         return [float(len(set(completion))) for completion in completions]
+
 
     trainer = GRPOTrainer(
         model="Qwen/Qwen2-0.5B-Instruct",
@@ -307,11 +302,11 @@ class GRPOTrainer(Trainer):
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
 
-            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
-              a path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
-              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
-              in `args.model_init_kwargs`.
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments in
+              `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
@@ -329,8 +324,8 @@ class GRPOTrainer(Trainer):
                   functions can also return None when the reward is not applicable to those samples. This is useful for
                   multi-task training where different reward functions apply to different types of samples. When a
                   reward function returns None for a sample, that reward function is excluded from the reward
-                  calculation for that sample. For more details, see
-                  [Using a custom reward function](#using-a-custom-reward-function).
+                  calculation for that sample. For more details, see [Using a custom reward
+                  function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
@@ -355,12 +350,13 @@ class GRPOTrainer(Trainer):
             - A single processing class: Used when `reward_funcs` contains only one reward function.
             - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
             If set to `None`, or if an element of the list corresponding to a [`~transformers.PreTrainedModel`] is
-            `None`, the tokenizer for the model is automatically loaded using [`~transformers.AutoTokenizer.from_pretrained`].
-            For elements in `reward_funcs` that are custom reward functions (not [`~transformers.PreTrainedModel`]),
-            the corresponding entries in `reward_processing_classes` are ignored.
+            `None`, the tokenizer for the model is automatically loaded using
+            [`~transformers.AutoTokenizer.from_pretrained`]. For elements in `reward_funcs` that are custom reward
+            functions (not [`~transformers.PreTrainedModel`]), the corresponding entries in `reward_processing_classes`
+            are ignored.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
-            List of callbacks to customize the training loop. Will add those to the list of default callbacks
-            detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
+            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
@@ -1481,10 +1477,9 @@ class GRPOTrainer(Trainer):
         citation = textwrap.dedent(
             """\
             @article{zhihong2024deepseekmath,
-                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
-                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
-                year         = 2024,
-                eprint       = {arXiv:2402.03300},
+                title = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}}, author
+                = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y.
+                K. Li and Y. Wu and Daya Guo}, year = 2024, eprint = {arXiv:2402.03300},
             }
             """
         )
