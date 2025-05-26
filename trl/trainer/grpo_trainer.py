@@ -261,7 +261,10 @@ def shuffle_dict_list(tensor_dict: dict[str, Optional[list[Any]]]) -> dict[str, 
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     batch_size = len(first_tensor)
     permutation = torch.randperm(batch_size)
-    return {key: [tensor[i] for i in permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
+    return {
+        key: [tensor[i] for i in permutation] if tensor is not None else None for key, tensor in tensor_dict.items()
+    }
+
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -1262,7 +1265,7 @@ class GRPOTrainer(Trainer):
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
-        # Unpad the prompt and completion ids to optimise memory: https://github.com/huggingface/trl/pull/3495  
+        # Unpad the prompt and completion ids to optimise memory: https://github.com/huggingface/trl/pull/3495
         unpadded_prompt_ids = []
         unpadded_completion_ids = []
         unpadded_per_token_logps = []
@@ -1270,7 +1273,7 @@ class GRPOTrainer(Trainer):
         # get the start and end indices of the attention_mask
         for p_ids, c_ids, old_logps, mask in zip(prompt_ids, completion_ids, old_per_token_logps, attention_mask):
             indices = torch.where(mask == 1)[0]
-            
+
             if len(indices) > 0:
                 start = indices[0]
                 end = indices[-1] + 1
@@ -1279,22 +1282,20 @@ class GRPOTrainer(Trainer):
                         f"End index {end} exceeds prompt_ids_length {prompt_ids_length}. "
                         "This can happen if the attention mask is not correctly set."
                     )
-                
+
                 # prompt ids were left padded
                 unpadded_prompt_ids.append(p_ids[start:prompt_ids_length])
                 # completion ids were right padded
-                unpadded_completion_ids.append(c_ids[:end-prompt_ids_length])
+                unpadded_completion_ids.append(c_ids[: end - prompt_ids_length])
                 if mask[start:end].sum() != end - start:
-                    raise ValueError(
-                        f"Attention mask from {start} to {end} does not match the expected length. "
-                    )
-                unpadded_per_token_logps.append(old_logps[:end-prompt_ids_length])
+                    raise ValueError(f"Attention mask from {start} to {end} does not match the expected length. ")
+                unpadded_per_token_logps.append(old_logps[: end - prompt_ids_length])
             else:
                 # case where the attention mask is all zeros, e.g. when mask_truncated_completions is enabled
                 unpadded_prompt_ids.append(None)
                 unpadded_completion_ids.append(None)
                 unpadded_per_token_logps.append(None)
-    
+
         return {
             "unpadded_prompt_ids": unpadded_prompt_ids,
             "unpadded_completion_ids": unpadded_completion_ids,
@@ -1350,29 +1351,41 @@ class GRPOTrainer(Trainer):
         return loss
 
     @profiling_decorator
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):        
-        prompt_ids, prompt_mask = pad(inputs["unpadded_prompt_ids"], padding_value=self.processing_class.pad_token_id, padding_side="left", return_mask=True)
-        completion_ids, completion_mask = pad(inputs["unpadded_completion_ids"], padding_value=self.processing_class.pad_token_id, padding_side="right", return_mask=True)
-        
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        prompt_ids, prompt_mask = pad(
+            inputs["unpadded_prompt_ids"],
+            padding_value=self.processing_class.pad_token_id,
+            padding_side="left",
+            return_mask=True,
+        )
+        completion_ids, completion_mask = pad(
+            inputs["unpadded_completion_ids"],
+            padding_value=self.processing_class.pad_token_id,
+            padding_side="right",
+            return_mask=True,
+        )
+
         old_per_token_logps = inputs["unpadded_per_token_logps"]
-        
+
         if old_per_token_logps is not None:
             old_per_token_logps = pad(inputs["unpadded_per_token_logps"], padding_value=0.0, padding_side="right")
-        
+
         padded_inputs = {
-            "prompt_ids": prompt_ids, 
+            "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
-            "completion_ids": completion_ids, 
+            "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "advantages": torch.stack(inputs["advantages"]),
-            "old_per_token_logps": old_per_token_logps,   
+            "old_per_token_logps": old_per_token_logps,
         }
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
         if self.use_liger_loss:
             # Compute the loss using the liger grpo loss
             unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, padded_inputs)
+            return self._forward_redirection(
+                model, unwrapped_model, self.compute_liger_loss, unwrapped_model, padded_inputs
+            )
         else:
             return self._compute_loss(model, padded_inputs)
 
