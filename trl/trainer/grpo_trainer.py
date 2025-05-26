@@ -1270,8 +1270,9 @@ class GRPOTrainer(Trainer):
         unpadded_completion_ids = []
         unpadded_per_token_logps = []
         prompt_ids_length = prompt_ids.size(1)
+        logp_iter = attention_mask if old_per_token_logps is None else old_per_token_logps  # dummy iterator
         # get the start and end indices of the attention_mask
-        for p_ids, c_ids, old_logps, mask in zip(prompt_ids, completion_ids, old_per_token_logps, attention_mask):
+        for p_ids, c_ids, old_logps, mask in zip(prompt_ids, completion_ids, logp_iter, attention_mask):
             indices = torch.where(mask == 1)[0]
 
             if len(indices) > 0:
@@ -1282,14 +1283,14 @@ class GRPOTrainer(Trainer):
                         f"End index {end} exceeds prompt_ids_length {prompt_ids_length}. "
                         "This can happen if the attention mask is not correctly set."
                     )
-
                 # prompt ids were left padded
                 unpadded_prompt_ids.append(p_ids[start:prompt_ids_length])
                 # completion ids were right padded
                 unpadded_completion_ids.append(c_ids[: end - prompt_ids_length])
                 if mask[start:end].sum() != end - start:
                     raise ValueError(f"Attention mask from {start} to {end} does not match the expected length. ")
-                unpadded_per_token_logps.append(old_logps[: end - prompt_ids_length])
+                if old_per_token_logps is not None:
+                    unpadded_per_token_logps.append(old_logps[: end - prompt_ids_length])
             else:
                 # case where the attention mask is all zeros, e.g. when mask_truncated_completions is enabled
                 unpadded_prompt_ids.append(None)
@@ -1299,7 +1300,7 @@ class GRPOTrainer(Trainer):
         return {
             "unpadded_prompt_ids": unpadded_prompt_ids,
             "unpadded_completion_ids": unpadded_completion_ids,
-            "unpadded_per_token_logps": unpadded_per_token_logps,
+            "unpadded_per_token_logps": unpadded_per_token_logps if old_per_token_logps is not None else None,
             "advantages": advantages,
         }
 
