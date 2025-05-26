@@ -41,6 +41,8 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+import numpy as np
+import random
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
@@ -80,6 +82,89 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.sample_indices = []
+
+    def add(self, experience):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+        else:
+            self.buffer.pop(0)
+            self.buffer.append(experience)
+
+        # Clear index queue when buffer changes
+        self.sample_indices.clear()
+
+    def add_batch(self, experiences: dict[str,list[torch.Tensor]]):
+        """
+        Add a batch of experiences to the replay buffer.
+        """
+        first_tensor = next(tensor for tensor in experiences.values() if tensor is not None)
+        num_items = len(first_tensor)
+        
+        for i in range(num_items):
+            experience = {key: tensor[i] if tensor is not None else None for key, tensor in experiences.items()}
+            self.add(experience)
+        
+    def _init_sampling_queue(self):
+        self.sample_indices = list(range(len(self.buffer)))
+        random.shuffle(self.sample_indices)
+
+    def sample(self, batch_size):
+        if not self.sample_indices:
+            self._init_sampling_queue()
+
+        batch = []
+        while len(batch) < batch_size and self.sample_indices:
+            idx = self.sample_indices.pop(0)
+            batch.append(self.buffer[idx])
+
+        if len(batch) != batch_size:
+            raise ValueError("Not enough samples in the buffer to fill the batch.")
+
+        return {k: [d[k] for d in batch] for k in batch[0]}
+
+    def __len__(self):
+        return len(self.buffer)
+
+
+class SSRReplayBuffer(ReplayBuffer):
+    # implementation of the SSR replay buffer from https://arxiv.org/pdf/2504.08837
+    def __init__(self, capacity, alpha=1.0):
+        super().__init__(capacity)
+        self.alpha = alpha
+        self.advantages = []
+
+    def add(self, experience):
+        EPS = 0.0001  # ensures we get non-zero advs when the buffer contains all 0 advantages
+        advantage = experience["advantages"].item()
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+            self.advantages.append(abs(advantage) + EPS)  # Store absolute advantage
+        else:
+            # Replace the oldest entry if the buffer is full
+            self.buffer.pop(0)
+            self.advantages.pop(0)
+            self.buffer.append(experience)
+            self.advantages.append(abs(advantage))
+
+
+    def sample(self, batch_size):
+        if not self.buffer:
+            raise ValueError("Buffer is empty. Cannot sample from an empty buffer.")
+
+        # Convert advantages to priorities
+        scaled_priorities = np.power(self.advantages, self.alpha)
+        total_priority = np.sum(scaled_priorities)
+        probabilities = scaled_priorities / total_priority
+
+        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities, replace=True)
+        batch = [self.buffer[i] for i in indices]
+        
+        return {k: [d[k] for d in batch] for k in batch[0]}
 
 class RepeatSampler(Sampler):
     """
@@ -223,7 +308,29 @@ def split_tensor_dict(
         }
         for i in range(num_chunks)
     ]
+    
+def combine_tensor_dict(split_dicts: list[dict[str, Optional[torch.Tensor]]]) -> dict[str, Optional[torch.Tensor]]:
+    """
+    Combines a list of dictionaries containing tensors into a single dictionary by
+    concatenating the tensors along the first dimension.
+    Example:
+        >>> d1 = {"x": torch.tensor([[0, 1], [2, 3]]), "y": torch.tensor([[0], [1]])}
+        >>> d2 = {"x": torch.tensor([[4, 5], [6, 7]]), "y": torch.tensor([[2], [3]])}
+        >>> d3 = {"x": torch.tensor([[8, 9], [10, 11]]), "y": torch.tensor([[4], [5]])}
+        >>> combine_tensor_dict([d1, d2, d3])
+        {
+            "x": tensor([[ 0,  1], [ 2,  3], [ 4,  5], [ 6,  7], [ 8,  9], [10, 11]]),
+            "y": tensor([[0], [1], [2], [3], [4], [5]])
+        }
+    """
+    combined_dict = {}
+    keys = split_dicts[0].keys()
 
+    for key in keys:
+        tensors = [d[key] for d in split_dicts if d[key] is not None]
+        combined_dict[key] = torch.stack(tensors, dim=0) if tensors else None
+
+    return combined_dict
 
 def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
     """
@@ -547,7 +654,17 @@ class GRPOTrainer(Trainer):
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
         # `_get_train_sampler` and `_prepare_inputs`.
-        self._buffered_inputs = None
+        if args.replay_buffer_class == "ReplayBuffer":
+            self.replay_buffer = ReplayBuffer(capacity=args.generation_batch_size)
+        elif args.replay_buffer_class == "SSRReplayBuffer":
+            self.replay_buffer = SSRReplayBuffer(
+                capacity=args.generation_batch_size * args.ssr_capacity_scalar,
+                alpha=args.ssr_alpha,
+            )
+        else:
+            raise ValueError(
+                f"Invalid `replay_buffer_class` passed to `GRPOConfig`. Expected either 'ReplayBuffer' or 'SSRReplayBuffer', but got {self.args.replay_buffer_class}."
+            )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -725,6 +842,8 @@ class GRPOTrainer(Trainer):
                     self.reward_funcs[i] = self.accelerator.prepare_model(
                         reward_func, evaluation_mode=True, device_placement=True
                     )
+                    
+                    
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -983,14 +1102,16 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.steps_per_generation * self.num_iterations
-            if self._step % generate_every == 0 or self._buffered_inputs is None:
+            if self._step % generate_every == 0 or len(self.replay_buffer) == 0:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
                 # we shuffle the generation batch to ensure that the order of prompts is randomized
                 # across different steps, onl relevant if the generation batch is larger than the optimization batch
                 generation_batch_shuffled = shuffle_dict_list(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch_shuffled, self.args.steps_per_generation)
-            inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
+                self.replay_buffer.add_batch(generation_batch_shuffled)
+
+            inputs = self.replay_buffer.sample(self.args.per_device_train_batch_size)
+            
             self._step += 1
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
@@ -1282,7 +1403,6 @@ class GRPOTrainer(Trainer):
                         f"End index {end} exceeds prompt_ids_length {prompt_ids_length}. "
                         "This can happen if the attention mask is not correctly set."
                     )
-
                 # prompt ids were left padded
                 unpadded_prompt_ids.append(p_ids[start:prompt_ids_length])
                 # completion ids were right padded

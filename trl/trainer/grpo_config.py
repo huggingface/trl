@@ -141,6 +141,15 @@ class GRPOConfig(TrainingArguments):
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        replay_buffer_class (`str`, *optional*, defaults to `"ReplayBuffer"`):
+            Replay buffer class to use. Options are [`ReplayBuffer`] and [`SSRReplayBuffer`]. The default is
+            `"ReplayBuffer"`, which randomly samples without replacement.
+        ssr_capacity_scalar (`int`, *optional*, defaults to `4`):
+            Scalar to multiply the replay buffer capacity. The default is `1`, which means the capacity is equal to the
+            number of training samples in the effective batch.
+        ssr_alpha (`float`, *optional*, defaults to `1.0`):
+            Alpha parameter for controlling the probability distribution of the replay buffer. The default is `1.0`,
+            which means the replay buffer samples uniformly.        
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -404,6 +413,26 @@ class GRPOConfig(TrainingArguments):
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
         },
     )
+    replay_buffer_class: str = field(
+        default="ReplayBuffer",
+        metadata={
+            "help": "Replay buffer class to use, Options [ReplayBuffer, SSRReplayBuffer] The default is `ReplayBuffer`, that randomly samples without replacement."
+        },
+    )
+    ssr_capacity_scalar: int = field(
+        default=4,
+        metadata={
+            "help": "Scalar to multiply the replay buffer capacity. The default is 1, which means the capacity is "
+            "equal to the number of training samples in the effective batch."
+        },
+    )
+    ssr_alpha: float = field(
+        default=1.0,
+        metadata={
+            "help": "Alpha parameter for controlling the probablity distribution of the replay buffer. The default is 1.0, "
+        },
+    )
+    
     reward_weights: Optional[list[float]] = field(
         default=None,
         metadata={
