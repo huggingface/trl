@@ -76,7 +76,7 @@ class GRPOConfig(TrainingArguments):
             `1.0` to consider all tokens.
         top_k (`int` or `None`, *optional*, defaults to `None`):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
-            disabled, which is the default setting.
+            disabled and all tokens are considered.
         min_p (`float` or `None`, *optional*, defaults to `None`):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
