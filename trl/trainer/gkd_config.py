@@ -45,6 +45,44 @@ class GKDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
             on teacher-generated output).
+        teacher_use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use vLLM for generating completions from the teacher model. Requires `vllm` to be installed.
+        teacher_vllm_mode (`str`, *optional*, defaults to `"server"`):
+            Mode for teacher vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or
+            `"colocate"` (run vLLM in the same process).
+        teacher_vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server for the teacher model (if `teacher_vllm_mode="server"`).
+        teacher_vllm_server_port (`int`, *optional*, defaults to `8000`):
+            Port of the vLLM server for the teacher model (if `teacher_vllm_mode="server"`).
+        teacher_vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
+            Timeout for connecting to the teacher vLLM server (if `teacher_vllm_mode="server"`).
+        teacher_vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
+            GPU memory utilization for the colocated teacher vLLM engine (if `teacher_vllm_mode="colocate"`).
+            It is recommended to set this to a low value if the student and teacher models share the same GPU.
+        teacher_vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Tensor parallel size for the colocated teacher vLLM engine (if `teacher_vllm_mode="colocate"`).
+        teacher_vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            Regex for vLLM guided decoding for the teacher model.
+        student_use_vllm (`bool`, *optional*, defaults to `False`):
+            Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
+        student_vllm_mode (`str`, *optional*, defaults to `"server"`):
+            Mode for student vLLM integration. Either `"server"` (connect to a running TRL vLLM server) or
+            `"colocate"` (run vLLM in the same process).
+        student_vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
+            Host of the vLLM server for the student model (if `student_vllm_mode="server"`).
+        student_vllm_server_port (`int`, *optional*, defaults to `8001`):
+            Port of the vLLM server for the student model (if `student_vllm_mode="server"`).
+        student_vllm_server_timeout (`float`, *optional*, defaults to `240.0`):
+            Timeout for connecting to the student vLLM server (if `student_vllm_mode="server"`).
+        student_vllm_gpu_memory_utilization (`float`, *optional*, defaults to `0.9`):
+            GPU memory utilization for the colocated student vLLM engine (if `student_vllm_mode="colocate"`).
+            It is recommended to set this to a low value if the student and teacher models share the same GPU.
+        student_vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
+            Tensor parallel size for the colocated student vLLM engine (if `student_vllm_mode="colocate"`).
+        student_vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            Regex for vLLM guided decoding for the student model.
+        student_vllm_sync_frequency (`int`, *optional*, defaults to `1`):
+            Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after every step.
     """
 
     temperature: float = field(
@@ -93,6 +131,95 @@ class GKDConfig(SFTConfig):
         metadata={
             "help": "Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised "
             "FT on teacher-generated output)."
+        },
+    )
+    # VLLM parameters for teacher model
+    teacher_use_vllm: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use vLLM for generating completions from the teacher model. Requires `vllm` to be installed."
+        },
+    )
+    teacher_vllm_mode: str = field(
+        default="server",
+        metadata={
+            "help": 'Mode for teacher vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+        },
+    )
+    teacher_vllm_server_host: str = field(
+        default="0.0.0.0",
+        metadata={"help": 'Host of the vLLM server for the teacher model (if `teacher_vllm_mode="server"`).'},
+    )
+    teacher_vllm_server_port: int = field(
+        default=8000,
+        metadata={"help": 'Port of the vLLM server for the teacher model (if `teacher_vllm_mode="server"`).'},
+    )
+    teacher_vllm_server_timeout: float = field(
+        default=240.0,
+        metadata={"help": 'Timeout for connecting to the teacher vLLM server (if `teacher_vllm_mode="server"`).'},
+    )
+    teacher_vllm_gpu_memory_utilization: float = field(
+        default=0.9,
+        metadata={
+            "help": 'GPU memory utilization for the colocated teacher vLLM engine (if `teacher_vllm_mode="colocate"`). It is recommended to set this to a low value if the student and teacher models share the same GPU.'
+        },
+    )
+    teacher_vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": 'Tensor parallel size for the colocated teacher vLLM engine (if `teacher_vllm_mode="colocate"`).'
+        },
+    )
+    teacher_vllm_guided_decoding_regex: Optional[str] = field(
+        default=None,
+        metadata={"help": "Regex for vLLM guided decoding for the teacher model."},
+    )
+    
+    # VLLM parameters for student model
+    student_use_vllm: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed."
+        },
+    )
+    student_vllm_mode: str = field(
+        default="server",
+        metadata={
+            "help": 'Mode for student vLLM integration. Either "server" (connect to a running TRL vLLM server) or "colocate" (run vLLM in the same process).'
+        },
+    )
+    student_vllm_server_host: str = field(
+        default="0.0.0.0",
+        metadata={"help": 'Host of the vLLM server for the student model (if `student_vllm_mode="server"`).'},
+    )
+    student_vllm_server_port: int = field(
+        default=8001,
+        metadata={"help": 'Port of the vLLM server for the student model (if `student_vllm_mode="server"`).'},
+    )
+    student_vllm_server_timeout: float = field(
+        default=240.0,
+        metadata={"help": 'Timeout for connecting to the student vLLM server (if `student_vllm_mode="server"`).'},
+    )
+    student_vllm_gpu_memory_utilization: float = field(
+        default=0.9,
+        metadata={
+            "help": 'GPU memory utilization for the colocated student vLLM engine (if `student_vllm_mode="colocate"`). It is recommended to set this to a low value if the student and teacher models share the same GPU.'
+        },
+    )
+    student_vllm_tensor_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": 'Tensor parallel size for the colocated student vLLM engine (if `student_vllm_mode="colocate"`).'
+        },
+    )
+    student_vllm_guided_decoding_regex: Optional[str] = field(
+        default=None,
+        metadata={"help": "Regex for vLLM guided decoding for the student model."},
+    )
+    student_vllm_sync_frequency: int = field(
+        default=1,
+        metadata={
+            "help": "Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after every step."
         },
     )
 
