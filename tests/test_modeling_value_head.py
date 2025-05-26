@@ -93,7 +93,7 @@ class BaseTester:
 
         def test_from_save_trl(self):
             """
-            Test if the model can be saved and loaded from a directory and get the same weights Including the
+            Test if the model can be saved and loaded from a directory and get the same weights, including the
             additional modules (e.g. v_head)
             """
             for model_name in self.all_model_names:
