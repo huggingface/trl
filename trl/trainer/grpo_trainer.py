@@ -1392,7 +1392,7 @@ class GRPOTrainer(Trainer):
         unpadded_completion_ids = []
         unpadded_per_token_logps = []
         prompt_ids_length = prompt_ids.size(1)
-        logp_iter = attention_mask if old_per_token_logps is None else old_per_token_logps # dummy iterator
+        logp_iter = attention_mask if old_per_token_logps is None else old_per_token_logps  # dummy iterator
         # get the start and end indices of the attention_mask
         for p_ids, c_ids, old_logps, mask in zip(prompt_ids, completion_ids, logp_iter, attention_mask):
             indices = torch.where(mask == 1)[0]
