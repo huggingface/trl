@@ -434,6 +434,8 @@ def pad(
             Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
         pad_to_multiple_of (`int`, *optional*, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
+        return_mask (`bool`, *optional*, defaults to `False`):
+            If True, returns an attn mask tensor.
 
     Returns:
         `torch.Tensor`:

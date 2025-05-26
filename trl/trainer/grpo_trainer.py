@@ -1277,7 +1277,7 @@ class GRPOTrainer(Trainer):
                 unpadded_prompt_ids.append(p_ids[start:prompt_ids_length])
                 unpadded_completion_ids.append(c_ids[:end-prompt_ids_length])
                 assert mask[start:end].sum() == end - start
-                unpadded_per_token_logps.append(old_logps[start:end])
+                unpadded_per_token_logps.append(old_logps[:end-prompt_ids_length])
             else:
                 # case where the attention mask is all zeros, e.g. when mask_truncated_completions is enabled
                 unpadded_prompt_ids.append(None)
@@ -1344,21 +1344,22 @@ class GRPOTrainer(Trainer):
         return loss
 
     @profiling_decorator
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        assert inputs["unpadded_completion_ids"].shape == inputs["unpadded_per_token_logps"].shape
-        
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):        
         prompt_ids, prompt_mask = pad(inputs["unpadded_prompt_ids"], padding_value=self.processing_class.pad_token_id, padding_side="left", return_mask=True)
         completion_ids, completion_mask = pad(inputs["unpadded_completion_ids"], padding_value=self.processing_class.pad_token_id, padding_side="right", return_mask=True)
-        if old_per_token_logps is None:
-            old_per_token_logps = pad(inputs["unpadded_per_token_logps"], padding_value=self.processing_class.pad_token_id, padding_side="right")
+        
+        old_per_token_logps = inputs["unpadded_per_token_logps"]
+        
+        if old_per_token_logps is not None:
+            old_per_token_logps = pad(inputs["unpadded_per_token_logps"], padding_value=0.0, padding_side="right")
         
         padded_inputs = {
             "prompt_ids": prompt_ids, 
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids, 
             "completion_mask": completion_mask,
-            "advantages": inputs["advantages"],
-            "old_per_token_logps": inputs["old_per_token_logps"],   
+            "advantages": torch.stack(inputs["advantages"]),
+            "old_per_token_logps": old_per_token_logps,   
         }
         if return_outputs:
             raise ValueError("The GRPOTrainer does not support returning outputs")
