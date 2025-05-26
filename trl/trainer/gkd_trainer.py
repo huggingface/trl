@@ -89,6 +89,7 @@ class GKDTrainer(SFTTrainer):
         # add remove_unused_columns=False to the dataclass args
         args.remove_unused_columns = False
         data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
+        self.model_name_or_path = model if isinstance(model, str) else model.config._name_or_path
 
         super().__init__(
             model,
@@ -172,7 +173,7 @@ class GKDTrainer(SFTTrainer):
                     )
                     # We don't need to call init_communicator here as it's for weight syncing
             elif self.teacher_vllm_mode == "colocate":
-                teacher_model_name_or_path = args.teacher_model_name_or_path or args.model_name_or_path
+                teacher_model_name_or_path = args.teacher_model_name_or_path or self.model_name_or_path
                 self.teacher_llm = LLM(
                     model=teacher_model_name_or_path,
                     tensor_parallel_size=args.teacher_vllm_tensor_parallel_size,
@@ -203,7 +204,7 @@ class GKDTrainer(SFTTrainer):
                         connection_timeout=args.student_vllm_server_timeout,
                     )
             elif self.student_vllm_mode == "colocate":
-                student_model_name_or_path = args.model_name_or_path
+                student_model_name_or_path = self.model_name_or_path
                 self.student_llm = LLM(
                     model=student_model_name_or_path,
                     tensor_parallel_size=args.student_vllm_tensor_parallel_size,
