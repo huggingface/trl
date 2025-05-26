@@ -429,13 +429,13 @@ def pad(
         tensors (`list[torch.Tensor]`):
             List of input tensors to pad.
         padding_value (`int`):
-            Value to use for padding. Default is 0.
+            Value to use for padding. Default is `0`.
         padding_side (`str`):
-            Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
+            Side on which to add padding. Must be `"left"` or `"right"`. Default is `"right"`.
         pad_to_multiple_of (`int`, *optional*, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.
         return_mask (`bool`, *optional*, defaults to `False`):
-            If True, returns an attn mask tensor.
+            If `True`, returns an attention mask tensor.
 
     Returns:
         `torch.Tensor`:

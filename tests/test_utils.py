@@ -129,6 +129,24 @@ class TestPad(unittest.TestCase):
         expected = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
         self.assertTrue(torch.equal(output, expected))
 
+    def test_pad_left_return_mask(self):
+        x = torch.tensor([1, 2, 3])
+        y = torch.tensor([4, 5])
+        output = pad((x, y), padding_value=0, padding_side="left", return_mask=True)
+        self.assertIsInstance(output, tuple)
+        expected = (torch.tensor([[1, 2, 3], [0, 4, 5]]), torch.tensor([[1, 1, 1], [0, 1, 1]]))
+        self.assertTrue(torch.equal(output[0], expected[0]))
+        self.assertTrue(torch.equal(output[1], expected[1]))
+
+    def test_pad_right_return_mask(self):
+        x = torch.tensor([1, 2, 3])
+        y = torch.tensor([4, 5])
+        output = pad((x, y), padding_value=0, padding_side="right", return_mask=True)
+        self.assertIsInstance(output, tuple)
+        expected = (torch.tensor([[1, 2, 3], [4, 5, 0]]), torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        self.assertTrue(torch.equal(output[0], expected[0]))
+        self.assertTrue(torch.equal(output[1], expected[1]))
+
 
 @require_peft
 class TestGetPEFTConfig(unittest.TestCase):
