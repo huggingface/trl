@@ -149,7 +149,7 @@ class GRPOConfig(TrainingArguments):
             number of training samples in the effective batch.
         ssr_alpha (`float`, *optional*, defaults to `1.0`):
             Alpha parameter for controlling the probability distribution of the replay buffer. The default is `1.0`,
-            which means the replay buffer samples uniformly.        
+            which means the replay buffer samples uniformly.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -432,7 +432,7 @@ class GRPOConfig(TrainingArguments):
             "help": "Alpha parameter for controlling the probablity distribution of the replay buffer. The default is 1.0, "
         },
     )
-    
+
     reward_weights: Optional[list[float]] = field(
         default=None,
         metadata={

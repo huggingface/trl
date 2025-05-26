@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import random
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -21,6 +22,7 @@ from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
 
 import datasets
+import numpy as np
 import torch
 import torch.utils.data
 import transformers
@@ -41,8 +43,6 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
-import numpy as np
-import random
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
@@ -82,6 +82,7 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+
 class ReplayBuffer:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -98,17 +99,17 @@ class ReplayBuffer:
         # Clear index queue when buffer changes
         self.sample_indices.clear()
 
-    def add_batch(self, experiences: dict[str,list[torch.Tensor]]):
+    def add_batch(self, experiences: dict[str, list[torch.Tensor]]):
         """
         Add a batch of experiences to the replay buffer.
         """
         first_tensor = next(tensor for tensor in experiences.values() if tensor is not None)
         num_items = len(first_tensor)
-        
+
         for i in range(num_items):
             experience = {key: tensor[i] if tensor is not None else None for key, tensor in experiences.items()}
             self.add(experience)
-        
+
     def _init_sampling_queue(self):
         self.sample_indices = list(range(len(self.buffer)))
         random.shuffle(self.sample_indices)
@@ -151,7 +152,6 @@ class SSRReplayBuffer(ReplayBuffer):
             self.buffer.append(experience)
             self.advantages.append(abs(advantage))
 
-
     def sample(self, batch_size):
         if not self.buffer:
             raise ValueError("Buffer is empty. Cannot sample from an empty buffer.")
@@ -163,8 +163,9 @@ class SSRReplayBuffer(ReplayBuffer):
 
         indices = np.random.choice(len(self.buffer), batch_size, p=probabilities, replace=True)
         batch = [self.buffer[i] for i in indices]
-        
+
         return {k: [d[k] for d in batch] for k in batch[0]}
+
 
 class RepeatSampler(Sampler):
     """
@@ -308,7 +309,8 @@ def split_tensor_dict(
         }
         for i in range(num_chunks)
     ]
-    
+
+
 def combine_tensor_dict(split_dicts: list[dict[str, Optional[torch.Tensor]]]) -> dict[str, Optional[torch.Tensor]]:
     """
     Combines a list of dictionaries containing tensors into a single dictionary by
@@ -331,6 +333,7 @@ def combine_tensor_dict(split_dicts: list[dict[str, Optional[torch.Tensor]]]) ->
         combined_dict[key] = torch.stack(tensors, dim=0) if tensors else None
 
     return combined_dict
+
 
 def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
     """
@@ -842,8 +845,6 @@ class GRPOTrainer(Trainer):
                     self.reward_funcs[i] = self.accelerator.prepare_model(
                         reward_func, evaluation_mode=True, device_placement=True
                     )
-                    
-                    
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -1111,7 +1112,7 @@ class GRPOTrainer(Trainer):
                 self.replay_buffer.add_batch(generation_batch_shuffled)
 
             inputs = self.replay_buffer.sample(self.args.per_device_train_batch_size)
-            
+
             self._step += 1
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
