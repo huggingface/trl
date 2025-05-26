@@ -260,9 +260,9 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
     def test_transformers_bf16_kwargs(self):
         r"""
-        Test if the transformers kwargs are correctly passed Here we check that loading a model in half precision works
-        as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can run a
-        dummy forward pass without any issue.
+        Test if the transformers kwargs are correctly passed. Here we check that loading a model in half precision
+        works as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can
+        run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
             trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
@@ -396,9 +396,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
     def test_transformers_bf16_kwargs(self):
         r"""
-        Test if the transformers kwargs are correctly passed Here we check that loading a model in half precision works
-        as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can run a
-        dummy forward pass without any issue.
+        Test if the transformers kwargs are correctly passed. Here we check that loading a model in half precision
+        works as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can
+        run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
             trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
