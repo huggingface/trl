@@ -86,6 +86,8 @@ class GRPOConfig(TrainingArguments):
             tokens.
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
+        multi_turn (`bool`, *optional*, defaults to `False`):
+            (async WIP) Whether generations are multiturn. Controls how padding is masked in the generation.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -93,11 +95,14 @@ class GRPOConfig(TrainingArguments):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
             instead of the default model.generate(). Requires `vllm` to be installed.
         vllm_mode (`str`, *optional*, defaults to `"server"`):
-            Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
+            Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"`, `"async_server"`, or
             `"colocate"`.
 
             - `"server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
               server is running (start with `trl vllm-serve`).
+            - (async WIP) `"async_server"`: The trainer will send generation requests to a separate vLLM server. Make sure a TRL vLLM
+              server is running (start with `trl vllm-serve-async`).
+              The users writes their own .generate() methods by utilizing the openai-compatible API.
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
@@ -311,6 +316,10 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
     )
+    multi_turn: bool = field(
+        default=False,
+        metadata={"help": "(WIP) Whether client does multi-turn generation."},
+    )
 
     # Parameters that control generation acceleration powered by vLLM
     use_vllm: bool = field(
@@ -323,9 +332,10 @@ class GRPOConfig(TrainingArguments):
     vllm_mode: str = field(
         default="server",
         metadata={
-            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
-            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a "
-            "TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server`, "
+            "`async_server`, or `colocate`. `'server'`: The trainer will send generation requests to a separate vLLM "
+            "server. Make sure a TRL vLLM server is running (start with `trl vllm-serve`). `'async_server'`: The "
+            "TRL vLLM server is running (start with `trl vllm-serve-async`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
         },

@@ -18,7 +18,7 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Type, Union
 
 import datasets
 import torch
@@ -79,6 +79,13 @@ if is_wandb_available():
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+# (WIP) Allow users to have custom rollouts by making API calls to the trl vllm-serve server. This could e.g. be
+# ready-made AI products. 
+# What we call a rollout function is a callable that takes in the data and sampling parameters and returns a list of
+# generation results. Those results must include "prompt" and "completion" field and can include an optional "tools"
+# field. Any extra fields are forwarded to the reward functions.
+RolloutFunc = Callable[[dict[str, Any], dict[str, Any]], list[dict[str, Any]]]
 
 
 class RepeatSampler(Sampler):
@@ -333,6 +340,10 @@ class GRPOTrainer(Trainer):
                   [Using a custom reward function](#using-a-custom-reward-function).
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
+        rollout_func (`RolloutFunc`, *optional*, defaults to `None`):
+            Function to use for generating completions. It must take in the data and sampling parameters and return a list of
+            generation results. Those results must include "prompt" and "completion" field and can include optional "tools" field
+            and any other fields that are forwarded to the reward functions.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -378,6 +389,7 @@ class GRPOTrainer(Trainer):
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
         args: Optional[GRPOConfig] = None,
+        rollout_func: Optional[RolloutFunc] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -498,6 +510,7 @@ class GRPOTrainer(Trainer):
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
+        self.multi_turn = args.multi_turn
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
@@ -616,13 +629,21 @@ class GRPOTrainer(Trainer):
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
+            
+            # TODO: Temp hack?
+            if self.vllm_mode == "async_server":
+                if rollout_func is None:
+                    raise ValueError("rollout_func must be provided when vllm_mode is 'async_server'")
+                self.rollout_func = rollout_func
+            else:
+                if rollout_func is not None:
+                    raise ValueError("rollout_func must be None when vllm_mode is not 'async_server'")
 
-            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+            if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
                 self.vllm_client = VLLMClient(
                     args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
                 )
                 self.vllm_client.init_communicator()
-
             elif self.vllm_mode == "colocate":
                 # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have
                 # the same number of ranks
@@ -918,7 +939,7 @@ class GRPOTrainer(Trainer):
                             continue
                         name = name.replace("modules_to_save.default.", "")
 
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                        if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
@@ -933,14 +954,14 @@ class GRPOTrainer(Trainer):
             else:
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
-                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                        if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                             llm_model.load_weights([(name, param.data)])
 
         # Reset cache on vLLM
-        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+        if self.vllm_mode in ["server", "async_server"] and self.accelerator.is_main_process:
             self.vllm_client.reset_prefix_cache()
         elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
@@ -984,6 +1005,14 @@ class GRPOTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
+        # NOTE (WIP): `extra_reward_kwargs` is useful when reward functions need access to
+        # information beyond the raw prompt and completion strings. This is particularly
+        # relevant when using custom generation logic or external generation clients (e.g., async_server mode).
+        # Such structured data might include: `generated_diff` or `test_coverage` for coding agents, `program_runtime` for code optimization, `win_rate` for game-playing agents, ...
+        # Feedback from the environment is often not present in the completion, but it is a valid reward signal.
+        extra_reward_kwargs = {}
+
+        # TODO: Find a non-breaking workaround, the async-server use case rarely has a simple "prompt" key, so currently I create a dummy "prompt" which is overwritten by the async_server
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
@@ -1033,6 +1062,66 @@ class GRPOTrainer(Trainer):
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
                 completion_ids = completion_ids[process_slice]
+            elif self.vllm_mode == "async_server":
+                if self.accelerator.is_main_process:
+                    with profiling_context(self, "Async vLLM.generate"):
+                        outputs = self.rollout_func(  # more lightweight than having to extend the VLLMClient as previously suggested
+                            data=gather_object(inputs),
+                            repetition_penalty=self.repetition_penalty,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=-1 if self.top_k is None else self.top_k,
+                            min_p=0.0 if self.min_p is None else self.min_p,
+                            max_tokens=self.max_completion_length,
+                            guided_decoding_regex=self.guided_decoding_regex,
+                        )
+                else:
+                    outputs = [None] * len(inputs)
+
+                # Broadcast outputs to all processes
+                outputs = broadcast_object_list(outputs, from_process=0)
+
+                # Each process selects its own slice of the outputs
+                process_start = self.accelerator.process_index * len(inputs)
+                process_end = (self.accelerator.process_index + 1) * len(inputs)
+                outputs = outputs[process_start:process_end]
+
+                # Extract prompts, completions, and tools from outputs
+                prompts = [o["prompt"] for o in outputs]
+                completions = [o["completion"] for o in outputs]
+                tools = [o.get("tools", None) for o in outputs]
+
+                # Prepare prompt input tensors
+                prompts_text = [
+                    self.processing_class.apply_chat_template(p, tools=t, tokenize=False)
+                    for p, t in zip(prompts, tools)
+                ]
+                prompt_inputs = self.processing_class(
+                    text=prompts_text,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="left",
+                    add_special_tokens=False,
+                )
+                prompt_inputs = super()._prepare_inputs(prompt_inputs)  # Needed? Or is .to(device) better?
+                prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+                # Prepare completion input tensors
+                completions_text = [
+                    self.processing_class.apply_chat_template(c, tokenize=False)
+                    for c in completions
+                ]
+                completion_ids = self.processing_class(completions_text)["input_ids"]
+                completion_lens = [len(ids) for ids in completion_ids]  # For masking right padding tokens
+
+                # Gather any extra keys for reward functions
+                extra_reward_kwargs = {}
+                if outputs:
+                    extra_reward_kwargs = {
+                        k: [o[k] for o in outputs]
+                        for k in outputs[0].keys()
+                        if k not in ["prompt", "completion", "tools"]
+                    }
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
@@ -1096,12 +1185,19 @@ class GRPOTrainer(Trainer):
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+        if self.multi_turn and self.vllm_mode == "async_server": # TODO: Fix
+            # Create an integer mask based on completion lengths to mask right padding tokens
+            max_completion_len = completion_ids.size(1)
+            indices = torch.arange(max_completion_len, device=device).expand(completion_ids.size(0), -1)
+            completion_lens_tensor = torch.tensor(completion_lens, device=device).unsqueeze(1)
+            completion_mask = (indices < completion_lens_tensor).int()  # all except last eos which is supposed to be there
+        else:
+            # Mask everything after the first EOS token
+            is_eos = completion_ids == self.processing_class.eos_token_id
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
@@ -1168,7 +1264,7 @@ class GRPOTrainer(Trainer):
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
                     output_reward_func = reward_func(
-                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                        prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs, **extra_reward_kwargs
                     )
                     # Convert None values to NaN
                     output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
