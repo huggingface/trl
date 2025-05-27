@@ -1069,14 +1069,19 @@ class DPOTrainer(Trainer):
     def concatenated_forward(
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]], is_ref_model: bool = False
     ):
-        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
+        """
+        Runs the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
 
         Args:
-            model: The model to run forward pass on
-            batch: The batch of inputs
-            is_ref_model: Whether this is being called for the reference model.
+            model:
+                Model to run the forward pass on.
+            batch:
+                Batch of input data.
+            is_ref_model:
+                Whether this method is being called for the reference model. If `True`, length desensitization is not
+                applied.
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
@@ -1231,13 +1236,13 @@ class DPOTrainer(Trainer):
 
             chosen_lengths = completion_lengths[:num_examples]
             rejected_lengths = completion_lengths[num_examples:]
-            l_p = torch.min(chosen_lengths, rejected_lengths)
-            l_p = torch.cat([l_p, l_p], dim=0)
+            public_lengths = torch.min(chosen_lengths, rejected_lengths)  # l_p in the paper
+            public_lengths = torch.cat([public_lengths, public_lengths], dim=0)
 
             seq_len = per_token_logps.size(1)
             position_ids = torch.arange(seq_len, device=per_token_logps.device).expand_as(per_token_logps)
 
-            ld_mask = position_ids < l_p.unsqueeze(1)
+            ld_mask = position_ids < public_lengths.unsqueeze(1)
             mask = position_ids < completion_lengths.unsqueeze(1)
 
             front_mask = (ld_mask & mask).float()
