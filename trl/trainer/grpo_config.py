@@ -69,14 +69,14 @@ class GRPOConfig(TrainingArguments):
             `per_device_train_batch_size * num_processes * gradient_accumulation_steps`.
         steps_per_generations: (`int` or `None`, *optional*, defaults to `None`):
             Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps.
-        temperature (`float`, defaults to `0.9`):
+        temperature (`float`, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
             `1.0` to consider all tokens.
-        top_k (`int` or `None`, *optional*, defaults to `50`):
+        top_k (`int` or `None`, *optional*, defaults to `None`):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
-            disabled.
+            disabled and all tokens are considered.
         min_p (`float` or `None`, *optional*, defaults to `None`):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
@@ -273,7 +273,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     temperature: float = field(
-        default=0.9,
+        default=1.0,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
     )
     top_p: float = field(
@@ -284,10 +284,10 @@ class GRPOConfig(TrainingArguments):
         },
     )
     top_k: Optional[int] = field(
-        default=50,
+        default=None,
         metadata={
             "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
-            "top-k-filtering is disabled."
+            "top-k-filtering is disabled and all tokens are considered."
         },
     )
     min_p: Optional[float] = field(
