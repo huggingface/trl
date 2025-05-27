@@ -40,14 +40,14 @@ logger = get_logger(__name__)
 
 class DDPOTrainer(PyTorchModelHubMixin):
     """
-    The DDPOTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
-    Note, this trainer is heavily inspired by the work here: https://github.com/kvablack/ddpo-pytorch
-    As of now only Stable Diffusion based pipelines are supported
+    The DDPOTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models. Note, this trainer is heavily
+    inspired by the work here: https://github.com/kvablack/ddpo-pytorch As of now only Stable Diffusion based pipelines
+    are supported
 
     Attributes:
-        **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more
+        **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more:
          details.
-        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used
+        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used:
         **prompt_function** (Callable[[], tuple[str, Any]]) -- Function to generate prompts to guide model
         **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
         **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
@@ -228,7 +228,8 @@ class DDPOTrainer(PyTorchModelHubMixin):
         Side Effects:
             - Model weights are updated
             - Logs the statistics to the accelerator trackers.
-            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step, and the accelerator tracker.
+            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step,
+              and the accelerator tracker.
 
         Returns:
             global_step (int): The updated global step.
@@ -333,18 +334,18 @@ class DDPOTrainer(PyTorchModelHubMixin):
             timesteps (torch.Tensor):
                 The timesteps sampled from the diffusion model, shape: [batch_size]
             next_latents (torch.Tensor):
-                The next latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height, width]
+                The next latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height,
+                width]
             log_probs (torch.Tensor):
                 The log probabilities of the latents, shape: [batch_size]
             advantages (torch.Tensor):
                 The advantages of the latents, shape: [batch_size]
             embeds (torch.Tensor):
-                The embeddings of the prompts, shape: [2*batch_size or batch_size, ...]
-                Note: the "or" is because if train_cfg is True, the expectation is that negative prompts are concatenated to the embeds
+                The embeddings of the prompts, shape: [2*batch_size or batch_size, ...] Note: the "or" is because if
+                train_cfg is True, the expectation is that negative prompts are concatenated to the embeds
 
         Returns:
-            loss (torch.Tensor), approx_kl (torch.Tensor), clipfrac (torch.Tensor)
-            (all of these are of shape (1,))
+            loss (torch.Tensor), approx_kl (torch.Tensor), clipfrac (torch.Tensor) (all of these are of shape (1,))
         """
         with self.autocast():
             if self.config.train_cfg:
@@ -627,12 +628,10 @@ class DDPOTrainer(PyTorchModelHubMixin):
 
         citation = textwrap.dedent("""\
         @inproceedings{black2024training,
-            title        = {{Training Diffusion Models with Reinforcement Learning}},
-            author       = {Kevin Black and Michael Janner and Yilun Du and Ilya Kostrikov and Sergey Levine},
-            year         = 2024,
-            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=YCWjhGrJFD},
+            title = {{Training Diffusion Models with Reinforcement Learning}}, author = {Kevin Black and Michael Janner
+            and Yilun Du and Ilya Kostrikov and Sergey Levine}, year = 2024, booktitle = {The Twelfth International
+            Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024}, publisher =
+            {OpenReview.net}, url = {https://openreview.net/forum?id=YCWjhGrJFD},
         }""")
 
         model_card = generate_model_card(

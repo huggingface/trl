@@ -157,8 +157,8 @@ class DDPOStableDiffusionPipeline:
 
 def _left_broadcast(input_tensor, shape):
     """
-    As opposed to the default direction of broadcasting (right to left), this function broadcasts
-    from left to right
+    As opposed to the default direction of broadcasting (right to left), this function broadcasts from left to right
+
         Args:
             input_tensor (`torch.FloatTensor`): is the tensor to broadcast
             shape (`tuple[int]`): is the shape to broadcast to
@@ -198,8 +198,8 @@ def scheduler_step(
 ) -> DDPOSchedulerOutput:
     """
 
-    Predict the sample at the previous timestep by reversing the SDE. Core function to propagate the diffusion
-    process from the learned model outputs (most often the predicted noise).
+    Predict the sample at the previous timestep by reversing the SDE. Core function to propagate the diffusion process
+    from the learned model outputs (most often the predicted noise).
 
     Args:
         model_output (`torch.FloatTensor`): direct output from learned diffusion model.
@@ -209,12 +209,12 @@ def scheduler_step(
         eta (`float`): weight of noise for added noise in diffusion step.
         use_clipped_model_output (`bool`): if `True`, compute "corrected" `model_output` from the clipped
             predicted original sample. Necessary because predicted original sample is clipped to [-1, 1] when
-            `self.config.clip_sample` is `True`. If no clipping has happened, "corrected" `model_output` would
-            coincide with the one provided as input and `use_clipped_model_output` will have not effect.
+            `self.config.clip_sample` is `True`. If no clipping has happened, "corrected" `model_output` would coincide
+            with the one provided as input and `use_clipped_model_output` will have not effect.
         generator: random number generator.
         variance_noise (`torch.FloatTensor`): instead of generating noise for the variance using `generator`, we
-            can directly provide the noise for the variance itself. This is useful for methods such as
-            CycleDiffusion. (https://huggingface.co/papers/2210.05559)
+            can directly provide the noise for the variance itself. This is useful for methods such as CycleDiffusion.
+            (https://huggingface.co/papers/2210.05559)
 
     Returns:
         `DDPOSchedulerOutput`: the predicted sample at the previous timestep and the log probability of the sample
@@ -345,18 +345,21 @@ def pipeline_step(
     guidance_rescale: float = 0.0,
 ):
     r"""
-    Function invoked when calling the pipeline for generation.  Args: prompt (`str` or `list[str]`, *optional*): The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`.  instead.  height (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor): The height in pixels of the generated image.
+    Function invoked when calling the pipeline for generation. Args: prompt (`str` or `list[str]`, *optional*): The
+    prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`. instead. height
+    (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor): The height in pixels of the
+    generated image.
         width (`int`, *optional*, defaults to self.unet.config.sample_size * self.vae_scale_factor):
             The width in pixels of the generated image.
         num_inference_steps (`int`, *optional*, defaults to 50):
-            The number of denoising steps. More denoising steps usually lead to a higher quality image at the
-            expense of slower inference.
+            The number of denoising steps. More denoising steps usually lead to a higher quality image at the expense
+            of slower inference.
         guidance_scale (`float`, *optional*, defaults to 7.5):
-            Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://huggingface.co/papers/2207.12598).
-            `guidance_scale` is defined as `w` of equation 2. of [Imagen
-            Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting `guidance_scale >
-            1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
-            usually at the expense of lower image quality.
+            Guidance scale as defined in [Classifier-Free Diffusion
+            Guidance](https://huggingface.co/papers/2207.12598). `guidance_scale` is defined as `w` of equation 2. of
+            [Imagen Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting
+            `guidance_scale > 1`. Higher guidance scale encourages to generate images that are closely linked to the
+            text `prompt`, usually at the expense of lower image quality.
         negative_prompt (`str` or `list[str]`, *optional*):
             The prompt or prompts not to guide the image generation. If not defined, one has to pass
             `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
@@ -364,11 +367,11 @@ def pipeline_step(
         num_images_per_prompt (`int`, *optional*, defaults to 1):
             The number of images to generate per prompt.
         eta (`float`, *optional*, defaults to 0.0):
-            Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only applies to
-            [`schedulers.DDIMScheduler`], will be ignored for others.
+            Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only applies
+            to [`schedulers.DDIMScheduler`], will be ignored for others.
         generator (`torch.Generator` or `list[torch.Generator]`, *optional*):
-            One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
-            to make generation deterministic.
+            One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html) to
+            make generation deterministic.
         latents (`torch.FloatTensor`, *optional*):
             Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
             generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
@@ -377,18 +380,16 @@ def pipeline_step(
             Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
             provided, text embeddings will be generated from `prompt` input argument.
         negative_prompt_embeds (`torch.FloatTensor`, *optional*):
-            Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
-            weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
-            argument.
+            Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting.
+            If not provided, negative_prompt_embeds will be generated from `negative_prompt` input argument.
         output_type (`str`, *optional*, defaults to `"pil"`):
-            The output format of the generate image. Choose between
-            [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
+            The output format of the generate image. Choose between [PIL](https://pillow.readthedocs.io/en/stable/):
+            `PIL.Image.Image` or `np.array`.
         return_dict (`bool`, *optional*, defaults to `True`):
-            Whether to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a
-            plain tuple.
+            Whether to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a plain tuple.
         callback (`Callable`, *optional*):
-            A function that will be called every `callback_steps` steps during inference. The function will be
-            called with the following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
+            A function that will be called every `callback_steps` steps during inference. The function will be called
+            with the following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
         callback_steps (`int`, *optional*, defaults to 1):
             The frequency at which the `callback` function will be called. If not specified, the callback will be
             called at every step.
@@ -405,7 +406,8 @@ def pipeline_step(
     Examples:
 
     Returns:
-        `DDPOPipelineOutput`: The generated image, the predicted latents used to generate the image and the associated log probabilities
+        `DDPOPipelineOutput`: The generated image, the predicted latents used to generate the image and the associated
+        log probabilities
     """
     # 0. Default height and width to unet
     height = height or self.unet.config.sample_size * self.vae_scale_factor
@@ -560,34 +562,40 @@ def pipeline_step_with_grad(
 
     Args:
         prompt (`str` or `list[str]`, *optional*, defaults to `None`):
-            The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds` instead.
+            The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`
+            instead.
         height (`int`, *optional*, defaults to `pipeline.unet.config.sample_size * pipeline.vae_scale_factor`):
             The height in pixels of the generated image.
         width (`int`, *optional*, defaults to `pipeline.unet.config.sample_size * pipeline.vae_scale_factor`):
             The width in pixels of the generated image.
         num_inference_steps (`int`, *optional*, defaults to `50`):
-            The number of denoising steps. More denoising steps usually lead to a higher quality image at the
-            expense of slower inference.
+            The number of denoising steps. More denoising steps usually lead to a higher quality image at the expense
+            of slower inference.
         guidance_scale (`float`, *optional*, defaults to `7.5`):
-            Guidance scale as defined in [Classifier-Free Diffusion Guidance](https://huggingface.co/papers/2207.12598).
-            `guidance_scale` is defined as `w` of equation 2. of [Imagen
-            Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting `guidance_scale >
-            1`. Higher guidance scale encourages to generate images that are closely linked to the text `prompt`,
-            usually at the expense of lower image quality.
+            Guidance scale as defined in [Classifier-Free Diffusion
+            Guidance](https://huggingface.co/papers/2207.12598). `guidance_scale` is defined as `w` of equation 2. of
+            [Imagen Paper](https://huggingface.co/papers/2205.11487). Guidance scale is enabled by setting
+            `guidance_scale > 1`. Higher guidance scale encourages to generate images that are closely linked to the
+            text `prompt`, usually at the expense of lower image quality.
         truncated_backprop (`bool`, *optional*, defaults to True):
-            Truncated Backpropation to fixed timesteps, helps prevent collapse during diffusion reward training as shown in AlignProp (https://huggingface.co/papers/2310.03739).
+            Truncated Backpropation to fixed timesteps, helps prevent collapse during diffusion reward training as
+            shown in AlignProp (https://huggingface.co/papers/2310.03739).
         truncated_backprop_rand (`bool`, *optional*, defaults to True):
-            Truncated Randomized Backpropation randomizes truncation to different diffusion timesteps, this helps prevent collapse during diffusion reward training as shown in AlignProp (https://huggingface.co/papers/2310.03739).
-            Enabling truncated_backprop_rand allows adapting earlier timesteps in diffusion while not resulting in a collapse.
+            Truncated Randomized Backpropation randomizes truncation to different diffusion timesteps, this helps
+            prevent collapse during diffusion reward training as shown in AlignProp
+            (https://huggingface.co/papers/2310.03739). Enabling truncated_backprop_rand allows adapting earlier
+            timesteps in diffusion while not resulting in a collapse.
         gradient_checkpoint (`bool`, *optional*, defaults to True):
-            Adds gradient checkpointing to Unet forward pass. Reduces GPU memory consumption while slightly increasing the training time.
+            Adds gradient checkpointing to Unet forward pass. Reduces GPU memory consumption while slightly increasing
+            the training time.
         truncated_backprop_timestep (`int`, *optional*, defaults to 49):
-            Absolute timestep to which the gradients are being backpropagated. Higher number reduces the memory usage and reduces the chances of collapse.
-            While a lower value, allows more semantic changes in the diffusion generations, as the earlier diffusion timesteps are getting updated.
-            However it also increases the chances of collapse.
+            Absolute timestep to which the gradients are being backpropagated. Higher number reduces the memory usage
+            and reduces the chances of collapse. While a lower value, allows more semantic changes in the diffusion
+            generations, as the earlier diffusion timesteps are getting updated. However it also increases the chances
+            of collapse.
         truncated_rand_backprop_minmax (`Tuple`, *optional*, defaults to (0,50)):
-            Range for randomized backprop. Here the value at 0 index indicates the earlier diffusion timestep to update (closer to noise), while the value
-            at index 1 indicates the later diffusion timestep to update.
+            Range for randomized backprop. Here the value at 0 index indicates the earlier diffusion timestep to update
+            (closer to noise), while the value at index 1 indicates the later diffusion timestep to update.
         negative_prompt (`str` or `list[str]`, *optional*):
             The prompt or prompts not to guide the image generation. If not defined, one has to pass
             `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
@@ -595,11 +603,11 @@ def pipeline_step_with_grad(
         num_images_per_prompt (`int`, *optional*, defaults to 1):
             The number of images to generate per prompt.
         eta (`float`, *optional*, defaults to 0.0):
-            Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only applies to
-            [`schedulers.DDIMScheduler`], will be ignored for others.
+            Corresponds to parameter eta (η) in the DDIM paper: https://huggingface.co/papers/2010.02502. Only applies
+            to [`schedulers.DDIMScheduler`], will be ignored for others.
         generator (`torch.Generator` or `list[torch.Generator]`, *optional*):
-            One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html)
-            to make generation deterministic.
+            One or a list of [torch generator(s)](https://pytorch.org/docs/stable/generated/torch.Generator.html) to
+            make generation deterministic.
         latents (`torch.FloatTensor`, *optional*):
             Pre-generated noisy latents, sampled from a Gaussian distribution, to be used as inputs for image
             generation. Can be used to tweak the same generation with different prompts. If not provided, a latents
@@ -608,18 +616,16 @@ def pipeline_step_with_grad(
             Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
             provided, text embeddings will be generated from `prompt` input argument.
         negative_prompt_embeds (`torch.FloatTensor`, *optional*):
-            Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
-            weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
-            argument.
+            Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting.
+            If not provided, negative_prompt_embeds will be generated from `negative_prompt` input argument.
         output_type (`str`, *optional*, defaults to `"pil"`):
-            The output format of the generate image. Choose between
-            [PIL](https://pillow.readthedocs.io/en/stable/): `PIL.Image.Image` or `np.array`.
+            The output format of the generate image. Choose between [PIL](https://pillow.readthedocs.io/en/stable/):
+            `PIL.Image.Image` or `np.array`.
         return_dict (`bool`, *optional*, defaults to `True`):
-            Whether to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a
-            plain tuple.
+            Whether to return a [`~pipelines.stable_diffusion.StableDiffusionPipelineOutput`] instead of a plain tuple.
         callback (`Callable`, *optional*):
-            A function that will be called every `callback_steps` steps during inference. The function will be
-            called with the following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
+            A function that will be called every `callback_steps` steps during inference. The function will be called
+            with the following arguments: `callback(step: int, timestep: int, latents: torch.FloatTensor)`.
         callback_steps (`int`, *optional*, defaults to 1):
             The frequency at which the `callback` function will be called. If not specified, the callback will be
             called at every step.
@@ -636,7 +642,8 @@ def pipeline_step_with_grad(
     Examples:
 
     Returns:
-        `DDPOPipelineOutput`: The generated image, the predicted latents used to generate the image and the associated log probabilities
+        `DDPOPipelineOutput`: The generated image, the predicted latents used to generate the image and the associated
+        log probabilities
     """
     # 0. Default height and width to unet
     height = height or pipeline.unet.config.sample_size * pipeline.vae_scale_factor

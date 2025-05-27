@@ -537,7 +537,7 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
         │ └────────────┴──────────────┴─────────────┴────────┘ │
         ╰──────────────────────────────────────────────────────╯
-        """)
+        """)  # docstyle-ignore
         self.assertEqual(output, expected_output)
 
     @patch("sys.stdout", new_callable=StringIO)
@@ -569,5 +569,5 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
                 │ └────────┴────────────┴───────┘ │
                 ╰─────────────────────────────────╯
                 """),
-        ]
+        ]  # docstyle-ignore
         self.assertIn(output, possible_outputs)

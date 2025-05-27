@@ -674,13 +674,12 @@ class RLOOTrainer(Trainer):
 
         citation = textwrap.dedent("""\
         @inproceedings{ahmadian2024back,
-            title        = {{Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs}},
-            author       = {Arash Ahmadian and Chris Cremer and Matthias Gall{\'{e}} and Marzieh Fadaee and Julia Kreutzer and Olivier Pietquin and Ahmet {\"{U}}st{\"{u}}n and Sara Hooker},
-            year         = 2024,
-            booktitle    = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), {ACL} 2024, Bangkok, Thailand, August 11-16, 2024},
-            publisher    = {Association for Computational Linguistics},
-            pages        = {12248--12267},
-            editor       = {Lun{-}Wei Ku and Andre Martins and Vivek Srikumar},
+            title = {{Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in
+            LLMs}}, author = {Arash Ahmadian and Chris Cremer and Matthias Gall{\'{e}} and Marzieh Fadaee and Julia
+            Kreutzer and Olivier Pietquin and Ahmet {\"{U}}st{\"{u}}n and Sara Hooker}, year = 2024, booktitle =
+            {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long
+            Papers), {ACL} 2024, Bangkok, Thailand, August 11-16, 2024}, publisher = {Association for Computational
+            Linguistics}, pages = {12248--12267}, editor = {Lun{-}Wei Ku and Andre Martins and Vivek Srikumar},
         }""")
 
         model_card = generate_model_card(

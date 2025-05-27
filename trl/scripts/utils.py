@@ -50,7 +50,8 @@ class ScriptArguments:
             Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
             Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar
-            type, inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
+            type, inplace operation. See
+            https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
     dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
@@ -79,8 +80,8 @@ class ScriptArguments:
 
 def init_zero_verbose():
     """
-    Perform zero verbose init - use this method on top of the CLI modules to make
-    logging and warning output cleaner. Uses Rich if available, falls back otherwise.
+    Perform zero verbose init - use this method on top of the CLI modules to make logging and warning output cleaner.
+    Uses Rich if available, falls back otherwise.
     """
     import logging
     import warnings
@@ -130,10 +131,12 @@ class TrlParser(HfArgumentParser):
     from dataclasses import dataclass
     from trl import TrlParser
 
+
     @dataclass
     class MyArguments:
         arg1: int
         arg2: str = "alpha"
+
 
     parser = TrlParser(dataclass_types=[MyArguments])
     training_args = parser.parse_args_and_config()
@@ -218,8 +221,7 @@ class TrlParser(HfArgumentParser):
         """
         Overrides the parser's default values with those provided via keyword arguments, including for subparsers.
 
-        Any argument with an updated default will also be marked as not required
-        if it was previously required.
+        Any argument with an updated default will also be marked as not required if it was previously required.
 
         Returns a list of strings that were not consumed by the parser.
         """

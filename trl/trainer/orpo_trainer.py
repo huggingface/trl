@@ -86,8 +86,9 @@ class ORPOTrainer(Trainer):
         args (`ORPOConfig`):
             The ORPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -97,7 +98,8 @@ class ORPOTrainer(Trainer):
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
+            The model initializer to use for training. If None is specified, the default model initializer will be
+            used.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -105,10 +107,11 @@ class ORPOTrainer(Trainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
+            a PEFT model.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
     """
 
     _tag_names = ["trl", "orpo"]
@@ -354,9 +357,8 @@ class ORPOTrainer(Trainer):
 
     def build_tokenized_answer(self, prompt, answer):
         """
-        Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
-        It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
-        Reference:
+        Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`. It does ensure `enc(a + b) = enc(a) + enc(a +
+        b)[len(enc(a)):]`. Reference:
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
 
@@ -405,13 +407,12 @@ class ORPOTrainer(Trainer):
     def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> dict:
         """Tokenize a single row from a ORPO specific dataset.
 
-        At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-        in case the prompt + chosen or prompt + rejected responses is/are too long. First
-        we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
+        At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation in case the prompt +
+        chosen or prompt + rejected responses is/are too long. First we truncate the prompt; if we're still too long,
+        we truncate the chosen/rejected.
 
-        We also create the labels for the chosen/rejected responses, which are of length equal to
-        the sum of the length of the prompt and the chosen/rejected response, with
-        label_pad_token_id  for the prompt tokens.
+        We also create the labels for the chosen/rejected responses, which are of length equal to the sum of the length
+        of the prompt and the chosen/rejected response, with label_pad_token_id for the prompt tokens.
         """
         batch = {}
         prompt = feature["prompt"]
@@ -569,7 +570,9 @@ class ORPOTrainer(Trainer):
         """Concatenate the chosen and rejected inputs into a single tensor.
 
         Args:
-            batch: A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors of shape (batch_size, sequence_length).
+            batch:
+                A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors
+                of shape (batch_size, sequence_length).
             is_encoder_decoder: Whether the model is an encoder-decoder model.
             label_pad_token_id: The label pad token id.
             padding_value: The padding value to use for the concatenated inputs_ids.
@@ -629,14 +632,14 @@ class ORPOTrainer(Trainer):
 
         Args:
             policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            policy_rejected_logps:
+                Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
 
         Returns:
-            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
-            The losses tensor contains the ORPO loss for each example in the batch.
-            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
-            The log odds ratio of the chosen responses over the rejected responses ratio for logging purposes.
-            The `log(sigmoid(log_odds_chosen))` for logging purposes.
+            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards). The losses tensor contains the ORPO
+            loss for each example in the batch. The chosen_rewards and rejected_rewards tensors contain the rewards for
+            the chosen and rejected responses, respectively. The log odds ratio of the chosen responses over the
+            rejected responses ratio for logging purposes. The `log(sigmoid(log_odds_chosen))` for logging purposes.
         """
 
         # Derived from Eqs. (4) and (7) from https://huggingface.co/papers/2403.07691 by using log identities and exp(log(P(y|x)) = P(y|x)
@@ -663,13 +666,18 @@ class ORPOTrainer(Trainer):
 
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
-            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+            labels:
+                Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are
+                ignored. Shape: (batch_size, sequence_length)
+            average_log_prob:
+                If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
+                log probabilities of the (non-masked) tokens.
             label_pad_token_id: The label pad token id.
             is_encoder_decoder: Whether the model is an encoder-decoder model.
 
         Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
+            given logits.
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
@@ -921,8 +929,8 @@ class ORPOTrainer(Trainer):
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
-        Overriding built-in evaluation loop to store metrics for each batch.
-        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
+        Overriding built-in evaluation loop to store metrics for each batch. Prediction/evaluation loop, shared by
+        `Trainer.evaluate()` and `Trainer.predict()`.
 
         Works both with or without labels.
         """
@@ -1041,10 +1049,8 @@ class ORPOTrainer(Trainer):
 
         citation = textwrap.dedent("""\
         @article{hong2024orpo,
-            title        = {{ORPO: Monolithic Preference Optimization without Reference Model}},
-            author       = {Jiwoo Hong and Noah Lee and James Thorne},
-            year         = 2024,
-            eprint       = {arXiv:2403.07691}
+            title = {{ORPO: Monolithic Preference Optimization without Reference Model}}, author = {Jiwoo Hong and Noah
+            Lee and James Thorne}, year = 2024, eprint = {arXiv:2403.07691}
         }""")
 
         model_card = generate_model_card(

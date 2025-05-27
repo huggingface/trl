@@ -45,6 +45,7 @@ def profiling_context(trainer: Trainer, name: str) -> Generator[None, None, None
     from transformers import Trainer
     from trl.extras.profiling import profiling_context
 
+
     class MyTrainer(Trainer):
         def some_method(self):
             A = np.random.rand(1000, 1000)
@@ -79,6 +80,7 @@ def profiling_decorator(func: callable) -> callable:
     ```python
     from transformers import Trainer
     from trl.extras.profiling import profiling_decorator
+
 
     class MyTrainer(Trainer):
         @profiling_decorator

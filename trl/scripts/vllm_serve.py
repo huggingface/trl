@@ -84,8 +84,8 @@ class WeightSyncWorkerExtension:
         """
         Initializes the weight update communicator using a stateless process group.
 
-        This method creates a `StatelessProcessGroup` that allows external training processes to
-        communicate with vLLM workers without interfering with the global torch distributed group.
+        This method creates a `StatelessProcessGroup` that allows external training processes to communicate with vLLM
+        workers without interfering with the global torch distributed group.
 
         Args:
             host (`str`):
@@ -321,12 +321,8 @@ def chunk_list(lst: list, n: int) -> list[list]:
     Split list `lst` into `n` evenly distributed sublists.
 
     Example:
-        >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
-        [[1, 2, 3], [4, 5, 6]]
-        >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
-        [[1, 2], [3, 4], [5], [6]]
-        >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
-        [[1], [2], [3], [4], [5], [6], [], []]
+        >>> chunk_list([1, 2, 3, 4, 5, 6], 2) [[1, 2, 3], [4, 5, 6]] >>> chunk_list([1, 2, 3, 4, 5, 6], 4) [[1, 2], [3,
+        4], [5], [6]] >>> chunk_list([1, 2, 3, 4, 5, 6], 8) [[1], [2], [3], [4], [5], [6], [], []]
     """
     k, r = divmod(len(lst), n)
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
@@ -495,8 +491,7 @@ def main(script_args: ScriptArguments):
     @app.post("/init_communicator/")
     async def init_communicator(request: InitCommunicatorRequest):
         """
-        Initializes the communicator for synchronizing model weights between a client and multiple server
-        workers.
+        Initializes the communicator for synchronizing model weights between a client and multiple server workers.
 
         Args:
             request (`InitCommunicatorRequest`):

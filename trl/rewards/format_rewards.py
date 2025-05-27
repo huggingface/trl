@@ -35,6 +35,7 @@ def think_format_reward(completions: list[list[dict[str, str]]], **kwargs) -> li
     Example:
     ```python
     >>> from trl.rewards import think_format_reward
+
     >>> completions = [
     ...     [{"content": "<think>\nThis is my reasoning.\n</think>\nThis is my answer."}],
     ...     [{"content": "<think>\nThis is my reasoning.\nThis is my answer."}],
