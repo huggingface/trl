@@ -602,6 +602,7 @@ class GRPOTrainer(Trainer):
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
+            "advantages": deque(maxlen=maxlen),
         }
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
@@ -1204,6 +1205,7 @@ class GRPOTrainer(Trainer):
             self.accelerator.process_index * len(prompts),
             (self.accelerator.process_index + 1) * len(prompts),
         )
+        all_process_advantages = advantages.clone()
         advantages = advantages[process_slice]
 
         # Log the metrics
@@ -1241,6 +1243,7 @@ class GRPOTrainer(Trainer):
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
+        self._textual_logs["advantages"].extend(all_process_advantages.tolist())
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
 
@@ -1437,6 +1440,7 @@ class GRPOTrainer(Trainer):
                     "prompt": self._textual_logs["prompt"],
                     "completion": self._textual_logs["completion"],
                     **self._textual_logs["rewards"],
+                    "advantage":self._textual_logs["advantages"]
                 }
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
