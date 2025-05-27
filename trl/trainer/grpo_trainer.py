@@ -1226,7 +1226,7 @@ class GRPOTrainer(Trainer):
 
         # Identify sequences that terminated with EOS and log their lengths
         agg_terminated_with_eos = self.accelerator.gather(is_eos.any(dim=1))
-        term_completion_lengths = completion_lengths[agg_terminated_with_eos]
+        term_completion_lengths = agg_completion_lengths[agg_terminated_with_eos]
         clipped_completions_ratio = 1 - len(term_completion_lengths) / len(completion_lengths)
         self._metrics[mode]["completions/clipped_ratio"].append(clipped_completions_ratio)
         if len(term_completion_lengths) == 0:  # edge case where no terminated sequences are found
