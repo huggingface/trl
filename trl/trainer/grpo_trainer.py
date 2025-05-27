@@ -1057,10 +1057,12 @@ class GRPOTrainer(Trainer):
                     orig_size = len(prompts_text)
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
-                    prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                else:
+                    all_prompts_text = prompts_text
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
@@ -1145,13 +1147,16 @@ class GRPOTrainer(Trainer):
             completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+
+        # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the num of generations
+        keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
+        reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
         ):
             with profiling_context(self, reward_func_name):
-                if isinstance(
-                    reward_func, nn.Module
-                ):  # Module instead of PretrainedModel for compat with compiled models
+                if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
@@ -1164,10 +1169,6 @@ class GRPOTrainer(Trainer):
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
-                    # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the number
-                    # of generations
-                    keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
-                    reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
@@ -1354,13 +1355,11 @@ class GRPOTrainer(Trainer):
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
+        # Two-sided clipping
         if self.args.delta is not None:
-            # Use clamp instead of min to handle tensor-float comparison
-            per_token_loss1 = torch.clamp(coef_1, max=self.args.delta) * advantages.unsqueeze(1)
-        else:
-            # Original GRPO clipping (only lower bound implicitly applied by the final min)
-            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+            coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
