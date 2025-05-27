@@ -1440,7 +1440,7 @@ class GRPOTrainer(Trainer):
                     "prompt": self._textual_logs["prompt"],
                     "completion": self._textual_logs["completion"],
                     **self._textual_logs["rewards"],
-                    "advantage":self._textual_logs["advantages"]
+                    "advantage": self._textual_logs["advantages"],
                 }
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
