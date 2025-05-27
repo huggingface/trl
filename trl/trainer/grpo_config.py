@@ -289,7 +289,7 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, "
-            "top-k-filtering is disabled."
+            "top-k-filtering is disabled and all tokens are considered."
         },
     )
     min_p: Optional[float] = field(
