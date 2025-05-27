@@ -1400,7 +1400,7 @@ class GRPOTrainer(Trainer):
             if len(indices) > 0:
                 start = indices[0]
                 end = indices[-1] + 1
-                if prompt_ids_length >= end:
+                if prompt_ids_length > end:
                     raise ValueError(
                         f"End index {end} exceeds prompt_ids_length {prompt_ids_length}. "
                         "This can happen if the attention mask is not correctly set."
