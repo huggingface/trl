@@ -1124,7 +1124,7 @@ class GRPOTrainer(Trainer):
             # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
             # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
             # per_token_logps.detach() instead.
-            if self.num_iterations > 1 or self.gradient_accumulation_steps % self.steps_per_generation != 0:
+            if self.num_iterations > 1 or self.args.gradient_accumulation_steps % self.args.steps_per_generation != 0:
                 old_per_token_logps = self._get_per_token_logps(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
