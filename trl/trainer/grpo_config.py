@@ -136,8 +136,10 @@ class GRPOConfig(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        delta: (`float`, *optional*, defaults to `None`):
-            Delta value for the upper clipping bound in two-sided GRPO. Recommended to be > 1 + epsilon. This method was introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
+        delta: (`float` or `None`, *optional*, defaults to `None`):
+            Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
+            GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
+            the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
@@ -394,7 +396,9 @@ class GRPOConfig(TrainingArguments):
     delta: Optional[float] = field(
         default=None,
         metadata={
-            "help": "If set to a float value (e.g., 2.0), enables the upper clipping bound in two-sided GRPO loss. If None (default), the standard GRPO clipping is used. Recommended to be > 1 + epsilon when enabled."
+            "help": "Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` "
+            "(default), standard GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This "
+            "method is introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291)."
         },
     )
     epsilon_high: Optional[float] = field(
