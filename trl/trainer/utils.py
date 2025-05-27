@@ -1683,6 +1683,15 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
     else:
         return mask, *tensors
 
+def calculate_entropy(logits, attention_mask):
+    entropy_values = []
+    for row_logits, mask_row in zip(logits, attention_mask):
+        probs = F.softmax(row_logits, dim=-1)
+        entropy_row = -torch.sum(probs * torch.log(probs + 1e-20), dim=-1) * mask_row
+        entropy_values.append(entropy_row)
+    entropy_values = torch.stack(entropy_values)
+    return entropy_values
+
 
 def selective_log_softmax(logits, index):
     """
