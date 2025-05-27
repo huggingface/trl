@@ -1663,22 +1663,52 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
     _, M = mask.shape
 
     # Create copy of mask and tensors
-    mask = mask.clone()
+    mask_copy = mask.clone()
     tensors = [t.clone() for t in tensors]
 
     # Shift non-zero values to the left
-    f = mask.argmax(dim=1)
-    pos = torch.arange(M, device=mask.device).unsqueeze(0)
-    idx_roll = (pos + f.unsqueeze(1)) % M
-    mask_roll = mask.gather(1, idx_roll)
+    first_non_zero = mask_copy.argmax(dim=1)
+    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
+    idx_roll = (pos + first_non_zero.unsqueeze(1)) % M
+    mask_roll = mask_copy.gather(1, idx_roll)
     rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
 
-    # Get the first column idx that is all zeros and remove every column after that
+    # Truncate trailing columns that are all zeros in mask_roll
     col_sums = mask_roll.sum(dim=0)
     empty_cols = col_sums == 0
-    first_empty = int(empty_cols.float().argmax()) if empty_cols.any() else M
-    flushed_mask = mask_roll[:, :first_empty]
-    flushed_tensors = [t[:, :first_empty] for t in rolled_tensors]
+    first_empty_col = int(empty_cols.to(torch.int8).argmax()) if empty_cols.any() else M
+    flushed_mask = mask_roll[:, :first_empty_col]
+    flushed_tensors = [t[:, :first_empty_col] for t in rolled_tensors]
+
+    if not flushed_tensors:
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
+
+
+def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ..., int]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the right. See `flush_left` for details.
+    """
+    _, M = mask.shape
+
+    # Create copy of mask and tensors
+    mask_copy = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the right
+    flipped_mask = torch.fliplr(mask_copy)
+    first_non_zero = flipped_mask.argmax(dim=1)
+    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
+    idx_roll = (pos - first_non_zero.unsqueeze(1)) % M
+    mask_roll = mask_copy.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
+
+    # Truncate leading columns that are all zeros in mask_roll
+    col_sums = mask_roll.sum(dim=0)
+    non_empty_cols = col_sums != 0
+    first_non_empty_col = int(non_empty_cols.to(torch.int8).argmax()) if non_empty_cols.any() else M
+    flushed_mask = mask_roll[:, first_non_empty_col:]
+    flushed_tensors = [t[:, first_non_empty_col:] for t in rolled_tensors]
 
     if not flushed_tensors:
         return flushed_mask
