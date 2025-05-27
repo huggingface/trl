@@ -126,7 +126,7 @@ class ReplayBuffer:
         if len(batch) != batch_size:
             raise ValueError("Not enough samples in the buffer to fill the batch.")
 
-        return {k: [d[k] for d in batch] for k in batch[0]}
+        return {k: [d[k] for d in batch] if batch[0][k] is not None else None for k in batch[0]}
 
     def __len__(self):
         return len(self.buffer)
@@ -164,7 +164,7 @@ class SSRReplayBuffer(ReplayBuffer):
         indices = np.random.choice(len(self.buffer), batch_size, p=probabilities, replace=True)
         batch = [self.buffer[i] for i in indices]
 
-        return {k: [d[k] for d in batch] for k in batch[0]}
+        return {k: [d[k] for d in batch] if batch[0][k] is not None else None for k in batch[0]}
 
 
 class RepeatSampler(Sampler):
@@ -1415,9 +1415,11 @@ class GRPOTrainer(Trainer):
                     unpadded_per_token_logps.append(old_logps[: end - prompt_ids_length])
             else:
                 # case where the attention mask is all zeros, e.g. when mask_truncated_completions is enabled
-                unpadded_prompt_ids.append(None)
-                unpadded_completion_ids.append(None)
-                unpadded_per_token_logps.append(None)
+                raise ValueError(
+                    "Attention mask is all zeros"
+                    f" for prompt {p_ids.tolist()} and completion {c_ids.tolist()}. "       
+                    
+                )
 
         return {
             "unpadded_prompt_ids": unpadded_prompt_ids,
