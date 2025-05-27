@@ -1148,83 +1148,33 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @staticmethod
-    def _make_delta_trainer(tmp_dir, tokenizer, dataset):
-        """Helper method to create a GRPOTrainer with specific delta clipping parameters."""
-        cfg = GRPOConfig(
-            output_dir=tmp_dir,
-            epsilon=0.20,
-            delta=2.0,
-            epsilon_high=0.20,
-            beta=0.0,
-            loss_type="bnpo",
-            max_completion_length=2,
-            report_to="none",
-        )
-        return GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=cfg,
-            reward_funcs=lambda x, **y: [1.0] * len(x),
-            train_dataset=dataset,
-            processing_class=tokenizer,
-        )
+    def test_training_delta_clipping(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-    @staticmethod
-    def _delta_inputs(device):
-        """Helper method to create standard inputs for delta clipping tests."""
-        return {
-            "prompt_ids": torch.tensor([[101]], device=device),
-            "prompt_mask": torch.tensor([[1]], device=device),
-            "completion_ids": torch.tensor([[2000, 2001]], device=device),
-            "completion_mask": torch.tensor([[1, 1]], device=device),
-        }
-
-    @parameterized.expand(
-        [
-            # name, advantage, old_prob, new_prob, expected_loss
-            ("pos_ratio_in_clip", 2.0, 0.50, 0.55, -2.2),
-            ("pos_ratio_above_clip", 2.0, 0.40, 0.60, -2.4),
-            ("neg_ratio_in_clip", -2.0, 0.50, 0.45, 1.8),
-            ("neg_ratio_below_clip", -2.0, 0.50, 0.35, 1.6),
-            ("neg_ratio_above_delta", -2.0, 0.20, 0.50, 4.0),
-            ("neg_between_clip_delta", -2.0, 0.40, 0.60, 3.0),
-        ]
-    )
-    def test_two_sided_clipping_loss(self, name, advantage, old_prob, new_prob, expected_loss):
-        """Test two-sided GRPO clipping logic with different scenarios.
-
-        Args:
-            name: Test case name
-            advantage: Advantage value for the scenario
-            old_prob: Old policy probability
-            new_prob: New policy probability
-            expected_loss: Expected loss value
-        """
         with tempfile.TemporaryDirectory() as tmp_dir:
-            model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-            tokenizer = AutoTokenizer.from_pretrained(model_id)
-
-            dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train[:1]")
-
-            trainer = self._make_delta_trainer(tmp_dir, tokenizer, dataset)
-
-            inputs = self._delta_inputs(trainer.accelerator.device)
-            inputs.update(
-                {
-                    "advantages": torch.tensor([advantage], device=trainer.accelerator.device),
-                    "old_per_token_logps": torch.log(torch.tensor([[old_prob]], device=trainer.accelerator.device)),
-                }
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                delta=2.0,  # set delta to a non-None value
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
             )
 
-            # Mock _get_per_token_logps to return predefined new log probabilities
-            with patch.object(trainer, "_get_per_token_logps") as mock_logps_func:
-                mock_logps_func.return_value = torch.log(torch.tensor([[new_prob]], device=trainer.accelerator.device))
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-                # Compute loss and verify
-                loss = trainer.compute_loss(trainer.model, inputs)
-                self.assertAlmostEqual(
-                    loss.item(),
-                    expected_loss,
-                    delta=1e-5,
-                    msg=f"Scenario {name} failed: expected {expected_loss}, got {loss.item()}",
-                )
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")

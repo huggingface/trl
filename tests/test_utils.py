@@ -564,22 +564,23 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         prompts = ["The sky is", "The sun is"]
         completions = [" blue.", " in the sky."]
         rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
         step = 42
 
-        print_prompt_completions_sample(prompts, completions, rewards, step)
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
 
         output = mock_stdout.getvalue()
 
         expected_output = textwrap.dedent("""\
-        ╭────────────────────── Step 42 ───────────────────────╮
-        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
-        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
-        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
-        │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
-        │ ├────────────┼──────────────┼─────────────┼────────┤ │
-        │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
-        │ └────────────┴──────────────┴─────────────┴────────┘ │
-        ╰──────────────────────────────────────────────────────╯
+        ╭──────────────────────────── Step 42 ─────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────╯
         """)
         self.assertEqual(output, expected_output)
 
@@ -588,29 +589,30 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         prompts = ["A", "B"]
         completions = ["1", "2"]
         rewards = {"Score": [0.1, 0.2]}
+        advantages = [0.3, 0.4]
         step = 10
 
-        print_prompt_completions_sample(prompts, completions, rewards, step, num_samples=1)
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
         output = mock_stdout.getvalue()
 
         possible_outputs = [
             textwrap.dedent("""\
-                ╭──────────── Step 10 ────────────╮
-                │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │
-                │ ┃ Prompt ┃ Completion ┃ Score ┃ │
-                │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │
-                │ │ A      │ 1          │  0.10 │ │
-                │ └────────┴────────────┴───────┘ │
-                ╰─────────────────────────────────╯
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ A      │ 1          │  0.10 │      0.30 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
                 """),
             textwrap.dedent("""\
-                ╭──────────── Step 10 ────────────╮
-                │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │
-                │ ┃ Prompt ┃ Completion ┃ Score ┃ │
-                │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │
-                │ │ B      │ 2          │  0.20 │ │
-                │ └────────┴────────────┴───────┘ │
-                ╰─────────────────────────────────╯
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ B      │ 2          │  0.20 │      0.40 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
                 """),
         ]
         self.assertIn(output, possible_outputs)

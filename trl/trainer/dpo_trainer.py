@@ -805,9 +805,9 @@ class DPOTrainer(Trainer):
         with torch.no_grad(), compte_ref_context_manager:
             if self.ref_model is None:
                 with self.null_ref_context():
-                    ref_model_output = self.concatenated_forward(self.model, batch)
+                    ref_model_output = self.concatenated_forward(self.model, batch, is_ref_model=True)
             else:
-                ref_model_output = self.concatenated_forward(self.ref_model, batch)
+                ref_model_output = self.concatenated_forward(self.ref_model, batch, is_ref_model=True)
         return ref_model_output["chosen_logps"], ref_model_output["rejected_logps"]
 
     @staticmethod
@@ -1067,10 +1067,22 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    def concatenated_forward(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
-        """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
+    def concatenated_forward(
+        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]], is_ref_model: bool = False
+    ):
+        """
+        Runs the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
+
+        Args:
+            model:
+                Model to run the forward pass on.
+            batch:
+                Batch of input data.
+            is_ref_model:
+                Whether this method is being called for the reference model. If `True`, length desensitization is not
+                applied.
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
@@ -1227,6 +1239,28 @@ class DPOTrainer(Trainer):
 
         if self.loss_type == "ipo":
             all_logps = all_logps / loss_mask.sum(-1)
+
+        if self.args.ld_alpha is not None and not is_ref_model:
+            # Compute response lengths based on loss_mask
+            completion_lengths = loss_mask.sum(dim=1)
+
+            chosen_lengths = completion_lengths[:num_examples]
+            rejected_lengths = completion_lengths[num_examples:]
+            public_lengths = torch.min(chosen_lengths, rejected_lengths)  # l_p in the paper
+            public_lengths = torch.cat([public_lengths, public_lengths], dim=0)
+
+            seq_len = per_token_logps.size(1)
+            position_ids = torch.arange(seq_len, device=per_token_logps.device).expand_as(per_token_logps)
+
+            ld_mask = position_ids < public_lengths.unsqueeze(1)
+            mask = position_ids < completion_lengths.unsqueeze(1)
+
+            front_mask = (ld_mask & mask).float()
+            rear_mask = (~ld_mask & mask).float()
+            front_logps = (per_token_logps * front_mask).sum(dim=1)
+            rear_logps = (per_token_logps * rear_mask).sum(dim=1)
+
+            all_logps = front_logps + self.args.ld_alpha * rear_logps
 
         output["chosen_logps"] = all_logps[:num_examples]
         output["rejected_logps"] = all_logps[num_examples:]
