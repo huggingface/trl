@@ -1192,7 +1192,7 @@ class GRPOTrainer(Trainer):
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-
+        frac_zero_std = torch.isclose(std_grouped_rewards, torch.tensor([0.0], device=std_grouped_rewards.device))
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
@@ -1239,7 +1239,7 @@ class GRPOTrainer(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
-
+        self._metrics[mode]["frac_zero_reward_std"].append(frac_zero_std.float().mean().item())
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
