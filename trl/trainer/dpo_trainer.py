@@ -62,6 +62,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     flush_left,
+    flush_right,
     generate_model_card,
     get_comet_experiment_url,
     log_table_to_comet_experiment,
@@ -1112,29 +1113,19 @@ class DPOTrainer(Trainer):
                 dim=1,
             )
 
-            # Flush left to reduce the memory usage
-            # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
-            #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
-            attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
-
-            # Truncate
+            # Truncate and flush
             if self.max_length is not None and self.max_length < attention_mask.size(1):
                 if self.truncation_mode == "keep_start":
+                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
                     attention_mask = attention_mask[:, : self.max_length]
                     input_ids = input_ids[:, : self.max_length]
                     loss_mask = loss_mask[:, : self.max_length]
                 elif self.truncation_mode == "keep_end":
-                    lengths = attention_mask.sum(dim=1).int()
-                    starts = (lengths - self.max_length).clamp(min=0)
-                    idx = torch.arange(self.max_length, device=attention_mask.device).unsqueeze(0) + starts.unsqueeze(
-                        1
-                    )
-                    idx = idx.clamp(0, attention_mask.size(1) - 1)
-
-                    attention_mask = attention_mask.gather(1, idx)
-                    input_ids = input_ids.gather(1, idx)
-                    loss_mask = loss_mask.gather(1, idx)
-
+                    attention_mask, input_ids, loss_mask = flush_right(attention_mask, input_ids, loss_mask)
+                    input_ids = input_ids[:, -self.max_length :]
+                    attention_mask = attention_mask[:, -self.max_length :]
+                    loss_mask = loss_mask[:, -self.max_length :]
+                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
                 else:
                     raise ValueError(
                         f"Unknown truncation mode: '{self.truncation_mode}'. Should be one of ['keep_end', 'keep_start']."
