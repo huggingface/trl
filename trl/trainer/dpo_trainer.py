@@ -62,6 +62,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     flush_left,
+    flush_right,
     generate_model_card,
     get_comet_experiment_url,
     log_table_to_comet_experiment,
@@ -1124,26 +1125,35 @@ class DPOTrainer(Trainer):
                 dim=1,
             )
 
-            # Flush left to reduce the memory usage
-            # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
-            #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
-            attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
-
-            # Truncate right
-            if self.max_length is not None:
-                if self.truncation_mode == "keep_end":
+            # Flush and truncate
+            if self.max_length is not None and self.max_length < attention_mask.size(1):
+                if self.truncation_mode == "keep_start":
+                    # Flush left to reduce the memory usage
+                    # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+                    #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
+                    attention_mask = attention_mask[:, : self.max_length]
+                    input_ids = input_ids[:, : self.max_length]
+                    loss_mask = loss_mask[:, : self.max_length]
+                elif self.truncation_mode == "keep_end":
+                    # Flush right before truncating left, then flush left
+                    # [[0, 0, x, x, x, x],  ->  [[0, 0, x, x],
+                    #  [0, x, x, x, 0, 0]]       [0, x, x, x]]
+                    attention_mask, input_ids, loss_mask = flush_right(attention_mask, input_ids, loss_mask)
                     input_ids = input_ids[:, -self.max_length :]
                     attention_mask = attention_mask[:, -self.max_length :]
                     loss_mask = loss_mask[:, -self.max_length :]
-                elif self.truncation_mode == "keep_start":
-                    input_ids = input_ids[:, : self.max_length]
-                    attention_mask = attention_mask[:, : self.max_length]
-                    loss_mask = loss_mask[:, : self.max_length]
+                    attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
                 else:
                     raise ValueError(
                         f"Unknown truncation mode: '{self.truncation_mode}'. Should be one of ['keep_end', "
                         "'keep_start']."
                     )
+            else:
+                # Flush left to reduce the memory usage
+                # [[0, 0, x, x, x, x],  ->  [[x, x, x, x],
+                #  [0, x, x, x, 0, 0]]       [x, x, x, 0]]
+                attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
 
             if self.use_logits_to_keep:
                 # Compute logits_to_keep based on loss_mask pattern:
