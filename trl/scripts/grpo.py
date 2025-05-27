@@ -14,10 +14,10 @@
 
 import argparse
 import importlib
+import os
+import sys
 from dataclasses import dataclass, field
 from typing import Optional
-import sys
-import os
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
