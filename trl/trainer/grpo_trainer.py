@@ -1245,10 +1245,9 @@ class GRPOTrainer(Trainer):
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
-        self._textual_logs["advantages"].extend(all_process_advantages.tolist())
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
-
+        self._textual_logs["advantages"].extend(all_process_advantages.tolist())
         return {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
