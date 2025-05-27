@@ -753,7 +753,7 @@ class GRPOTrainer(Trainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
-    def _get_train_sampler(self) -> Sampler:
+    def _get_train_sampler(self, dataset: Optional[Dataset] = None) -> Sampler:
         # Returns a sampler that
         # 1. ensures each prompt is repeated across multiple processes. This guarantees that identical prompts are
         #    distributed to different GPUs, allowing rewards to be computed and normalized correctly within each prompt
@@ -779,9 +779,10 @@ class GRPOTrainer(Trainer):
         #                      2          4    12  12  13  13  14  14   <- Generate for the second `steps_per_generation` (prompts 12 to 23); store the completions; use the first slice to compute the loss
         #                      2          5    15  15  16  16  17  17   <- Take the stored generations and use the second slice to compute the loss
         #                                          ...
-
+        if dataset is None:
+            dataset = self.train_dataset
         return RepeatSampler(
-            data_source=self.train_dataset,
+            data_source=dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.generation_batch_size // self.num_generations,
             repeat_count=self.num_iterations * self.args.steps_per_generation,
@@ -1057,10 +1058,12 @@ class GRPOTrainer(Trainer):
                     orig_size = len(prompts_text)
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
-                    prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                else:
+                    all_prompts_text = prompts_text
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
@@ -1140,13 +1143,16 @@ class GRPOTrainer(Trainer):
             completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+
+        # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the num of generations
+        keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
+        reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
         ):
             with profiling_context(self, reward_func_name):
-                if isinstance(
-                    reward_func, nn.Module
-                ):  # Module instead of PretrainedModel for compat with compiled models
+                if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
@@ -1159,10 +1165,6 @@ class GRPOTrainer(Trainer):
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
-                    # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the number
-                    # of generations
-                    keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
-                    reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
