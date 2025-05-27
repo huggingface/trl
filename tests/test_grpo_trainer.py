@@ -1156,6 +1156,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
                 delta=2.0,  # set delta to a non-None value
                 report_to="none",
