@@ -504,6 +504,7 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.stop_tokens = args.stop_tokens
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1022,6 +1023,7 @@ class GRPOTrainer(Trainer):
                             min_p=0.0 if self.min_p is None else self.min_p,
                             max_tokens=self.max_completion_length,
                             guided_decoding_regex=self.guided_decoding_regex,
+                            stop=self.stop_tokens,
                         )
                 else:
                     completion_ids = [None] * len(all_prompts_text)
@@ -1049,6 +1051,7 @@ class GRPOTrainer(Trainer):
                     min_p=0.0 if self.min_p is None else self.min_p,
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
+                    stop=self.stop_tokens,
                 )
 
                 if self.vllm_tensor_parallel_size > 1:
