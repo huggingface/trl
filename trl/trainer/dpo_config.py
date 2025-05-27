@@ -131,14 +131,19 @@ class DPOConfig(TrainingArguments):
             Whether to ignore the provided reference model and implicitly use a reference model that assigns equal
             probability to all responses.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
-            Robust DPO label smoothing parameter from the [cDPO](https://ericmitchell.ai/cdpo.pdf) report and
+            Robust DPO label smoothing parameter from the [cDPO report](https://ericmitchell.ai/cdpo.pdf) and
             [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
         use_weighting (`bool`, *optional*, defaults to `False`):
-            Whether to weight the loss as done in the [WPO](https://huggingface.co/papers/2406.11827) paper.
+            Whether to weight the loss as done in the [WPO paper](https://huggingface.co/papers/2406.11827).
         rpo_alpha (`float`, *optional*, defaults to `None`):
-            α parameter from the [RPO](https://huggingface.co/papers/2404.19733) paper (v3), which controls the
+            α parameter from the [RPO paper](https://huggingface.co/papers/2404.19733) (v3), which controls the
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
             DPO loss. The paper recommends `rpo_alpha=1.0`.
+        ld_alpha (`float` or `None`, *optional*, defaults to `None`):
+            α parameter from the [LD-DPO paper](https://huggingface.co/papers/2409.06411), which controls the weighting
+            of the verbose token log-probabilities in responses. If `None`, no weighting is applied to the verbose
+            part, and the loss is equivalent to the standard DPO loss. The paper recommends setting `ld_alpha` between
+            `0.0` and `1.0`.
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
@@ -344,6 +349,14 @@ class DPOConfig(TrainingArguments):
             "help": "α parameter from the RPO paper (v3), which controls the weighting of the NLL term in the loss. "
             "If `None`, no weighting is applied and the loss is the same as the DPO loss. The paper recommends "
             "`rpo_alpha=1.0`."
+        },
+    )
+    ld_alpha: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "α parameter from the LD-DPO paper, which controls the weighting of the verbose token "
+            "log-probabilities in responses. If `None`, no weighting is applied to the verbose part, and the loss is "
+            "equivalent to the standard DPO loss. The paper recommends setting `ld_alpha` between `0.0` and `1.0`.",
         },
     )
     discopop_tau: float = field(
