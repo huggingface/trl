@@ -1113,7 +1113,7 @@ class DPOTrainer(Trainer):
                 dim=1,
             )
 
-            # Truncate and flush
+            # Flush and truncate
             if self.max_length is not None and self.max_length < attention_mask.size(1):
                 if self.truncation_mode == "keep_start":
                     attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
@@ -1130,6 +1130,8 @@ class DPOTrainer(Trainer):
                     raise ValueError(
                         f"Unknown truncation mode: '{self.truncation_mode}'. Should be one of ['keep_end', 'keep_start']."
                     )
+            else:
+                attention_mask, input_ids, loss_mask = flush_left(attention_mask, input_ids, loss_mask)
 
             if self.use_logits_to_keep:
                 # Compute logits_to_keep based on loss_mask pattern:
