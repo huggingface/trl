@@ -17,6 +17,47 @@
     <a href="https://huggingface.co/trl-lib"><img alt="Hugging Face Hub" src="https://img.shields.io/badge/🤗%20Hub-trl--lib-yellow"></a> 
 </p>
 
+
+## INTERNAL FORK
+This repo is an internal fork of the TRL library used for faster paced projects, the objective is to upstream useful code / findings / tutorials to the public TRL library.
+In order to stay in sync with the main branch you can follow these instructions:
+
+Step-by-step to Sync with Original Repo
+1. Add the original repository as an upstream remote:
+
+
+```shell
+git remote add upstream https://github.com/original_owner/original_repo.git
+```
+Check remotes:
+
+
+```shell
+git remote -v
+```
+You should see something like:
+
+
+```shell
+origin  https://github.com/your_username/your_private_repo.git (fetch)
+origin  https://github.com/your_username/your_private_repo.git (push)
+upstream  https://github.com/original_owner/original_repo.git (fetch)
+upstream  https://github.com/original_owner/original_repo.git (push)
+```
+2. Fetch changes from the original repo:
+
+
+```shell
+git fetch upstream
+```
+3. Merge or rebase the changes into your private repo:
+
+
+```shell
+git checkout main
+git merge upstream/main
+```
+
 ## Overview
 
 TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.
