@@ -341,6 +341,7 @@ class PPOHandler:
     def flush_ppo_stats(self)->None:
         del self.ppo_stats
 
+
 class PPOTrainer(Trainer):
     _tag_names = ["trl", "ppo"]
 
@@ -352,15 +353,15 @@ class PPOTrainer(Trainer):
         ],
         model: nn.Module,
         ref_model: Optional[nn.Module],
-        reward_model: Optional[nn.Module]= None,
-        train_dataset: Optional[Dataset]= None,
+        reward_model: Optional[nn.Module] = None,
+        train_dataset: Optional[Dataset] = None,
         value_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        # less commonly used
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: Optional[list[TrainerCallback]] = None,
         peft_config: Optional["PeftConfig"] = None,
+        use_only_step_method: bool = False,
     ) -> None:
         if ref_model is model:
             raise ValueError(
@@ -371,25 +372,23 @@ class PPOTrainer(Trainer):
         self.args = args
         self.processing_class = processing_class
         self.policy_model = model
+        self.use_only_step_method = use_only_step_method
 
-        # Define the collator if not provided
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
 
-        # Handle stop token settings: update policy model's generation_config to use provided stop token
-        if args.stop_token and args.stop_token_id:
+        if self.args.stop_token and self.args.stop_token_id:
             raise ValueError("You cannot set both `stop_token` and `stop_token_id`.")
-        elif args.stop_token:
-            if args.stop_token == "eos":
+        elif self.args.stop_token:
+            if self.args.stop_token == "eos":
                 self.policy_model.generation_config.eos_token_id = self.stop_token_id = processing_class.eos_token_id
             else:
                 raise ValueError(
-                    f"Unknown `stop_token` {args.stop_token}. Allowed values are: `'eos'` and `None` (no stop token)."
+                    f"Unknown `stop_token` {self.args.stop_token}. Allowed values are: `'eos'` and `None` (no stop token)."
                 )
         else:
-            self.policy_model.generation_config.eos_token_id = self.stop_token_id = args.stop_token_id  # None or int
+            self.policy_model.generation_config.eos_token_id = self.stop_token_id = self.args.stop_token_id
 
-        # Check that the kl estimator is valid
         if self.args.kl_estimator not in {"k1", "k3"}:
             raise ValueError(
                 "kl_estimator must be either 'k1' (straightforward, unbiased) or 'k3' (lower variance, unbiased, "
@@ -397,24 +396,20 @@ class PPOTrainer(Trainer):
                 "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
             )
 
-        # peft support
         if not is_peft_available() and peft_config is not None:
             raise ImportError(
                 "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
             )
         elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_confg, we merge and unload it first
             if isinstance(self.policy_model, PeftModel):
                 self.policy_model = self.policy_model.merge_and_unload()
-
-            # get peft model with the given config
             self.policy_model = get_peft_model(self.policy_model, peft_config)
-            if args.bf16 and getattr(self.policy_model, "is_loaded_in_4bit", False):
+            if self.args.bf16 and getattr(self.policy_model, "is_loaded_in_4bit", False):
                 peft_module_casting_to_bf16(self.policy_model)
 
         self.is_peft_model = is_peft_available() and isinstance(self.policy_model, PeftModel)
-        self.model_adapter_name = args.model_adapter_name
-        self.ref_adapter_name = args.ref_adapter_name
+        self.model_adapter_name = self.args.model_adapter_name
+        self.ref_adapter_name = self.args.ref_adapter_name
 
         if ref_model:
             self.ref_model = ref_model
@@ -424,63 +419,98 @@ class PPOTrainer(Trainer):
             self.ref_model = create_reference_model(self.policy_model)
 
         self.reward_model = reward_model
-        self.train_dataset = train_dataset
-        self.train_dataset_len = len(train_dataset)
         self.value_model = value_model
-        self.data_collator = data_collator
-        self.eval_dataset = eval_dataset
         self.optimizer, self.lr_scheduler = optimizers
-        self.optimizer_cls_and_kwargs = None  # needed for transformers >= 4.47
+        self.optimizer_cls_and_kwargs = None
 
-        #########
-        # calculate various batch sizes
-        #########
-        if args.total_episodes is None:  # allow the users to define episodes in terms of epochs.
-            args.total_episodes = int(args.num_train_epochs * self.train_dataset_len)
-        accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
+        accelerator = Accelerator(gradient_accumulation_steps=self.args.gradient_accumulation_steps)
         self.accelerator = accelerator
-        args.world_size = accelerator.num_processes
-        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps
-        args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
-        args.batch_size = int(args.local_batch_size * args.world_size)
-        args.mini_batch_size = exact_div(
-            args.batch_size, args.num_mini_batches, "`batch_size` must be a multiple of `num_mini_batches`"
+        self.args.world_size = accelerator.num_processes
+        self.args.local_batch_size = self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps
+        self.args.micro_batch_size = int(self.args.per_device_train_batch_size * self.args.world_size)
+        self.args.batch_size = int(self.args.local_batch_size * self.args.world_size)
+        self.args.mini_batch_size = exact_div(
+            self.args.batch_size, self.args.num_mini_batches, "`batch_size` must be a multiple of `num_mini_batches`"
         )
-        args.local_mini_batch_size = exact_div(
-            args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
+        self.args.local_mini_batch_size = exact_div(
+            self.args.local_batch_size, self.args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
-        if args.whiten_rewards:
-            assert args.local_mini_batch_size >= 8, (
-                f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
+        if self.args.whiten_rewards:
+            assert self.args.local_mini_batch_size >= 8, (
+                f"Per-rank minibatch size {self.args.local_mini_batch_size} is insufficient for whitening"
             )
-        # `per_rank_rollout_batch_size` is our `args.local_batch_size`
-        # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
-        args.num_total_batches = math.ceil(
-            args.total_episodes / args.batch_size
-        )  # we may train for more than `total_episodes`
-        time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
-        time_int = broadcast(time_tensor, 0).item()  # avoid different timestamps across processes
-        args.run_name = f"{args.exp_name}__{args.seed}__{time_int}"
-        self.local_seed = args.seed + accelerator.process_index * 100003  # Prime
-        if args.num_sample_generations > 0:
-            self.sample_generations_freq = max(1, args.num_total_batches // args.num_sample_generations)
-        self.local_dataloader_batch_size = args.local_batch_size
 
-        #########
-        # setup model, optimizer, and others
-        #########
+        time_tensor = torch.tensor(int(time.time()), device=accelerator.device)
+        time_int = broadcast(time_tensor, 0).item()
+        self.args.run_name = f"{self.args.exp_name}__{self.args.seed}__{time_int}"
+        self.local_seed = self.args.seed + accelerator.process_index * 100003
+
+        if self.args.num_sample_generations > 0:
+            self.sample_generations_freq = max(1, self.args.num_total_batches // self.args.num_sample_generations)
+        self.local_dataloader_batch_size = self.args.local_batch_size
+
         for module in [self.policy_model, self.ref_model, self.value_model, self.reward_model]:
             if module is not None:
                 disable_dropout_in_model(module)
-        self.model = PolicyAndValueWrapper(self.policy_model, self.value_model)
-        self.model.config = self.policy_model.config  # needed for pushing to hub
-        self.create_optimizer_and_scheduler(
-            num_training_steps=args.num_total_batches
-        )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
 
-        #########
-        ### trainer specifics
-        #########
+        self.model = PolicyAndValueWrapper(self.policy_model, self.value_model)
+        self.model.config = self.policy_model.config
+
+        if not self.use_only_step_method:
+            self.default_init_dataloader(train_dataset, data_collator, eval_dataset)
+        else:
+            warnings.warn(
+                "You are using the PPOTrainer with `use_only_step_method=True`. "
+                "Be sure to handle the dataloader manually",
+            )
+            self.args.num_total_batches = math.ceil(
+                self.args.total_episodes / self.args.batch_size
+            )  # we may train for more than `total_episodes`
+
+        self.create_optimizer_and_scheduler(num_training_steps=self.args.num_total_batches)
+        self.default_callbacks_init(callbacks)
+
+        self.hub_model_id = None
+        if self.args.push_to_hub:
+            self.init_hf_repo()
+        if self.args.should_save:
+            os.makedirs(self.args.output_dir, exist_ok=True)
+
+        if hasattr(self.model, "add_model_tags"):
+            self.model.add_model_tags(self._tag_names)
+
+        torch.manual_seed(self.args.seed)
+        if not self.use_only_step_method:
+            self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
+        else:
+            self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
+        torch.manual_seed(self.local_seed)
+
+        self.prepare_training_gpu()
+
+    def default_init_dataloader(self, train_dataset, data_collator, eval_dataset) -> None:
+        self.train_dataset = train_dataset
+        self.train_dataset_len = len(train_dataset)
+        self.data_collator = data_collator
+        self.eval_dataset = eval_dataset
+        if self.args.total_episodes is None:  # allow the users to define episodes in terms of epochs.
+            self.args.total_episodes = int(self.args.num_train_epochs * self.train_dataset_len)
+        self.dataloader = DataLoader(
+            self.train_dataset,
+            batch_size=self.local_dataloader_batch_size,
+            shuffle=True,
+            collate_fn=self.data_collator,
+            drop_last=True,  # needed; otherwise the last batch will be of ragged shape
+        )
+        self.eval_dataloader = DataLoader(
+            self.eval_dataset,
+            batch_size=self.args.per_device_eval_batch_size,
+            collate_fn=self.data_collator,
+            drop_last=True,
+        )  # no need to shuffle eval dataset
+        self.eval_dataloader = self.accelerator.prepare(self.eval_dataloader)
+    
+    def default_callbacks_init(self, callbacks) -> None:
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
         self.callback_handler = CallbackHandler(
@@ -497,54 +527,22 @@ class PPOTrainer(Trainer):
         )
         self.current_flos = 0
         self.hp_search_backend = None
+
+    def prepare_training_gpu(self) -> None:
         self.is_deepspeed_enabled = getattr(self.accelerator.state, "deepspeed_plugin", None) is not None
         self.is_fsdp_enabled = getattr(self.accelerator.state, "fsdp_plugin", None) is not None
-        # Create distant repo and output directory if needed
-        self.hub_model_id = None
-        if self.args.push_to_hub:
-            self.init_hf_repo()
-        if self.args.should_save:
-            os.makedirs(self.args.output_dir, exist_ok=True)
-
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
-
-        #########
-        ### setup dataloader
-        #########
-        self.dataloader = DataLoader(
-            self.train_dataset,
-            batch_size=self.local_dataloader_batch_size,
-            shuffle=True,
-            collate_fn=self.data_collator,
-            drop_last=True,  # needed; otherwise the last batch will be of ragged shape
-        )
-        # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
-        # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
-        torch.manual_seed(args.seed)
-        self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
-        torch.manual_seed(self.local_seed)  # reset the local seed again
-
-        self.eval_dataloader = DataLoader(
-            self.eval_dataset,
-            batch_size=args.per_device_eval_batch_size,
-            collate_fn=self.data_collator,
-            drop_last=True,
-        )  # no need to shuffle eval dataset
-        self.eval_dataloader = accelerator.prepare(self.eval_dataloader)
-
         if self.is_deepspeed_enabled:
-            self.reward_model = prepare_deepspeed(
-                self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
-            )
+            if self.reward_model is not None:
+                self.reward_model = prepare_deepspeed(
+                    self.reward_model, self.args.per_device_train_batch_size, self.args.fp16, self.args.bf16
+                )
 
             if self.ref_model is None:
                 if not self.is_peft_model:
                     raise ValueError("No reference model and model is not a Peft model.")
             else:
                 self.ref_model = prepare_deepspeed(
-                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
+                    self.ref_model, self.args.per_device_train_batch_size, self.args.fp16, self.args.bf16
                 )
         else:
             if self.ref_model is None:
@@ -552,7 +550,8 @@ class PPOTrainer(Trainer):
                     raise ValueError("No reference model and model is not a Peft model.")
             else:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
-            self.reward_model = self.reward_model.to(self.accelerator.device)
+            if self.reward_model is not None:
+                self.reward_model = self.reward_model.to(self.accelerator.device)
 
     def get_train_dataloader(self) -> DataLoader:
         return self.dataloader
