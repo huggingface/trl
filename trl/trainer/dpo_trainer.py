@@ -243,8 +243,7 @@ class DPOTrainer(Trainer):
             ref_model = self._create_model_from_path(ref_model, args, is_ref=True)
 
         # PEFT configuration and model wrapping
-        if peft_config is not None:
-            model = self._prepare_peft_model(model, ref_model, peft_config, args)
+        model = self._prepare_peft_model(model, ref_model, peft_config, args)
 
         if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
             raise ValueError(
@@ -464,7 +463,9 @@ class DPOTrainer(Trainer):
         model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
         return model
 
-    def _prepare_peft_model(self, model: PreTrainedModel, ref_model: PreTrainedModel, peft_config: Any, args: DPOConfig) -> PreTrainedModel:
+    def _prepare_peft_model(
+        self, model: PreTrainedModel, ref_model: PreTrainedModel, peft_config: Any, args: DPOConfig
+    ) -> PreTrainedModel:
         """Prepares a model for PEFT training."""
         # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
         # has been called in order to properly call autocast if needed.
@@ -525,6 +526,7 @@ class DPOTrainer(Trainer):
             if hasattr(model, "enable_input_require_grads"):
                 model.enable_input_require_grads()
             else:
+
                 def make_inputs_require_grad(module, input, output):
                     output.requires_grad_(True)
 
