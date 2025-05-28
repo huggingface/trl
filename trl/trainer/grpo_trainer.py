@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+# ?ask: 1. the torch.any in mean_grouped_rewards section; 2. the return in advantage arg 
 import os
 import textwrap
 import warnings
@@ -503,6 +503,7 @@ class GRPOTrainer(Trainer):
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
+        self.use_self_certainty = args.use_self_certainty
         self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
@@ -831,6 +832,63 @@ class GRPOTrainer(Trainer):
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
+    # from Intuitor paper 
+    @profiling_decorator
+    def _get_per_token_self_certainty(
+        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None
+    ) -> torch.Tensor:
+        """
+        Computes per-token self-certainty in batches. We add constant logV, which is equivalent to the original
+        formula as we are going to normalize it in batch.
+        """
+        batch_size = batch_size or input_ids.size(0)
+        all_sce = []
+        # Process inputs in chunks
+        for i in range(0, input_ids.size(0), batch_size):
+            input_ids_batch = input_ids[i : i + batch_size]
+            attention_mask_batch = attention_mask[i : i + batch_size]
+
+            # Get logits: shape (B, seq_len, V)
+            logits = model(input_ids=input_ids_batch, attention_mask=attention_mask_batch).logits
+            # Keep only the last `logits_to_keep` positions
+            sce_chunk = logits[:, -logits_to_keep:, :]  # (B, L_keep, V)
+            # Compute log-sum-exp across vocabulary and subtract mean logit
+            # logsumexp - mean gives a measure of dispersion (self-certainty)
+            sce_values = torch.logsumexp(sce_chunk, dim=-1) - sce_chunk.mean(dim=-1)
+            all_sce.append(sce_values)
+
+        # Concatenate over batch dimension
+        return torch.cat(all_sce, dim=0)
+
+    # from Intuitor paper
+    @profiling_decorator
+    @torch.no_grad()
+    def _get_advantage_from_sce(
+        self,
+        SCe: torch.Tensor,
+        completion_mask: torch.Tensor,          
+    ) -> torch.Tensor:
+        """
+        Calculates advantage scores from SCe values and returns a 1D tensor with a single advantage per sample.
+
+        Args
+        ----
+        SCe : (B, L) tensor
+            Per-token score.
+        completion_mask : (B, L) bool / 0-1 tensor
+            1 for valid tokens, 0 for padding.
+        Returns
+        -------
+        advantage : (B,) tensor 
+        """
+        output_lengths = completion_mask.sum(dim=1, dtype=torch.long) # (B,)
+        advantage = torch.zeros(SCe.size(0), device=SCe.device, dtype=SCe.dtype)
+        valid_mask = output_lengths > 0
+        if valid_mask.any():
+            sce_sum = (SCe * completion_mask).sum(dim=1)
+            advantage[valid_mask] = sce_sum[valid_mask] / output_lengths[valid_mask].to(SCe.dtype)
+        return advantage.detach()
+
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
@@ -1135,7 +1193,16 @@ class GRPOTrainer(Trainer):
                 )
             else:
                 old_per_token_logps = None
-
+            
+            # Compute self-certainty per-token       
+            sce_advantage_raw = self._get_per_token_self_certainty(
+                self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+            )
+            # Compute self-certainty advantage from raw scores
+            sce_advantage_raw  = self._get_advantage_from_sce(
+                sce_advantage_raw, completion_mask
+            )
+            
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
@@ -1147,6 +1214,8 @@ class GRPOTrainer(Trainer):
             completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+        # from Intuitor paper
+        sce_advantage_mean = gather((sce_advantage_raw))
 
         # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the num of generations
         keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
@@ -1214,6 +1283,23 @@ class GRPOTrainer(Trainer):
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
+        
+        #calculate the mean and std of self-certainty advantage     
+        sce_advantage_mean = sce_advantage_mean.view(-1, self.num_generations)
+        mean_sce_advantage_mean = sce_advantage_mean.mean(dim=1)
+        std_sce_advantage_mean = sce_advantage_mean.std(dim=1)
+        
+        sce_advantage_record = mean_sce_advantage_mean.mean().item()
+        sce_advantage_std_record = std_sce_advantage_mean.mean().item()
+        
+        mean_sce_advantage_mean = mean_sce_advantage_mean.repeat_interleave(self.num_generations, dim=0)
+        std_sce_advantage_mean = std_sce_advantage_mean.repeat_interleave(self.num_generations, dim=0)
+        
+        mean_sce_advantage_mean = mean_sce_advantage_mean[process_slice]
+        std_sce_advantage_mean = std_sce_advantage_mean[process_slice]
+        sce_advantage = (sce_advantage_raw - mean_sce_advantage_mean)
+        sce_advantage = sce_advantage / (std_sce_advantage_mean + 1e-4)
+        sce_advantage = sce_advantage + advantages # combine self-certainty advantage with the original advantage
 
         # Log the metrics
         if mode == "train":
@@ -1246,6 +1332,8 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
+        self._metrics[mode]["sce_advantage"].append(sce_advantage_record) #from Intuitor paper
+        self._metrics[mode]["sce_advantage_std"].append(sce_advantage_std_record) #from Intuitor paper
 
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
@@ -1259,7 +1347,7 @@ class GRPOTrainer(Trainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
-            "advantages": advantages,
+            "advantages": sce_advantage if self.use_self_certainty else advantages,
             "old_per_token_logps": old_per_token_logps,
         }
 
