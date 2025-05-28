@@ -155,6 +155,7 @@ This constant is recommended to be the maximum completion length. To use this fo
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after applying reward weights.
 - `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
+- `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero. 
 - `clip_ratio/region_mean`: The ratio of token probabilities where the GRPO objective is clipped to stay within the trust region:
 $$

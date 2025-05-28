@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import random
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -21,6 +22,7 @@ from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
 
 import datasets
+import numpy as np
 import torch
 import torch.utils.data
 import transformers
@@ -79,6 +81,124 @@ if is_wandb_available():
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.sample_indices = []
+
+    def add(self, experience):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+        else:
+            self.buffer.pop(0)
+            self.buffer.append(experience)
+
+        # Clear index queue when buffer changes
+        self.sample_indices.clear()
+
+    def add_batch(self, experiences: dict[str, list[torch.Tensor]]):
+        """
+        Add a batch of experiences to the replay buffer.
+        """
+        first_tensor = next(tensor for tensor in experiences.values() if tensor is not None)
+        num_items = len(first_tensor)
+
+        for i in range(num_items):
+            experience = {key: tensor[i] if tensor is not None else None for key, tensor in experiences.items()}
+            self.add(experience)
+
+    def _init_sampling_queue(self):
+        self.sample_indices = list(range(len(self.buffer)))
+        random.shuffle(self.sample_indices)
+
+    def sample(self, batch_size):
+        if not self.sample_indices:
+            self._init_sampling_queue()
+
+        batch = []
+        while len(batch) < batch_size and self.sample_indices:
+            idx = self.sample_indices.pop(0)
+            batch.append(self.buffer[idx])
+
+        if len(batch) != batch_size:
+            raise ValueError("Not enough samples in the buffer to fill the batch.")
+
+        return {k: [d[k] for d in batch] if batch[0][k] is not None else None for k in batch[0]}
+
+    def __len__(self):
+        return len(self.buffer)
+
+
+class SSRReplayBuffer(ReplayBuffer):
+    # implementation of the SSR replay buffer from https://arxiv.org/pdf/2504.08837
+    def __init__(self, capacity, alpha=1.0):
+        super().__init__(capacity)
+        self.alpha = alpha
+        self.advantages = []
+
+    def add(self, experience):
+        EPS = 0.0001  # ensures we get non-zero advs when the buffer contains all 0 advantages
+        advantage = experience["advantages"].item()
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+            self.advantages.append(abs(advantage) + EPS)  # Store absolute advantage
+        elif abs(advantage) > EPS:
+                # Replace the oldest entry if the buffer is full and adv is non zero
+                self.buffer.pop(0)
+                self.advantages.pop(0)
+                self.buffer.append(experience)
+                self.advantages.append(abs(advantage))
+
+    def sample(self, batch_size):
+        if not self.buffer:
+            raise ValueError("Buffer is empty. Cannot sample from an empty buffer.")
+
+        # Convert advantages to priorities
+        scaled_priorities = np.power(self.advantages, self.alpha)
+        total_priority = np.sum(scaled_priorities)
+        probabilities = scaled_priorities / total_priority
+
+        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities, replace=True)
+        batch = [self.buffer[i] for i in indices]
+
+        return {k: [d[k] for d in batch] if batch[0][k] is not None else None for k in batch[0]}
+    
+class DapoReplayBuffer(ReplayBuffer):
+    # implementation of the SSR replay buffer from https://arxiv.org/pdf/2504.08837
+    def __init__(self, capacity, alpha=1.0):
+        super().__init__(capacity)
+        self.alpha = alpha
+        self.weights = []
+
+    def add(self, experience):
+        EPS = 0.0001  # ensures we get non-zero advs when the buffer contains all 0 advantages
+        advantage = experience["advantages"].item()
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+            self.weights.append(1.0)  # Store absolute advantage
+        elif abs(advantage) > EPS:
+            # Replace the oldest entry if the buffer is full and adv is positive
+            self.buffer.pop(0)
+            self.weights.pop(0)
+            self.buffer.append(experience)
+            self.weights.append(1.0)
+
+    def sample(self, batch_size):
+        if not self.buffer:
+            raise ValueError("Buffer is empty. Cannot sample from an empty buffer.")
+
+        # Convert advantages to priorities
+        scaled_priorities = np.power(self.weights, self.alpha)
+        total_priority = np.sum(scaled_priorities)
+        probabilities = scaled_priorities / total_priority
+
+        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities, replace=False)
+        batch = [self.buffer[i] for i in indices]
+
+        return {k: [d[k] for d in batch] if batch[0][k] is not None else None for k in batch[0]}
 
 
 class RepeatSampler(Sampler):
@@ -223,6 +343,30 @@ def split_tensor_dict(
         }
         for i in range(num_chunks)
     ]
+
+
+def combine_tensor_dict(split_dicts: list[dict[str, Optional[torch.Tensor]]]) -> dict[str, Optional[torch.Tensor]]:
+    """
+    Combines a list of dictionaries containing tensors into a single dictionary by
+    concatenating the tensors along the first dimension.
+    Example:
+        >>> d1 = {"x": torch.tensor([[0, 1], [2, 3]]), "y": torch.tensor([[0], [1]])}
+        >>> d2 = {"x": torch.tensor([[4, 5], [6, 7]]), "y": torch.tensor([[2], [3]])}
+        >>> d3 = {"x": torch.tensor([[8, 9], [10, 11]]), "y": torch.tensor([[4], [5]])}
+        >>> combine_tensor_dict([d1, d2, d3])
+        {
+            "x": tensor([[ 0,  1], [ 2,  3], [ 4,  5], [ 6,  7], [ 8,  9], [10, 11]]),
+            "y": tensor([[0], [1], [2], [3], [4], [5]])
+        }
+    """
+    combined_dict = {}
+    keys = split_dicts[0].keys()
+
+    for key in keys:
+        tensors = [d[key] for d in split_dicts if d[key] is not None]
+        combined_dict[key] = torch.stack(tensors, dim=0) if tensors else None
+
+    return combined_dict
 
 
 def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
@@ -547,7 +691,22 @@ class GRPOTrainer(Trainer):
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
         # `_get_train_sampler` and `_prepare_inputs`.
-        self._buffered_inputs = None
+        if args.replay_buffer_class == "ReplayBuffer":
+            self.replay_buffer = ReplayBuffer(capacity=args.generation_batch_size)
+        elif args.replay_buffer_class == "SSRReplayBuffer":
+            self.replay_buffer = SSRReplayBuffer(
+                capacity=args.generation_batch_size * args.ssr_capacity_scalar,
+                alpha=args.ssr_alpha,
+            )
+        elif args.replay_buffer_class == "DapoReplayBuffer":
+            self.replay_buffer = DapoReplayBuffer(
+                capacity=args.generation_batch_size * args.ssr_capacity_scalar,
+                alpha=args.ssr_alpha,
+            )
+        else:
+            raise ValueError(
+                f"Invalid `replay_buffer_class` passed to `GRPOConfig`. Expected either 'ReplayBuffer' or 'SSRReplayBuffer', but got {self.args.replay_buffer_class}."
+            )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
@@ -621,6 +780,7 @@ class GRPOTrainer(Trainer):
             "prompt": deque(maxlen=maxlen),
             "completion": deque(maxlen=maxlen),
             "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
+            "advantages": deque(maxlen=maxlen),
         }
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
@@ -636,9 +796,11 @@ class GRPOTrainer(Trainer):
                 )
 
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                self.vllm_client = VLLMClient(
-                    args.vllm_server_host, args.vllm_server_port, connection_timeout=args.vllm_server_timeout
-                )
+                if args.vllm_server_base_url is not None:
+                    base_url = args.vllm_server_base_url
+                else:
+                    base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+                self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
                 self.vllm_client.init_communicator()
 
             elif self.vllm_mode == "colocate":
@@ -771,7 +933,7 @@ class GRPOTrainer(Trainer):
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
 
-    def _get_train_sampler(self) -> Sampler:
+    def _get_train_sampler(self, dataset: Optional[Dataset] = None) -> Sampler:
         # Returns a sampler that
         # 1. ensures each prompt is repeated across multiple processes. This guarantees that identical prompts are
         #    distributed to different GPUs, allowing rewards to be computed and normalized correctly within each prompt
@@ -783,7 +945,6 @@ class GRPOTrainer(Trainer):
         # In the following figure, the values are the prompt indices. The first row shows the first sampled batch, the
         # second row shows the second sampled batch, and so on.
         #
-        #                                      |    Accum step 0     |
         #                                      |   GPU 0  |   GPU 1  |
         #
         #                 global_step   step    <-───>  num_generations=2
@@ -797,9 +958,10 @@ class GRPOTrainer(Trainer):
         #                      2          4    12  12  13  13  14  14   <- Generate for the second `steps_per_generation` (prompts 12 to 23); store the completions; use the first slice to compute the loss
         #                      2          5    15  15  16  16  17  17   <- Take the stored generations and use the second slice to compute the loss
         #                                          ...
-
+        if dataset is None:
+            dataset = self.train_dataset
         return RepeatSampler(
-            data_source=self.train_dataset,
+            data_source=dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.generation_batch_size // self.num_generations,
             repeat_count=self.num_iterations * self.args.steps_per_generation,
@@ -983,14 +1145,16 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
         if mode == "train":
             generate_every = self.args.steps_per_generation * self.num_iterations
-            if self._step % generate_every == 0 or self._buffered_inputs is None:
+            if self._step % generate_every == 0 or len(self.replay_buffer) == 0:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
                 # we shuffle the generation batch to ensure that the order of prompts is randomized
                 # across different steps, onl relevant if the generation batch is larger than the optimization batch
                 generation_batch_shuffled = shuffle_dict_list(generation_batch)
-                self._buffered_inputs = split_tensor_dict(generation_batch_shuffled, self.args.steps_per_generation)
-            inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
+                self.replay_buffer.add_batch(generation_batch_shuffled)
+
+            inputs = self.replay_buffer.sample(self.args.per_device_train_batch_size)
+
             self._step += 1
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
@@ -1077,10 +1241,12 @@ class GRPOTrainer(Trainer):
                     orig_size = len(prompts_text)
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
-                    prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                else:
+                    all_prompts_text = prompts_text
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
@@ -1127,6 +1293,9 @@ class GRPOTrainer(Trainer):
             [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
         ]
 
+        # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
+        completion_lengths = completion_mask.sum(1)
+
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
             truncated_completions = ~is_eos.any(dim=1)
@@ -1160,13 +1329,16 @@ class GRPOTrainer(Trainer):
             completions = completions_text
 
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+
+        # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the num of generations
+        keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
+        reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
         ):
             with profiling_context(self, reward_func_name):
-                if isinstance(
-                    reward_func, nn.Module
-                ):  # Module instead of PretrainedModel for compat with compiled models
+                if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
@@ -1179,10 +1351,6 @@ class GRPOTrainer(Trainer):
                     with torch.inference_mode():
                         rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
                 else:
-                    # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the number
-                    # of generations
-                    keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
-                    reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
                     output_reward_func = reward_func(
                         prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
                     )
@@ -1212,6 +1380,7 @@ class GRPOTrainer(Trainer):
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
@@ -1225,30 +1394,30 @@ class GRPOTrainer(Trainer):
             self.accelerator.process_index * len(prompts),
             (self.accelerator.process_index + 1) * len(prompts),
         )
+        all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
 
         # Log the metrics
         if mode == "train":
-            self.state.num_input_tokens_seen += self.accelerator.gather_for_metrics(attention_mask.sum()).sum().item()
+            self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
-        # log completion lengths, mean, min, max
-        agg_completion_mask = self.accelerator.gather_for_metrics(completion_mask.sum(1))
-        self._metrics[mode]["completions/mean_length"].append(agg_completion_mask.float().mean().item())
-        self._metrics[mode]["completions/min_length"].append(agg_completion_mask.float().min().item())
-        self._metrics[mode]["completions/max_length"].append(agg_completion_mask.float().max().item())
+        # Log completion lengths, mean, min, max
+        agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
-        # identify sequences that terminated with EOS and log their lengths
-        agg_terminated_with_eos = self.accelerator.gather_for_metrics(is_eos.any(dim=1))
-        term_completion_mask = agg_completion_mask[agg_terminated_with_eos]
-        clipped_completions_ratio = 1 - len(term_completion_mask) / len(agg_completion_mask)
+        # Identify sequences that terminated with EOS and log their lengths
+        agg_terminated_with_eos = self.accelerator.gather(is_eos.any(dim=1))
+        term_completion_lengths = agg_completion_lengths[agg_terminated_with_eos]
+        clipped_completions_ratio = 1 - len(term_completion_lengths) / len(completion_lengths)
         self._metrics[mode]["completions/clipped_ratio"].append(clipped_completions_ratio)
-        if len(term_completion_mask) == 0:
-            # edge case where no completed sequences are found
-            term_completion_mask = torch.zeros(1, device=device)
-        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_mask.float().mean().item())
-        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_mask.float().min().item())
-        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_mask.float().max().item())
+        if len(term_completion_lengths) == 0:  # edge case where no terminated sequences are found
+            term_completion_lengths = torch.zeros(1, device=device)
+        self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
+        self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
+        self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
         # Calculate mean reward per function, but only for samples where the function was applied (non-NaN values)
         for i, reward_func_name in enumerate(self.reward_func_names):
@@ -1258,12 +1427,14 @@ class GRPOTrainer(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
         self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
+        self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
         # Unpad the prompt and completion ids to optimise memory: https://github.com/huggingface/trl/pull/3495
         unpadded_prompt_ids = []
@@ -1278,7 +1449,7 @@ class GRPOTrainer(Trainer):
             if len(indices) > 0:
                 start = indices[0]
                 end = indices[-1] + 1
-                if prompt_ids_length >= end:
+                if prompt_ids_length > end:
                     raise ValueError(
                         f"End index {end} exceeds prompt_ids_length {prompt_ids_length}. "
                         "This can happen if the attention mask is not correctly set."
@@ -1293,9 +1464,11 @@ class GRPOTrainer(Trainer):
                     unpadded_per_token_logps.append(old_logps[: end - prompt_ids_length])
             else:
                 # case where the attention mask is all zeros, e.g. when mask_truncated_completions is enabled
-                unpadded_prompt_ids.append(None)
-                unpadded_completion_ids.append(None)
-                unpadded_per_token_logps.append(None)
+                raise ValueError(
+                    "Attention mask is all zeros"
+                    f" for prompt {p_ids.tolist()} and completion {c_ids.tolist()}. "       
+                    
+                )
 
         return {
             "unpadded_prompt_ids": unpadded_prompt_ids,
@@ -1347,8 +1520,8 @@ class GRPOTrainer(Trainer):
 
         mode = "train" if self.model.training else "eval"
         if self.beta != 0.0:
-            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
+            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
+        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
         return loss
 
     @profiling_decorator
@@ -1427,13 +1600,11 @@ class GRPOTrainer(Trainer):
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
+        # Two-sided clipping
         if self.args.delta is not None:
-            # Use clamp instead of min to handle tensor-float comparison
-            per_token_loss1 = torch.clamp(coef_1, max=self.args.delta) * advantages.unsqueeze(1)
-        else:
-            # Original GRPO clipping (only lower bound implicitly applied by the final min)
-            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+            coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
@@ -1453,7 +1624,7 @@ class GRPOTrainer(Trainer):
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).nanmean().item())
+            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
@@ -1464,13 +1635,13 @@ class GRPOTrainer(Trainer):
         high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
         clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
 
-        gathered_low_clip = self.accelerator.gather_for_metrics(low_clip)
+        gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather_for_metrics(high_clip)
+        gathered_high_clip = self.accelerator.gather(high_clip)
         self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather_for_metrics(clip_ratio)
+        gathered_clip_ratio = self.accelerator.gather(clip_ratio)
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
 
@@ -1504,6 +1675,7 @@ class GRPOTrainer(Trainer):
                     self._textual_logs["prompt"],
                     self._textual_logs["completion"],
                     self._textual_logs["rewards"],
+                    self._textual_logs["advantages"],
                     self.state.global_step,
                     self.num_completions_to_print,
                 )
@@ -1516,6 +1688,7 @@ class GRPOTrainer(Trainer):
                     "prompt": self._textual_logs["prompt"],
                     "completion": self._textual_logs["completion"],
                     **self._textual_logs["rewards"],
+                    "advantage": self._textual_logs["advantages"],
                 }
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
