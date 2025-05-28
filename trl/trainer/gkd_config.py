@@ -45,6 +45,10 @@ class GKDConfig(SFTConfig):
         seq_kd (`bool`, *optional*, defaults to `False`):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
             on teacher-generated output).
+        use_transformers_paged (`bool`, *optional*, defaults to `True`):
+            Whether to use the `transformers` paged implementation for generation. If set to `True`, the
+            `transformers` paged implementation will be used for generation instead of the default padded
+            implementation.
     """
 
     temperature: float = field(
@@ -93,6 +97,23 @@ class GKDConfig(SFTConfig):
         metadata={
             "help": "Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised "
             "FT on teacher-generated output)."
+        },
+    )
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
+            "`transformers` paged implementation will be used for generation instead of the default padded "
+            "implementation."
+        },
+    )
+    ds3_gather_for_generation: bool = field(
+        default=True,
+        metadata={
+            "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
+            "generation, improving generation speed. However, disabling this option allows training models that "
+            "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation. Disabling this option "
+            "is not compatible with vLLM generation."
         },
     )
 
