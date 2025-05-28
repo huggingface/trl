@@ -47,6 +47,7 @@ from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
 from transformers.utils import is_peft_available, is_rich_available
+from transformers import AutoModelForSequenceClassification
 
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
@@ -362,6 +363,7 @@ class PPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         peft_config: Optional["PeftConfig"] = None,
         use_only_step_method: bool = False,
+        share_same_value_and_policy_lm_backbone: bool = False,
     ) -> None:
         if ref_model is model:
             raise ValueError(
@@ -373,6 +375,24 @@ class PPOTrainer(Trainer):
         self.processing_class = processing_class
         self.policy_model = model
         self.use_only_step_method = use_only_step_method
+        self.share_same_value_and_policy_lm_backbone = share_same_value_and_policy_lm_backbone
+
+        if self.share_same_value_and_policy_lm_backbone:
+            if value_model is not None:
+                raise ValueError(
+                    "You cannot pass a `value_model` when `share_same_value_and_policy_lm_backbone` is set to True."
+                )
+            value_model = AutoModelForSequenceClassification.from_config(
+                self.policy_model.config
+            )
+            value_model.num_labels = 1
+            value_model.classifier = nn.Linear(self.policy_model.config.hidden_size, 1)
+            setattr(value_model, value_model.base_model_prefix, getattr(self.policy_model, self.policy_model.base_model_prefix))
+        else:
+            if value_model is None:
+                raise ValueError(
+                    "You must pass a `value_model` when `share_same_value_and_policy_lm_backbone` is set to False."
+                )
 
         if data_collator is None:
             data_collator = DataCollatorWithPadding(self.processing_class)
