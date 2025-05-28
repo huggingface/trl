@@ -145,12 +145,12 @@ class SSRReplayBuffer(ReplayBuffer):
         if len(self.buffer) < self.capacity:
             self.buffer.append(experience)
             self.advantages.append(abs(advantage) + EPS)  # Store absolute advantage
-        else:
-            # Replace the oldest entry if the buffer is full
-            self.buffer.pop(0)
-            self.advantages.pop(0)
-            self.buffer.append(experience)
-            self.advantages.append(abs(advantage))
+        elif abs(advantage) > EPS:
+                # Replace the oldest entry if the buffer is full and adv is non zero
+                self.buffer.pop(0)
+                self.advantages.pop(0)
+                self.buffer.append(experience)
+                self.advantages.append(abs(advantage))
 
     def sample(self, batch_size):
         if not self.buffer:
@@ -162,6 +162,40 @@ class SSRReplayBuffer(ReplayBuffer):
         probabilities = scaled_priorities / total_priority
 
         indices = np.random.choice(len(self.buffer), batch_size, p=probabilities, replace=True)
+        batch = [self.buffer[i] for i in indices]
+
+        return {k: [d[k] for d in batch] if batch[0][k] is not None else None for k in batch[0]}
+    
+class DapoReplayBuffer(ReplayBuffer):
+    # implementation of the SSR replay buffer from https://arxiv.org/pdf/2504.08837
+    def __init__(self, capacity, alpha=1.0):
+        super().__init__(capacity)
+        self.alpha = alpha
+        self.weights = []
+
+    def add(self, experience):
+        EPS = 0.0001  # ensures we get non-zero advs when the buffer contains all 0 advantages
+        advantage = experience["advantages"].item()
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(experience)
+            self.weights.append(1.0)  # Store absolute advantage
+        elif abs(advantage) > EPS:
+            # Replace the oldest entry if the buffer is full and adv is positive
+            self.buffer.pop(0)
+            self.weights.pop(0)
+            self.buffer.append(experience)
+            self.weights.append(1.0)
+
+    def sample(self, batch_size):
+        if not self.buffer:
+            raise ValueError("Buffer is empty. Cannot sample from an empty buffer.")
+
+        # Convert advantages to priorities
+        scaled_priorities = np.power(self.weights, self.alpha)
+        total_priority = np.sum(scaled_priorities)
+        probabilities = scaled_priorities / total_priority
+
+        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities, replace=False)
         batch = [self.buffer[i] for i in indices]
 
         return {k: [d[k] for d in batch] if batch[0][k] is not None else None for k in batch[0]}
@@ -661,6 +695,11 @@ class GRPOTrainer(Trainer):
             self.replay_buffer = ReplayBuffer(capacity=args.generation_batch_size)
         elif args.replay_buffer_class == "SSRReplayBuffer":
             self.replay_buffer = SSRReplayBuffer(
+                capacity=args.generation_batch_size * args.ssr_capacity_scalar,
+                alpha=args.ssr_alpha,
+            )
+        elif args.replay_buffer_class == "DapoReplayBuffer":
+            self.replay_buffer = DapoReplayBuffer(
                 capacity=args.generation_batch_size * args.ssr_capacity_scalar,
                 alpha=args.ssr_alpha,
             )
