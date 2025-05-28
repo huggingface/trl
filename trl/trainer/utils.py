@@ -1720,7 +1720,12 @@ def selective_log_softmax(logits, index):
 
 
 def print_prompt_completions_sample(
-    prompts: list[str], completions: list[str], rewards: dict[str, list[float]], step: int, num_samples: int = None
+    prompts: list[str],
+    completions: list[str],
+    rewards: dict[str, list[float]],
+    advantages: list[float],
+    step: int,
+    num_samples: int = None,
 ) -> None:
     """
     Print out a sample of model completions to the console with multiple reward metrics.
@@ -1735,6 +1740,8 @@ def print_prompt_completions_sample(
             List of completions corresponding to the prompts.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
+        advantages (`list[float]`):
+            List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int` or `None`, *optional*, defaults to `None`):
@@ -1746,16 +1753,17 @@ def print_prompt_completions_sample(
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
     >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
-    >>> print_prompt_completions_sample(prompts, completions, rewards, 42)
-    ╭────────────────────── Step 42 ───────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┘ │
-    ╰──────────────────────────────────────────────────────╯
+    >>> advantages = [0.987, 0.654]
+    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
+    ╭──────────────────────────── Step 42 ─────────────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+    ╰──────────────────────────────────────────────────────────────────╯
     ```
     """
     if not is_rich_available():
@@ -1771,6 +1779,7 @@ def print_prompt_completions_sample(
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
+    table.add_column("Advantage", style="bold magenta", justify="right")
 
     # Some basic input validation
     if num_samples is not None:
@@ -1785,10 +1794,11 @@ def print_prompt_completions_sample(
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
+        advantages = [advantages[i] for i in indices]
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
-        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values)
+        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values, f"{advantages[i]:.2f}")
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
