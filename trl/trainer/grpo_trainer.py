@@ -995,17 +995,62 @@ class GRPOTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompts = [x["prompt"] for x in inputs]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        prompts = [x.get("prompt", x.get("prompt_content")) for x in inputs]
+        raw_prompt_lists = prompts
 
-        # if custom processor was passed in, use it to handle the prompts
+        if is_conversational(inputs[0]):
+            rp_dicts = [{"prompt": lst} for lst in raw_prompt_lists]
+            prompts_text = [maybe_apply_chat_template(d, self.processing_class)["prompt"] for d in rp_dicts]
+        else:
+            prompts_text = raw_prompt_lists
+
+        images, audios, videos = [], [], []
+        for rp_list in raw_prompt_lists:
+            img_buf, aud_buf, vid_buf = [], [], []
+            if isinstance(rp_list, list):
+                for msg in rp_list:
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        for seg in content:
+                            if not isinstance(seg, dict):
+                                continue
+                            t = seg.get("type")
+                            if t == "image" and "image" in seg:
+                                img_buf.append(seg["image"])
+                            elif t == "audio" and "audio" in seg:
+                                aud_buf.append(seg["audio"])
+                            elif t == "video" and "video" in seg:
+                                vid_buf.append(seg["video"])
+
+            images.append(img_buf)
+            audios.append(aud_buf)
+            videos.append(vid_buf)
+
+        processor_kwargs: dict[str, Any] = {"text": prompts_text}
+        if any(images):
+            processor_kwargs["images"] = images
+        if any(audios):
+            processor_kwargs["audio"] = audios
+        if any(videos):
+            processor_kwargs["video"] = videos
+
         if isinstance(self.processing_class, PreTrainedTokenizerBase):
             prompt_inputs = self.processing_class(
-                text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+                **processor_kwargs,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
             )
         else:
-            prompt_inputs = self.processing_class.apply_chat_template(
-                prompts, return_tensors="pt", padding=True, addpadding_side="left", add_generation_prompt=True, tokenize=True, return_dict=True
+            prompt_inputs = self.processing_class(
+                **processor_kwargs,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
             )
 
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
