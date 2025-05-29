@@ -25,7 +25,8 @@ python examples/scripts/gkd.py \
     --logging_steps 10 \
     --num_train_epochs 1 \
     --push_to_hub \
-    --gradient_checkpointing
+    --gradient_checkpointing \
+    --bidirectional
 
 # LoRA:
 python examples/scripts/gkd.py \
