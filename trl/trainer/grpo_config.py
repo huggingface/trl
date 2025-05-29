@@ -153,6 +153,8 @@ class GRPOConfig(TrainingArguments):
             are normalized by the standard deviation, ensuring they have unit variance. If `False`, no scaling is
             applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
             as scaling by the standard deviation introduces a question-level difficulty bias.
+        use_self_certainty (`bool`, *optional*, defaults to `False`):
+            Whether to use self-certainty for the rewards. If `True`, the self-certainty is computed for each token. TODO:
         loss_type (`str`, *optional*, defaults to `"bnpo"`):
             Specifies the loss formulation to use. Supported values are:
 
@@ -431,6 +433,13 @@ class GRPOConfig(TrainingArguments):
             "the rewards are normalized by the standard deviation, ensuring they have unit variance. If `False`, no "
             "scaling is applied. The Dr. GRPO paper recommends not scaling the rewards, as scaling by the standard "
             "deviation introduces a question-level difficulty bias."
+        },
+    )
+    use_self_certainty: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use self-certainty for the rewards. If `True`, the self-certainty is computed for "
+            "each token. TODO: This feature is not yet implemented."
         },
     )
     loss_type: str = field(
