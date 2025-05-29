@@ -217,6 +217,31 @@ class GKDTrainer(SFTTrainer):
         else:
             return jsd
 
+    def compute_kd_loss(self, student, teacher, inputs):
+        # Forward pass for student
+        outputs_student = student(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
+        )
+        teacher.eval()
+        with torch.no_grad():
+            outputs_teacher = teacher(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+            )
+        prompt_lengths = inputs["prompts"].shape[1]
+        shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
+        shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
+        shifted_labels = inputs["labels"][:, prompt_lengths:]
+        loss = self.generalized_jsd_loss(
+            student_logits=shifted_student_logits,
+            teacher_logits=shifted_teacher_logits,
+            labels=shifted_labels,
+            beta=self.beta,
+        )
+        empty_cache()
+        return loss
+
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         # compute student output
         outputs_student = model(
@@ -301,6 +326,16 @@ class GKDTrainer(SFTTrainer):
             inputs["input_ids"] = new_input_ids
             inputs["attention_mask"] = new_attention_mask
             inputs["labels"] = new_labels
+
+        # --- Bidirectional KD logic ---
+        if getattr(self.args, "bidirectional", False):
+            # Student learns from teacher
+            loss = self.compute_kd_loss(model, self.teacher_model, inputs)
+            # Teacher learns from student
+            reverse_loss = self.compute_kd_loss(self.teacher_model, model, inputs)
+            loss = (loss + reverse_loss) / 2
+            return loss
+        # --- End bidirectional block ---
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
