@@ -332,6 +332,8 @@ class DPOTrainer(Trainer):
         self.use_logits_to_keep = args.use_logits_to_keep
 
         if args.padding_free:
+            if data_collator is not None:
+                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if model.config._attn_implementation != "flash_attention_2":
                 warnings.warn(
                     "Padding-free training is enabled, but the attention implementation is not set to "
@@ -340,6 +342,12 @@ class DPOTrainer(Trainer):
                     "other implementations may lead to unexpected behavior. To ensure compatibility, set "
                     "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
                     "attention mechanism can handle flattened sequences."
+                )
+            if args.per_device_train_batch_size == 1:
+                warnings.warn(
+                    "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
+                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "to at least 2."
                 )
         self.padding_free = args.padding_free
 
