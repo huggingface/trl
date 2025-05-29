@@ -9,7 +9,7 @@ on:
 
 jobs:
    build:
-    uses: qgallouedec/doc-builder/.github/workflows/build_main_documentation.yml@main
+    uses: qgallouedec/doc-builder/.github/workflows/build_main_documentation.yml@no_dev
     with:
       commit_sha: ${{ github.sha }}
       package: trl

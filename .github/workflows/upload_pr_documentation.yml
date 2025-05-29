@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    uses: qgallouedec/doc-builder/.github/workflows/upload_pr_documentation.yml@main
+    uses: qgallouedec/doc-builder/.github/workflows/upload_pr_documentation.yml@no_dev
     with:
       package_name: trl
     secrets:
