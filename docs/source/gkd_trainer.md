@@ -96,3 +96,9 @@ The dataset should be formatted as a list of "messages" where each message is a 
 ## GKDConfig
 
 [[autodoc]] GKDConfig
+
+## Bidirectional Knowledge Distillation
+
+Set `bidirectional=True` in your config or pass `--bidirectional` to the script to enable mutual learning between student and teacher models.  
+This feature is based on recent research and may improve performance for certain tasks.  
+See [this paper (2024)](https://arxiv.org/pdf/2505.18120) for more details.
