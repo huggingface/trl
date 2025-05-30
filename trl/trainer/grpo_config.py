@@ -208,6 +208,15 @@ class GRPOConfig(TrainingArguments):
         default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
+            )
+        },
+    )
     gradient_checkpointing: bool = field(
         default=True,
         metadata={
