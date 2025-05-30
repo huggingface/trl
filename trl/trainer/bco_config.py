@@ -23,6 +23,10 @@ class BCOConfig(TrainingArguments):
     r"""
     Configuration class for the [`BCOTrainer`].
 
+    This class includes only the parameters that are specific to BCO training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.

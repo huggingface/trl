@@ -23,8 +23,9 @@ class IterativeSFTConfig(TrainingArguments):
     r"""
     Configuration class for the [`IterativeSFTTrainer`].
 
-    Only the parameters specific to iterative SFT training are listed here. For details on other parameters, refer to the
-    [`~transformers.TrainingArguments`] documentation.
+    This class includes only the parameters that are specific to Iterative SFT training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
