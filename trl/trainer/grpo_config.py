@@ -129,9 +129,6 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        learning_rate (`float`, *optional*, defaults to `1e-6`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
         beta (`float`, *optional*, defaults to `0.04`):
             KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
             speed, but may be numerically unstable for long training runs.
@@ -205,6 +202,12 @@ class GRPOConfig(TrainingArguments):
         _VALID_DICT_FIELDS.append("model_init_kwargs")
     else:
         _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=1e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
 
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[Union[dict, str]] = field(
@@ -381,13 +384,6 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    learning_rate: float = field(
-        default=1e-6,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "`transformers.TrainingArguments`."
-        },
-    )
     beta: float = field(
         default=0.04,
         metadata={

@@ -32,9 +32,6 @@ class CPOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        learning_rate (`float`, *optional*, defaults to `1e-6`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
@@ -82,13 +79,12 @@ class CPOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
     """
 
+    # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=1e-6,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "`transformers.TrainingArguments`."
-        },
+        metadata={"help": "The initial learning rate for AdamW."},
     )
+
     max_length: Optional[int] = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},

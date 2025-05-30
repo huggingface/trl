@@ -32,9 +32,6 @@ class OnlineDPOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        learning_rate (`float`, *optional*, defaults to `5e-7`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
         reward_model_path (`str` or `None`, *optional*, defaults to `None`):
             Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both.
         judge (`str` or `None`, *optional*, defaults to `None`):
@@ -76,13 +73,12 @@ class OnlineDPOConfig(TrainingArguments):
             capacity of a single GPU, albeit at the cost of slower generation.
     """
 
+    # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=5e-7,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "transformers.TrainingArguments."
-        },
+        metadata={"help": "The initial learning rate for AdamW."},
     )
+
     reward_model_path: Optional[str] = field(
         default=None,
         metadata={
