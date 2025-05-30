@@ -103,6 +103,12 @@ Note that compared to the original formulation in [DeepSeekMath: Pushing the Lim
 
 </Tip>
 
+<Tip>
+
+Note that compared to the original formulation in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300), we use  \\( \beta = 0.0 \\) by default, meaning that the KL divergence term is not used. This choice is motivated by several recent studies (e.g., [citations needed]) which have shown that the KL divergence term is not essential for training with GRPO. As a result, it has become common practice to exclude it (e.g. [citation needed]). If you wish to include the KL divergence term, you can set `beta` in [GRPOConfig] to a non-zero value.
+
+</Tip>
+
 In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:
 
 $$
