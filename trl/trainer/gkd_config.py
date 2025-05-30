@@ -23,6 +23,9 @@ class GKDConfig(SFTConfig):
     """
     Configuration class for [`GKDTrainer`].
 
+    This class includes only the parameters that are specific to GKD training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
+
     Args:
         temperature (`float`, *optional*, defaults to `0.9`):
             Temperature for sampling. The higher the temperature, the more random the completions.
