@@ -48,6 +48,14 @@ class IterativeSFTConfig(TrainingArguments):
             Whether to optimize CUDA cache for slightly more memory-efficient training.
     """
 
+    # Parameters whose default values are overridden from TrainingArguments
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+
     # Parameters that control the model
     model_init_kwargs: Optional[dict[str, Any]] = field(
         default=None,

@@ -1067,6 +1067,14 @@ class OnPolicyConfig(TrainingArguments):
             Whether to push the model to the Hub after training.
     """
 
+    # Parameters whose default values are overridden from TrainingArguments
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+
     run_name: Optional[str] = field(
         default=None,
         metadata={"help": "Name of the run."},

@@ -77,7 +77,7 @@ class BCOConfig(TrainingArguments):
             Maximum value of the density ratio. The estimated density ratio is clamped to this value.
     """
 
-    # Arguments whose default values are overridden from TrainingArguments
+    # Parameters whose default values are overridden from TrainingArguments
     gradient_checkpointing: bool = field(
         default=True,
         metadata={

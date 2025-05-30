@@ -208,6 +208,12 @@ class GRPOConfig(TrainingArguments):
         default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
 
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[Union[dict, str]] = field(
