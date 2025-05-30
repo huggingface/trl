@@ -86,6 +86,15 @@ class SFTConfig(TrainingArguments):
         default=2e-5,
         metadata={"help": "The initial learning rate for AdamW."},
     )
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": (
+                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
+                "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
     gradient_checkpointing: bool = field(
         default=True,
         metadata={
