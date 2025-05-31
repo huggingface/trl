@@ -43,6 +43,7 @@ _import_structure = {
         "PreTrainedModelWrapper",
         "create_reference_model",
         "setup_chat_format",
+        "setup_chat_template",
     ],
     "trainer": [
         "AlignPropConfig",

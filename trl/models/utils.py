@@ -167,8 +167,17 @@ def setup_chat_template(
             The updated model with resized token embeddings and EOS token configured.
         tokenizer (`~transformers.PreTrainedTokenizer`):
             The updated tokenizer with the chat template and special tokens applied.
-    """
 
+    Example:
+    ```python
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl import setup_chat_template
+    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+    model, tokenizer = setup_chat_template(model, tokenizer, source="Qwen/Qwen3-0.6B")
+    ```
+    """
+    # Load the source tokenizer
     tokenizer_source = AutoTokenizer.from_pretrained(source)
 
     # Set the chat template for the tokenizer
