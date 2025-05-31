@@ -279,7 +279,7 @@ def prepare_fsdp(model, accelerator):
         accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
         fsdp_plugin = accelerator.state.fsdp_plugin
         kwargs = {
-            "sharding_strategy": fsdp_plugin.sharding_strategy,
+            "sharding_strategy": fsdp_plugin.sharding_strategy or fsdp_plugin.reshard_after_forward,
             "cpu_offload": fsdp_plugin.cpu_offload,
             "auto_wrap_policy": fsdp_plugin.auto_wrap_policy,
             "mixed_precision": fsdp_plugin.mixed_precision_policy,

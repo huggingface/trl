@@ -45,12 +45,12 @@ from transformers import (
 )
 from transformers.utils import (
     is_peft_available,
+    is_rich_available,
     is_torch_mlu_available,
     is_torch_npu_available,
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_rich_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -978,7 +978,11 @@ def cap_exp(value, cap=-1):
     return torch.exp(torch.clamp(value, max=cap))
 
 
-def print_rich_table(df: pd.DataFrame) -> Table:
+def print_rich_table(df: pd.DataFrame) -> None:
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
+        )
     console = Console()
     table = Table(show_lines=True)
     for column in df.columns:
@@ -1614,7 +1618,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
         experiment.log_table(tabular_data=table, filename=name)
 
 
-def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the left.
 
@@ -1656,28 +1660,59 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
             [5, 6, 0]])
     ```
     """
+    _, M = mask.shape
+
     # Create copy of mask and tensors
-    mask = mask.clone()
+    mask_copy = mask.clone()
     tensors = [t.clone() for t in tensors]
 
     # Shift non-zero values to the left
-    for i in range(mask.size(0)):
-        first_one_idx = torch.nonzero(mask[i])[0].item()
-        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
-        for tensor in tensors:
-            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+    first_non_zero = mask_copy.argmax(dim=1)
+    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
+    idx_roll = (pos + first_non_zero.unsqueeze(1)) % M
+    mask_roll = mask_copy.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
 
-    # Get the first column idx that is all zeros and remove every column after that
-    empty_cols = torch.sum(mask, dim=0) == 0
-    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
-    mask = mask[:, :first_empty_col]
-    for i, tensor in enumerate(tensors):
-        tensors[i] = tensor[:, :first_empty_col]
+    # Truncate trailing columns that are all zeros in mask_roll
+    col_sums = mask_roll.sum(dim=0)
+    empty_cols = col_sums == 0
+    first_empty_col = int(empty_cols.to(torch.int8).argmax()) if empty_cols.any() else M
+    flushed_mask = mask_roll[:, :first_empty_col]
+    flushed_tensors = [t[:, :first_empty_col] for t in rolled_tensors]
 
-    if not tensors:
-        return mask
-    else:
-        return mask, *tensors
+    if not flushed_tensors:
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
+
+
+def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the right. See `flush_left` for details.
+    """
+    _, M = mask.shape
+
+    # Create copy of mask and tensors
+    mask_copy = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the right
+    flipped_mask = torch.fliplr(mask_copy)
+    first_non_zero = flipped_mask.argmax(dim=1)
+    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
+    idx_roll = (pos - first_non_zero.unsqueeze(1)) % M
+    mask_roll = mask_copy.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
+
+    # Truncate leading columns that are all zeros in mask_roll
+    col_sums = mask_roll.sum(dim=0)
+    non_empty_cols = col_sums != 0
+    first_non_empty_col = int(non_empty_cols.to(torch.int8).argmax()) if non_empty_cols.any() else M
+    flushed_mask = mask_roll[:, first_non_empty_col:]
+    flushed_tensors = [t[:, first_non_empty_col:] for t in rolled_tensors]
+
+    if not flushed_tensors:
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
 
 
 def selective_log_softmax(logits, index):
@@ -1716,7 +1751,12 @@ def selective_log_softmax(logits, index):
 
 
 def print_prompt_completions_sample(
-    prompts: list[str], completions: list[str], rewards: dict[str, list[float]], step: int, num_samples: int = None
+    prompts: list[str],
+    completions: list[str],
+    rewards: dict[str, list[float]],
+    advantages: list[float],
+    step: int,
+    num_samples: int = None,
 ) -> None:
     """
     Print out a sample of model completions to the console with multiple reward metrics.
@@ -1731,6 +1771,8 @@ def print_prompt_completions_sample(
             List of completions corresponding to the prompts.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
+        advantages (`list[float]`):
+            List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int` or `None`, *optional*, defaults to `None`):
@@ -1742,18 +1784,24 @@ def print_prompt_completions_sample(
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
     >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
-    >>> print_prompt_completions_sample(prompts, completions, rewards, 42)
-    ╭────────────────────── Step 42 ───────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┘ │
-    ╰──────────────────────────────────────────────────────╯
+    >>> advantages = [0.987, 0.654]
+    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
+    ╭──────────────────────────── Step 42 ─────────────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+    ╰──────────────────────────────────────────────────────────────────╯
     ```
     """
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_prompt_completions_sample` requires the `rich` library. Please install it with "
+            "`pip install rich`."
+        )
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 
@@ -1762,6 +1810,7 @@ def print_prompt_completions_sample(
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
+    table.add_column("Advantage", style="bold magenta", justify="right")
 
     # Some basic input validation
     if num_samples is not None:
@@ -1776,10 +1825,11 @@ def print_prompt_completions_sample(
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
+        advantages = [advantages[i] for i in indices]
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
-        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values)
+        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values, f"{advantages[i]:.2f}")
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")

@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
 import dataclasses
 import os
 import warnings
@@ -51,6 +52,7 @@ from ..data_utils import (
     pack_dataset,
     truncate_dataset,
 )
+from ..models import get_act_offloading_ctx_manager
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -395,6 +397,12 @@ class SFTTrainer(Trainer):
             **super_init_kwargs,
         )
 
+        # Initialize activation offloading context
+        if self.args.activation_offloading:
+            self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
+        else:
+            self.maybe_activation_offload_context = contextlib.nullcontext()
+
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
@@ -718,6 +726,11 @@ class SFTTrainer(Trainer):
             self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
+
+    # Override training step to add activation offloading context.
+    def training_step(self, *args, **kwargs):
+        with self.maybe_activation_offload_context:
+            return super().training_step(*args, **kwargs)
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "train" if self.model.training else "eval"
