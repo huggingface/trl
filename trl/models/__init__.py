@@ -26,6 +26,7 @@ _import_structure = {
         "prepare_deepspeed",
         "prepare_fsdp",
         "setup_chat_format",
+        "setup_chat_template",
         "unwrap_model_for_generation",
     ],
 }
@@ -52,6 +53,7 @@ if TYPE_CHECKING:
         prepare_deepspeed,
         prepare_fsdp,
         setup_chat_format,
+        setup_chat_template,
         unwrap_model_for_generation,
     )
 

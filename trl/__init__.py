@@ -43,6 +43,7 @@ _import_structure = {
         "PreTrainedModelWrapper",
         "create_reference_model",
         "setup_chat_format",
+        "setup_chat_template",
     ],
     "trainer": [
         "AlignPropConfig",
@@ -138,6 +139,7 @@ if TYPE_CHECKING:
         PreTrainedModelWrapper,
         create_reference_model,
         setup_chat_format,
+        setup_chat_template,
     )
     from .scripts import ScriptArguments, TrlParser, init_zero_verbose
     from .trainer import (

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import torch.nn as nn
 from packaging import version
-from transformers import PreTrainedModel, PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
@@ -82,6 +82,10 @@ def setup_chat_format(
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
+    <Tip warning="true">
+    We recommend using [`setup_chat_template`] instead of this function.
+    </Tip>
+
     If the model already has a chat template, this will throw an error. If you want to overwrite it, please set `tokenizer.chat_template` to `None`.
 
     Args:
@@ -116,7 +120,8 @@ def setup_chat_format(
 
     # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
     model.resize_token_embeddings(
-        len(tokenizer), pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None
+        new_num_tokens=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
     )
     # Update the model config to use the new eos & bos tokens
     if getattr(model, "config", None) is not None:
@@ -128,6 +133,69 @@ def setup_chat_format(
         model.generation_config.bos_token_id = tokenizer.bos_token_id
         model.generation_config.eos_token_id = tokenizer.eos_token_id
         model.generation_config.pad_token_id = tokenizer.pad_token_id
+
+    return model, tokenizer
+
+
+def setup_chat_template(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    source: str,
+    resize_to_multiple_of: Optional[int] = 64,
+) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+    """
+    Sets up the chat template for the tokenizer and model, copying the chat template from a source tokenizer.
+
+    This function:
+    - Get the chat template from a pretrained tokenizer specified by `source` and sets it for the provided tokenizer.
+    - Update the tokenizer's EOS token and add it to the special tokens.
+    - Resize the model's token embeddings to accommodate the new special tokens.
+    - Update the model's configuration and generation configuration to use the new EOS token.
+
+    Args:
+        model (`PreTrainedModel`):
+            Model to update.
+        tokenizer (`PreTrainedTokenizer`):
+            Tokenizer to update with a new chat template.
+        source (`str`):
+            Name or path of a pretrained tokenizer from which to copy the chat template.
+        resize_to_multiple_of (`int` or `None`, *optional*, defaults to `64`):
+            Resize the model's token embeddings to a multiple of this value. If `None`, no resizing is performed.
+
+    Returns:
+        model (`PreTrainedModel`):
+            The updated model with resized token embeddings and EOS token configured.
+        tokenizer (`~transformers.PreTrainedTokenizer`):
+            The updated tokenizer with the chat template and special tokens applied.
+
+    Example:
+    ```python
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl import setup_chat_template
+    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+    model, tokenizer = setup_chat_template(model, tokenizer, source="Qwen/Qwen3-0.6B")
+    ```
+    """
+    # Load the source tokenizer
+    tokenizer_source = AutoTokenizer.from_pretrained(source)
+
+    # Set the chat template for the tokenizer
+    tokenizer.chat_template = tokenizer_source.get_chat_template()
+
+    # Set the special tokens for the tokenizer
+    tokenizer.add_special_tokens({"additional_special_tokens": [tokenizer_source.eos_token]})
+    tokenizer.eos_token = tokenizer_source.eos_token
+
+    # Set the special tokens for the model
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    # Resize the model's token embeddings to account for the new special tokens
+    model.resize_token_embeddings(
+        new_num_tokens=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
+    )
 
     return model, tokenizer
 
