@@ -12,20 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import TYPE_CHECKING
+from .environments import CodeAgentEnvironment, DefaultEnvironment, Environment
+from .utils import E2BExecuter, ModalCodeExecuter, LocalExecuter, prepare_data_for_e2b_agent, prepare_data_for_local_agent
 
-from ..import_utils import _LazyModule
 
-
-_import_structure = {
-    "best_of_n_sampler": ["BestOfNSampler"],
-    "vllm_client": ["VLLMClient", "VLLMClientGenerationConfig"],
-}
-
-if TYPE_CHECKING:
-    from .best_of_n_sampler import BestOfNSampler
-    from .vllm_client import VLLMClient, VLLMClientGenerationConfig
-else:
-    import sys
-
-    sys.modules[__name__] = _LazyModule(__name__, globals()["__file__"], _import_structure, module_spec=__spec__)
+__all__ = [
+    "Environment",
+    "DefaultEnvironment",
+    "CodeAgentEnvironment",
+    "E2BExecuter",
+    "ModalCodeExecuter",
+    "LocalExecuter",
+    "prepare_data_for_e2b_agent",
+    "prepare_data_for_local_agent",
+]
