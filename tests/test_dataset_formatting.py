@@ -135,7 +135,7 @@ class SetupChatFormatTestCase(unittest.TestCase):
         self.assertEqual(modified_tokenizer.eos_token, _chatml.eos_token)
         self.assertEqual(modified_tokenizer.pad_token, _chatml.pad_token)
         self.assertEqual(modified_tokenizer.bos_token, _chatml.bos_token)
-        self.assertEqual((self.model.get_input_embeddings().weight.shape[0] % 123), 0)
+        self.assertEqual((modified_model.get_input_embeddings().weight.shape[0] % 123), 0)
 
     def test_example_with_setup_model(self):
         modified_model, modified_tokenizer = setup_chat_format(
