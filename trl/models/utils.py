@@ -16,11 +16,11 @@ import itertools
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import torch.nn as nn
 from packaging import version
-from transformers import PreTrainedModel, PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
@@ -76,64 +76,117 @@ FORMAT_MAPPING = {"chatml": ChatMlSpecialTokens}
 def setup_chat_format(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
-    format: str = "chatml",
+    format: Optional[Literal["chatml"]] = "chatml",
     resize_to_multiple_of: Optional[int] = None,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
-    Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
-    embedding layer of the model based on the new special tokens.
+    Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
-    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set
-    `tokenizer.chat_template` to `None` before calling this function.
+    <Tip warning="true">
+    We recommend using [`setup_chat_template`] instead of this function.
+    </Tip>
+
+    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set `tokenizer.chat_template` to `None`.
 
     Args:
-        model (`~transformers.PreTrainedModel`):
-            Model to be modified.
-        tokenizer (`~transformers.PreTrainedTokenizer`):
-            Tokenizer to be modified.
-        format (`str`, *optional*, defaults to `"chatml"`):
-            Format to be set. This can be either one of `{"chatml"}`.
-        resize_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
-            If not None, the model's embedding layer will be resized to a multiple of this number.
+        model (`~transformers.PreTrainedModel`): The model to be modified.
+        tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
+        format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
+        resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
-        model (`~transformers.PreTrainedModel`):
-            Mdified model.
-        tokenizer (`~transformers.PreTrainedTokenizer`):
-            Modified tokenizer.
+        model (`~transformers.PreTrainedModel`): The modified model.
+        tokenizer (`~transformers.PreTrainedTokenizer`): The modified tokenizer.
     """
-    # Check if model already had a chat template
+    # check if model already had a chat template
     if tokenizer.chat_template is not None:
         raise ValueError(
-            "Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None  "
-            "before calling this function."
+            "Chat template is already added to the tokenizer. If you want to overwrite it, please set it to None"
         )
 
+    # check if format available and retrieve
     if format not in FORMAT_MAPPING:
-        raise ValueError(f"Format {chat_format} not supported. Supported formats are: {', '.join(FORMAT_MAPPING.keys())}")
+        raise ValueError(f"Format {format} not available. Please use one of {FORMAT_MAPPING.keys()}")
 
     chat_format = FORMAT_MAPPING[format]()
 
-    # Set special tokens and chat template
-    tokenizer.chat_template = chat_format.chat_template
+    # set special tokens and them
     tokenizer.eos_token = chat_format.eos_token
+    tokenizer.pad_token = chat_format.pad_token
     tokenizer.bos_token = chat_format.bos_token
     tokenizer.add_special_tokens({"additional_special_tokens": [chat_format.bos_token, chat_format.eos_token]})
+    # set chat format for tokenizer
+    tokenizer.chat_template = chat_format.chat_template
 
-    # Resize embedding layer
-    # This can lead to significant speedup, see https://x.com/karpathy/status/1621578354024677377
+    # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
     model.resize_token_embeddings(
         new_num_tokens=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
-        pad_to_multiple_of=resize_to_multiple_of,
+        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
     )
-
     # Update the model config to use the new eos & bos tokens
-    model.config.bos_token_id = tokenizer.bos_token_id
-    model.config.eos_token_id = tokenizer.eos_token_id
-
+    if getattr(model, "config", None) is not None:
+        model.config.pad_token_id = tokenizer.pad_token_id
+        model.config.bos_token_id = tokenizer.bos_token_id
+        model.config.eos_token_id = tokenizer.eos_token_id
     # Update the generation config to use the new eos & bos token
-    model.generation_config.bos_token_id = tokenizer.bos_token_id
+    if getattr(model, "generation_config", None) is not None:
+        model.generation_config.bos_token_id = tokenizer.bos_token_id
+        model.generation_config.eos_token_id = tokenizer.eos_token_id
+        model.generation_config.pad_token_id = tokenizer.pad_token_id
+
+    return model, tokenizer
+
+
+def setup_chat_template(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    source: str,
+    resize_to_multiple_of: Optional[int] = 64,
+) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+    """
+    Sets up the chat template for the tokenizer and model, copying the chat template from a source tokenizer.
+
+    This function:
+    - Get the chat template from a pretrained tokenizer specified by `source` and sets it for the provided tokenizer.
+    - Update the tokenizer's EOS token and add it to the special tokens.
+    - Resize the model's token embeddings to accommodate the new special tokens.
+    - Update the model's configuration and generation configuration to use the new EOS token.
+
+    Args:
+        model (`~transformers.PreTrainedModel`):
+            Model to update.
+        tokenizer (`~transformers.PreTrainedTokenizer`):
+            Tokenizer to update with a new chat template.
+        source (`str`):
+            Name or path of a pretrained tokenizer from which to copy the chat template.
+        resize_to_multiple_of (`int` or `None`, *optional*, defaults to `64`):
+            Resize the model's token embeddings to a multiple of this value. If `None`, no resizing is performed.
+
+    Returns:
+        model (`~transformers.PreTrainedModel`):
+            The updated model with resized token embeddings and EOS token configured.
+        tokenizer (`~transformers.PreTrainedTokenizer`):
+            The updated tokenizer with the chat template and special tokens applied.
+    """
+
+    tokenizer_source = AutoTokenizer.from_pretrained(source)
+
+    # Set the chat template for the tokenizer
+    tokenizer.chat_template = tokenizer_source.get_chat_template()
+
+    # Set the special tokens for the tokenizer
+    tokenizer.add_special_tokens({"additional_special_tokens": [tokenizer_source.eos_token]})
+    tokenizer.eos_token = tokenizer_source.eos_token
+
+    # Set the special tokens for the model
+    model.config.eos_token_id = tokenizer.eos_token_id
     model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    # Resize the model's token embeddings to account for the new special tokens
+    model.resize_token_embeddings(
+        new_num_tokens=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
+    )
 
     return model, tokenizer
 
