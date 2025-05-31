@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import transformers
 from accelerate import PartialState
@@ -122,6 +123,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     completion_only_loss: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
+    sequence_parallel_size: int = 1
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
@@ -151,7 +153,40 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             )
             output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
 
+        if self.sequence_parallel_size > 1:
+            # Get local (start, end) for sequence parallelism slicing
+            total_seq_len = output["input_ids"].shape[1]
+            slice_size = total_seq_len // self.local_world_size
+            start = self.local_rank * slice_size
+            end = start + slice_size
+
+            # Generate proper position IDs for this rank
+            if "position_ids" not in output:
+                batch_size = output["input_ids"].shape[0]
+                position_ids = torch.arange(start, end, dtype=torch.long, device=output["input_ids"].device)
+                output["position_ids"] = position_ids.unsqueeze(0).expand(batch_size, -1)
+
+            # Slice all tensors
+            keys_to_slice = ["input_ids", "attention_mask", "labels", "position_ids"]
+            for key in keys_to_slice:
+                if key in output:
+                    output[key] = output[key][:, start:end]
+
+            # Now update ring attention params with sliced data
+            from ..models.ring_attn import update_ring_attn_params
+
+            update_ring_attn_params(output)
+
         return output
+
+    def __post_init__(self):
+        if self.sequence_parallel_size > 1:
+            from ..models.ring_attn import get_ring_attn_group
+
+            # Get information about our position in the SP group
+            sp_group = get_ring_attn_group()
+            self.local_rank = dist.get_rank(group=sp_group)
+            self.local_world_size = dist.get_world_size(group=sp_group)
 
 
 class SFTTrainer(Trainer):
@@ -311,7 +346,7 @@ class SFTTrainer(Trainer):
             if args.per_device_train_batch_size == 1:
                 warnings.warn(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "of 1 annihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
                 )
             data_collator = DataCollatorWithFlattening()
@@ -333,7 +368,11 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as a padding token."
                 )
             data_collator = DataCollatorForLanguageModeling(
-                pad_token_id, self.completion_only_loss, args.pad_to_multiple_of
+                pad_token_id,
+                sequence_parallel_size=args.sequence_parallel_size,
+                pad_to_multiple_of=args.sequence_parallel_size
+                if args.sequence_parallel_size is not None
+                else args.pad_to_multiple_of,
             )
 
         # Dataset
@@ -397,6 +436,39 @@ class SFTTrainer(Trainer):
             **super_init_kwargs,
         )
 
+        # Register Ring Attention for Sequence Parallelism if configured
+        if (
+            hasattr(self.args, "sequence_parallel_size")
+            and self.args.sequence_parallel_size
+            and self.args.sequence_parallel_size > 1
+        ):
+            if not dist.is_initialized():
+                warnings.warn(
+                    "torch.distributed is not initialized. Cannot register Ring Attention for Sequence Parallelism.",
+                    UserWarning,
+                )
+            else:
+                try:
+                    # Lazily import to avoid circular dependency issues if ring_attn imports Trainer parts later
+                    from ..models.ring_attn import register_ring_attn
+
+                    self.log(
+                        {
+                            "message": f"Attempting to register Ring Attention with sequence parallel size: {self.args.sequence_parallel_size}"
+                        }
+                    )
+                    register_ring_attn(
+                        sequence_parallel_degree=self.args.sequence_parallel_size,
+                        heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
+                    )
+                    self.log({"message": "Ring Attention registered successfully."})
+                except ImportError:
+                    warnings.warn(
+                        "Could not import `register_ring_attn` from `trl.models.ring_attn`. Ring Attention will not be enabled.",
+                        ImportWarning,
+                    )
+                except Exception as e:
+                    warnings.warn(f"Failed to register Ring Attention: {e}", RuntimeWarning)
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
