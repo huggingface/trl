@@ -153,9 +153,9 @@ def setup_chat_template(
     - Update the model's configuration and generation configuration to use the new EOS token.
 
     Args:
-        model (`~transformers.PreTrainedModel`):
+        model (`PreTrainedModel`):
             Model to update.
-        tokenizer (`~transformers.PreTrainedTokenizer`):
+        tokenizer (`PreTrainedTokenizer`):
             Tokenizer to update with a new chat template.
         source (`str`):
             Name or path of a pretrained tokenizer from which to copy the chat template.
@@ -163,7 +163,7 @@ def setup_chat_template(
             Resize the model's token embeddings to a multiple of this value. If `None`, no resizing is performed.
 
     Returns:
-        model (`~transformers.PreTrainedModel`):
+        model (`PreTrainedModel`):
             The updated model with resized token embeddings and EOS token configured.
         tokenizer (`~transformers.PreTrainedTokenizer`):
             The updated tokenizer with the chat template and special tokens applied.
