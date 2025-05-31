@@ -1,3 +1,7 @@
+# Note: This is a fork of `trl` implementing key-token advantage estimation https://arxiv.org/pdf/2505.16826v1
+
+## See `_compute_key_token_advantages` in trl/trainer/grpo_trainer.py for implementation!
+
 # TRL - Transformer Reinforcement Learning
 
 <div style="text-align: center">

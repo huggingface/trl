@@ -15,10 +15,13 @@
 import os
 import textwrap
 import warnings
+import math
+
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, Union, List
+from scipy.stats import fisher_exact
 
 import datasets
 import torch
@@ -80,6 +83,138 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+
+def _calculate_fisher_score(a: int, b: int, c: int, d: int) -> float:
+    """Calculate Fisher's exact test score according to Equation 4 & 5."""
+    try:
+        # Use scipy for accurate Fisher's exact test
+        contingency_table = [[a, b], [c, d]]
+        _, p_value = fisher_exact(contingency_table, alternative='two-sided')
+        
+        # Apply transformation from Equation 5
+        if p_value != 1.0:
+            fisher_score = math.exp(-2 * p_value)
+        else:
+            fisher_score = 0.0
+            
+        return fisher_score
+    except (ValueError, OverflowError):
+        # Fallback to log-space calculation for extreme cases
+        return _fisher_score_logspace(a, b, c, d)
+
+
+def _fisher_score_logspace(a: int, b: int, c: int, d: int) -> float:
+    """Fallback Fisher's exact test calculation in log-space."""
+    try:
+        N = a + b + c + d
+        
+        # Calculate log p-value using lgamma
+        log_num = (torch.lgamma(torch.tensor(float(a + b + 1))) + 
+                  torch.lgamma(torch.tensor(float(c + d + 1))) + 
+                  torch.lgamma(torch.tensor(float(a + c + 1))) + 
+                  torch.lgamma(torch.tensor(float(b + d + 1))))
+        
+        log_den = (torch.lgamma(torch.tensor(float(a + 1))) + 
+                  torch.lgamma(torch.tensor(float(b + 1))) + 
+                  torch.lgamma(torch.tensor(float(c + 1))) + 
+                  torch.lgamma(torch.tensor(float(d + 1))) + 
+                  torch.lgamma(torch.tensor(float(N + 1))))
+        
+        log_p = log_num - log_den
+        p_value = math.exp(log_p.item())
+        
+        return math.exp(-2 * p_value) if p_value != 1.0 else 0.0
+    except (ValueError, OverflowError):
+        return 0.0
+
+
+def _calculate_information_gain(a: int, b: int, c: int, d: int, N: int) -> float:
+    """Calculate Information Gain according to Equations 6 & 7."""
+    if N == 0:
+        return 0.0
+    
+    def safe_entropy(p: float) -> float:
+        return -p * math.log2(p) if p > 0 else 0.0
+    
+    # Equation 6: Calculate H(Y) - entropy of rollout correctness
+    p_correct = (a + c) / N
+    p_incorrect = (b + d) / N
+    H_Y = safe_entropy(p_correct) + safe_entropy(p_incorrect)
+    
+    # Equation 7: Calculate H(Y|X) - conditional entropy
+    H_Y_given_X = 0.0
+    
+    # When token is present (X=1)
+    if a + b > 0:
+        p_correct_given_present = a / (a + b)
+        p_incorrect_given_present = b / (a + b)
+        H_Y_given_present = safe_entropy(p_correct_given_present) + safe_entropy(p_incorrect_given_present)
+        H_Y_given_X += (a + b) / N * H_Y_given_present
+    
+    # When token is absent (X=0)  
+    if c + d > 0:
+        p_correct_given_absent = c / (c + d)
+        p_incorrect_given_absent = d / (c + d)
+        H_Y_given_absent = safe_entropy(p_correct_given_absent) + safe_entropy(p_incorrect_given_absent)
+        H_Y_given_X += (c + d) / N * H_Y_given_absent
+    
+    # Information Gain = H(Y) - H(Y|X)
+    return max(0.0, H_Y - H_Y_given_X)
+
+
+def _calculate_directional_score(
+    token: int, 
+    correct_seqs: List[List[int]], 
+    incorrect_seqs: List[List[int]], 
+    a: int, b: int, c: int, d: int,
+    lenavg: float,
+    k1: float, b_param: float, h3: float
+) -> float:
+    """Calculate directional score according to Equations 8 & 9."""
+    
+    # Concatenate sequences for BM25 term frequency calculation
+    correct_tokens = [tok for seq in correct_seqs for tok in seq]
+    incorrect_tokens = [tok for seq in incorrect_seqs for tok in seq]
+    
+    # Calculate term frequencies
+    tfT = correct_tokens.count(token)
+    tfF = incorrect_tokens.count(token)
+    
+    # Calculate average lengths of concatenated sequences
+    lenT = len(correct_tokens)
+    lenF = len(incorrect_tokens)
+    
+    # BM25-inspired normalized term frequency scores (Equation 8)
+    if lenavg > 0:
+        denomT = k1 * (1 - b_param + b_param * (lenT / (lenavg * len(correct_seqs)))) + tfT if len(correct_seqs) > 0 else 1.0
+        denomF = k1 * (1 - b_param + b_param * (lenF / (lenavg * len(incorrect_seqs)))) + tfF if len(incorrect_seqs) > 0 else 1.0
+    else:
+        denomT = k1 + tfT
+        denomF = k1 + tfF
+    
+    scoreT = (k1 + 1) * tfT / denomT if denomT > 0 else 0.0
+    scoreF = (k1 + 1) * tfF / denomF if denomF > 0 else 0.0
+    
+    # Cohen's h effect size for proportion differences
+    propT = a / (a + c) if a + c > 0 else 0.0
+    propF = b / (b + d) if b + d > 0 else 0.0
+    
+    # Safe arcsin calculation
+    def safe_arcsin_sqrt(p: float) -> float:
+        return math.asin(math.sqrt(max(0.0, min(1.0, p))))
+    
+    cohens_h = safe_arcsin_sqrt(propT) - safe_arcsin_sqrt(propF)
+    
+    # Frequency ratio term
+    if scoreT > 0 and scoreF > 0:
+        ratio_term = scoreT / scoreF - scoreF / scoreT
+    else:
+        ratio_term = 0.0
+    
+    # Final directional score (Equation 9)
+    directional_score = cohens_h + h3 * ratio_term
+    
+    return directional_score
 
 class RepeatSampler(Sampler):
     """
@@ -462,6 +597,12 @@ class GRPOTrainer(Trainer):
         else:
             self.reward_weights = torch.ones(len(reward_funcs), dtype=torch.float32)
 
+        self.h1 = args.h1
+        self.h2 = args.h2
+        self.h3 = args.h3
+        self.k1 = args.k1
+        self.b = args.b
+
         # Reward processing class
         if reward_processing_classes is None:
             reward_processing_classes = [None] * len(reward_funcs)
@@ -504,6 +645,7 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.compute_key_token_advantages = args.compute_key_token_advantages
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -933,7 +1075,7 @@ class GRPOTrainer(Trainer):
             if self.is_fsdp_enabled:
                 self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
             else:
-                for name, param in self.model.named_parameters():
+                for name, param in list(self.model.named_parameters()):
                     with gather_if_zero3([param]):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
@@ -979,6 +1121,95 @@ class GRPOTrainer(Trainer):
             # local generation batch == local eval batch
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
+
+    def _compute_key_token_advantages(
+        self, completion_ids_list: List[List[int]], rollout_advantages: torch.Tensor, rewards: torch.Tensor
+    ) -> torch.Tensor:
+        """
+        Compute token-level advantages using Key-Token Advantage Estimation (KTAE).
+        
+        Args:
+            completion_ids_list: local list of rollout token id sequences.
+            rollout_advantages: global advantage tensor, shape (N_rollouts,)
+            rewards: global reward tensor, shape (N_rollouts,)
+        
+        Returns:
+            Enhanced advantages with token-level contributions
+        """
+        # Gather completions across processes
+        all_comps = gather_object(completion_ids_list)
+        num_rollouts = len(all_comps)
+        G = self.num_generations
+        
+        if G <= 0 or num_rollouts % G != 0:
+            return rollout_advantages
+        
+        num_groups = num_rollouts // G
+        new_adv = rollout_advantages.clone()
+        
+        for i in range(num_groups):
+            start = i * G
+            end = start + G
+            group_seqs = all_comps[start:end]
+            group_rewards = rewards[start:end]
+            
+            # Divide rollouts into correct (xT) and incorrect (xF) sets
+            correct_mask = group_rewards > 0
+            correct_seqs = [seq for seq, is_correct in zip(group_seqs, correct_mask) if is_correct]
+            incorrect_seqs = [seq for seq, is_correct in zip(group_seqs, correct_mask) if not is_correct]
+            
+            # Calculate average rollout length for BM25 normalization
+            total_len = sum(len(seq) for seq in group_seqs)
+            lenavg = total_len / G if G > 0 else 0.0
+            
+            # Get all unique tokens in this group (Step 2 in Algorithm 1)
+            all_tokens = set(tok for seq in group_seqs for tok in seq)
+            
+            # Calculate token scores
+            token_scores = {}
+            
+            for tok in all_tokens:
+                # Step 5: Build contingency table
+                # a = count of correct rollouts containing token
+                a = sum(1 for seq in correct_seqs if tok in seq)
+                # b = count of incorrect rollouts containing token  
+                b = sum(1 for seq in incorrect_seqs if tok in seq)
+                # c = count of correct rollouts NOT containing token
+                c = len(correct_seqs) - a
+                # d = count of incorrect rollouts NOT containing token
+                d = len(incorrect_seqs) - b
+                
+                # Validate contingency table
+                assert a + b + c + d == G, f"Contingency table error: {a}+{b}+{c}+{d} != {G}"
+                
+                # Step 6: Calculate Fisher's exact test score
+                fisher_score = _calculate_fisher_score(a, b, c, d)
+                
+                # Step 6: Calculate Information Gain
+                ig_score = _calculate_information_gain(a, b, c, d, G)
+                
+                # Step 7: Weighted combination of association strength
+                association_strength = self.h1 * fisher_score + self.h2 * ig_score
+                
+                # Step 8 & 9: Calculate directional score using BM25-inspired frequency + Cohen's h
+                directional_score = _calculate_directional_score(
+                    tok, correct_seqs, incorrect_seqs, a, b, c, d, lenavg, self.k1, self.b, self.h3
+                )
+                
+                # Step 10: Calculate final key-token-value
+                key_token_value = association_strength * directional_score
+                
+                # Apply sigmoid normalization and center around 0
+                normalized_score = 1.0 / (1.0 + math.exp(-key_token_value)) - 0.5
+                token_scores[tok] = normalized_score
+            
+            # Step 10: Add token-level contributions to rollout advantages
+            for j, seq in enumerate(group_seqs):
+                idx = start + j
+                token_contribution = sum(token_scores.get(tok, 0.0) for tok in seq)
+                new_adv[idx] += token_contribution
+        
+        return new_adv
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1213,7 +1444,9 @@ class GRPOTrainer(Trainer):
             (self.accelerator.process_index + 1) * len(prompts),
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
-        advantages = advantages[process_slice]
+        # Apply Key-Token Advantage Estimation
+        all_process_advantages = self._compute_key_token_advantages(completion_ids_list, all_process_advantages, rewards)
+        advantages = all_process_advantages[process_slice]
 
         # Log the metrics
         if mode == "train":
