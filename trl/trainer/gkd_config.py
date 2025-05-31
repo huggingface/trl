@@ -95,6 +95,10 @@ class GKDConfig(SFTConfig):
             "FT on teacher-generated output)."
         },
     )
+        bidirectional: bool = field(
+        default=False,
+        metadata={"help": "Enable bidirectional knowledge distillation: allow student to also teach teacher."},
+    )
 
     def __post_init__(self):
         super().__post_init__()
