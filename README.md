@@ -163,6 +163,12 @@ trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
     --output_dir Qwen2.5-0.5B-SFT
 ```
 
+```bash
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
+    --dataset_name ./dataset.json \
+    --output_dir Qwen2.5-0.5B-SFT
+```
+
 **DPO:**
 
 ```bash
