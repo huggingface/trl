@@ -24,13 +24,84 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.grpo_trainer import RepeatSampler
+from trl.trainer.grpo_trainer import RepeatSampler, shuffle_tensor_dict, split_tensor_dict
 
 from .testing_utils import require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
+
+
+class SplitTensorDictTester(unittest.TestCase):
+    def test_split_equal_chunks(self):
+        x = torch.arange(12).reshape(6, 2)
+        y = torch.arange(6).reshape(6, 1)
+        tensor_dict = {"x": x, "y": y}
+
+        result = split_tensor_dict(tensor_dict, 3)
+
+        expected_x_chunks = torch.chunk(x, 3, dim=0)
+        expected_y_chunks = torch.chunk(y, 3, dim=0)
+        self.assertEqual(len(result), 3)
+        for i in range(3):
+            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
+            self.assertTrue(torch.equal(result[i]["y"], expected_y_chunks[i]))
+
+    def test_with_none_tensor(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": None}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        self.assertEqual(len(result), 2)
+        for i in range(2):
+            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
+            self.assertIsNone(result[i]["y"])
+
+
+class ShuffleTensorDictTester(unittest.TestCase):
+    def test_shuffle_preserves_shape(self):
+        x = torch.arange(6).reshape(3, 2)
+        y = torch.arange(3).reshape(3, 1)
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        self.assertEqual(shuffled["x"].shape, x.shape)
+        self.assertEqual(shuffled["y"].shape, y.shape)
+
+    def test_shuffle_consistent_across_tensors(self):
+        # Use known patterns to check alignment
+        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
+        y = torch.tensor([[1], [2], [3]])
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        # Build a reverse map from shuffled x rows to y values
+        for i in range(3):
+            x_row = shuffled["x"][i]
+            y_val = shuffled["y"][i].item()
+
+            if torch.equal(x_row, torch.tensor([10, 11])):
+                self.assertEqual(y_val, 1)
+            elif torch.equal(x_row, torch.tensor([20, 21])):
+                self.assertEqual(y_val, 2)
+            elif torch.equal(x_row, torch.tensor([30, 31])):
+                self.assertEqual(y_val, 3)
+            else:
+                self.fail("Unexpected x row in shuffled output.")
+
+    def test_none_tensor_remains_none(self):
+        x = torch.arange(6).reshape(3, 2)
+        tensor_dict = {"x": x.clone(), "y": None}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        self.assertIsNone(shuffled["y"])
+        self.assertEqual(shuffled["x"].shape, x.shape)
 
 
 class RepeatRandomSamplerTester(unittest.TestCase):
@@ -738,12 +809,12 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    def test_beta_zero_no_ref_model_and_no_kl(self):
+    def test_training_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                beta=0.0,  # set beta to 0 to test the case where the reference model is not used
+                beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1057,6 +1128,37 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
                 num_generations=6,  # the number of generations is larger than the batch size, but
                 gradient_accumulation_steps=2,  # gradient accumulation should allow that
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_delta_clipping(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                delta=2.0,  # set delta to a non-None value
                 report_to="none",
             )
             trainer = GRPOTrainer(

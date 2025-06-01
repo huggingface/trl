@@ -78,6 +78,9 @@ class SFTConfig(TrainingArguments):
             `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
             loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
             the full sequence for [language modeling](#language-modeling) datasets.
+        activation_offloading (`bool`, *optional*, defaults to `False`):
+            Whether to offload the activations to the CPU.
+
     """
 
     # Parameters that control the model
@@ -170,6 +173,10 @@ class SFTConfig(TrainingArguments):
                 "language modeling datasets."
             )
         },
+    )
+    activation_offloading: bool = field(
+        default=False,
+        metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
     # Deprecated parameters
