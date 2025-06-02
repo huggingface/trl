@@ -58,6 +58,9 @@ git checkout main
 git merge upstream/main
 ```
 
+> [!NOTE]
+> The main dev work of this repo is currently on the `smollm3` branch 
+
 ## Overview
 
 TRL is a cutting-edge library designed for post-training foundation models using advanced techniques like Supervised Fine-Tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO). Built on top of the [🤗 Transformers](https://github.com/huggingface/transformers) ecosystem, TRL supports a variety of model architectures and modalities, and can be scaled-up across various hardware setups.
