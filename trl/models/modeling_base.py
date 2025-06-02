@@ -663,7 +663,9 @@ def create_reference_model(
         param = model.get_parameter(param_name)
         param.requires_grad = False
 
-        _ref_param = ref_model.get_parameter(param_name)
+        ref_param = ref_model.get_parameter(param_name)
+        ref_param.requires_grad = False
+        ref_param.data = param.data
 
     # for all other parameters just make sure they don't use gradients
     for param_name in unshared_param_list:
