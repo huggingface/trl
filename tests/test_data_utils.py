@@ -234,49 +234,52 @@ class ApplyChatTemplateTester(unittest.TestCase):
 
     def test_apply_chat_template_with_generation_prompt_tokens(self):
         """Test that tokenizers adding generation prompt tokens work correctly with apply_chat_template."""
-        
+
         try:
             import transformers
-            tokenizer = transformers.AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", use_fast=True)
+
+            tokenizer = transformers.AutoTokenizer.from_pretrained(
+                "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", use_fast=True
+            )
         except Exception:
             # If we can't load the real tokenizer, skip the test
             self.skipTest("DeepSeek tokenizer not available")
-        
+
         # Test prompt-completion example that would previously fail
         example = {
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "completion": [{"role": "assistant", "content": "It is blue."}],
         }
-        
+
         # This should not raise a ValueError with the fix
         result = apply_chat_template(example, tokenizer)
-        
+
         # Verify the result structure
         self.assertIsInstance(result, dict)
         self.assertIn("prompt", result)
         self.assertIn("completion", result)
         self.assertIsInstance(result["prompt"], str)
         self.assertIsInstance(result["completion"], str)
-        
+
         # The completion should not be empty
         self.assertTrue(len(result["completion"]) > 0)
-        
+
         # Also test with preference data
         preference_example = {
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "chosen": [{"role": "assistant", "content": "It is blue."}],
             "rejected": [{"role": "assistant", "content": "It is green."}],
         }
-        
+
         # This should also not raise a ValueError with the fix
         preference_result = apply_chat_template(preference_example, tokenizer)
-        
+
         # Verify the preference result structure
         self.assertIsInstance(preference_result, dict)
         self.assertIn("prompt", preference_result)
         self.assertIn("chosen", preference_result)
         self.assertIn("rejected", preference_result)
-        
+
         # The completions should not be empty
         self.assertTrue(len(preference_result["chosen"]) > 0)
         self.assertTrue(len(preference_result["rejected"]) > 0)

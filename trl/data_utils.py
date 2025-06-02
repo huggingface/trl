@@ -113,7 +113,7 @@ def apply_chat_template(
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
         )
-        
+
         # For comparison with full conversations, we also need a version without generation prompt
         # This handles tokenizers like DeepSeek that add generation tokens (e.g., <think>)
         prompt_without_generation = tokenizer.apply_chat_template(
