@@ -323,7 +323,7 @@ class SFTTrainer(Trainer):
                     "in the model configuration."
                 )
             data_collator = DataCollatorWithFlattening(
-                return_flash_attn_kwargs=model.config._attn_implementation == "flash_attention_2",
+                return_flash_attn_kwargs=False,
                 return_position_ids=True,
             )
 
@@ -692,6 +692,9 @@ class SFTTrainer(Trainer):
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
             self._signature_columns = ["input_ids", "attention_mask", "completion_mask"]
+        # For the packing case with FFD, we need to store sequence_length returned by the data collator with flattening
+        if self.args.packing and self.args.packing_strategy == "ffd" and self.args.padding_free:
+            self._signature_columns.append("sequence_length")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
