@@ -813,7 +813,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
-                max_length=16,  # make sure there is at least 1 packed sequence
+                max_length=128,  # make sure there is at least 1 packed sequence
                 eval_packing=False,
                 report_to="none",
             )
@@ -825,7 +825,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
             self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
     def test_eval_packing(self):
@@ -833,7 +833,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_length=16,  # make sure there is at least 1 packed sequence
+                max_length=128,  # make sure there is at least 1 packed sequence
                 packing=True,
                 report_to="none",
             )
@@ -844,15 +844,15 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
-            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 6)  # w/ this dataset, we end up with 6 seqs
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
+            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 1)  # w/ this dataset, we end up with 6 seqs
 
     def test_no_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_length=16,  # make sure there is at least 1 packed sequence
+                max_length=128,  # make sure there is at least 1 packed sequence
                 packing=False,
                 report_to="none",
             )
