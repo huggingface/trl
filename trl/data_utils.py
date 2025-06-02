@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
+import warnings
+from collections import defaultdict
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, TypeVar, Union
 
@@ -465,6 +466,11 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
     ```
     """
+    warnings.warn(
+        "`pack_examples` is deprecated and will be removed in version 0.20.0. Use `pack_dataset` with a dataset "
+        "instead.",
+        DeprecationWarning,
+    )
     # Join  all the values into a single list
     examples = {k: sum(v, []) for k, v in examples.items()}
     # Split the values into chunks of size seq_length
@@ -472,7 +478,105 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     return examples
 
 
-def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dict[str, Any]] = None) -> DatasetType:
+def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
+    packed_columns = []
+    for column in examples.columns:
+        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
+            if isinstance(column, pa.ChunkedArray):
+                column = column.combine_chunks()
+            offsets, values = column.offsets, column.values
+            values = values[offsets[0].as_py() : offsets[-1].as_py()]
+
+            # Extract sequences using numpy for vectorized operations
+            offset_array = offsets.to_numpy()
+            starts = offset_array[:-1]
+            ends = offset_array[1:]
+            seq_lens = ends - starts
+
+            # Vectorized truncation
+            truncated_lens = np.minimum(seq_lens, seq_length)
+            truncated_ends = starts + truncated_lens
+
+            # Create sequences list with truncated values
+            sequences = list(zip(truncated_lens, starts, truncated_ends))
+
+            # Sort by length (decreasing) for First Fit Decreasing
+            sequences.sort(key=lambda x: x[0], reverse=True)
+
+            # Optimized bin packing using a priority queue approach
+            bins_by_remaining = defaultdict(list)  # remaining_space -> [bin_indices]
+            bins = []  # [(current_length, seq_indices)]
+
+            for i, (seq_len, _start, _end) in enumerate(sequences):
+                # Find bins with enough space using the dictionary
+                placed = False
+                for remaining in range(seq_len, seq_length + 1):
+                    if bins_by_remaining[remaining]:
+                        # Use the first available bin with this remaining space
+                        bin_idx = bins_by_remaining[remaining].pop()
+                        current_len, seq_indices = bins[bin_idx]
+
+                        # Update bin
+                        new_len = current_len + seq_len
+                        new_remaining = seq_length - new_len
+                        bins[bin_idx] = (new_len, seq_indices + [i])
+
+                        # Update the remaining space mapping
+                        if new_remaining > 0:
+                            bins_by_remaining[new_remaining].append(bin_idx)
+
+                        placed = True
+                        break
+
+                # If no bin fits, create new bin
+                if not placed:
+                    bin_idx = len(bins)
+                    bins.append((seq_len, [i]))
+                    remaining = seq_length - seq_len
+                    if remaining > 0:
+                        bins_by_remaining[remaining].append(bin_idx)
+
+            # Reconstruct packed values more efficiently
+            values_numpy = values.to_numpy()
+            packed_values = []
+            new_offsets = [0]
+
+            for _, seq_indices in bins:
+                for seq_idx in seq_indices:
+                    _, start, end = sequences[seq_idx]
+                    packed_values.extend(values_numpy[start:end])
+                new_offsets.append(len(packed_values))
+
+            dtype = offsets.type.to_pandas_dtype()
+            new_offsets = np.array(new_offsets, dtype=dtype)
+            packed_values = pa.array(packed_values, type=values.type)
+            column = type(column).from_arrays(new_offsets, packed_values)
+        packed_columns.append(column)
+    return pa.Table.from_arrays(packed_columns, names=examples.column_names)
+
+
+def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using a wrapped strategy."""
+    packed_columns = []
+    for column in examples.columns:
+        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
+            if isinstance(column, pa.ChunkedArray):
+                column = column.combine_chunks()
+            offsets, values = column.offsets, column.values
+            values = values[offsets[0].as_py() : offsets[-1].as_py()]
+            num_elements = len(values)
+            dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
+            offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
+            offsets = np.concatenate((offsets, [num_elements]))
+            column = type(column).from_arrays(offsets, values)
+        packed_columns.append(column)
+    return pa.Table.from_arrays(packed_columns, names=examples.column_names)
+
+
+def pack_dataset(
+    dataset: DatasetType, seq_length: int, strategy: str = "ffd", map_kwargs: Optional[dict[str, Any]] = None
+) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
 
@@ -481,6 +585,13 @@ def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dic
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
+        strategy (`str`, *optional*, defaults to `"ffd"`):
+            Packing strategy to use. Can be either:
+
+            - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
+                middle.
+            - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
+                to completely fill each packed sequence with data.
         map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
@@ -491,46 +602,29 @@ def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dic
     Example:
     ```python
     >>> from datasets import Dataset
+    >>> from trl import pack_dataset
     >>> examples = {
-    ...     "input_ids": [[1, 2], [3, 4], [5, 6], [7]],
-    ...     "attention_mask": [[1, 1], [0, 1], [1, 1], [1]],
+    ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8], [9]],
+    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]]
     ... }
     >>> dataset = Dataset.from_dict(examples)
-    >>> packed_dataset = pack_dataset(dataset, seq_length=4)
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="ffd")
     >>> packed_dataset[:]
-    {'input_ids': [[1, 2, 3, 4], [5, 6, 7]],
-     'attention_mask': [[1, 1, 0, 1], [1, 1, 1]]}
+    {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
+     'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
     ```
     """
     if map_kwargs is None:
         map_kwargs = {}
-    if isinstance(dataset, Dataset):
-        # Fast packing with pyarrow
-        def pack(examples):
-            packed_columns = []
-            for column in examples.columns:
-                if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-                    if isinstance(column, pa.ChunkedArray):
-                        column = column.combine_chunks()
-                    offsets, values = column.offsets, column.values
-                    values = values[offsets[0].as_py() : offsets[-1].as_py()]
-                    num_elements = len(values)
-                    dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
-                    offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
-                    offsets = np.concatenate((offsets, [num_elements]))
-                    column = type(column).from_arrays(offsets, values)
-                packed_columns.append(column)
-            return pa.Table.from_arrays(packed_columns, names=examples.column_names)
-
-        dataset = dataset.with_format("arrow")
-        dataset = dataset.map(pack, batched=True, **map_kwargs)
-        dataset = dataset.with_format(None)
+    # Fast packing with pyarrow
+    dataset = dataset.with_format("arrow")
+    if strategy == "ffd":
+        dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    elif strategy == "wrapped":
+        dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        dataset = dataset.map(
-            functools.partial(pack_examples, seq_length=seq_length),
-            batched=True,
-            **map_kwargs,
-        )
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'wrapped'.")
+    dataset = dataset.with_format(None)
     return dataset
 
 
