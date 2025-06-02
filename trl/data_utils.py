@@ -588,10 +588,10 @@ def pack_dataset(
         strategy (`str`, *optional*, defaults to `"ffd"`):
             Packing strategy to use. Can be either:
 
-        - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
-            middle.
-        - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle to
-            completely fill each packed sequence with data.
+            - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
+                middle.
+            - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
+                to completely fill each packed sequence with data.
         map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
