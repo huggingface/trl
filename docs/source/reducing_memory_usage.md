@@ -84,7 +84,7 @@ Packing reduces padding by merging several sequences in one row when possible. W
 
 <Tip>
 
-In TRL 0.18 and earlier, packing used a more aggressive method that reduced padding to almost nothing, but had the downside of breaking sequence continuity for a large fraction of the dataset. To revert to this strategy, use `packing_strategy="fixed"` in `SFTConfig`.
+In TRL 0.18 and earlier, packing used a more aggressive method that reduced padding to almost nothing, but had the downside of breaking sequence continuity for a large fraction of the dataset. To revert to this strategy, use `packing_strategy="wrapped"` in `SFTConfig`.
 
 </Tip>
 

@@ -439,7 +439,7 @@ class TestPackExamples(unittest.TestCase):
         self.assertEqual(dataset.to_dict(), expected_output)
 
 
-class TestPackDatasetFixed(unittest.TestCase):
+class TestPackDatasetWrapped(unittest.TestCase):
     def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
@@ -451,7 +451,7 @@ class TestPackDatasetFixed(unittest.TestCase):
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="fixed")
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         self.assertEqual(dataset.to_dict(), expected_output)
 
     def test_with_iterable_dataset(self):
@@ -465,7 +465,7 @@ class TestPackDatasetFixed(unittest.TestCase):
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="fixed")
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         num_examples = len(examples[next(iter(examples))])
         self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
 

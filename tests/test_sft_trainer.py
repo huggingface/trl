@@ -1231,7 +1231,7 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-    @parameterized.expand([("ffd",), ("fixed",)])
+    @parameterized.expand([("ffd",), ("wrapped",)])
     def test_train_packing(self, packing_strategy):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
