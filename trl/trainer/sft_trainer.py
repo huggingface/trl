@@ -294,7 +294,7 @@ class SFTTrainer(Trainer):
         if args.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
-            if args.packing:
+            if args.packing and args.packing_strategy != "ffd":
                 warnings.warn(
                     "You are passing `packing=True` and `padding_free=True` which is not recommended. Please refer "
                     "to the documentation to understand why this is not recommended."
@@ -314,7 +314,18 @@ class SFTTrainer(Trainer):
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
                 )
-            data_collator = DataCollatorWithFlattening()
+            if args.packing and model.config._attn_implementation != "flash_attention_2":
+                warnings.warn(
+                    "You are using packing with padding-free training, but the attention implementation is not set to "
+                    "'flash_attention_2'. Packing flattens batches into a single sequence, and 'flash_attention_2' is "
+                    "the only known attention mechanism that reliably supports this. Using other implementations may "
+                    "lead to unexpected behavior. To ensure compatibility, set `attn_implementation='flash_attention_2'` "
+                    "in the model configuration."
+                )
+            data_collator = DataCollatorWithFlattening(
+                return_flash_attn_kwargs=model.config._attn_implementation == "flash_attention_2",
+                return_position_ids=True,
+            )
 
         if args.completion_only_loss is None:
             first_example = next(iter(train_dataset))
@@ -659,15 +670,18 @@ class SFTTrainer(Trainer):
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
-                dataset = dataset.select_columns("input_ids")
-                dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
+                dataset: Dataset = dataset.select_columns("input_ids")
+                dataset: Dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+                dataset: Dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
-                dataset = dataset.select_columns("input_ids")
+                if "sequence_length" in dataset.column_names:
+                    dataset: Dataset = dataset.select_columns(["input_ids", "sequence_length"])
+                else:
+                    dataset: Dataset = dataset.select_columns("input_ids")
 
         return dataset
 

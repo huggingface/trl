@@ -564,25 +564,33 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
 
             # Reconstruct packed values more efficiently
             values_numpy = values.to_numpy()
-            packed_values = []
-            new_offsets = [0]
+            packed_values: list[np.dtype] = []
+            new_offsets: list[int] = [0]
+            sequence_lengths: list[list[int]] = []
 
             # Group sequences by bin assignment and concatenate them
             for bin_idx in range(len(bin_sizes)):
                 # Find all sequences assigned to this bin
                 seq_indices = np.where(bin_assignments == bin_idx)[0]
+                seq_lens_in_bin = []
                 for seq_idx in seq_indices:
                     start = starts[seq_idx]
                     end = truncated_ends[seq_idx]
                     packed_values.extend(values_numpy[start:end])
+                    seq_lens_in_bin.append(end - start)
+                sequence_lengths.append(seq_lens_in_bin)
                 new_offsets.append(len(packed_values))
 
             dtype = offsets.type.to_pandas_dtype()
             new_offsets = np.array(new_offsets, dtype=dtype)
             packed_values = pa.array(packed_values, type=values.type)
+            sequence_lengths = pa.array(sequence_lengths, type=pa.list_(pa.int32()))
             column = type(column).from_arrays(new_offsets, packed_values)
-        packed_columns.append(column)
-    return pa.Table.from_arrays(packed_columns, names=examples.column_names)
+            packed_columns.append(column)
+            packed_columns.append(sequence_lengths)
+        else:
+            packed_columns.append(column)
+    return pa.Table.from_arrays(packed_columns, names=examples.column_names + ["sequence_length"])
 
 
 def _pack_fixed(examples: pa.Table, seq_length: int) -> pa.Table:
@@ -640,7 +648,8 @@ def pack_dataset(
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="ffd")
     >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
-     'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
+     'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]
+     'sequence_length': [[3, 1], [3, 2]]}
     ```
     """
     if map_kwargs is None:
