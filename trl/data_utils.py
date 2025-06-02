@@ -556,8 +556,8 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     return pa.Table.from_arrays(packed_columns, names=examples.column_names)
 
 
-def _pack_fixed(examples: pa.Table, seq_length: int) -> pa.Table:
-    """Pack sequences in a pyarrow Table using fixed-length packing."""
+def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using a wrapped strategy."""
     packed_columns = []
     for column in examples.columns:
         if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
@@ -590,7 +590,7 @@ def pack_dataset(
 
         - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
             middle.
-        - `"fixed"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle to
+        - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle to
             completely fill each packed sequence with data.
         map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to the dataset's map method when packing examples.
@@ -620,11 +620,10 @@ def pack_dataset(
     dataset = dataset.with_format("arrow")
     if strategy == "ffd":
         dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
-    elif strategy == "fixed":
-        dataset = dataset.with_format("arrow")
-        dataset = dataset.map(_pack_fixed, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    elif strategy == "wrapped":
+        dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'fixed'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'wrapped'.")
     dataset = dataset.with_format(None)
     return dataset
 
