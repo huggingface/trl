@@ -57,6 +57,8 @@ class SFTConfig(TrainingArguments):
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
         packing (`bool`, *optional*, defaults to `False`):
             Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define sequence length.
+        packing_strategy (`str`, *optional*, defaults to `"ffd"`):
+            Strategy for packing sequences. Can be either `"ffd"` (first-fit decreasing, default), or `"fixed"`.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
@@ -134,6 +136,13 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define "
             "sequence length."
+        },
+    )
+    packing_strategy: str = field(
+        default="ffd",
+        metadata={
+            "help": "Strategy for packing sequences. Can be either `'ffd'` (first-fit decreasing, default), or "
+            "`'fixed'`."
         },
     )
     padding_free: bool = field(

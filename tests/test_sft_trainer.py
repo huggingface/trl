@@ -19,6 +19,7 @@ import unittest
 import numpy as np
 import torch
 from datasets import Dataset, Image, Sequence, load_dataset
+from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoProcessor,
@@ -1211,6 +1212,34 @@ class SFTTrainerTester2(unittest.TestCase):
                 model_init_kwargs={"attn_implementation": "flash_attention_2"},
                 bf16=True,  # flash_attention_2 only supports bf16 and fp16
                 report_to="none",
+            )
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @parameterized.expand([("ffd",), ("fixed",)])
+    def test_train_packing(self, packing_strategy):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(
+                output_dir=tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
             )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
