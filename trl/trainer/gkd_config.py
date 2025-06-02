@@ -115,7 +115,7 @@ class GKDConfig(SFTConfig):
             "FT on teacher-generated output)."
         },
     )
-    
+
     # VLLM parameters for student model
     student_use_vllm: bool = field(
         default=False,

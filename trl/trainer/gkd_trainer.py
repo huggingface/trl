@@ -50,9 +50,7 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_comet_experiment_url,
-    pad,
 )
-from ..data_utils import maybe_apply_chat_template
 
 
 if is_peft_available():
@@ -168,8 +166,8 @@ class GKDTrainer(SFTTrainer):
             if self.student_vllm_mode == "server":
                 if self.accelerator.is_main_process:
                     self.student_vllm_client = VLLMClient(
-                        args.student_vllm_server_host,
-                        args.student_vllm_server_port,
+                        host=args.student_vllm_server_host,
+                        server_port=args.student_vllm_server_port,
                         connection_timeout=args.student_vllm_server_timeout,
                     )
                     self.student_vllm_client.init_communicator()
@@ -195,13 +193,13 @@ class GKDTrainer(SFTTrainer):
         # need to keep the messages column as it is. We use the following workaround to keep the messages column.
         # Only do this if a "prompt" column doesn't already exist from user script preprocessing
         if "prompt" not in dataset.column_names:
-            if "messages" in dataset.column_names: # Check if "messages" column exists before trying to access it
+            if "messages" in dataset.column_names:  # Check if "messages" column exists before trying to access it
                 dataset = dataset.add_column("_messages", dataset["messages"])
                 dataset = super()._prepare_dataset(dataset, *args)
                 dataset = dataset.rename_column("_messages", "messages")
-            else: # If "messages" is not there (e.g. user provided text/completion), just call super
+            else:  # If "messages" is not there (e.g. user provided text/completion), just call super
                 dataset = super()._prepare_dataset(dataset, *args)
-        else: # If "prompt" column exists, assume user has preprocessed, just call super
+        else:  # If "prompt" column exists, assume user has preprocessed, just call super
             dataset = super()._prepare_dataset(dataset, *args)
         return dataset
 
@@ -242,7 +240,7 @@ class GKDTrainer(SFTTrainer):
             # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
             beta = torch.tensor(beta, dtype=student_log_probs.dtype, device=student_log_probs.device)
             mixture_log_probs = torch.logsumexp(
-                torch.stack([student_log_probs + torch.log1p(- beta), teacher_log_probs + torch.log(beta)]),
+                torch.stack([student_log_probs + torch.log1p(-beta), teacher_log_probs + torch.log(beta)]),
                 dim=0,
             )
 
@@ -329,6 +327,12 @@ class GKDTrainer(SFTTrainer):
 
     def _generate_on_policy_outputs_student_vllm(self, inputs, generation_config, pad_token_id=None):
         device = self.accelerator.device
+
+        # Update the vLLM weights if needed (similar to GRPO trainer)
+        if self.state.global_step != self._last_student_sync_step:
+            self._move_student_model_to_vllm()
+            self._last_student_sync_step = self.state.global_step
+
         # Decode the tokenized prompts from inputs["prompts"]
         # Ensure to skip special tokens and padding tokens during decoding
         prompts_text = self.processing_class.batch_decode(
@@ -416,15 +420,17 @@ class GKDTrainer(SFTTrainer):
             elif len(completion_tensor) < max_new_tokens:
                 # Pad if shorter than max_new_tokens
                 padding_needed = max_new_tokens - len(completion_tensor)
-                padded_tensor = torch.cat([
-                    completion_tensor, 
-                    torch.full((padding_needed,), pad_token_id, device=device, dtype=completion_tensor.dtype)
-                ])
+                padded_tensor = torch.cat(
+                    [
+                        completion_tensor,
+                        torch.full((padding_needed,), pad_token_id, device=device, dtype=completion_tensor.dtype),
+                    ]
+                )
                 padded_completion_ids_list.append(padded_tensor)
             else:
                 # Already the right length
                 padded_completion_ids_list.append(completion_tensor)
-        
+
         # Now all tensors are the same length, so we can stack them
         padded_completion_ids = torch.stack(padded_completion_ids_list)
 
@@ -460,10 +466,11 @@ class GKDTrainer(SFTTrainer):
                 child_module, prefix=child_prefix, visited=visited
             )  # recurse into the child
 
-        if hasattr(module, '__class__') and 'FSDP' in module.__class__.__name__:
+        if hasattr(module, "__class__") and "FSDP" in module.__class__.__name__:
             # Import FSDP here to avoid import errors if not available
             try:
                 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+
                 if isinstance(module, FSDP):
                     with FSDP.summon_full_params(module, recurse=False, writeback=False):
                         for param_name, param in module.named_parameters():
@@ -491,6 +498,7 @@ class GKDTrainer(SFTTrainer):
         if zero_stage_3:
             try:
                 import deepspeed
+
                 gather_if_zero3 = deepspeed.zero.GatheredParameters
             except ImportError:
                 gather_if_zero3 = nullcontext
@@ -500,9 +508,13 @@ class GKDTrainer(SFTTrainer):
         # Check if model is PEFT
         try:
             from peft import PeftModel
-            is_peft_model_func = lambda model: isinstance(model, PeftModel)
+
+            def is_peft_model_func(model):
+                return isinstance(model, PeftModel)
         except ImportError:
-            is_peft_model_func = lambda model: False
+
+            def is_peft_model_func(model):
+                return False
 
         if is_peft_model_func(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
@@ -520,7 +532,7 @@ class GKDTrainer(SFTTrainer):
                     for name, param in self.model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name and discard some parameters
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        if hasattr(self.model, 'prefix') and self.model.prefix in name:
+                        if hasattr(self.model, "prefix") and self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
                         if "original_module" in name:
@@ -538,7 +550,9 @@ class GKDTrainer(SFTTrainer):
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:
-                self._sync_fsdp_params_to_student_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
+                self._sync_fsdp_params_to_student_vllm(
+                    self.model
+                )  # use memory-efficient post-order traversal for FSDP
             else:
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
@@ -566,12 +580,6 @@ class GKDTrainer(SFTTrainer):
         """
         if random.random() <= self.lmbda:
             if self.student_use_vllm:
-                # # Synchronize student model weights to vLLM if needed
-                # if (self.state.global_step % self.student_vllm_sync_frequency == 0 and 
-                #     self.state.global_step != self._last_student_sync_step):
-                #     self._move_student_model_to_vllm()
-                #     self._last_student_sync_step = self.state.global_step
-
                 new_input_ids, new_attention_mask, new_labels = self._generate_on_policy_outputs_student_vllm(
                     inputs, self.generation_config, self.processing_class.pad_token_id
                 )
