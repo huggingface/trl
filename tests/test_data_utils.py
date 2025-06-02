@@ -235,15 +235,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
     def test_apply_chat_template_with_generation_prompt_tokens(self):
         """Test that tokenizers adding generation prompt tokens work correctly with apply_chat_template."""
 
-        try:
-            import transformers
-
-            tokenizer = transformers.AutoTokenizer.from_pretrained(
-                "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", use_fast=True
-            )
-        except Exception:
-            # If we can't load the real tokenizer, skip the test
-            self.skipTest("DeepSeek tokenizer not available")
+        tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", use_fast=True)
 
         # Test prompt-completion example that would previously fail
         example = {
