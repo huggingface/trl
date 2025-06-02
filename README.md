@@ -18,39 +18,56 @@
 </p>
 
 
-## INTERNAL FORK
-This repo is an internal fork of the TRL library used for faster paced projects, the objective is to upstream useful code / findings / tutorials to the public TRL library.
-In order to stay in sync with the main branch you can follow these instructions:
+# Internal Fork 🍴
 
-Step-by-step to Sync with Original Repo
-1. Add the original repository as an upstream remote:
+This repo is an internal fork of the TRL library that is used for fast-paced projects, and whose objective is to upstream useful code / findings / tutorials to the public TRL library. We use dedicated branches per project and keep the main branch in sync with the original TRL repo.
+
+> [!NOTE]
+> The main dev work of this repo is in the `smollm3` branch.
+
+## Installation
+
+### Clone and set up the internal fork
+
+First clone the internal fork and add the original `trl` repository as an upstream remote--this will allow us to stay in sync with the main branch of `trl`. To do so, follow these steps:
+
+1. Clone the internal fork:
+
+```shell
+git clone https://github.com/huggingface/trl-internal.git
+```
+
+2. Add the original repository as an upstream remote:
 
 
 ```shell
-git remote add upstream https://github.com/original_owner/original_repo.git
+git remote add upstream https://github.com/huggingface/trl.git
 ```
+
 Check remotes:
 
 
 ```shell
 git remote -v
 ```
+
 You should see something like:
 
-
 ```shell
-origin  https://github.com/your_username/your_private_repo.git (fetch)
-origin  https://github.com/your_username/your_private_repo.git (push)
-upstream  https://github.com/original_owner/original_repo.git (fetch)
-upstream  https://github.com/original_owner/original_repo.git (push)
+origin  https://github.com/huggingface/trl-internal.git (fetch)
+origin  https://github.com/huggingface/trl-internal.git (push)
+upstream  https://github.com/huggingface/trl.git (fetch)
+upstream  https://github.com/huggingface/trl.git (push)
 ```
-2. Fetch changes from the original repo:
+
+3. Fetch changes from the original repo:
 
 
 ```shell
 git fetch upstream
 ```
-3. Merge or rebase the changes into your private repo:
+
+4. Merge or rebase the changes into your private repo:
 
 
 ```shell
@@ -58,8 +75,48 @@ git checkout main
 git merge upstream/main
 ```
 
-> [!NOTE]
-> The main dev work of this repo is currently on the `smollm3` branch 
+### Install dependencies
+
+To run the code in this project, first, create a Python virtual environment using e.g. `uv`.
+To install `uv`, follow the [UV Installation Guide](https://docs.astral.sh/uv/getting-started/installation/).
+
+
+```shell
+uv venv trl-internal --python 3.11 && source trl-internal/bin/activate && uv pip install --upgrade pip
+```
+
+> [!TIP]
+> For Hugging Face cluster users, add `export UV_LINK_MODE=copy` to your `.bashrc` to suppress cache warnings from `uv`. You may also need to add `module load cuda/12.4` to your `.bashrc` to ensure the correct CUDA version is loaded.
+
+Next, install vLLM and FlashAttention:
+
+```shell
+uv pip install vllm==0.8.5.post1
+uv pip install setuptools && uv pip install flash-attn --no-build-isolation
+```
+
+This will also install PyTorch `v2.6.0` and it is **very important** to use this version since the vLLM binaries are compiled for it. You can then install the remaining dependencies for your specific use case via `pip install -e .[LIST OF MODES]`. For most contributors, we recommend:
+
+```shell
+GIT_LFS_SKIP_SMUDGE=1 uv pip install -e ".[dev]"
+```
+
+## Training examples
+
+### SFT example with Qwen2.5-1.5B-Instruct on a dev node
+
+```shell
+accelerate launch --num_processes=2 --config_file=examples/accelerate_configs/deepspeed_zero3.yaml examples/smollm3/scripts/sft.py --config examples/smollm3/recipes/Qwen2.5-1.5B-Instruct/sft/config_demo.yaml
+```
+
+### SFT example with Qwen2.5-1.5B-Instruct on a prod node
+
+```shell
+TODO
+```
+
+
+### Alignment (port TODO)
 
 ## Overview
 
