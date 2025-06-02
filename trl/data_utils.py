@@ -17,6 +17,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, TypeVar, Union
 
+import numba
 import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -478,6 +479,67 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     return examples
 
 
+@numba.njit(["(int32[:], int32)", "(int64[:], int64)"], cache=True)
+def _pack_sequences_ffd_core(seq_lens: np.ndarray, seq_length: int) -> tuple[np.ndarray, np.ndarray]:
+    """First Fit Decreasing bin packing algorithm.
+
+    Args:
+        seq_lens: Array of sequence lengths to pack
+        seq_length: Target sequence length for each bin (maximum capacity)
+
+    Returns:
+        tuple of (bin_assignments, bin_sizes) where:
+        - bin_assignments[i] is the bin index for sequence i
+    """
+    n_sequences = len(seq_lens)
+    sorted_indices = np.argsort(-seq_lens)
+
+    # seq_idx -> bin_idx (initialize to -1)
+    bin_assignments = np.full(n_sequences, -1, dtype=seq_lens.dtype)
+    # bin_idx -> remaining space
+    bin_remaining_space = np.empty(n_sequences, dtype=seq_lens.dtype)
+    bin_count = 0
+
+    for seq_idx in sorted_indices:
+        seq_len = seq_lens[seq_idx]
+
+        # Find best‐fit bin in a single loop:
+        best_bin_idx = -1
+        best_waste = seq_length + 1
+
+        for bin_idx in range(bin_count):
+            remaining = bin_remaining_space[bin_idx]
+            if remaining >= seq_len:
+                waste = remaining - seq_len
+                if waste < best_waste:
+                    best_waste = waste
+                    best_bin_idx = bin_idx
+                    if waste == 0:
+                        # perfect fit—no need to keep searching
+                        break
+
+        if best_bin_idx >= 0:
+            bin_assignments[seq_idx] = best_bin_idx
+            bin_remaining_space[best_bin_idx] -= seq_len
+        else:
+            # create a new bin
+            bin_assignments[seq_idx] = bin_count
+            bin_remaining_space[bin_count] = seq_length - seq_len
+            bin_count += 1
+
+    bin_sizes = seq_length - bin_remaining_space[:bin_count]
+    return bin_assignments, bin_sizes
+
+
+# Warm up the function at module import to avoid first-use compilation
+try:
+    # Pre-warm with small arrays to trigger compilation
+    _pack_sequences_ffd_core(np.array([10, 20, 30], dtype=np.int32), 50)
+    _pack_sequences_ffd_core(np.array([10, 20, 30], dtype=np.int64), 50)
+except:
+    pass  # Ignore any compilation errors during import
+
+
 def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
     packed_columns = []
@@ -498,53 +560,20 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
             truncated_lens = np.minimum(seq_lens, seq_length)
             truncated_ends = starts + truncated_lens
 
-            # Create sequences list with truncated values
-            sequences = list(zip(truncated_lens, starts, truncated_ends))
-
-            # Sort by length (decreasing) for First Fit Decreasing
-            sequences.sort(key=lambda x: x[0], reverse=True)
-
-            # Optimized bin packing using a priority queue approach
-            bins_by_remaining = defaultdict(list)  # remaining_space -> [bin_indices]
-            bins = []  # [(current_length, seq_indices)]
-
-            for i, (seq_len, _start, _end) in enumerate(sequences):
-                # Find bins with enough space using the dictionary
-                placed = False
-                for remaining in range(seq_len, seq_length + 1):
-                    if bins_by_remaining[remaining]:
-                        # Use the first available bin with this remaining space
-                        bin_idx = bins_by_remaining[remaining].pop()
-                        current_len, seq_indices = bins[bin_idx]
-
-                        # Update bin
-                        new_len = current_len + seq_len
-                        new_remaining = seq_length - new_len
-                        bins[bin_idx] = (new_len, seq_indices + [i])
-
-                        # Update the remaining space mapping
-                        if new_remaining > 0:
-                            bins_by_remaining[new_remaining].append(bin_idx)
-
-                        placed = True
-                        break
-
-                # If no bin fits, create new bin
-                if not placed:
-                    bin_idx = len(bins)
-                    bins.append((seq_len, [i]))
-                    remaining = seq_length - seq_len
-                    if remaining > 0:
-                        bins_by_remaining[remaining].append(bin_idx)
+            bin_assignments, bin_sizes = _pack_sequences_ffd_core(truncated_lens, seq_length)
 
             # Reconstruct packed values more efficiently
             values_numpy = values.to_numpy()
             packed_values = []
             new_offsets = [0]
 
-            for _, seq_indices in bins:
+            # Group sequences by bin assignment and concatenate them
+            for bin_idx in range(len(bin_sizes)):
+                # Find all sequences assigned to this bin
+                seq_indices = np.where(bin_assignments == bin_idx)[0]
                 for seq_idx in seq_indices:
-                    _, start, end = sequences[seq_idx]
+                    start = starts[seq_idx]
+                    end = truncated_ends[seq_idx]
                     packed_values.extend(values_numpy[start:end])
                 new_offsets.append(len(packed_values))
 
@@ -621,7 +650,6 @@ def pack_dataset(
     if strategy == "ffd":
         dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     elif strategy == "fixed":
-        dataset = dataset.with_format("arrow")
         dataset = dataset.map(_pack_fixed, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
         raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'fixed'.")
