@@ -439,7 +439,7 @@ class TestPackExamples(unittest.TestCase):
         self.assertEqual(dataset.to_dict(), expected_output)
 
 
-class TestPackDataset(unittest.TestCase):
+class TestPackDatasetFixed(unittest.TestCase):
     def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
@@ -451,7 +451,7 @@ class TestPackDataset(unittest.TestCase):
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length)
+        dataset = pack_dataset(dataset, seq_length, strategy="fixed")
         self.assertEqual(dataset.to_dict(), expected_output)
 
     def test_with_iterable_dataset(self):
@@ -465,9 +465,54 @@ class TestPackDataset(unittest.TestCase):
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length)
+        dataset = pack_dataset(dataset, seq_length, strategy="fixed")
         num_examples = len(examples[next(iter(examples))])
         self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+
+class TestPackDatasetFfd(unittest.TestCase):
+    def test_simple(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
+            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
+            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+    def test_with_truncation(self):
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
+            "attention_mask": [[1, 1, 1, 1, 1], [1, 1], [1, 1, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
+            "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        self.assertEqual(dataset.to_dict(), expected_output)
 
 
 class TestTruncateExamples(unittest.TestCase):

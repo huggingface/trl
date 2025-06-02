@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
+import warnings
 from collections import defaultdict
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, TypeVar, Union
@@ -466,6 +466,11 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
     ```
     """
+    warnings.warn(
+        "`pack_examples` is deprecated and will be removed in version 0.20.0. Use `pack_dataset` with a dataset "
+        "instead.",
+        DeprecationWarning,
+    )
     # Join  all the values into a single list
     examples = {k: sum(v, []) for k, v in examples.items()}
     # Split the values into chunks of size seq_length
@@ -597,37 +602,30 @@ def pack_dataset(
     Example:
     ```python
     >>> from datasets import Dataset
+    >>> from trl import pack_dataset
     >>> examples = {
-    ...     "input_ids": [[1, 2], [3, 4], [5, 6], [7]],
-    ...     "attention_mask": [[1, 1], [0, 1], [1, 1], [1]],
+    ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8], [9]],
+    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]]
     ... }
     >>> dataset = Dataset.from_dict(examples)
-    >>> packed_dataset = pack_dataset(dataset, seq_length=4)
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="ffd")
     >>> packed_dataset[:]
-    {'input_ids': [[1, 2, 3, 4], [5, 6, 7]],
-     'attention_mask': [[1, 1, 0, 1], [1, 1, 1]]}
+    {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
+     'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
     ```
     """
     if map_kwargs is None:
         map_kwargs = {}
-    if isinstance(dataset, Dataset):
-        # Fast packing with pyarrow
+    # Fast packing with pyarrow
+    dataset = dataset.with_format("arrow")
+    if strategy == "ffd":
+        dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    elif strategy == "fixed":
         dataset = dataset.with_format("arrow")
-        if strategy == "ffd":
-            dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
-        elif strategy == "fixed":
-            dataset = dataset.with_format("arrow")
-            dataset = dataset.map(_pack_fixed, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
-        else:
-            raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'fixed'.")
-        dataset = dataset.with_format(None)
+        dataset = dataset.map(_pack_fixed, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        # This fallback isn't very satisfying, is it needed?
-        dataset = dataset.map(
-            functools.partial(pack_examples, seq_length=seq_length),
-            batched=True,
-            **map_kwargs,
-        )
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'fixed'.")
+    dataset = dataset.with_format(None)
     return dataset
 
 
