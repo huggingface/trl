@@ -114,16 +114,6 @@ def apply_chat_template(
             add_generation_prompt=add_generation_prompt,
         )
 
-        # For comparison with full conversations, we also need a version without generation prompt
-        # This handles tokenizers like DeepSeek that add generation tokens (e.g., <think>)
-        prompt_without_generation = tokenizer.apply_chat_template(
-            example["prompt"],
-            tools=tools,
-            continue_final_message=continue_final_message,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-
     # Apply the chat template to the entire prompt + completion
     if "prompt" in example:  # explicit prompt and prompt-completion case
         prompt_completions = {}
@@ -151,6 +141,16 @@ def apply_chat_template(
             "The chat template applied to the prompt + completion does not start with the chat template applied to "
             "the prompt alone. This can indicate that the chat template is not supported by TRL."
             "\n**Prompt**:\n{}\n\n**Prompt + Completion**:\n{}"
+        )
+
+        # For comparison with full conversations, we also need a version without generation prompt
+        # This handles tokenizers like DeepSeek that add generation tokens (e.g., <think>)
+        prompt_without_generation = tokenizer.apply_chat_template(
+            example["prompt"],
+            tools=tools,
+            continue_final_message=continue_final_message,
+            tokenize=False,
+            add_generation_prompt=False,
         )
 
         # Determine which prompt version to use and extract completions
