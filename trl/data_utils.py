@@ -17,6 +17,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, TypeVar, Union
 
+from networkx import volume
 import numba
 import numpy as np
 import pyarrow as pa
@@ -585,7 +586,7 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
             new_offsets = np.array(new_offsets, dtype=dtype)
             packed_values = pa.array(packed_values, type=values.type)
             sequence_lengths = pa.array(sequence_lengths, type=pa.list_(pa.int32()))
-            column = type(column).from_arrays(new_offsets, packed_values)
+            column = type(volume).from_arrays(new_offsets, packed_values)
             packed_columns.append(column)
             packed_columns.append(sequence_lengths)
         else:
@@ -593,7 +594,7 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     return pa.Table.from_arrays(packed_columns, names=examples.column_names + ["sequence_length"])
 
 
-def _pack_fixed(examples: pa.Table, seq_length: int) -> pa.Table:
+def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using fixed-length packing."""
     packed_columns = []
     for column in examples.columns:
@@ -625,10 +626,10 @@ def pack_dataset(
         strategy (`str`, *optional*, defaults to `"ffd"`):
             Packing strategy to use. Can be either:
 
-        - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
-            middle.
-        - `"fixed"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle to
-            completely fill each packed sequence with data.
+            - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
+                middle.
+            - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
+                to completely fill each packed sequence with data.
         map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
@@ -658,10 +659,10 @@ def pack_dataset(
     dataset = dataset.with_format("arrow")
     if strategy == "ffd":
         dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
-    elif strategy == "fixed":
-        dataset = dataset.map(_pack_fixed, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    elif strategy == "wrapped":
+        dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'fixed'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'wrapped'.")
     dataset = dataset.with_format(None)
     return dataset
 
