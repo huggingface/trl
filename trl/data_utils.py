@@ -126,21 +126,19 @@ def apply_chat_template(
 
     # Apply the chat template to the entire prompt + completion
     if "prompt" in example:  # explicit prompt and prompt-completion case
+        prompt_completions = {}
         if "chosen" in example:
-            prompt_chosen = tokenizer.apply_chat_template(
+            prompt_completions["chosen"] = tokenizer.apply_chat_template(
                 example["prompt"] + example["chosen"], tools=tools, tokenize=False, add_generation_prompt=False
             )
-            chosen = prompt_chosen[len(prompt_without_generation) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
-            prompt_rejected = tokenizer.apply_chat_template(
+            prompt_completions["rejected"] = tokenizer.apply_chat_template(
                 example["prompt"] + example["rejected"], tools=tools, tokenize=False, add_generation_prompt=False
             )
-            rejected = prompt_rejected[len(prompt_without_generation) :]
         if "completion" in example:
-            prompt_completion = tokenizer.apply_chat_template(
+            prompt_completions["completion"] = tokenizer.apply_chat_template(
                 example["prompt"] + example["completion"], tools=tools, tokenize=False, add_generation_prompt=False
             )
-            completion = prompt_completion[len(prompt_without_generation) :]
     else:  # implicit prompt case
         if "chosen" in example:
             chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False)
@@ -154,12 +152,28 @@ def apply_chat_template(
             "the prompt alone. This can indicate that the chat template is not supported by TRL."
             "\n**Prompt**:\n{}\n\n**Prompt + Completion**:\n{}"
         )
-        if "chosen" in example and not prompt_chosen.startswith(prompt_without_generation):
-            raise ValueError(error_message.format(prompt_without_generation, prompt_chosen))
-        if "rejected" in example and not prompt_rejected.startswith(prompt_without_generation):
-            raise ValueError(error_message.format(prompt_without_generation, prompt_rejected))
-        if "completion" in example and not prompt_completion.startswith(prompt_without_generation):
-            raise ValueError(error_message.format(prompt_without_generation, prompt_completion))
+
+        # Determine which prompt version to use and extract completions
+        use_prompt_without_generation = True
+        completions = {}
+
+        for _, prompt_completion in prompt_completions.items():
+            if not prompt_completion.startswith(prompt_without_generation):
+                # Fall back to original prompt if prompt_without_generation doesn't work
+                if prompt_completion.startswith(prompt):
+                    use_prompt_without_generation = False
+                else:
+                    raise ValueError(error_message.format(prompt_without_generation, prompt_completion))
+
+        # Extract completions using the appropriate prompt version
+        prompt_to_use = prompt_without_generation if use_prompt_without_generation else prompt
+        for key, prompt_completion in prompt_completions.items():
+            completions[key] = prompt_completion[len(prompt_to_use) :]
+
+        # Assign extracted completions to variables
+        chosen = completions.get("chosen")
+        rejected = completions.get("rejected")
+        completion = completions.get("completion")
 
     # Extract the completion by removing the prompt part from the prompt-completion string
     output = {}
