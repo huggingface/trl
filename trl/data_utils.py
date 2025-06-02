@@ -17,7 +17,6 @@ from collections import defaultdict
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, TypeVar, Union
 
-from networkx import volume
 import numba
 import numpy as np
 import pyarrow as pa
@@ -586,7 +585,7 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
             new_offsets = np.array(new_offsets, dtype=dtype)
             packed_values = pa.array(packed_values, type=values.type)
             sequence_lengths = pa.array(sequence_lengths, type=pa.list_(pa.int32()))
-            column = type(volume).from_arrays(new_offsets, packed_values)
+            column = type(column).from_arrays(new_offsets, packed_values)
             packed_columns.append(column)
             packed_columns.append(sequence_lengths)
         else:
