@@ -23,14 +23,15 @@ class OnlineDPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`OnlineDPOTrainer`].
 
+    This class includes only the parameters that are specific to Online DPO training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-        learning_rate (`float`, *optional*, defaults to `5e-7`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
         reward_model_path (`str` or `None`, *optional*, defaults to `None`):
             Path to the reward model. Either `judge` or `reward_model_path` must be set, but not both.
         judge (`str` or `None`, *optional*, defaults to `None`):
@@ -72,13 +73,12 @@ class OnlineDPOConfig(TrainingArguments):
             capacity of a single GPU, albeit at the cost of slower generation.
     """
 
+    # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=5e-7,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "transformers.TrainingArguments."
-        },
+        metadata={"help": "The initial learning rate for AdamW."},
     )
+
     reward_model_path: Optional[str] = field(
         default=None,
         metadata={

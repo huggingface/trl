@@ -23,6 +23,10 @@ class RewardConfig(TrainingArguments):
     r"""
     Configuration class for the [`RewardTrainer`].
 
+    This class includes only the parameters that are specific to Reward training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
@@ -42,6 +46,9 @@ class RewardConfig(TrainingArguments):
             Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if
             the dataset is pretokenized.
     """
+
+    # Parameters whose default values are overridden from TrainingArguments
+    # No default overrides currently
 
     max_length: Optional[int] = field(
         default=1024,
