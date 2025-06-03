@@ -146,13 +146,6 @@ class SFTConfig(TrainingArguments):
             "`'wrapped'`."
         },
     )
-    packing_strategy: str = field(
-        default="ffd",
-        metadata={
-            "help": "Strategy for packing sequences. Can be either `'ffd'` (first-fit decreasing, default), or "
-            "`'fixed'`."
-        },
-    )
     padding_free: bool = field(
         default=False,
         metadata={
