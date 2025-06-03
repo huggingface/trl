@@ -139,19 +139,6 @@ class RLOOConfig(TrainingArguments):
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
-        loss_type (`str`, *optional*, defaults to `"bnpo"`):
-            Specifies the loss formulation to use. Supported values are:
-
-            - `"grpo"`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to
-                length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
-                with negative advantages.
-            - `"bnpo"`: Aggregates token-level losses by normalizing number of active token in the local batch.
-                Note that normalization is performed over the local batch only, so results may slightly vary depending
-                on the local batch size, despite a constant effective batch size. When using
-                `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
-            - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
-                introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
-                The value of the constant corresponds to `max_completion_length`.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -401,22 +388,6 @@ class RLOOConfig(TrainingArguments):
         metadata={
             "help": "Weights for each reward function. Must match the number of reward functions. If `None`, all "
             "rewards are weighted equally with weight `1.0`."
-        },
-    )
-    loss_type: str = field(
-        default="bnpo",
-        metadata={
-            "help": "Specifies the loss formulation to use. Supported values are `grpo`, `bnpo`, and `dr_grpo`. "
-            "`'grpo'`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to "
-            "length bias—this approach tends to prefer shorter completions with positive advantages and longer ones "
-            "with negative advantages. "
-            "`'bnpo'`: Aggregates token-level losses by normalizing number of active token in the local batch. "
-            "Note that normalization is performed over the local batch only, so results may slightly vary depending "
-            "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
-            "`'dr_grpo'`: Aggregates token-level losses by normalizing with a global constant. This method was "
-            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
-            "`max_completion_length`."
         },
     )
     mask_truncated_completions: bool = field(

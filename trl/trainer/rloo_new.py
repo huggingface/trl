@@ -501,7 +501,6 @@ class GRPOTrainer(Trainer):
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
-        self.loss_type = args.loss_type
         self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
@@ -582,7 +581,6 @@ class GRPOTrainer(Trainer):
                 epsilon=self.epsilon,
                 temperature=self.temperature,
                 use_ref_model=self.beta != 0.0,
-                loss_type=self.loss_type,
                 max_completion_length=self.max_completion_length,
             )
 
@@ -1359,14 +1357,7 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-        else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
+        loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
