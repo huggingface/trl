@@ -87,12 +87,6 @@ class OnlineDPOConfig(TrainingArguments):
             )
         },
     )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
 
     reward_model_path: Optional[str] = field(
         default=None,

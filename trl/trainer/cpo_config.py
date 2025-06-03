@@ -93,12 +93,6 @@ class CPOConfig(TrainingArguments):
             )
         },
     )
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
 
     max_length: Optional[int] = field(
         default=1024,
