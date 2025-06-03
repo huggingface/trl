@@ -223,32 +223,19 @@ trl dpo --config dpo_config.yaml
 
 <Tip warning={true}>
 
-The chat interface is deprecated and will be removed in TRL 0.19. Use `transformers-cli chat` instead. For more information, see the [Transformers documentation, chat with text generation models](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
+The TRL chat interface is deprecated and will be removed in TRL 0.19. Use `transformers chat` instead to directly chat with models. Usage example;
 
-</Tip>
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-DPO
+<strong><span style="color: red;">&lt;shirin_yamani&gt;:</span></strong>
+What is Huggingface?
 
-The chat CLI lets you quickly load the model and talk to it. Simply run the following:
-
-<pre><code>$ trl chat --model_name_or_path Qwen/Qwen1.5-0.5B-Chat 
-<strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
-What is the best programming language?
-
-<strong><span style="color: blue;">&lt;Qwen/Qwen1.5-0.5B-Chat&gt;:</span></strong>
-There isn't a "best" programming language, as everyone has different style preferences, needs, and preferences. However, some people commonly use   
-languages like Python, Java, C++, and JavaScript, which are popular among developers for a variety of reasons, including readability, flexibility,  
-and scalability. Ultimately, it depends on personal preference, needs, and goals.
+<strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-DPO&gt;:</span></strong>
+Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets for the development of machine learning models and applications. It provides a repository of over 300, 000 pre-trained models in  Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets for the development of machine learning models and applications. It provides a repository of over 300, 000  pre-trained models in a variety of languages, enabling users to explore and utilize the latest techniques and technologies in the field of machine learning.
 </code></pre>
 
-Note that the chat interface relies on the tokenizer's [chat template](https://huggingface.co/docs/transformers/chat_templating) to format the inputs for the model. Make sure your tokenizer has a chat template defined.
+ For more information, see the [Transformers documentation, chat with text generation models](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-Besides talking to the model there are a few commands you can use:
-
-- `clear`: clears the current conversation and start a new one
-- `example {NAME}`: load example named `{NAME}` from the config and use it as the user input
-- `set {SETTING_NAME}={SETTING_VALUE};`: change the system prompt or generation settings (multiple settings are separated by a `;`).
-- `reset`: same as clear but also resets the generation configs to defaults if they have been changed by `set`
-- `save` or `save {SAVE_NAME}`: save the current chat and settings to file by default to `./chat_history/{MODEL_NAME}/chat_{DATETIME}.yaml` or `{SAVE_NAME}` if provided
-- `exit`: closes the interface
+</Tip>
 
 ## Getting the System Information
 
