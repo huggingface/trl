@@ -21,11 +21,11 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class GRPOConfig(TrainingArguments):
+class RLOOConfig(TrainingArguments):
     r"""
-    Configuration class for the [`GRPOTrainer`].
+    Configuration class for the [`RLOOTrainer`].
 
-    This class includes only the parameters that are specific to GRPO training. For a full list of training arguments,
+    This class includes only the parameters that are specific to RLOO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
     differ from those in [`~transformers.TrainingArguments`].
 
@@ -136,10 +136,6 @@ class GRPOConfig(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        delta: (`float` or `None`, *optional*, defaults to `None`):
-            Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
-            GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
-            the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
