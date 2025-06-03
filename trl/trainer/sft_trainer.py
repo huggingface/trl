@@ -660,7 +660,7 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
-                dataset = pack_dataset(dataset, args.max_length, map_kwargs)
+                dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
