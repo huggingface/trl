@@ -50,7 +50,7 @@ class RLOOConfig(TrainingArguments):
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
-        num_generations (`int` or `None`, *optional*, defaults to `8`):
+        num_generations (`int` or `None`, *optional*, defaults to `2`):
             Number of generations per prompt to sample. The effective batch size (num_processes *
             per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
@@ -226,7 +226,7 @@ class RLOOConfig(TrainingArguments):
         },
     )
     num_generations: Optional[int] = field(
-        default=8,
+        default=2,
         metadata={
             "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size "
             "* gradient_accumulation_steps) must be evenly divisible by this value."
@@ -470,11 +470,6 @@ class RLOOConfig(TrainingArguments):
         self.steps_per_generation = self.generation_batch_size // (self.per_device_train_batch_size * num_processes)
 
         # Check if the effective batch size can be divided by the number of generations
-        if self.num_generations < 2:
-            raise ValueError(
-                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
-                f"{self.num_generations}, which is less than the minimum required."
-            )
         possible_values = [
             n_gen for n_gen in range(2, self.generation_batch_size + 1) if (self.generation_batch_size) % n_gen == 0
         ]
