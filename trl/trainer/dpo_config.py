@@ -193,7 +193,6 @@ class DPOConfig(TrainingArguments):
         },
     )
 
-
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[dict[str, Any]] = field(
         default=None,
