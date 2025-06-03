@@ -78,7 +78,7 @@ class BCOConfig(TrainingArguments):
     """
 
     # Parameters whose default values are overridden from TrainingArguments
-    # None yet
+    # No default overrides currently
 
     max_length: Optional[int] = field(
         default=1024,

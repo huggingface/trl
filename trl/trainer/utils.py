@@ -1068,7 +1068,7 @@ class OnPolicyConfig(TrainingArguments):
     """
 
     # Parameters whose default values are overridden from TrainingArguments
-    # None yet
+    # No default overrides currently
 
     run_name: Optional[str] = field(
         default=None,

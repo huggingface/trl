@@ -49,7 +49,7 @@ class IterativeSFTConfig(TrainingArguments):
     """
 
     # Parameters whose default values are overridden from TrainingArguments
-    # None yet
+    # No default overrides currently
 
     # Parameters that control the model
     model_init_kwargs: Optional[dict[str, Any]] = field(
