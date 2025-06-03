@@ -328,8 +328,11 @@ class GKDTrainer(SFTTrainer):
     def _generate_on_policy_outputs_student_vllm(self, inputs, generation_config, pad_token_id=None):
         device = self.accelerator.device
 
-        # Update the vLLM weights if needed (similar to GRPO trainer)
-        if self.state.global_step != self._last_student_sync_step:
+        # Update the vLLM weights if needed (based on sync frequency)
+        if (
+            self.state.global_step % self.student_vllm_sync_frequency == 0
+            and self.state.global_step != self._last_student_sync_step
+        ):
             self._move_student_model_to_vllm()
             self._last_student_sync_step = self.state.global_step
 
@@ -462,9 +465,8 @@ class GKDTrainer(SFTTrainer):
 
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp_params_to_student_vllm(
-                child_module, prefix=child_prefix, visited=visited
-            )  # recurse into the child
+            # recurse into the child
+            self._sync_fsdp_params_to_student_vllm(child_module, prefix=child_prefix, visited=visited)
 
         if hasattr(module, "__class__") and "FSDP" in module.__class__.__name__:
             # Import FSDP here to avoid import errors if not available
@@ -550,9 +552,8 @@ class GKDTrainer(SFTTrainer):
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:
-                self._sync_fsdp_params_to_student_vllm(
-                    self.model
-                )  # use memory-efficient post-order traversal for FSDP
+                # use memory-efficient post-order traversal for FSDP
+                self._sync_fsdp_params_to_student_vllm(self.model)
             else:
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
