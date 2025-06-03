@@ -1,2 +1,3 @@
-- `rloo_k` is changed to `num_generations` in `RLOOTrainer`.
+- `rloo_k` is changed to `num_generations` in `RLOOTrainer`.Default value is set to 2.
 - `cliprange` is changed to epsilons in `RLOOTrainer`.
+- `kl_coef` is change to `beta` in `RLOOTrainer`. Default is set to 0.05. 
