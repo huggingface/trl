@@ -66,9 +66,6 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
-
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
@@ -567,14 +564,6 @@ class RLOOTrainer(Trainer):
                 )
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
-
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
-                beta=self.beta,
-                epsilon=self.epsilon,
-                temperature=self.temperature,
-                use_ref_model=self.beta != 0.0,
-                max_completion_length=self.max_completion_length,
-            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
