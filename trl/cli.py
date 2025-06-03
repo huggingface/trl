@@ -19,8 +19,6 @@ import warnings
 
 from accelerate.commands.launch import launch_command, launch_command_parser
 
-from .scripts.chat import main as chat_main
-from .scripts.chat import make_parser as make_chat_parser
 from .scripts.dpo import make_parser as make_dpo_parser
 from .scripts.env import print_env
 from .scripts.grpo import make_parser as make_grpo_parser
@@ -38,7 +36,6 @@ def main():
     subparsers = parser.add_subparsers(help="available commands", dest="command", parser_class=TrlParser)
 
     # Add the subparsers for every script
-    make_chat_parser(subparsers)
     make_dpo_parser(subparsers)
     subparsers.add_parser("env", help="Print the environment information")
     make_grpo_parser(subparsers)
@@ -77,10 +74,6 @@ def main():
 
         # Insert '--config_file' and the absolute path to the front of the list
         launch_args = ["--config_file", str(accelerate_config_path)] + launch_args
-
-    if args.command == "chat":
-        (chat_args,) = parser.parse_args_and_config()
-        chat_main(chat_args)
 
     if args.command == "dpo":
         # Get the default args for the launch command
