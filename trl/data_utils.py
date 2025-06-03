@@ -481,6 +481,9 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
 def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
     packed_columns = []
+    sequence_lengths = None
+    target_column_names = examples.column_names
+
     for column in examples.columns:
         if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
             if isinstance(column, pa.ChunkedArray):
@@ -541,7 +544,7 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
             values_numpy = values.to_numpy()
             packed_values: list[np.dtype] = []
             new_offsets: list[int] = [0]
-            sequence_lengths: list[list[int]] = []
+            current_sequence_lengths: list[list[int]] = []
 
             for _, seq_indices in bins:
                 seq_lens_in_bin = []
@@ -549,19 +552,22 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
                     _, start, end = sequences[seq_idx]
                     packed_values.extend(values_numpy[start:end])
                     seq_lens_in_bin.append(end - start)
-                sequence_lengths.append(seq_lens_in_bin)
+                current_sequence_lengths.append(seq_lens_in_bin)
                 new_offsets.append(len(packed_values))
 
             dtype = offsets.type.to_pandas_dtype()
             new_offsets = np.array(new_offsets, dtype=dtype)
             packed_values = pa.array(packed_values, type=values.type)
-            sequence_lengths = pa.array(sequence_lengths, type=pa.list_(pa.int32()))
+            sequence_lengths = pa.array(current_sequence_lengths, type=pa.list_(pa.int32()))
             column = type(column).from_arrays(new_offsets, packed_values)
             packed_columns.append(column)
-            packed_columns.append(sequence_lengths)
-        else:
-            packed_columns.append(column)
-    return pa.Table.from_arrays(packed_columns, names=examples.column_names + ["sequence_length"])
+
+    # Add sequence_length column at the end
+    if sequence_lengths is not None:
+        packed_columns.append(sequence_lengths)
+        target_column_names.append("sequence_length")
+
+    return pa.Table.from_arrays(packed_columns, names=target_column_names)
 
 
 def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
