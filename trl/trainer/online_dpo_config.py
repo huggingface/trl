@@ -78,6 +78,15 @@ class OnlineDPOConfig(TrainingArguments):
         default=5e-7,
         metadata={"help": "The initial learning rate for AdamW."},
     )
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": (
+                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
+                "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
 
     reward_model_path: Optional[str] = field(
         default=None,
