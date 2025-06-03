@@ -89,6 +89,17 @@ The dataset should be formatted as a list of "messages" where each message is a 
 * `content`: the message content
 
 
+## Accelerated Generation with vLLM
+
+GKD training supports accelerated student model generation using [vLLM](https://github.com/vllm-project/vllm), which can significantly speed up the on-policy data generation process. Two integration modes are available:
+
+**Server Mode (`student_vllm_mode="server"`)**: In this mode, vLLM runs as a separate server process on dedicated GPUs, and the trainer communicates with it via HTTP. This approach provides good isolation between training and inference but requires additional GPU resources for the vLLM server.
+
+**Co-locate Mode (`student_vllm_mode="colocate"`)**: In this mode, vLLM runs within the same distributed process group as the training job, sharing the same GPUs. This approach maximizes GPU utilization by allowing training and inference to take turns on the same hardware, eliminating idle GPU time and reducing the total number of GPUs required. Co-locate mode typically provides better throughput and is more resource-efficient.
+
+To enable vLLM integration, set `student_use_vllm=True` in your [`GKDConfig`] and configure the appropriate mode. For co-locate mode, adjust `student_vllm_gpu_memory_utilization` (recommended: 0.3 for smaller models) and `student_vllm_tensor_parallel_size` based on your model size and available resources. The `student_vllm_sync_frequency` parameter controls how often the student model weights are synchronized to the vLLM engine (default: every step).
+
+
 ## GKDTrainer
 
 [[autodoc]] GKDTrainer
