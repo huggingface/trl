@@ -1,1 +1,2 @@
 - `rloo_k` is changed to `num_generations` in `RLOOTrainer`.
+- `cliprange` is changed to epsilons in `RLOOTrainer`.
