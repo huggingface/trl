@@ -63,20 +63,12 @@ Distributed across 8 GPUs, the training takes approximately 3 minutes. You can v
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-DPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-DPO
-<strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
-What is the best programming language?
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-DPO
+<strong><span style="color: red;">&lt;shirin_yamani&gt;:</span></strong>
+What is Huggingface?
 
 <strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-DPO&gt;:</span></strong>
-The best programming language for specific applications can vary depending on the use case and knowledge level of the programmer. Here are some general factors that can be used as input to choose the best programming language:
-
- <strong><span style="color: green;">1</span></strong> Ease of use: Some programming languages are more user-friendly than others, such as Python, Java, or Ruby. Python is popular due to its simplicity and great scalability.
- <strong><span style="color: green;">2</span></strong> Versatility: The ability to work with a wide range of data structures and frameworks can define the language as versatile.
- <strong><span style="color: green;">3</span></strong> Ease of learning: Different programming languages have different learning curves, so users must be willing to take some time to master one.
- <strong><span style="color: green;">4</span></strong> Community support: The broader community of developers and enthusiasts in the selected programming language can provide great support and resources.
- <strong><span style="color: green;">5</span></strong> Reusability: Languages that emphasize code reuse and can be easily modifiable can be more suitable for software development.
-
-The best programming language based on these factors is subjective and depends on what the programmer intends to accomplish.
+Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets for the development of machine learning models and applications. It provides a repository of over 300, 000 pre-trained models in  Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets for the development of machine learning models and applications. It provides a repository of over 300, 000  pre-trained models in a variety of languages, enabling users to explore and utilize the latest techniques and technologies in the field of machine learning.
 </code></pre>
 
 ## Expected dataset type
