@@ -48,7 +48,15 @@ class RewardConfig(TrainingArguments):
     """
 
     # Parameters whose default values are overridden from TrainingArguments
-    # No default overrides currently
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": (
+                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
+                "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
 
     max_length: Optional[int] = field(
         default=1024,
