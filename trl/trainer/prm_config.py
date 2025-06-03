@@ -23,14 +23,15 @@ class PRMConfig(TrainingArguments):
     r"""
     Configuration class for the [`PRMTrainer`].
 
+    This class includes only the parameters that are specific to PRM training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-        learning_rate (`float`, *optional*, defaults to `1e-5`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) used for truncation.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
@@ -47,13 +48,12 @@ class PRMConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
     """
 
+    # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=1e-5,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "`TrainingArguments`."
-        },
+        metadata={"help": "The initial learning rate for AdamW."},
     )
+
     max_length: Optional[int] = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) used for truncation."},

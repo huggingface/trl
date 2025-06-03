@@ -35,6 +35,10 @@ class DPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`DPOTrainer`].
 
+    This class includes only the parameters that are specific to DPO training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
@@ -99,9 +103,6 @@ class DPOConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        learning_rate (`float`, *optional*, defaults to `1e-6`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
         loss_type (`str`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
@@ -167,6 +168,12 @@ class DPOConfig(TrainingArguments):
             Whether to generate and log completions from both the model and the reference model to W&B or Comet during
             evaluation.
     """
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=1e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
 
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[dict[str, Any]] = field(
@@ -279,13 +286,6 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    learning_rate: float = field(
-        default=1e-6,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "`transformers.TrainingArguments`."
-        },
-    )
     loss_type: str = field(
         default="sigmoid",
         metadata={
