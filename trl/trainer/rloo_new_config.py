@@ -139,11 +139,6 @@ class RLOOConfig(TrainingArguments):
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
-        scale_rewards (`bool`, *optional*, defaults to `True`):
-            Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), the rewards
-            are normalized by the standard deviation, ensuring they have unit variance. If `False`, no scaling is
-            applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
-            as scaling by the standard deviation introduces a question-level difficulty bias.
         loss_type (`str`, *optional*, defaults to `"bnpo"`):
             Specifies the loss formulation to use. Supported values are:
 
@@ -406,15 +401,6 @@ class RLOOConfig(TrainingArguments):
         metadata={
             "help": "Weights for each reward function. Must match the number of reward functions. If `None`, all "
             "rewards are weighted equally with weight `1.0`."
-        },
-    )
-    scale_rewards: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), "
-            "the rewards are normalized by the standard deviation, ensuring they have unit variance. If `False`, no "
-            "scaling is applied. The Dr. GRPO paper recommends not scaling the rewards, as scaling by the standard "
-            "deviation introduces a question-level difficulty bias."
         },
     )
     loss_type: str = field(
