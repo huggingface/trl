@@ -48,12 +48,7 @@ class RewardConfig(TrainingArguments):
     """
 
     # Parameters whose default values are overridden from TrainingArguments
-    gradient_checkpointing: bool = field(
-        default=True,
-        metadata={
-            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
-        },
-    )
+    # None yet
 
     max_length: Optional[int] = field(
         default=1024,
