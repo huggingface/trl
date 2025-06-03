@@ -219,24 +219,6 @@ trl dpo --config dpo_config.yaml
 </hfoption>
 </hfoptions>
 
-## Chat Interface
-
-<Tip warning={true}>
-
-The TRL chat interface is deprecated and will be removed in TRL 0.19. Use `transformers chat` instead to directly chat with models. Usage example;
-
-<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-DPO
-<strong><span style="color: red;">&lt;shirin_yamani&gt;:</span></strong>
-What is Huggingface?
-
-<strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-DPO&gt;:</span></strong>
-Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets for the development of machine learning models and applications. It provides a repository of over 300, 000 pre-trained models in  Huggingface is a platform that allows users to access a variety of open-source machine learning resources such as pre-trained models and datasets for the development of machine learning models and applications. It provides a repository of over 300, 000  pre-trained models in a variety of languages, enabling users to explore and utilize the latest techniques and technologies in the field of machine learning.
-</code></pre>
-
- For more information, see the [Transformers documentation, chat with text generation models](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
-
-</Tip>
-
 ## Getting the System Information
 
 You can get the system information by running the following command:
