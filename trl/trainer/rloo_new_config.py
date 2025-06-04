@@ -158,6 +158,10 @@ class RLOOConfig(TrainingArguments):
             set `sync_ref_model=True`.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
+        normalize_rewards (`bool`, *optional*, defaults to `False`):
+            Whether to normalize rewards.
+        normalize_advantages (`bool`, *optional*, defaults to `False`):
+            Whether to normalize advantages.
 
         > Parameters that control the logging
 
@@ -423,6 +427,14 @@ class RLOOConfig(TrainingArguments):
     use_liger_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
+    normalize_rewards: bool = field(
+        default=False,
+        metadata={"help": "Whether to normalize rewards."},
+    )
+    normalize_advantages: bool = field(
+        default=False,
+        metadata={"help": "Whether to normalize advantages."},
     )
 
     # Parameters that control the logging
