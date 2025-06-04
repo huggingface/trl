@@ -15,6 +15,7 @@
 import warnings
 from collections import defaultdict
 from collections.abc import Sequence
+from itertools import takewhile
 from typing import Any, Callable, Optional, TypeVar, Union
 
 import numpy as np
@@ -121,36 +122,31 @@ def apply_chat_template(
             prompt_chosen = tokenizer.apply_chat_template(
                 example["prompt"] + example["chosen"], tools=tools, tokenize=False
             )
+            # DeepSeek-R1 inserts a <think> token when using `add_generation_prompt`, which can cause discrepancies
+            # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
+            # common prefix between the two. In most cases, this is a no-op.
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen)))
+
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = tokenizer.apply_chat_template(
                 example["prompt"] + example["rejected"], tools=tools, tokenize=False
             )
+            # Handle DeepSeek-R1 <think> token, see the above comment for details
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
                 example["prompt"] + example["completion"], tools=tools, tokenize=False
             )
+            # Handle DeepSeek-R1 <think> token, see the above comment for details
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
             chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False)
         if "rejected" in example:
             rejected = tokenizer.apply_chat_template(example["rejected"], tools=tools, tokenize=False)
-
-    # Ensure that the prompt is the initial part of the prompt-completion string
-    if "prompt" in example:
-        error_message = (
-            "The chat template applied to the prompt + completion does not start with the chat template applied to "
-            "the prompt alone. This can indicate that the chat template is not supported by TRL."
-            "\n**Prompt**:\n{}\n\n**Prompt + Completion**:\n{}"
-        )
-        if "chosen" in example and not prompt_chosen.startswith(prompt):
-            raise ValueError(error_message.format(prompt, prompt_chosen))
-        if "rejected" in example and not prompt_rejected.startswith(prompt):
-            raise ValueError(error_message.format(prompt, prompt_rejected))
-        if "completion" in example and not prompt_completion.startswith(prompt):
-            raise ValueError(error_message.format(prompt, prompt_completion))
 
     # Extract the completion by removing the prompt part from the prompt-completion string
     output = {}
