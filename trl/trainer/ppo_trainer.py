@@ -465,10 +465,6 @@ class PPOTrainer(Trainer):
         self.args.run_name = f"{self.args.exp_name}__{self.args.seed}__{time_int}"
         self.local_seed = self.args.seed + accelerator.process_index * 100003
 
-        if self.args.num_sample_generations > 0:
-            self.sample_generations_freq = max(1, self.args.num_total_batches // self.args.num_sample_generations)
-        self.local_dataloader_batch_size = self.args.local_batch_size
-
         for module in [self.policy_model, self.ref_model, self.value_model, self.reward_model]:
             if module is not None:
                 disable_dropout_in_model(module)
@@ -476,6 +472,10 @@ class PPOTrainer(Trainer):
         self.model = PolicyAndValueWrapper(self.policy_model, self.value_model)
         self.model.config = self.policy_model.config
 
+        self.local_dataloader_batch_size = self.args.local_batch_size
+        self.args.num_total_batches = math.ceil(
+            self.args.total_episodes / self.args.batch_size
+        )  # we may train for more than `total_episodes`
         if not self.use_only_step_method:
             self.default_init_dataloader(train_dataset, data_collator, eval_dataset)
         else:
@@ -483,9 +483,8 @@ class PPOTrainer(Trainer):
                 "You are using the PPOTrainer with `use_only_step_method=True`. "
                 "Be sure to handle the dataloader manually",
             )
-            self.args.num_total_batches = math.ceil(
-                self.args.total_episodes / self.args.batch_size
-            )  # we may train for more than `total_episodes`
+        if self.args.num_sample_generations > 0:
+            self.sample_generations_freq = max(1, self.args.num_total_batches // self.args.num_sample_generations)
 
         self.create_optimizer_and_scheduler(num_training_steps=self.args.num_total_batches)
         self.default_callbacks_init(callbacks)
@@ -623,7 +622,10 @@ class PPOTrainer(Trainer):
         self.state.global_step = 0
         self.state.episode = 0
         self.state.max_steps = args.num_total_batches
-        self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
+        if hasattr(self, "train_dataset_len"):
+            self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
+        else:   
+            self.state.num_train_epochs = args.num_train_epochs
 
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
@@ -924,7 +926,7 @@ class PPOTrainer(Trainer):
         for tensor, name, expected_dim in zip(
             [query_responses, queries, scores, query_responses_logitss],
             ["query_responses", "queries", "scores", "query_responses_logitss"],
-            [2, 2, 2, 3]
+            [2, 2, 1, 3]
         ):
             if tensor is not None and tensor.dim() != expected_dim:
                 raise ValueError(f"{name} should be a {expected_dim}D tensor, but got {tensor.dim()}D.")
@@ -944,9 +946,9 @@ class PPOTrainer(Trainer):
             )
 
         if scores is not None:
-            if scores.shape[1] != query_part.shape[1]:
+            if scores.shape[0] != query_part.shape[0]:
                 raise ValueError(
-                    f"Mismatch between `scores` (shape: {scores.shape[1]}) and query portion of `query_responses` (shape: {query_part.shape[1]})."
+                    f"Mismatch between `scores` (shape: {scores.shape[0]}) and number of answers of `query_responses` (shape: {query_part.shape[0]})."
                 )
             else:
                 warnings.warn(
