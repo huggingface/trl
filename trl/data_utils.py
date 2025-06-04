@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import warnings
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Sequence
 from typing import Any, Callable, Optional, TypeVar, Union
 
@@ -478,87 +478,110 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     return examples
 
 
+class _SegmentTree:
+    """
+    A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger value
+    for a given input within the range [1, maxval].
+
+    See [Fewer Truncations Improve Language Modeling](https://arxiv.org/abs/2404.10830) for more details.
+    """
+
+    def __init__(self, maxval: int):
+        self.maxval = maxval
+        self.tree = [0] * (2 * maxval)
+
+    def add(self, val):
+        assert 0 < val <= self.maxval
+        i = self.maxval + val - 1
+        self.tree[i] = val
+        while i > 1:
+            i >>= 1
+            left, right = self.tree[i << 1], self.tree[(i << 1) + 1]
+            # Compare the values using if-else otherwise repeated calls to `builtins.max` become the bottleneck
+            self.tree[i] = left if left >= right else right
+
+    def remove(self, val):
+        assert 0 < val <= self.maxval
+        i = self.maxval + val - 1
+        self.tree[i] = 0
+        while i > 1:
+            i >>= 1
+            left, right = self.tree[i << 1], self.tree[(i << 1) + 1]
+            # Compare the values using if-else otherwise repeated calls to `builtins.max` become the bottleneck
+            self.tree[i] = left if left >= right else right
+
+    def search(self, val):
+        assert 0 < val <= self.maxval
+        i = 1
+        while i < self.maxval:
+            if self.tree[i << 1] >= val:
+                i = i << 1
+            else:
+                i = (i << 1) + 1
+        return self.tree[i]
+
+
 def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
-    packed_columns = []
-    for column in examples.columns:
+    columns = []
+    list_column_idx = None
+    for idx, column in enumerate(examples.columns):
         if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-            if isinstance(column, pa.ChunkedArray):
-                column = column.combine_chunks()
-            offsets, values = column.offsets, column.values
-            values = values[offsets[0].as_py() : offsets[-1].as_py()]
+            column = pc.list_slice(column, 0, seq_length)
+            if list_column_idx is None:
+                list_column_idx = idx
+        columns.append(column)
+    examples = pa.Table.from_arrays(columns, names=examples.column_names)
 
-            # Extract sequences using numpy for vectorized operations
-            offset_array = offsets.to_numpy()
-            starts = offset_array[:-1]
-            ends = offset_array[1:]
-            seq_lens = ends - starts
+    ids = np.arange(len(examples))
+    assert list_column_idx is not None
+    lengths = pc.make_struct(pc.list_value_length(examples[list_column_idx]).combine_chunks(), ids)
+    lengths = lengths.sort("descending", by=0)
 
-            # Vectorized truncation
-            truncated_lens = np.minimum(seq_lens, seq_length)
-            truncated_ends = starts + truncated_lens
+    segment_tree = _SegmentTree(seq_length)
+    segment_tree.add(seq_length)  # the max, `seq_length` bin is always available
+    space_to_bin = defaultdict(deque)
 
-            # Create sequences list with truncated values
-            sequences = list(zip(truncated_lens, starts, truncated_ends))
+    bins: list[
+        dict
+    ] = []  # Bin is represented as a dict (of example ids and sum of their lengths) to allow in-place updates
+    for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
+        space = segment_tree.search(length)
 
-            # Sort by length (decreasing) for First Fit Decreasing
-            sequences.sort(key=lambda x: x[0], reverse=True)
+        if space < seq_length:
+            bin = space_to_bin[space].popleft()
+        else:
+            bin = {"ids": [], "length": 0}
+            bins.append(bin)
 
-            # Optimized bin packing using a priority queue approach
-            bins_by_remaining = defaultdict(list)  # remaining_space -> [bin_indices]
-            bins = []  # [(current_length, seq_indices)]
+        bin["ids"].append(idx)
+        bin["length"] += length
+        if space < seq_length and not space_to_bin[space]:
+            segment_tree.remove(space)
 
-            for i, (seq_len, _start, _end) in enumerate(sequences):
-                # Find bins with enough space using the dictionary
-                placed = False
-                for remaining in range(seq_len, seq_length + 1):
-                    if bins_by_remaining[remaining]:
-                        # Use the first available bin with this remaining space
-                        bin_idx = bins_by_remaining[remaining].pop()
-                        current_len, seq_indices = bins[bin_idx]
+        space = space - length
+        space_to_bin[space].append(bin)
+        if space > 0:
+            segment_tree.add(space)
 
-                        # Update bin
-                        new_len = current_len + seq_len
-                        new_remaining = seq_length - new_len
-                        bins[bin_idx] = (new_len, seq_indices + [i])
+    examples = pc.take(examples, [id_ for bin in bins for id_ in bin["ids"]])
+    offsets = np.array([0] + [bin["length"] for bin in bins])
+    offsets = np.cumsum(offsets)
 
-                        # Update the remaining space mapping
-                        if new_remaining > 0:
-                            bins_by_remaining[new_remaining].append(bin_idx)
-
-                        placed = True
-                        break
-
-                # If no bin fits, create new bin
-                if not placed:
-                    bin_idx = len(bins)
-                    bins.append((seq_len, [i]))
-                    remaining = seq_length - seq_len
-                    if remaining > 0:
-                        bins_by_remaining[remaining].append(bin_idx)
-
-            # Reconstruct packed values more efficiently
-            values_numpy = values.to_numpy()
-            packed_values = []
-            new_offsets = [0]
-
-            for _, seq_indices in bins:
-                for seq_idx in seq_indices:
-                    _, start, end = sequences[seq_idx]
-                    packed_values.extend(values_numpy[start:end])
-                new_offsets.append(len(packed_values))
-
-            dtype = offsets.type.to_pandas_dtype()
-            new_offsets = np.array(new_offsets, dtype=dtype)
-            packed_values = pa.array(packed_values, type=values.type)
-            column = type(column).from_arrays(new_offsets, packed_values)
-        packed_columns.append(column)
-    return pa.Table.from_arrays(packed_columns, names=examples.column_names)
+    columns = []
+    for column in examples.columns:
+        assert len(column.chunks) == 1  # `pc.take` returns a ChunkedArray with a single chunk
+        column = column.chunks[0]
+        if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
+            dtype = column.offsets.type.to_pandas_dtype()
+            column = type(column).from_arrays(offsets.astype(dtype), column.values)
+        columns.append(column)
+    return pa.Table.from_arrays(columns, names=examples.column_names)
 
 
 def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using a wrapped strategy."""
-    packed_columns = []
+    columns = []
     for column in examples.columns:
         if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
             if isinstance(column, pa.ChunkedArray):
@@ -570,8 +593,8 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
             offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
             offsets = np.concatenate((offsets, [num_elements]))
             column = type(column).from_arrays(offsets, values)
-        packed_columns.append(column)
-    return pa.Table.from_arrays(packed_columns, names=examples.column_names)
+        columns.append(column)
+    return pa.Table.from_arrays(columns, names=examples.column_names)
 
 
 def pack_dataset(
