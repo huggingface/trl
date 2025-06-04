@@ -156,8 +156,6 @@ class RLOOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-        use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use the Liger GRPO loss.
         normalize_rewards (`bool`, *optional*, defaults to `False`):
             Whether to normalize rewards.
         normalize_advantages (`bool`, *optional*, defaults to `False`):
@@ -423,10 +421,6 @@ class RLOOConfig(TrainingArguments):
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
-    )
-    use_liger_loss: bool = field(
-        default=False,
-        metadata={"help": "Whether to use the Liger GRPO loss."},
     )
     normalize_rewards: bool = field(
         default=False,
