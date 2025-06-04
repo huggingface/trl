@@ -233,4 +233,5 @@ from trl import SFTConfig
 
 training_args = SFTConfig(..., sequence_parallel_size=4, ...)
 ```
+</hfoption>
 </hfoptions>
