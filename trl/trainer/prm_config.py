@@ -46,11 +46,6 @@ class PRMConfig(TrainingArguments):
             Whether to train only on the last step.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        average_tokens_across_devices (`bool`, *optional*, defaults to `True`):
-            Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize
-            num_tokens_in_batch for precise loss calculation. Reference:
-            https://github.com/huggingface/transformers/issues/34242
-            Overrides the `average_tokens_across_devices` parameter in [`~transformers.TrainingArguments`].
     """
 
     # Parameters whose default values are overridden from TrainingArguments
