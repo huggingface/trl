@@ -92,6 +92,8 @@ class ApplyChatTemplateTester(unittest.TestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
         "trl-internal-testing/tiny-DbrxForCausalLM",
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         "trl-internal-testing/tiny-FalconMambaForCausalLM",
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",
