@@ -23,6 +23,10 @@ class RewardConfig(TrainingArguments):
     r"""
     Configuration class for the [`RewardTrainer`].
 
+    This class includes only the parameters that are specific to Reward training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
@@ -47,6 +51,17 @@ class RewardConfig(TrainingArguments):
             https://github.com/huggingface/transformers/issues/34242
             Overrides the `average_tokens_across_devices` parameter in [`~transformers.TrainingArguments`].
     """
+
+    # Parameters whose default values are overridden from TrainingArguments
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": (
+                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
+                "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
 
     max_length: Optional[int] = field(
         default=1024,
