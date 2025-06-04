@@ -15,6 +15,7 @@
 import warnings
 from collections import defaultdict
 from collections.abc import Sequence
+from itertools import takewhile
 from typing import Any, Callable, Optional, TypeVar, Union
 
 import numpy as np
@@ -117,64 +118,35 @@ def apply_chat_template(
 
     # Apply the chat template to the entire prompt + completion
     if "prompt" in example:  # explicit prompt and prompt-completion case
-        prompt_completions = {}
         if "chosen" in example:
-            prompt_completions["chosen"] = tokenizer.apply_chat_template(
-                example["prompt"] + example["chosen"], tools=tools, tokenize=False, add_generation_prompt=False
+            prompt_chosen = tokenizer.apply_chat_template(
+                example["prompt"] + example["chosen"], tools=tools, tokenize=False
             )
+            # DeepSeek-R1 inserts a <think> token when using `add_generation_prompt`, which can cause discrepancies
+            # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
+            # common prefix between the two. In most cases, this is a no-op.
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen)))
+
+            chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
-            prompt_completions["rejected"] = tokenizer.apply_chat_template(
-                example["prompt"] + example["rejected"], tools=tools, tokenize=False, add_generation_prompt=False
+            prompt_rejected = tokenizer.apply_chat_template(
+                example["prompt"] + example["rejected"], tools=tools, tokenize=False
             )
+            # Handle DeepSeek-R1 <think> token, see the above comment for details
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
+            rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
-            prompt_completions["completion"] = tokenizer.apply_chat_template(
-                example["prompt"] + example["completion"], tools=tools, tokenize=False, add_generation_prompt=False
+            prompt_completion = tokenizer.apply_chat_template(
+                example["prompt"] + example["completion"], tools=tools, tokenize=False
             )
+            # Handle DeepSeek-R1 <think> token, see the above comment for details
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
+            completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
             chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False)
         if "rejected" in example:
             rejected = tokenizer.apply_chat_template(example["rejected"], tools=tools, tokenize=False)
-
-    # Ensure that the prompt is the initial part of the prompt-completion string
-    if "prompt" in example:
-        error_message = (
-            "The chat template applied to the prompt + completion does not start with the chat template applied to "
-            "the prompt alone. This can indicate that the chat template is not supported by TRL."
-            "\n**Prompt**:\n{}\n\n**Prompt + Completion**:\n{}"
-        )
-
-        # For comparison with full conversations, we also need a version without generation prompt
-        # This handles tokenizers like DeepSeek that add generation tokens (e.g., <think>)
-        prompt_without_generation = tokenizer.apply_chat_template(
-            example["prompt"],
-            tools=tools,
-            continue_final_message=continue_final_message,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-
-        # Determine which prompt version to use and extract completions
-        use_prompt_without_generation = True
-        completions = {}
-
-        for _, prompt_completion in prompt_completions.items():
-            if not prompt_completion.startswith(prompt_without_generation):
-                # Fall back to original prompt if prompt_without_generation doesn't work
-                if prompt_completion.startswith(prompt):
-                    use_prompt_without_generation = False
-                else:
-                    raise ValueError(error_message.format(prompt_without_generation, prompt_completion))
-
-        # Extract completions using the appropriate prompt version
-        prompt_to_use = prompt_without_generation if use_prompt_without_generation else prompt
-        for key, prompt_completion in prompt_completions.items():
-            completions[key] = prompt_completion[len(prompt_to_use) :]
-
-        # Assign extracted completions to variables
-        chosen = completions.get("chosen")
-        rejected = completions.get("rejected")
-        completion = completions.get("completion")
 
     # Extract the completion by removing the prompt part from the prompt-completion string
     output = {}
