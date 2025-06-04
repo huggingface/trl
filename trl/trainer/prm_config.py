@@ -45,6 +45,11 @@ class PRMConfig(TrainingArguments):
             Whether to train only on the last step.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
+        average_tokens_across_devices (`bool`, *optional*, defaults to `True`):
+            Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize
+            num_tokens_in_batch for precise loss calculation. Reference:
+            https://github.com/huggingface/transformers/issues/34242
+            Overrides the `average_tokens_across_devices` parameter in [`~transformers.TrainingArguments`].
     """
 
     learning_rate: float = field(
@@ -84,4 +89,12 @@ class PRMConfig(TrainingArguments):
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    average_tokens_across_devices: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
+            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
+            "Overrides the `average_tokens_across_devices` parameter in [`~transformers.TrainingArguments`]."
+        },
     )
