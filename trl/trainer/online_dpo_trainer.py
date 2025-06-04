@@ -25,7 +25,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
-import transformers
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
@@ -724,11 +723,7 @@ class OnlineDPOTrainer(Trainer):
             self._total_loss_scalar += tr_loss_scalar
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
-
-            if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
-                self.log(logs, start_time)
-            else:  # transformers<=4.46
-                self.log(logs)
+            self.log(logs, start_time)
 
         metrics = None
         if self.control.should_evaluate:
