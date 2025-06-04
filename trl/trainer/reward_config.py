@@ -45,11 +45,6 @@ class RewardConfig(TrainingArguments):
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if
             the dataset is pretokenized.
-        average_tokens_across_devices (`bool`, *optional*, defaults to `True`):
-            Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize
-            num_tokens_in_batch for precise loss calculation. Reference:
-            https://github.com/huggingface/transformers/issues/34242
-            Overrides the `average_tokens_across_devices` parameter in [`~transformers.TrainingArguments`].
     """
 
     # Parameters whose default values are overridden from TrainingArguments
