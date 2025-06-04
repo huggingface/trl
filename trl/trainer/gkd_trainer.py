@@ -173,6 +173,29 @@ class GKDTrainer(SFTTrainer):
                     self.student_vllm_client.init_communicator()
             elif self.student_vllm_mode == "colocate":
                 student_model_name_or_path = self.model_name_or_path
+
+                # Check tensor parallel size constraints (same as GRPO)
+                if args.student_vllm_tensor_parallel_size > 1:
+                    # Make sure tensor_parallel_size divides world size evenly
+                    if not self.accelerator.num_processes % args.student_vllm_tensor_parallel_size == 0:
+                        raise ValueError(
+                            f"student_vllm_tensor_parallel_size ({args.student_vllm_tensor_parallel_size}) must divide world size "
+                            f"({self.accelerator.num_processes}) evenly."
+                        )
+
+                    # Create subgroups of ranks for TP
+                    self.student_tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
+                        [
+                            list(
+                                range(
+                                    i * args.student_vllm_tensor_parallel_size,
+                                    (i + 1) * args.student_vllm_tensor_parallel_size,
+                                )
+                            )
+                            for i in range(self.accelerator.num_processes // args.student_vllm_tensor_parallel_size)
+                        ]
+                    )
+
                 self.student_llm = LLM(
                     model=student_model_name_or_path,
                     tensor_parallel_size=args.student_vllm_tensor_parallel_size,
@@ -180,8 +203,15 @@ class GKDTrainer(SFTTrainer):
                     # Max num seqs can be a small number as we generate one by one during training
                     max_num_seqs=self.args.per_device_train_batch_size * self.args.gradient_accumulation_steps,
                     max_model_len=args.max_length,  # Assuming max_length covers prompt + new tokens
-                    seed=args.seed,  # Use the global seed for consistency
+                    distributed_executor_backend="external_launcher",
+                    # Feed identical seed for tp groups to ensure sampling results are the same across workers
+                    seed=args.seed
+                    if args.student_vllm_tensor_parallel_size == 1
+                    else self.accelerator.process_index // args.student_vllm_tensor_parallel_size,
                 )
+
+                # Synchronize all processes after vLLM initialization to prevent hanging
+                self.accelerator.wait_for_everyone()
             else:
                 raise ValueError(f"Unknown student_vllm_mode: {self.student_vllm_mode}")
             self.student_vllm_guided_decoding_regex = args.student_vllm_guided_decoding_regex
@@ -395,8 +425,26 @@ class GKDTrainer(SFTTrainer):
                 max_tokens=max_new_tokens,
                 guided_decoding=guided_decoding,
             )
-            all_outputs = self.student_llm.generate(prompts_text, sampling_params=sampling_params, use_tqdm=False)
-            completion_ids = [output.token_ids for outputs_list in all_outputs for output in outputs_list.outputs]
+
+            if hasattr(self, "student_tp_group") and self.args.student_vllm_tensor_parallel_size > 1:
+                # Gather prompts from all ranks in the TP group and flatten.
+                # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                orig_size = len(prompts_text)
+                gathered_prompts = [None for _ in range(self.args.student_vllm_tensor_parallel_size)]
+                torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.student_tp_group)
+                all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+            else:
+                all_prompts_text = prompts_text
+
+            all_outputs = self.student_llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+            completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+
+            if hasattr(self, "student_tp_group") and self.args.student_vllm_tensor_parallel_size > 1:
+                # Slice completions for this rank within its TP group.
+                # Each rank generates all outputs — we keep only our share.
+                local_rank_in_group = torch.distributed.get_rank(group=self.student_tp_group)
+                tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                completion_ids = completion_ids[tp_slice]
         else:
             raise ValueError(f"Unknown student_vllm_mode: {self.student_vllm_mode}")
 
