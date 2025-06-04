@@ -32,6 +32,7 @@ from trl.trainer.utils import (
     batch_generation,
     decode_and_strip_padding,
     flush_left,
+    flush_right,
     generate_model_card,
     get_peft_config,
     pad,
@@ -492,12 +493,12 @@ class TestFlushLeft(unittest.TestCase):
         self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
 
     def test_no_shift_needed(self):
-        mask = torch.tensor([[1, 1, 0, 0], [1, 1, 0, 0]])
-        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 8, 0, 0]])
+        mask = torch.tensor([[1, 1, 0, 0], [1, 0, 0, 0]])
+        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 0, 0, 0]])
         new_mask, new_tensor1 = flush_left(mask, tensor1)
 
-        expected_mask = torch.tensor([[1, 1], [1, 1]])
-        expected_tensor1 = torch.tensor([[5, 6], [7, 8]])
+        expected_mask = torch.tensor([[1, 1], [1, 0]])
+        expected_tensor1 = torch.tensor([[5, 6], [7, 0]])
 
         self.assertTrue(torch.equal(new_mask, expected_mask))
         self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
@@ -505,9 +506,51 @@ class TestFlushLeft(unittest.TestCase):
     def test_no_tensors(self):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         new_mask = flush_left(mask)
-
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
+        self.assertTrue(torch.equal(new_mask, expected_mask))
 
+
+class TestFlushRight(unittest.TestCase):
+    def test_basic_case(self):
+        mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
+        tensor1 = torch.tensor([[2, 3, 4, 0, 0], [0, 0, 5, 6, 0]])
+        tensor2 = torch.tensor([[7, 8, 9, 0, 0], [0, 0, 10, 11, 0]])
+        new_mask, new_tensor1, new_tensor2 = flush_right(mask, tensor1, tensor2)
+
+        expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
+        expected_tensor1 = torch.tensor([[2, 3, 4], [0, 5, 6]])
+        expected_tensor2 = torch.tensor([[7, 8, 9], [0, 10, 11]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        self.assertTrue(torch.equal(new_tensor2, expected_tensor2))
+
+    def test_single_row(self):
+        mask = torch.tensor([[1, 1, 0, 0]])
+        tensor1 = torch.tensor([[2, 3, 0, 0]])
+        new_mask, new_tensor1 = flush_right(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1]])
+        expected_tensor1 = torch.tensor([[2, 3]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_shift_needed(self):
+        mask = torch.tensor([[0, 0, 1, 1], [0, 0, 0, 1]])
+        tensor1 = torch.tensor([[0, 0, 5, 6], [0, 0, 0, 7]])
+        new_mask, new_tensor1 = flush_right(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1], [0, 1]])
+        expected_tensor1 = torch.tensor([[5, 6], [0, 7]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_tensors(self):
+        mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
+        new_mask = flush_right(mask)
+        expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
         self.assertTrue(torch.equal(new_mask, expected_mask))
 
 
@@ -539,22 +582,23 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         prompts = ["The sky is", "The sun is"]
         completions = [" blue.", " in the sky."]
         rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
         step = 42
 
-        print_prompt_completions_sample(prompts, completions, rewards, step)
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
 
         output = mock_stdout.getvalue()
 
         expected_output = textwrap.dedent("""\
-        ╭────────────────────── Step 42 ───────────────────────╮
-        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
-        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
-        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
-        │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
-        │ ├────────────┼──────────────┼─────────────┼────────┤ │
-        │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
-        │ └────────────┴──────────────┴─────────────┴────────┘ │
-        ╰──────────────────────────────────────────────────────╯
+        ╭──────────────────────────── Step 42 ─────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────╯
         """)
         self.assertEqual(output, expected_output)
 
@@ -563,29 +607,30 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         prompts = ["A", "B"]
         completions = ["1", "2"]
         rewards = {"Score": [0.1, 0.2]}
+        advantages = [0.3, 0.4]
         step = 10
 
-        print_prompt_completions_sample(prompts, completions, rewards, step, num_samples=1)
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
         output = mock_stdout.getvalue()
 
         possible_outputs = [
             textwrap.dedent("""\
-                ╭──────────── Step 10 ────────────╮
-                │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │
-                │ ┃ Prompt ┃ Completion ┃ Score ┃ │
-                │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │
-                │ │ A      │ 1          │  0.10 │ │
-                │ └────────┴────────────┴───────┘ │
-                ╰─────────────────────────────────╯
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ A      │ 1          │  0.10 │      0.30 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
                 """),
             textwrap.dedent("""\
-                ╭──────────── Step 10 ────────────╮
-                │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │
-                │ ┃ Prompt ┃ Completion ┃ Score ┃ │
-                │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │
-                │ │ B      │ 2          │  0.20 │ │
-                │ └────────┴────────────┴───────┘ │
-                ╰─────────────────────────────────╯
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ B      │ 2          │  0.20 │      0.40 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
                 """),
         ]
         self.assertIn(output, possible_outputs)
