@@ -542,9 +542,8 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     segment_tree.add(seq_length)  # the max, `seq_length` bin is always available
     space_to_bin = defaultdict(deque)
 
-    bins: list[
-        dict
-    ] = []  # Bin is represented as a dict (of example ids and sum of their lengths) to allow in-place updates
+    # Bin is represented as a dict (of example ids and sum of their lengths) to allow in-place updates
+    bins: list[dict] = []
     for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
         space = segment_tree.search(length)
 
