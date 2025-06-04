@@ -144,12 +144,12 @@ class ApplyChatTemplateTester(unittest.TestCase):
     ]
 
     non_conversational_examples = [
-        {"prompt": "The sky is", "completion": " blue."},
-        {"text": "The sky is blue."},
-        {"prompt": "The sky is"},
-        {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},
-        {"chosen": "The sky is blue.", "rejected": "The sky is green."},
-        {"prompt": "The sky is", "completion": " blue.", "label": True},
+        {"text": "The sky is blue."},  # Language modeling
+        {"prompt": "The sky is"},  # Prompt only
+        {"prompt": "The sky is", "completion": " blue."},  # Prompt-completion
+        {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},  # Preference
+        {"chosen": "The sky is blue.", "rejected": "The sky is green."},  # Preference with implicit prompt
+        {"prompt": "The sky is", "completion": " blue.", "label": True},  # Unpaired preference
     ]
 
     @parameterized.expand(itertools.product(tokenizers, conversational_examples))
