@@ -27,10 +27,8 @@ import torch
 import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
-import transformers
 from accelerate import PartialState
 from datasets import Dataset
-from packaging import version
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -176,7 +174,7 @@ class ORPOTrainer(Trainer):
                     prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
 
                 model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-            elif getattr(args, "gradient_checkpointing", False):
+            elif args.gradient_checkpointing:
                 # For backward compatibility with older versions of transformers
                 if hasattr(model, "enable_input_require_grads"):
                     model.enable_input_require_grads()
@@ -197,7 +195,7 @@ class ORPOTrainer(Trainer):
         # For models that use gradient_checkpointing, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
         # fail or completely fail.
-        elif getattr(args, "gradient_checkpointing", False):
+        elif args.gradient_checkpointing:
             # For backward compatibility with older versions of transformers
             if hasattr(model, "enable_input_require_grads"):
                 model.enable_input_require_grads()
@@ -978,11 +976,7 @@ class ORPOTrainer(Trainer):
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[key] = torch.tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
-
-        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
-            return super().log(logs, start_time)
-        else:  # transformers<=4.46
-            return super().log(logs)
+        return super().log(logs, start_time)
 
     def _shift_right(self, input_ids):
         if self.decoder_start_token_id is None:
