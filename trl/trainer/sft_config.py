@@ -211,7 +211,6 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
             "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
-            "Overrides the `average_tokens_across_devices` parameter in [`~transformers.TrainingArguments`]."
         },
     )
 
