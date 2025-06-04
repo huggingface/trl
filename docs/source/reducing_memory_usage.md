@@ -225,6 +225,7 @@ Ring Attention is a memory-efficient attention mechanism that can be used to red
 
 To enable Ring Attention, install the `ring-flash-attn` package and set the `sequence_parallel_size` parameter to the number of GPUs you want to use for sequence parallelism.
 
+</hfoption>
 <hfoption id="SFT">
 
 ```python
