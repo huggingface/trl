@@ -426,11 +426,7 @@ class SFTTrainer(Trainer):
         )
 
         # Register Ring Attention for Sequence Parallelism if configured
-        if (
-            hasattr(self.args, "sequence_parallel_size")
-            and self.args.sequence_parallel_size
-            and self.args.sequence_parallel_size > 1
-        ):
+        if self.args.sequence_parallel_size and self.args.sequence_parallel_size > 1:
             if not dist.is_initialized():
                 warnings.warn(
                     "torch.distributed is not initialized. Cannot register Ring Attention for Sequence Parallelism.",

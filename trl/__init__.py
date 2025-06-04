@@ -42,8 +42,8 @@ _import_structure = {
         "AutoModelForSeq2SeqLMWithValueHead",
         "PreTrainedModelWrapper",
         "create_reference_model",
-        "setup_chat_format",
         "register_ring_attn",
+        "setup_chat_format",
     ],
     "trainer": [
         "AlignPropConfig",
