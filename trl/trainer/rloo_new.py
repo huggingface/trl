@@ -348,12 +348,14 @@ class RLOOTrainer(Trainer):
             padding token, `processing_class.pad_token`, must be set. If the processing class has not set a padding
             token, `processing_class.eos_token` will be used as the default.
         reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
-            Processing classes corresponding to the reward models specified in `reward_model`. Can be:
+            Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
-            - A single processing class: Used when `reward_model` contains only one reward model. If set to `None`, or if the corresponding
-            reward model [`~transformers.PreTrainedModel`] is `None`, the tokenizer for the model is automatically 
-            loaded using [`~transformers.AutoTokenizer.from_pretrained`].
-        
+            - A single processing class: Used when `reward_funcs` contains only one reward function.
+            - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
+            If set to `None`, or if an element of the list corresponding to a [`~transformers.PreTrainedModel`] is
+            `None`, the tokenizer for the model is automatically loaded using [`~transformers.AutoTokenizer.from_pretrained`].
+            For elements in `reward_funcs` that are custom reward functions (not [`~transformers.PreTrainedModel`]),
+            the corresponding entries in `reward_processing_classes` are ignored.  
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks
             detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
