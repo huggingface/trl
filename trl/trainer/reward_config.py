@@ -57,6 +57,13 @@ class RewardConfig(TrainingArguments):
             )
         },
     )
+    average_tokens_across_devices: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
+            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
+        },
+    )
 
     max_length: Optional[int] = field(
         default=1024,
@@ -85,12 +92,5 @@ class RewardConfig(TrainingArguments):
         metadata={
             "help": "Whether to remove the columns that are not used by the model's forward pass. Can be `True` only "
             "if the dataset is pretokenized."
-        },
-    )
-    average_tokens_across_devices: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
-            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
         },
     )
