@@ -42,3 +42,11 @@ This approach thechnicaly ensures that:
 - The baseline for each sample comes from the other sample
 - The policy is updated based on relative performance between the samples
 - The variance reduction is achieved through direct comparison between samples from the same policy
+
+
+# Main sources. 
+1. [RLOO Paper](https://openreview.net/pdf?id=r1lgTGL5DE)
+2. [back to basics Paper](https://arxiv.org/pdf/2402.14740)
+3. [REINFORCE++ Paper](https://arxiv.org/html/2501.03262v1)
+4. [RLOO Blog on HF](https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo)
+5. [RLOO OPENRLHF](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05)
