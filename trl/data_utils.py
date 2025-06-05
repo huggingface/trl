@@ -519,11 +519,14 @@ class _SegmentTree:
 
 def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
+    # Add position_ids to the examples
+    input_ids = examples["input_ids"]
+    position_ids_python = [list(range(len(sequence))) for sequence in input_ids.to_pylist()]
+    position_ids_array = pa.array(position_ids_python, type=examples["input_ids"].type)
+    examples = examples.append_column("position_ids", position_ids_array)
+
     columns = []
     list_column_idx = None
-    sequence_lengths = None
-    target_column_names = examples.column_names
-
     for idx, column in enumerate(examples.columns):
         if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
             column = pc.list_slice(column, 0, seq_length)
@@ -535,7 +538,7 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     ids = np.arange(len(examples))
     assert list_column_idx is not None
     lengths = pc.make_struct(pc.list_value_length(examples[list_column_idx]).combine_chunks(), ids)
-    sorted_lengths = lengths.sort("descending", by=0)
+    lengths = lengths.sort("descending", by=0)
 
     segment_tree = _SegmentTree(seq_length)
     segment_tree.add(seq_length)  # the max, `seq_length` bin is always available
@@ -543,7 +546,7 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
 
     # Bin is represented as a dict (of example ids and sum of their lengths) to allow in-place updates
     bins: list[dict] = []
-    for length, idx in zip(sorted_lengths.field(0).to_numpy(), sorted_lengths.field(1).to_numpy()):
+    for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
         space = segment_tree.search(length)
 
         if space < seq_length:
@@ -563,7 +566,6 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
             segment_tree.add(space)
 
     examples = pc.take(examples, [id_ for bin in bins for id_ in bin["ids"]])
-    sequence_lengths = pc.take(lengths.field(0), [id_ for bin in bins for id_ in bin["ids"]])
     offsets = np.array([0] + [bin["length"] for bin in bins])
     offsets = np.cumsum(offsets)
 
@@ -574,14 +576,8 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
         if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
             dtype = column.offsets.type.to_pandas_dtype()
             column = type(column).from_arrays(offsets.astype(dtype), column.values)
-            columns.append(column)
-
-    # Add sequence_length column at the end
-    if sequence_lengths is not None:
-        columns.append(sequence_lengths)
-        target_column_names.append("sequence_length")
-
-    return pa.Table.from_arrays(columns, names=target_column_names)
+        columns.append(column)
+    return pa.Table.from_arrays(columns, names=examples.column_names)
 
 
 def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
