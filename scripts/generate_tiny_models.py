@@ -29,6 +29,8 @@ from transformers import (
     CohereForCausalLM,
     DbrxConfig,
     DbrxForCausalLM,
+    DeepseekV3Config,
+    DeepseekV3ForCausalLM,
     FalconMambaConfig,
     FalconMambaForCausalLM,
     Gemma2Config,
@@ -109,6 +111,9 @@ for model_id, config_class, model_class, suffix in [
     ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),
     ("CohereForAI/aya-expanse-8b", CohereConfig, CohereForCausalLM, None),
     ("databricks/dbrx-instruct", DbrxConfig, DbrxForCausalLM, None),
+    ("deepseek-ai/DeepSeek-R1", DeepseekV3Config, DeepseekV3ForCausalLM, None),
+    # It's important to have R1-0528 as it doesn't have the same chat template
+    ("deepseek-ai/DeepSeek-R1-0528", DeepseekV3Config, DeepseekV3ForCausalLM, "0528"),
     ("tiiuae/falcon-7b-instruct", FalconMambaConfig, FalconMambaForCausalLM, None),
     ("google/gemma-2-2b-it", Gemma2Config, Gemma2ForCausalLM, None),
     ("google/gemma-7b-it", GemmaConfig, GemmaForCausalLM, None),
