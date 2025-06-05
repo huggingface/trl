@@ -520,25 +520,28 @@ class GKDTrainer(SFTTrainer):
             # Import FSDP here to avoid import errors if not available
             try:
                 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+            except ImportError as err:
+                raise ImportError(
+                    "FSDP is not available but is required for vLLM integration with FSDP. Please install PyTorch with "
+                    "FSDP support to use this feature."
+                ) from err
 
-                if isinstance(module, FSDP):
-                    with FSDP.summon_full_params(module, recurse=False, writeback=False):
-                        for param_name, param in module.named_parameters():
-                            full_name = f"{prefix}.{param_name}" if prefix else param_name
-                            for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
-                                full_name = full_name.replace(extra, "")
+            if isinstance(module, FSDP):
+                with FSDP.summon_full_params(module, recurse=False, writeback=False):
+                    for param_name, param in module.named_parameters():
+                        full_name = f"{prefix}.{param_name}" if prefix else param_name
+                        for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
+                            full_name = full_name.replace(extra, "")
 
-                            if full_name in visited:
-                                continue  # skip FSDP subtrees already traversed
-                            visited.add(full_name)
+                        if full_name in visited:
+                            continue  # skip FSDP subtrees already traversed
+                        visited.add(full_name)
 
-                            if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
-                                self.student_vllm_client.update_named_param(full_name, param.data)
-                            elif self.student_vllm_mode == "colocate":
-                                llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
-                                llm_model.load_weights([(full_name, param.data)])
-            except ImportError:
-                pass  # FSDP not available
+                        if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.student_vllm_client.update_named_param(full_name, param.data)
+                        elif self.student_vllm_mode == "colocate":
+                            llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights([(full_name, param.data)])
 
     def _move_student_model_to_vllm(self):
         """Synchronize student model weights to vLLM engine."""
