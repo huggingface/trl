@@ -172,7 +172,10 @@ class TrlParser(HfArgumentParser):
         super().__init__(dataclass_types=dataclass_types, **kwargs)
 
     def parse_args_and_config(
-        self, args: Optional[Iterable[str]] = None, return_remaining_strings: bool = False
+        self,
+        args: Optional[Iterable[str]] = None,
+        return_remaining_strings: bool = False,
+        fail_with_unknown_args: bool = True,
     ) -> tuple[DataClass, ...]:
         """
         Parse command-line args and config file into instances of the specified dataclass types.
@@ -212,6 +215,12 @@ class TrlParser(HfArgumentParser):
             args_remaining_strings = output[-1]
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
         else:
+            if fail_with_unknown_args:
+                if config_remaining_strings:
+                    raise ValueError(
+                        f"Unknown arguments from config file: {config_remaining_strings}. "
+                        "Please remove them or add them to the dataclass."
+                    )
             return output
 
     def set_defaults_with_config(self, **kwargs) -> list[str]:
