@@ -50,3 +50,4 @@ This approach thechnicaly ensures that:
 3. [REINFORCE++ Paper](https://arxiv.org/html/2501.03262v1)
 4. [RLOO Blog on HF](https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo)
 5. [RLOO OPENRLHF](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05)
+6. [Youtube RLOO](https://www.youtube.com/watch?v=86asXGPK6RU&ab_channel=BuzzRobot)
