@@ -683,7 +683,7 @@ class SFTTrainer(Trainer):
             self._signature_columns = ["input_ids", "attention_mask", "completion_mask"]
         # For the packing case with FFD, we need to store sequence_length returned by the data collator with flattening
         if self.args.packing and self.args.packing_strategy == "ffd" and self.args.padding_free:
-            self._signature_columns.append("sequence_length")
+            self._signature_columns.append("position_ids")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
