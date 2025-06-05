@@ -62,6 +62,13 @@ class PRMConfig(TrainingArguments):
             )
         },
     )
+    average_tokens_across_devices: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
+            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
+        },
+    )
 
     max_length: Optional[int] = field(
         default=1024,
