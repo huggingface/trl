@@ -21,8 +21,9 @@ from typing import Any, Callable, Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import broadcast_object_list, gather_object
+from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from transformers import (
     AutoModelForCausalLM,
     BaseImageProcessor,
@@ -516,32 +517,22 @@ class GKDTrainer(SFTTrainer):
             # recurse into the child
             self._sync_fsdp_params_to_student_vllm(child_module, prefix=child_prefix, visited=visited)
 
-        if hasattr(module, "__class__") and "FSDP" in module.__class__.__name__:
-            # Import FSDP here to avoid import errors if not available
-            try:
-                from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-            except ImportError as err:
-                raise ImportError(
-                    "FSDP is not available but is required for vLLM integration with FSDP. Please install PyTorch with "
-                    "FSDP support to use this feature."
-                ) from err
+        if isinstance(module, FSDP):
+            with FSDP.summon_full_params(module, recurse=False, writeback=False):
+                for param_name, param in module.named_parameters():
+                    full_name = f"{prefix}.{param_name}" if prefix else param_name
+                    for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
+                        full_name = full_name.replace(extra, "")
 
-            if isinstance(module, FSDP):
-                with FSDP.summon_full_params(module, recurse=False, writeback=False):
-                    for param_name, param in module.named_parameters():
-                        full_name = f"{prefix}.{param_name}" if prefix else param_name
-                        for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
-                            full_name = full_name.replace(extra, "")
+                    if full_name in visited:
+                        continue  # skip FSDP subtrees already traversed
+                    visited.add(full_name)
 
-                        if full_name in visited:
-                            continue  # skip FSDP subtrees already traversed
-                        visited.add(full_name)
-
-                        if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.student_vllm_client.update_named_param(full_name, param.data)
-                        elif self.student_vllm_mode == "colocate":
-                            llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(full_name, param.data)])
+                    if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
+                        self.student_vllm_client.update_named_param(full_name, param.data)
+                    elif self.student_vllm_mode == "colocate":
+                        llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
+                        llm_model.load_weights([(full_name, param.data)])
 
     def _move_student_model_to_vllm(self):
         """Synchronize student model weights to vLLM engine."""
@@ -549,27 +540,13 @@ class GKDTrainer(SFTTrainer):
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
         if zero_stage_3:
-            try:
-                import deepspeed
+            import deepspeed
 
-                gather_if_zero3 = deepspeed.zero.GatheredParameters
-            except ImportError:
-                gather_if_zero3 = nullcontext
+            gather_if_zero3 = deepspeed.zero.GatheredParameters
         else:
             gather_if_zero3 = nullcontext
 
-        # Check if model is PEFT
-        try:
-            from peft import PeftModel
-
-            def is_peft_model_func(model):
-                return isinstance(model, PeftModel)
-        except ImportError:
-
-            def is_peft_model_func(model):
-                return False
-
-        if is_peft_model_func(self.model):
+        if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
             with gather_if_zero3(list(self.model.parameters())):
