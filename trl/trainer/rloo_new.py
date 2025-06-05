@@ -434,7 +434,7 @@ class RLOOTrainer(Trainer):
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
-        # Reward functions
+        # Reward functions/models
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
@@ -1172,7 +1172,9 @@ class RLOOTrainer(Trainer):
                 f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
                 "Please ensure that at least one reward function returns a valid reward."
             )
-
+        #? ASK: we by default normalize the reward/adv in grpo but in rloo this is in arg form?
+        #? Ask: there is no gruoping in rloo so remove all the gp things n define the baseline as the mean of the rewards
+        #? is the above equivalent to the grouping rm then? 🧐
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
@@ -1181,12 +1183,12 @@ class RLOOTrainer(Trainer):
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
         # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) 
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
 
         # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # why?[1,1,2,2,3,3]?
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
         
