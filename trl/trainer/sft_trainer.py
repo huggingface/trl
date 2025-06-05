@@ -121,6 +121,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     completion_only_loss: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
+    padding_free: bool = True # just for test, don't use True here
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
@@ -134,27 +135,37 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
         # Pad
         output = {}
-        output["input_ids"] = pad(
-            input_ids,
-            padding_value=self.pad_token_id,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-        )
-        output["attention_mask"] = pad(
-            attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-        )
-        output["labels"] = pad(
-            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-        )
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = pad(
-                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        if self.padding_free:
+            output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
+            output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+            output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
+            if self.completion_only_loss and "completion_mask" in examples[0]:
+                completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
+                output["labels"][completion_mask == 0] = -100
+            if "position_ids" in examples[0]:
+                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
+        else:
+            output["input_ids"] = pad(
+                input_ids,
+                padding_value=self.pad_token_id,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-        if "position_ids" in examples[0]:
-            output["position_ids"] = pad(
-                position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            output["attention_mask"] = pad(
+                attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
+            output["labels"] = pad(
+                labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            if self.completion_only_loss and "completion_mask" in examples[0]:
+                completion_mask = pad(
+                    completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
+                output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
+            if "position_ids" in examples[0]:
+                output["position_ids"] = pad(
+                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
         return output
 
 
