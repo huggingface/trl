@@ -678,6 +678,7 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
+                # packing adds new column "position_ids" needed for document aware flash attention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -685,10 +686,10 @@ class SFTTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
-                if "sequence_length" in dataset.column_names:
-                    dataset = dataset.select_columns(["input_ids", "sequence_length"])
-                else:
-                    dataset = dataset.select_columns("input_ids")
+                selected_columns = ["input_ids"]
+                if "position_ids" in dataset.column_names:
+                    selected_columns.append("position_ids")
+                dataset = dataset.select_columns(selected_columns)
 
         return dataset
 
