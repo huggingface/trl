@@ -998,17 +998,22 @@ class GRPOTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompts = [x.get("prompt", x.get("prompt_content")) for x in inputs]
+        def _get_prompt(sample):
+            if "prompt" in sample:
+                return sample["prompt"]
+            if "prompt_content" in sample:
+                return sample["prompt_content"]
+            if "text" in sample:
+                return sample["text"]
+            return ""
+
+        prompts = [_get_prompt(x) for x in inputs]
         raw_prompt_lists = prompts
 
-        if is_conversational(inputs[0]):
-            rp_dicts = [{"prompt": lst} for lst in raw_prompt_lists]
-            prompts_text = [maybe_apply_chat_template(d, self.processing_class)["prompt"] for d in rp_dicts]
-        else:
-            prompts_text = raw_prompt_lists
-
         images, audios, videos = [], [], []
-        for rp_list in raw_prompt_lists:
+        # Gather multimodal inputs. For conversational data, they can be embedded inside the prompt;
+        # for standard-format data, they can appear as top-level keys (e.g. "audio", "image").
+        for sample, rp_list in zip(inputs, raw_prompt_lists):
             img_buf, aud_buf, vid_buf = [], [], []
             if isinstance(rp_list, list):
                 for msg in rp_list:
@@ -1025,15 +1030,36 @@ class GRPOTrainer(Trainer):
                             elif t == "video" and "video" in seg:
                                 vid_buf.append(seg["video"])
 
+            def _extend(buf, value):
+                if value is None:
+                    return
+                if isinstance(value, list):
+                    buf.extend(value)
+                else:
+                    buf.append(value)
+
+            _extend(img_buf, sample.get("image"))
+            _extend(img_buf, sample.get("images"))
+            _extend(aud_buf, sample.get("audio"))
+            _extend(aud_buf, sample.get("audios"))
+            _extend(vid_buf, sample.get("video"))
+            _extend(vid_buf, sample.get("videos"))
+
             images.append(img_buf)
             audios.append(aud_buf)
             videos.append(vid_buf)
+
+        if is_conversational(inputs[0]):
+            rp_dicts = [{"prompt": lst} for lst in raw_prompt_lists]
+            prompts_text = [maybe_apply_chat_template(d, self.processing_class)["prompt"] for d in rp_dicts]
+        else:
+            prompts_text = raw_prompt_lists
 
         processor_kwargs: dict[str, Any] = {"text": prompts_text}
         if any(images):
             processor_kwargs["images"] = images
         if any(audios):
-            processor_kwargs["audio"] = audios
+            processor_kwargs["audio"] = list(ele[0]["array"] for ele in audios)
         if any(videos):
             processor_kwargs["video"] = videos
 
@@ -1049,11 +1075,7 @@ class GRPOTrainer(Trainer):
             prompt_inputs = self.processing_class(
                 **processor_kwargs,
                 return_tensors="pt",
-                padding=True,
-                padding_side="left",
-                add_generation_prompt=True,
-                tokenize=True,
-                return_dict=True,
+                add_special_tokens=False
             )
 
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
@@ -1072,12 +1094,12 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
-                all_prompts_text = gather_object(prompts_text)
+                all_prompts = gather_object(prompts_text)
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
-                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                    ordered_set_of_prompts = all_prompts[:: self.num_generations]
                     with profiling_context(self, "vLLM.generate"):
                         completion_ids = self.vllm_client.generate(
                             prompts=ordered_set_of_prompts,
@@ -1091,13 +1113,13 @@ class GRPOTrainer(Trainer):
                             guided_decoding_regex=self.guided_decoding_regex,
                         )
                 else:
-                    completion_ids = [None] * len(all_prompts_text)
+                    completion_ids = [None] * len(all_prompts)
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its
                 # corresponding slice.
                 completion_ids = broadcast_object_list(completion_ids, from_process=0)
                 process_slice = slice(
-                    self.accelerator.process_index * len(prompts),
-                    (self.accelerator.process_index + 1) * len(prompts),
+                    self.accelerator.process_index * len(prompts_text),
+                    (self.accelerator.process_index + 1) * len(prompts_text),
                 )
                 completion_ids = completion_ids[process_slice]
 
@@ -1124,12 +1146,12 @@ class GRPOTrainer(Trainer):
                     orig_size = len(prompts_text)
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
-                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                    all_prompts = [p for sublist in gathered_prompts for p in sublist]
                 else:
-                    all_prompts_text = prompts_text
+                    all_prompts = prompts_text
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+                    all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
@@ -1274,8 +1296,8 @@ class GRPOTrainer(Trainer):
 
         # Slice to keep only the local part of the data
         process_slice = slice(
-            self.accelerator.process_index * len(prompts),
-            (self.accelerator.process_index + 1) * len(prompts),
+            self.accelerator.process_index * len(prompts_text),
+            (self.accelerator.process_index + 1) * len(prompts_text),
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
