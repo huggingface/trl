@@ -121,6 +121,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     completion_only_loss: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
+    padding_free: bool = True # just for test, don't use True here
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
@@ -129,27 +130,42 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         labels = [torch.tensor(example["input_ids"]) for example in examples]
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
+        if "position_ids" in examples[0]:
+            position_ids = [torch.tensor(example["position_ids"]) for example in examples]
 
         # Pad
         output = {}
-        output["input_ids"] = pad(
-            input_ids,
-            padding_value=self.pad_token_id,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-        )
-        output["attention_mask"] = pad(
-            attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-        )
-        output["labels"] = pad(
-            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-        )
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = pad(
-                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        if self.padding_free:
+            output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
+            output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+            output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
+            if self.completion_only_loss and "completion_mask" in examples[0]:
+                completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
+                output["labels"][completion_mask == 0] = -100
+            if "position_ids" in examples[0]:
+                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
+        else:
+            output["input_ids"] = pad(
+                input_ids,
+                padding_value=self.pad_token_id,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-
+            output["attention_mask"] = pad(
+                attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"] = pad(
+                labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            if self.completion_only_loss and "completion_mask" in examples[0]:
+                completion_mask = pad(
+                    completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
+                output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
+            if "position_ids" in examples[0]:
+                output["position_ids"] = pad(
+                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
         return output
 
 
@@ -293,7 +309,7 @@ class SFTTrainer(Trainer):
         if args.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
-            if args.packing and args.packing_strategy != "ffd":
+            if args.packing:
                 warnings.warn(
                     "You are passing `packing=True` and `padding_free=True` which is not recommended. Please refer "
                     "to the documentation to understand why this is not recommended."
@@ -313,18 +329,7 @@ class SFTTrainer(Trainer):
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
                 )
-            if args.packing and model.config._attn_implementation != "flash_attention_2":
-                warnings.warn(
-                    "You are using packing with padding-free training, but the attention implementation is not set to "
-                    "'flash_attention_2'. Packing flattens batches into a single sequence, and 'flash_attention_2' is "
-                    "the only known attention mechanism that reliably supports this. Using other implementations may "
-                    "lead to unexpected behavior. To ensure compatibility, set `attn_implementation='flash_attention_2'` "
-                    "in the model configuration."
-                )
-            data_collator = DataCollatorWithFlattening(
-                return_flash_attn_kwargs=False,
-                return_position_ids=True,
-            )
+            data_collator = DataCollatorWithFlattening(return_position_ids=True)
 
         if args.completion_only_loss is None:
             first_example = next(iter(train_dataset))
@@ -344,6 +349,19 @@ class SFTTrainer(Trainer):
                 )
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id, self.completion_only_loss, args.pad_to_multiple_of
+            )
+
+        if (
+            args.packing
+            and args.packing_strategy == "ffd"
+            and model.config._attn_implementation != "flash_attention_2"
+        ):
+            warnings.warn(
+                "You are using packing, but the attention implementation is not set to 'flash_attention_2'. Packing "
+                "flattens batches into a single sequence, and 'flash_attention_2' is the only known attention "
+                "mechanism that reliably supports this. Using other implementations may lead to cross-contamination "
+                "between batches. To avoid this, either disable packing by setting `packing=False`, or set "
+                "`attn_implementation='flash_attention_2'` in the model configuration."
             )
 
         # Dataset
@@ -659,18 +677,18 @@ class SFTTrainer(Trainer):
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
-                dataset: Dataset = dataset.select_columns("input_ids")
-                dataset: Dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
+                dataset = dataset.select_columns("input_ids")
+                dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset: Dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+                dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
                 if "sequence_length" in dataset.column_names:
-                    dataset: Dataset = dataset.select_columns(["input_ids", "sequence_length"])
+                    dataset = dataset.select_columns(["input_ids", "sequence_length"])
                 else:
-                    dataset: Dataset = dataset.select_columns("input_ids")
+                    dataset = dataset.select_columns("input_ids")
 
         return dataset
 
@@ -682,7 +700,7 @@ class SFTTrainer(Trainer):
         if self._signature_columns is None:
             self._signature_columns = ["input_ids", "attention_mask", "completion_mask"]
         # For the packing case with FFD, we need to store sequence_length returned by the data collator with flattening
-        if self.args.packing and self.args.packing_strategy == "ffd" and self.args.padding_free:
+        if self.args.packing and self.args.packing_strategy == "ffd":
             self._signature_columns.append("position_ids")
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
