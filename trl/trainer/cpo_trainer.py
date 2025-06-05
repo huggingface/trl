@@ -24,13 +24,13 @@ from typing import Any, Callable, Literal, Optional, Union
 import numpy as np
 import pandas as pd
 import torch
-import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 import transformers
 from accelerate import PartialState
 from datasets import Dataset
 from packaging import version
+from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -860,7 +860,9 @@ class CPOTrainer(Trainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
-        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        compute_loss_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
@@ -876,8 +878,10 @@ class CPOTrainer(Trainer):
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
-        # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        # the torch amp context manager as some hidden states are silently casted to full precision.
+        generate_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with generate_context_manager:
             policy_output = model.generate(
@@ -906,7 +910,9 @@ class CPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        prediction_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")

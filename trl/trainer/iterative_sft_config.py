@@ -45,7 +45,7 @@ class IterativeSFTConfig(TrainingArguments):
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             The truncation mode to use, either `"keep_end"` or `"keep_start"`.
         optimize_device_cache (`bool`, *optional*, defaults to `False`):
-            Whether to optimize CUDA cache for slightly more memory-efficient training.
+            Whether to optimize accelerator cache for slightly more memory-efficient training.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -81,7 +81,7 @@ class IterativeSFTConfig(TrainingArguments):
     )
     optimize_device_cache: bool = field(
         default=False,
-        metadata={"help": "Whether to optimize CUDA cache for slightly more memory-efficient training."},
+        metadata={"help": "Whether to optimize accelerator cache for slightly more memory-efficient training."},
     )
 
     def __post_init__(self):
