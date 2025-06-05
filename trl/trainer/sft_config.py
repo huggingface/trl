@@ -81,7 +81,6 @@ class SFTConfig(TrainingArguments):
             the full sequence for [language modeling](#language-modeling) datasets.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
-
     """
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -96,6 +95,13 @@ class SFTConfig(TrainingArguments):
                 "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
                 "If smaller than 1, will be interpreted as ratio of total training steps."
             )
+        },
+    )
+    average_tokens_across_devices: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
+            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
         },
     )
 
