@@ -25,8 +25,9 @@ class GRPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`GRPOTrainer`].
 
-    Only the parameters specific to GRPO training are listed here. For details on other parameters, refer to the
-    [`~transformers.TrainingArguments`] documentation.
+    This class includes only the parameters that are specific to GRPO training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -128,12 +129,9 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        learning_rate (`float`, *optional*, defaults to `1e-6`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
-        beta (`float`, *optional*, defaults to `0.04`):
-            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
-            speed, but may be numerically unstable for long training runs.
+        beta (`float`, *optional*, defaults to `0.0`):
+            KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and improving
+            training speed.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
@@ -204,6 +202,21 @@ class GRPOConfig(TrainingArguments):
         _VALID_DICT_FIELDS.append("model_init_kwargs")
     else:
         _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=1e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": (
+                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
+                "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
 
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[Union[dict, str]] = field(
@@ -380,18 +393,11 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    learning_rate: float = field(
-        default=1e-6,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "`transformers.TrainingArguments`."
-        },
-    )
     beta: float = field(
-        default=0.04,
+        default=0.0,
         metadata={
-            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
-            "training speed, but may be numerically unstable for long training runs."
+            "help": "KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and "
+            "improving training speed."
         },
     )
     num_iterations: int = field(

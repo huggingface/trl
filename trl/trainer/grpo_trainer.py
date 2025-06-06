@@ -23,10 +23,8 @@ from typing import Any, Callable, Optional, Union
 import datasets
 import torch
 import torch.utils.data
-import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -1508,10 +1506,7 @@ class GRPOTrainer(Trainer):
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
         logs = {**logs, **metrics}
-        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
-            super().log(logs, start_time)
-        else:  # transformers<=4.46
-            super().log(logs)
+        super().log(logs, start_time)
         self._metrics[mode].clear()
 
         if self.accelerator.is_main_process and self.log_completions:

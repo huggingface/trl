@@ -55,7 +55,7 @@ Distributed across 8 x H100 GPUs, the training takes approximately 30 minutes. Y
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-KTO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-KTO
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-KTO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
