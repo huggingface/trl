@@ -134,6 +134,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     pad_token_id: int
     completion_only_loss: bool = True
     padding_free: bool = False
+    return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
@@ -141,10 +142,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
         attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
-        if "position_ids" in examples[0]:
-            position_ids = [torch.tensor(example["position_ids"]) for example in examples]
-        else:
-            position_ids = [torch.arange(len(ids)) for ids in input_ids]
+        if self.return_position_ids:
+            if "position_ids" in examples[0]:
+                position_ids = [torch.tensor(example["position_ids"]) for example in examples]
+            else:
+                position_ids = [torch.arange(len(ids)) for ids in input_ids]
         labels = [torch.tensor(example["input_ids"]) for example in examples]
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
@@ -154,7 +156,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         if self.padding_free:
             output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
             output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
-            output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
+            if self.return_position_ids:
+                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
             output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
             if self.completion_only_loss and "completion_mask" in examples[0]:
                 completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
@@ -170,9 +173,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-            output["position_ids"] = pad(
-                position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
+            if self.return_position_ids:
+                output["position_ids"] = pad(
+                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
             output["labels"] = pad(
                 labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
@@ -354,6 +358,7 @@ class SFTTrainer(Trainer):
             self.completion_only_loss = "prompt" in first_example
         else:
             self.completion_only_loss = args.completion_only_loss
+
         if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -366,7 +371,12 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as a padding token."
                 )
             data_collator = DataCollatorForLanguageModeling(
-                pad_token_id, self.completion_only_loss, self.padding_free, args.pad_to_multiple_of
+                pad_token_id=pad_token_id,
+                completion_only_loss=self.completion_only_loss,
+                padding_free=self.padding_free,
+                # Using position_ids without flash_attn hurts the training
+                # return_position_ids=model.config._attn_implementation == "flash_attention_2",
+                pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
         if (
