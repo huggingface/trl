@@ -213,6 +213,28 @@ class TestTrlParser(unittest.TestCase):
         self.assertEqual(result_args[0].arg1, 3)
         self.assertEqual(result_args[0].arg2, "config_value")  # Still from config
 
+    @patch("builtins.open", mock_open(read_data="arg1: 2\nthis_arg_does_not_exist: config_value"))
+    @patch("yaml.safe_load")
+    def test_subparsers_with_config_defaults_and_arg_override_wrong_name(self, mock_yaml_load):
+        """Test that config defaults are applied to all subparsers."""
+        mock_yaml_load.return_value = {"arg1": 2, "this_arg_does_not_exist": "config_value"}
+
+        # Create the main parser
+        parser = TrlParser()
+
+        # Add subparsers
+        subparsers = parser.add_subparsers(dest="command", parser_class=TrlParser)
+
+        # Create a subparser for a specific command
+        subparsers.add_parser("subcommand", dataclass_types=[MyDataclass])
+
+        # Test with command line arguments overriding config
+        args = ["subcommand", "--arg1", "3", "--config", "config.yaml"]
+        with self.assertRaises(ValueError):
+            parser.parse_args_and_config(args)
+
+        parser.parse_args_and_config(args, fail_with_unknown_args=False)
+
     @patch("builtins.open", mock_open(read_data="arg1: 2\narg2: config_value"))
     @patch("yaml.safe_load")
     def test_subparsers_multiple_with_config_defaults(self, mock_yaml_load):
