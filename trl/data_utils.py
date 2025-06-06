@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import functools
+import warnings
+from collections import defaultdict, deque
 from collections.abc import Sequence
+from itertools import takewhile
 from typing import Any, Callable, Optional, TypeVar, Union
 
 import numpy as np
@@ -120,36 +122,31 @@ def apply_chat_template(
             prompt_chosen = tokenizer.apply_chat_template(
                 example["prompt"] + example["chosen"], tools=tools, tokenize=False
             )
+            # DeepSeek-R1 inserts a <think> token when using `add_generation_prompt`, which can cause discrepancies
+            # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
+            # common prefix between the two. In most cases, this is a no-op.
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen)))
+
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = tokenizer.apply_chat_template(
                 example["prompt"] + example["rejected"], tools=tools, tokenize=False
             )
+            # Handle DeepSeek-R1 <think> token, see the above comment for details
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
                 example["prompt"] + example["completion"], tools=tools, tokenize=False
             )
+            # Handle DeepSeek-R1 <think> token, see the above comment for details
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
             chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False)
         if "rejected" in example:
             rejected = tokenizer.apply_chat_template(example["rejected"], tools=tools, tokenize=False)
-
-    # Ensure that the prompt is the initial part of the prompt-completion string
-    if "prompt" in example:
-        error_message = (
-            "The chat template applied to the prompt + completion does not start with the chat template applied to "
-            "the prompt alone. This can indicate that the chat template is not supported by TRL."
-            "\n**Prompt**:\n{}\n\n**Prompt + Completion**:\n{}"
-        )
-        if "chosen" in example and not prompt_chosen.startswith(prompt):
-            raise ValueError(error_message.format(prompt, prompt_chosen))
-        if "rejected" in example and not prompt_rejected.startswith(prompt):
-            raise ValueError(error_message.format(prompt, prompt_rejected))
-        if "completion" in example and not prompt_completion.startswith(prompt):
-            raise ValueError(error_message.format(prompt, prompt_completion))
 
     # Extract the completion by removing the prompt part from the prompt-completion string
     output = {}
@@ -465,6 +462,11 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
     ```
     """
+    warnings.warn(
+        "`pack_examples` is deprecated and will be removed in version 0.20.0. Use `pack_dataset` with a dataset "
+        "instead.",
+        DeprecationWarning,
+    )
     # Join  all the values into a single list
     examples = {k: sum(v, []) for k, v in examples.items()}
     # Split the values into chunks of size seq_length
@@ -472,7 +474,127 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
     return examples
 
 
-def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dict[str, Any]] = None) -> DatasetType:
+class _SegmentTree:
+    """
+    A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger value
+    for a given input within the range [1, maxval].
+
+    See [Fewer Truncations Improve Language Modeling](https://arxiv.org/abs/2404.10830) for more details.
+    """
+
+    def __init__(self, maxval: int):
+        self.maxval = maxval
+        self.tree = [0] * (2 * maxval)
+
+    def add(self, val):
+        assert 0 < val <= self.maxval
+        i = self.maxval + val - 1
+        self.tree[i] = val
+        while i > 1:
+            i >>= 1
+            left, right = self.tree[i << 1], self.tree[(i << 1) + 1]
+            # Compare the values using if-else otherwise repeated calls to `builtins.max` become the bottleneck
+            self.tree[i] = left if left >= right else right
+
+    def remove(self, val):
+        assert 0 < val <= self.maxval
+        i = self.maxval + val - 1
+        self.tree[i] = 0
+        while i > 1:
+            i >>= 1
+            left, right = self.tree[i << 1], self.tree[(i << 1) + 1]
+            # Compare the values using if-else otherwise repeated calls to `builtins.max` become the bottleneck
+            self.tree[i] = left if left >= right else right
+
+    def search(self, val):
+        assert 0 < val <= self.maxval
+        i = 1
+        while i < self.maxval:
+            if self.tree[i << 1] >= val:
+                i = i << 1
+            else:
+                i = (i << 1) + 1
+        return self.tree[i]
+
+
+def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
+    columns = []
+    list_column_idx = None
+    for idx, column in enumerate(examples.columns):
+        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
+            column = pc.list_slice(column, 0, seq_length)
+            if list_column_idx is None:
+                list_column_idx = idx
+        columns.append(column)
+    examples = pa.Table.from_arrays(columns, names=examples.column_names)
+
+    ids = np.arange(len(examples))
+    assert list_column_idx is not None
+    lengths = pc.make_struct(pc.list_value_length(examples[list_column_idx]).combine_chunks(), ids)
+    lengths = lengths.sort("descending", by=0)
+
+    segment_tree = _SegmentTree(seq_length)
+    segment_tree.add(seq_length)  # the max, `seq_length` bin is always available
+    space_to_bin = defaultdict(deque)
+
+    # Bin is represented as a dict (of example ids and sum of their lengths) to allow in-place updates
+    bins: list[dict] = []
+    for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
+        space = segment_tree.search(length)
+
+        if space < seq_length:
+            bin = space_to_bin[space].popleft()
+        else:
+            bin = {"ids": [], "length": 0}
+            bins.append(bin)
+
+        bin["ids"].append(idx)
+        bin["length"] += length
+        if space < seq_length and not space_to_bin[space]:
+            segment_tree.remove(space)
+
+        space = space - length
+        space_to_bin[space].append(bin)
+        if space > 0:
+            segment_tree.add(space)
+
+    examples = pc.take(examples, [id_ for bin in bins for id_ in bin["ids"]])
+    offsets = np.array([0] + [bin["length"] for bin in bins])
+    offsets = np.cumsum(offsets)
+
+    columns = []
+    for column in examples.columns:
+        assert len(column.chunks) == 1  # `pc.take` returns a ChunkedArray with a single chunk
+        column = column.chunks[0]
+        if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
+            dtype = column.offsets.type.to_pandas_dtype()
+            column = type(column).from_arrays(offsets.astype(dtype), column.values)
+        columns.append(column)
+    return pa.Table.from_arrays(columns, names=examples.column_names)
+
+
+def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using a wrapped strategy."""
+    columns = []
+    for column in examples.columns:
+        if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
+            if isinstance(column, pa.ChunkedArray):
+                column = column.combine_chunks()
+            offsets, values = column.offsets, column.values
+            values = values[offsets[0].as_py() : offsets[-1].as_py()]
+            num_elements = len(values)
+            dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
+            offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
+            offsets = np.concatenate((offsets, [num_elements]))
+            column = type(column).from_arrays(offsets, values)
+        columns.append(column)
+    return pa.Table.from_arrays(columns, names=examples.column_names)
+
+
+def pack_dataset(
+    dataset: DatasetType, seq_length: int, strategy: str = "ffd", map_kwargs: Optional[dict[str, Any]] = None
+) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
 
@@ -481,6 +603,13 @@ def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dic
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
+        strategy (`str`, *optional*, defaults to `"ffd"`):
+            Packing strategy to use. Can be either:
+
+            - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
+                middle.
+            - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
+                to completely fill each packed sequence with data.
         map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
@@ -491,46 +620,29 @@ def pack_dataset(dataset: DatasetType, seq_length: int, map_kwargs: Optional[dic
     Example:
     ```python
     >>> from datasets import Dataset
+    >>> from trl import pack_dataset
     >>> examples = {
-    ...     "input_ids": [[1, 2], [3, 4], [5, 6], [7]],
-    ...     "attention_mask": [[1, 1], [0, 1], [1, 1], [1]],
+    ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8], [9]],
+    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]]
     ... }
     >>> dataset = Dataset.from_dict(examples)
-    >>> packed_dataset = pack_dataset(dataset, seq_length=4)
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="ffd")
     >>> packed_dataset[:]
-    {'input_ids': [[1, 2, 3, 4], [5, 6, 7]],
-     'attention_mask': [[1, 1, 0, 1], [1, 1, 1]]}
+    {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
+     'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
     ```
     """
     if map_kwargs is None:
         map_kwargs = {}
-    if isinstance(dataset, Dataset):
-        # Fast packing with pyarrow
-        def pack(examples):
-            packed_columns = []
-            for column in examples.columns:
-                if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-                    if isinstance(column, pa.ChunkedArray):
-                        column = column.combine_chunks()
-                    offsets, values = column.offsets, column.values
-                    values = values[offsets[0].as_py() : offsets[-1].as_py()]
-                    num_elements = len(values)
-                    dtype = offsets.type.to_pandas_dtype()  # np.int32 or np.int64
-                    offsets = np.arange(0, num_elements, seq_length, dtype=dtype)
-                    offsets = np.concatenate((offsets, [num_elements]))
-                    column = type(column).from_arrays(offsets, values)
-                packed_columns.append(column)
-            return pa.Table.from_arrays(packed_columns, names=examples.column_names)
-
-        dataset = dataset.with_format("arrow")
-        dataset = dataset.map(pack, batched=True, **map_kwargs)
-        dataset = dataset.with_format(None)
+    # Fast packing with pyarrow
+    dataset = dataset.with_format("arrow")
+    if strategy == "ffd":
+        dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    elif strategy == "wrapped":
+        dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        dataset = dataset.map(
-            functools.partial(pack_examples, seq_length=seq_length),
-            batched=True,
-            **map_kwargs,
-        )
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'wrapped'.")
+    dataset = dataset.with_format(None)
     return dataset
 
 
