@@ -519,6 +519,12 @@ class _SegmentTree:
 
 def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
+    # Add position_ids to the examples
+    input_ids = examples["input_ids"]
+    position_ids_python = [list(range(len(sequence))) for sequence in input_ids.to_pylist()]
+    position_ids_array = pa.array(position_ids_python, type=examples["input_ids"].type)
+    examples = examples.append_column("position_ids", position_ids_array)
+
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
