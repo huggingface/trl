@@ -138,7 +138,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
-    sequence_parallel_size: int = 1
+    sequence_parallel_size: Optional[int] = None
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
@@ -188,7 +188,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
                 output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
 
-        if self.sequence_parallel_size > 1:
+        if self.sequence_parallel_size is not None and self.sequence_parallel_size > 1:
             # Get local (start, end) for sequence parallelism slicing
             total_seq_len = output["input_ids"].shape[1]
             slice_size = total_seq_len // self.local_world_size
@@ -221,7 +221,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         return output
 
     def __post_init__(self):
-        if self.sequence_parallel_size > 1:
+        if self.sequence_parallel_size is not None and self.sequence_parallel_size > 1:
             from ..models.ring_attn import get_ring_attn_group
 
             # Get information about our position in the SP group
