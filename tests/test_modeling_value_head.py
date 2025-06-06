@@ -68,7 +68,7 @@ class BaseTester:
             """
             for model_name in self.all_model_names:
                 model = self.trl_model_class.from_pretrained(model_name)
-                self.assertEqual(model.v_head.summary.weight.shape[0], 1)
+                self.assertEqual(model.v_head.summary.num_embeddings, 1)
 
         def test_value_head_init_random(self):
             r"""

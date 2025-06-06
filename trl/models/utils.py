@@ -83,7 +83,7 @@ def setup_chat_format(
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
     <Tip warning="true">
-    We recommend using [`setup_chat_template`] instead of this function.
+    We recommend using [`clone_chat_template`] instead of this function.
     </Tip>
 
     If the model already has a chat template, this will throw an error. If you want to overwrite it, please set `tokenizer.chat_template` to `None`.
@@ -137,7 +137,7 @@ def setup_chat_format(
     return model, tokenizer
 
 
-def setup_chat_template(
+def clone_chat_template(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     source_tokenizer_path: str,
@@ -171,14 +171,14 @@ def setup_chat_template(
     Example:
     ```python
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    from trl import setup_chat_template
+    from trl import clone_chat_template
     model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
-    model, tokenizer = setup_chat_template(model, tokenizer, source="Qwen/Qwen3-0.6B")
+    model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
     ```
     """
     # Load the source tokenizer
-    tokenizer_source = AutoTokenizer.from_pretrained(source)
+    tokenizer_source = AutoTokenizer.from_pretrained(source_tokenizer_path)
 
     # Set the chat template for the tokenizer
     tokenizer.chat_template = tokenizer_source.get_chat_template()

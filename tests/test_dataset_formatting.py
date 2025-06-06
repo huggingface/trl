@@ -19,7 +19,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl.extras.dataset_formatting import get_formatting_func_from_dataset
-from trl.models.utils import ChatMlSpecialTokens, setup_chat_format, setup_chat_template
+from trl.models.utils import ChatMlSpecialTokens, clone_chat_template, setup_chat_format
 
 
 class DatasetFormattingTestCase(unittest.TestCase):
@@ -135,7 +135,7 @@ class SetupChatFormatTestCase(unittest.TestCase):
         self.assertEqual(modified_tokenizer.eos_token, _chatml.eos_token)
         self.assertEqual(modified_tokenizer.pad_token, _chatml.pad_token)
         self.assertEqual(modified_tokenizer.bos_token, _chatml.bos_token)
-        self.assertEqual((modified_model.get_input_embeddings().weight.shape[0] % 123), 0)
+        self.assertEqual((modified_model.get_input_embeddings().num_embeddings % 123), 0)
 
     def test_example_with_setup_model(self):
         modified_model, modified_tokenizer = setup_chat_format(
@@ -155,7 +155,7 @@ class SetupChatFormatTestCase(unittest.TestCase):
         )
 
 
-class SetupChatTemplateTestCase(unittest.TestCase):
+class CloneChatTemplateTestCase(unittest.TestCase):
     def setUp(self):
         # This tokenizer doesn't have a chat_template by default
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
@@ -163,20 +163,20 @@ class SetupChatTemplateTestCase(unittest.TestCase):
         # This one has a chat_template by default
         self.source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
-    def test_setup(self):
-        _, modified_tokenizer = setup_chat_template(self.model, self.tokenizer, self.source)
+    def test_clone(self):
+        _, modified_tokenizer = clone_chat_template(self.model, self.tokenizer, self.source)
 
         # Check if special tokens are correctly set
         self.assertEqual(modified_tokenizer.eos_token, "<|im_end|>")
 
-    def test_setup_with_resize(self):
-        modified_model, _ = setup_chat_template(self.model, self.tokenizer, self.source, resize_to_multiple_of=123)
+    def test_clone_with_resize(self):
+        modified_model, _ = clone_chat_template(self.model, self.tokenizer, self.source, resize_to_multiple_of=123)
 
         # Check that the input embeddings have been resized to a multiple of 123
-        self.assertEqual((modified_model.get_input_embeddings().weight.shape[0] % 123), 0)
+        self.assertEqual((modified_model.get_input_embeddings().num_embeddings % 123), 0)
 
     def test_apply_new_chat_template(self):
-        _, modified_tokenizer = setup_chat_template(self.model, self.tokenizer, self.source)
+        _, modified_tokenizer = clone_chat_template(self.model, self.tokenizer, self.source)
         messages = [
             {"role": "system", "content": "You are helpful"},
             {"role": "user", "content": "Hello"},

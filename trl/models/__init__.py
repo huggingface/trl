@@ -23,10 +23,10 @@ _import_structure = {
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
     "utils": [
         "SUPPORTED_ARCHITECTURES",
+        "clone_chat_template",
         "prepare_deepspeed",
         "prepare_fsdp",
         "setup_chat_format",
-        "setup_chat_template",
         "unwrap_model_for_generation",
     ],
 }
@@ -50,10 +50,10 @@ if TYPE_CHECKING:
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
     from .utils import (
         SUPPORTED_ARCHITECTURES,
+        clone_chat_template,
         prepare_deepspeed,
         prepare_fsdp,
         setup_chat_format,
-        setup_chat_template,
         unwrap_model_for_generation,
     )
 

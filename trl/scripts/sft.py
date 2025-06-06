@@ -63,10 +63,10 @@ from trl import (
     SFTConfig,
     SFTTrainer,
     TrlParser,
+    clone_chat_template,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    setup_chat_template,
 )
 
 
@@ -105,7 +105,7 @@ def main(script_args, training_args, model_args):
     # Set default chat template if needed
     if tokenizer.chat_template is None:
         # TODO: source should be passed as an argument
-        model, tokenizer = setup_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+        model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
 
     ################
     # Dataset

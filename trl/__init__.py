@@ -41,9 +41,9 @@ _import_structure = {
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
         "PreTrainedModelWrapper",
+        "clone_chat_template",
         "create_reference_model",
         "setup_chat_format",
-        "setup_chat_template",
     ],
     "trainer": [
         "AlignPropConfig",
@@ -137,9 +137,9 @@ if TYPE_CHECKING:
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
         PreTrainedModelWrapper,
+        clone_chat_template,
         create_reference_model,
         setup_chat_format,
-        setup_chat_template,
     )
     from .scripts import ScriptArguments, TrlParser, init_zero_verbose
     from .trainer import (
