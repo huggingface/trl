@@ -38,6 +38,7 @@ from transformers import (
     Trainer,
     TrainerCallback,
     is_wandb_available,
+    ProcessorMixin,
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
@@ -378,7 +379,7 @@ class GRPOTrainer(Trainer):
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
@@ -431,8 +432,19 @@ class GRPOTrainer(Trainer):
         # Processing class
         if processing_class is None:
             processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
-        if processing_class.pad_token is None:
-            processing_class.pad_token = processing_class.eos_token
+
+        # pick the tokenizer from the processing class
+        self.processor_tok = processing_class if isinstance(processing_class, PreTrainedTokenizerBase) else processing_class.tokenizer
+        if self.processor_tok.pad_token is None:
+            self.processor_tok.pad_token = self.processor_tok.eos_token
+
+        # if using a custom processor, disable vLLM sampling
+        if isinstance(processing_class, ProcessorMixin):
+            args.use_vllm = False
+            warnings.warn(
+                "Detected a custom processing class; disabling vLLM sampling.",
+                UserWarning,
+            )
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -668,9 +680,9 @@ class GRPOTrainer(Trainer):
             self.generation_config = GenerationConfig(
                 max_new_tokens=self.max_completion_length,
                 do_sample=True,
-                pad_token_id=processing_class.pad_token_id,
-                bos_token_id=processing_class.bos_token_id,
-                eos_token_id=processing_class.eos_token_id,
+                pad_token_id=self.processor_tok.pad_token_id,
+                bos_token_id=self.processor_tok.bos_token_id,
+                eos_token_id=self.processor_tok.eos_token_id,
                 temperature=self.temperature,
                 top_p=self.top_p,
                 top_k=self.top_k,
@@ -984,11 +996,86 @@ class GRPOTrainer(Trainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompts = [x["prompt"] for x in inputs]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-        prompt_inputs = self.processing_class(
-            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
+        def _get_prompt(sample):
+            if "prompt" in sample:
+                return sample["prompt"]
+            if "prompt_content" in sample:
+                return sample["prompt_content"]
+            if "text" in sample:
+                return sample["text"]
+            return ""
+
+        prompts = [_get_prompt(x) for x in inputs]
+        raw_prompt_lists = prompts
+
+        images, audios, videos = [], [], []
+        # Gather multimodal inputs. For conversational data, they can be embedded inside the prompt;
+        # for standard-format data, they can appear as top-level keys (e.g. "audio", "image").
+        for sample, rp_list in zip(inputs, raw_prompt_lists):
+            img_buf, aud_buf, vid_buf = [], [], []
+            if isinstance(rp_list, list):
+                for msg in rp_list:
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        for seg in content:
+                            if not isinstance(seg, dict):
+                                continue
+                            t = seg.get("type")
+                            if t == "image" and "image" in seg:
+                                img_buf.append(seg["image"])
+                            elif t == "audio" and "audio" in seg:
+                                aud_buf.append(seg["audio"])
+                            elif t == "video" and "video" in seg:
+                                vid_buf.append(seg["video"])
+
+            def _extend(buf, value):
+                if value is None:
+                    return
+                if isinstance(value, list):
+                    buf.extend(value)
+                else:
+                    buf.append(value)
+
+            _extend(img_buf, sample.get("image"))
+            _extend(img_buf, sample.get("images"))
+            _extend(aud_buf, sample.get("audio"))
+            _extend(aud_buf, sample.get("audios"))
+            _extend(vid_buf, sample.get("video"))
+            _extend(vid_buf, sample.get("videos"))
+
+            images.append(img_buf)
+            audios.append(aud_buf)
+            videos.append(vid_buf)
+
+        if is_conversational(inputs[0]):
+            rp_dicts = [{"prompt": lst} for lst in raw_prompt_lists]
+            prompts_text = [maybe_apply_chat_template(d, self.processing_class)["prompt"] for d in rp_dicts]
+        else:
+            prompts_text = raw_prompt_lists
+
+        processor_kwargs: dict[str, Any] = {"text": prompts_text}
+        if any(images):
+            processor_kwargs["images"] = images
+        if any(audios):
+            processor_kwargs["audio"] = list(ele[0]["array"] for ele in audios)
+        if any(videos):
+            processor_kwargs["video"] = videos
+
+        if isinstance(self.processing_class, PreTrainedTokenizerBase):
+            prompt_inputs = self.processing_class(
+                **processor_kwargs,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+            )
+        else:
+            prompt_inputs = self.processing_class(
+                **processor_kwargs,
+                return_tensors="pt",
+                add_special_tokens=False
+            )
+
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
@@ -1005,12 +1092,12 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
-                all_prompts_text = gather_object(prompts_text)
+                all_prompts = gather_object(prompts_text)
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
-                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                    ordered_set_of_prompts = all_prompts[:: self.num_generations]
                     with profiling_context(self, "vLLM.generate"):
                         completion_ids = self.vllm_client.generate(
                             prompts=ordered_set_of_prompts,
@@ -1024,13 +1111,13 @@ class GRPOTrainer(Trainer):
                             guided_decoding_regex=self.guided_decoding_regex,
                         )
                 else:
-                    completion_ids = [None] * len(all_prompts_text)
+                    completion_ids = [None] * len(all_prompts)
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its
                 # corresponding slice.
                 completion_ids = broadcast_object_list(completion_ids, from_process=0)
                 process_slice = slice(
-                    self.accelerator.process_index * len(prompts),
-                    (self.accelerator.process_index + 1) * len(prompts),
+                    self.accelerator.process_index * len(prompts_text),
+                    (self.accelerator.process_index + 1) * len(prompts_text),
                 )
                 completion_ids = completion_ids[process_slice]
 
@@ -1057,12 +1144,12 @@ class GRPOTrainer(Trainer):
                     orig_size = len(prompts_text)
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
-                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                    all_prompts = [p for sublist in gathered_prompts for p in sublist]
                 else:
-                    all_prompts_text = prompts_text
+                    all_prompts = prompts_text
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+                    all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
@@ -1075,7 +1162,7 @@ class GRPOTrainer(Trainer):
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            completion_ids = pad(completion_ids, padding_value=self.processor_tok.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         else:
             # Regular generation path
@@ -1088,7 +1175,7 @@ class GRPOTrainer(Trainer):
                     else nullcontext()
                 ):
                     prompt_completion_ids = unwrapped_model.generate(
-                        prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+                        **prompt_inputs, generation_config=self.generation_config
                     )
 
             # Compute prompt length and extract completion ids
@@ -1097,7 +1184,7 @@ class GRPOTrainer(Trainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
+        is_eos = completion_ids == self.processor_tok.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1135,7 +1222,7 @@ class GRPOTrainer(Trainer):
                 old_per_token_logps = None
 
         # Decode the generated completions
-        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        completions_text = self.processor_tok.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
             for prompt, completion in zip(prompts, completions_text):
@@ -1207,8 +1294,8 @@ class GRPOTrainer(Trainer):
 
         # Slice to keep only the local part of the data
         process_slice = slice(
-            self.accelerator.process_index * len(prompts),
-            (self.accelerator.process_index + 1) * len(prompts),
+            self.accelerator.process_index * len(prompts_text),
+            (self.accelerator.process_index + 1) * len(prompts_text),
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
