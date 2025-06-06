@@ -214,13 +214,12 @@ class TrlParser(HfArgumentParser):
         if return_remaining_strings:
             args_remaining_strings = output[-1]
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
+        elif fail_with_unknown_args and config_remaining_strings:
+            raise ValueError(
+                f"Unknown arguments from config file: {config_remaining_strings}. Please remove them, add them to the "
+                "dataclass, or set `fail_with_unknown_args=False`."
+            )
         else:
-            if fail_with_unknown_args:
-                if config_remaining_strings:
-                    raise ValueError(
-                        f"Unknown arguments from config file: {config_remaining_strings}. "
-                        "Please remove them or add them to the dataclass."
-                    )
             return output
 
     def set_defaults_with_config(self, **kwargs) -> list[str]:

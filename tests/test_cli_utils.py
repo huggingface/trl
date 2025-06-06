@@ -233,6 +233,8 @@ class TestTrlParser(unittest.TestCase):
         with self.assertRaises(ValueError):
             parser.parse_args_and_config(args)
 
+        parser.parse_args_and_config(args, allow_unknown_args=True)
+
     @patch("builtins.open", mock_open(read_data="arg1: 2\narg2: config_value"))
     @patch("yaml.safe_load")
     def test_subparsers_multiple_with_config_defaults(self, mock_yaml_load):
