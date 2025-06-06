@@ -157,7 +157,7 @@ def setup_chat_template(
             Model to update.
         tokenizer (`PreTrainedTokenizer`):
             Tokenizer to update with a new chat template.
-        source (`str`):
+        source_tokenizer_path (`str`):
             Name or path of a pretrained tokenizer from which to copy the chat template.
         resize_to_multiple_of (`int` or `None`, *optional*, defaults to `64`):
             Resize the model's token embeddings to a multiple of this value. If `None`, no resizing is performed.
