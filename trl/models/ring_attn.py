@@ -204,26 +204,26 @@ def update_ring_attn_params(batch: dict[str, torch.Tensor]):
 def reset_ring_attn_position_ids(position_ids: torch.Tensor) -> torch.Tensor:
     """
     Reset position IDs for ring attention to start from 0 for each rank.
-    
+
     For ring attention, each rank should have position IDs that start from 0
     rather than continuing from where the previous rank left off.
-    
+
     Args:
         position_ids: Original position IDs tensor with shape [batch_size, seq_len]
-        
+
     Returns:
         Reset position IDs tensor with shape [batch_size, seq_len] where
         each sequence starts from 0
     """
     if position_ids.dim() == 1:
         position_ids = position_ids.unsqueeze(0)
-    
+
     batch_size, seq_len = position_ids.shape
     reset_position_ids = torch.zeros_like(position_ids)
-    
+
     for batch_idx in range(batch_size):
         seq_pos_ids = position_ids[batch_idx]
         # Reset position IDs to start from 0 for this rank's sequence slice
         reset_position_ids[batch_idx] = torch.arange(seq_len, dtype=seq_pos_ids.dtype, device=seq_pos_ids.device)
-    
+
     return reset_position_ids
