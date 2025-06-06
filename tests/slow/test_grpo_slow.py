@@ -22,7 +22,13 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_liger_kernel, require_peft, require_torch_accelerator
+from transformers.testing_utils import (
+    backend_empty_cache,
+    require_liger_kernel,
+    require_peft,
+    require_torch_accelerator,
+    torch_device,
+)
 
 from trl import GRPOConfig, GRPOTrainer
 
@@ -39,7 +45,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
 
     def tearDown(self):
         gc.collect()
-        torch.cuda.empty_cache()
+        backend_empty_cache(torch_device)
         gc.collect()
 
     @parameterized.expand(MODELS_TO_TEST)

@@ -198,7 +198,7 @@ class TestGenerateModelCard(unittest.TestCase):
         card_text = str(model_card)
         self.assertIn("[username/my_base_model](https://huggingface.co/username/my_base_model)", card_text)
         self.assertIn("my_model", card_text)
-        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
+        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device=torch_device)', card_text)
         self.assertIn("datasets: username/my_dataset", card_text)
         self.assertIn("](https://wandb.ai/username/project_id/runs/abcd1234)", card_text)
         self.assertIn("](https://www.comet.com/username/project_id/experiment_id", card_text)
@@ -222,7 +222,7 @@ class TestGenerateModelCard(unittest.TestCase):
         )
         card_text = str(model_card)
         self.assertIn("my_model", card_text)
-        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
+        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device=torch_device)', card_text)
         self.assertIn("My Trainer", card_text)
 
 

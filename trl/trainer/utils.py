@@ -918,9 +918,7 @@ def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesCon
 
 
 def get_kbit_device_map() -> Optional[dict[str, int]]:
-    if is_torch_xpu_available():
-        return {"": f"xpu:{PartialState().local_process_index}"}
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available() or is_torch_xpu_available():
         return {"": PartialState().local_process_index}
     else:
         return None

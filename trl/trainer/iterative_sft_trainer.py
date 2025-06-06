@@ -87,7 +87,7 @@ class IterativeSFTTrainer(Trainer):
         truncation_mode (`str`, *optional*, deprecated):
             The truncation mode to use. Use `args.truncation_mode` instead.
         optimize_device_cache (`bool`, *optional*, deprecated):
-            Whether to optimize CUDA cache. Use `args.optimize_device_cache` instead.
+            Whether to optimize accelerator cache. Use `args.optimize_device_cache` instead.
     """
 
     _tag_names = ["trl", "iterative-sft"]
