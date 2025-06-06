@@ -140,7 +140,7 @@ def setup_chat_format(
 def setup_chat_template(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
-    source: str,
+    source_tokenizer_path: str,
     resize_to_multiple_of: Optional[int] = 64,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
