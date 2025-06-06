@@ -29,16 +29,16 @@ _deepspeed_available = _is_package_available("deepspeed")
 _diffusers_available = _is_package_available("diffusers")
 _fastapi_available = _is_package_available("fastapi")
 _is_liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
-_joblib_available = _is_package_available("joblib")
 _llm_blender_available = _is_package_available("llm_blender")
 _mergekit_available = _is_package_available("mergekit")
 _pydantic_available = _is_package_available("pydantic")
 _requests_available = _is_package_available("requests")
-_ring_attn_available = _is_package_available("ring_flash_attn")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
-_vllm_ascend_available = _is_package_available("vllm_ascend")
 _vllm_available = _is_package_available("vllm")
+_vllm_ascend_available = _is_package_available("vllm_ascend")
+_joblib_available = _is_package_available("joblib")
+_ring_attn_available = _is_package_available("ring_flash_attn")
 
 
 def is_deepspeed_available() -> bool:
@@ -51,10 +51,6 @@ def is_diffusers_available() -> bool:
 
 def is_fastapi_available() -> bool:
     return _fastapi_available
-
-
-def is_joblib_available() -> bool:
-    return _joblib_available
 
 
 def is_liger_kernel_available(min_version: str = LIGER_KERNEL_MIN_VERSION) -> bool:
@@ -77,10 +73,6 @@ def is_requests_available() -> bool:
     return _requests_available
 
 
-def is_ring_attn_available() -> bool:
-    return _ring_attn_available
-
-
 def is_unsloth_available() -> bool:
     return _unsloth_available
 
@@ -89,12 +81,20 @@ def is_uvicorn_available() -> bool:
     return _uvicorn_available
 
 
+def is_vllm_available() -> bool:
+    return _vllm_available
+
+
 def is_vllm_ascend_available() -> bool:
     return _vllm_ascend_available
 
 
-def is_vllm_available() -> bool:
-    return _vllm_available
+def is_joblib_available() -> bool:
+    return _joblib_available
+
+
+def is_ring_attn_available() -> bool:
+    return _ring_attn_available
 
 
 class _LazyModule(ModuleType):
