@@ -21,6 +21,9 @@ import torch.nn.functional as F
 from ..import_utils import is_ring_attn_available
 
 
+if is_ring_attn_available():
+    from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
+
 logger = logging.getLogger(__name__)
 
 RING_ATTN_GROUP = None
@@ -47,15 +50,22 @@ def set_ring_attn_group(ring_attn_group: dist.ProcessGroup | None):
     RING_ATTN_GROUP = ring_attn_group
 
 
-def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int | None = None):
+def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int = 1):
     """
     Create ring attention group and substitute flash attn with ring flash attn.
 
     Args:
-        sequence_parallel_size: Sequence parallelism factor.
-        heads_k_stride: Sequence parallelism K head stride size. Passed
-            through to `ring_flash_attn.substitute_hf_flash_attn`. Defaults to 1.
+        sequence_parallel_size (`int`):
+            Sequence parallelism factor.
+        heads_k_stride (`int`, *optional*, defaults to `1`):
+            Sequence parallelism K head stride size. Passed through to `ring_flash_attn.substitute_hf_flash_attn`.
     """
+    if not is_ring_attn_available():
+        raise ImportError(
+            "ring-flash-attn is required for sequence parallelism with ring attention. Please install it using: "
+            "`pip install ring-flash-attn`."
+        )
+
     if get_ring_attn_group() is not None:
         logger.info("Ring attention already registered, exiting early...")
         return
@@ -65,15 +75,15 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int | None
         return
 
     logger.info(
-        "Enabling ring attention sequence parallelism: "
-        f"each sequence will be processed across {sequence_parallel_degree} GPUs"
+        "Enabling ring attention sequence parallelism: each sequence will be processed across "
+        f"{sequence_parallel_degree} GPUs"
     )
 
     world_size = dist.get_world_size()
     if sequence_parallel_degree > world_size:
         raise ValueError(
-            f"sequence_parallel_degree ({sequence_parallel_degree}) "
-            f"must be less than or equal to world_size ({world_size})"
+            f"sequence_parallel_degree ({sequence_parallel_degree}) must be less than or equal to world_size "
+            f"({world_size})"
         )
     if world_size % sequence_parallel_degree != 0:
         raise ValueError(
@@ -86,27 +96,21 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int | None
     local_group = None
 
     # Create sequence parallel groups
-    for i in range(num_groups):
-        ring_attn_ranks = list(
-            range(
-                i * sequence_parallel_degree,
-                (i + 1) * sequence_parallel_degree,
-            )
-        )
+    for group_idx in range(num_groups):
+        ring_attn_ranks = list(range(group_idx * sequence_parallel_degree, (group_idx + 1) * sequence_parallel_degree))
         # NCCL backend is assumed for GPU communication
         group = dist.new_group(ranks=ring_attn_ranks, backend="nccl")
 
         # Track which GPUs are in which groups for logging
-        for r in ring_attn_ranks:
-            group_assignments[r] = i
+        for rank in ring_attn_ranks:
+            group_assignments[rank] = group_idx
 
         # Assign the group to the current rank if it belongs to this group
         if rank in ring_attn_ranks:
             local_group = group
 
     if local_group is None:
-        # This should theoretically not happen if ranks cover 0 to world_size-1
-        # and checks above pass.
+        # This should theoretically not happen if ranks cover 0 to world_size-1 and checks above pass.
         raise RuntimeError(f"Rank {rank} was not assigned to any ring attention group.")
 
     set_ring_attn_group(local_group)
@@ -115,34 +119,16 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int | None
     if rank == 0:
         logger.info(f"Sequence parallel group assignments (GPU Rank -> Group Index): {group_assignments}")
 
-    if heads_k_stride is None:
-        heads_k_stride = 1
-
-    if is_ring_attn_available():
-        from ring_flash_attn import substitute_hf_flash_attn
-
-        substitute_hf_flash_attn(process_group=get_ring_attn_group(), heads_k_stride=heads_k_stride)
-        logger.info("Successfully substituted HF flash attention with ring flash attention.")
-    else:
-        logger.error(
-            "Could not import `substitute_hf_flash_attn` from `ring_flash_attn`. "
-            "Please ensure the 'ring-flash-attn' package is installed."
-        )
-        # Reset the group if substitution fails to avoid inconsistent state
-        set_ring_attn_group(None)
-        raise ImportError("Could not import `substitute_hf_flash_attn` from `ring_flash_attn`.")
+    substitute_hf_flash_attn(process_group=get_ring_attn_group(), heads_k_stride=heads_k_stride)
 
 
-def get_cu_seqlens_from_pos_ids(
-    position_ids: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """generate a cumulative sequence length mask for flash attention using pos ids"""
+def get_cu_seqlens_from_pos_ids(position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Generate a cumulative sequence length mask for flash attention using pos ids"""
     if len(position_ids.shape) == 1:
         position_ids = position_ids.unsqueeze(0)
 
     device = position_ids.device
     results = []
-    max_seq_lens = []
 
     for row in position_ids:
         # Count the number of consecutive zeros from the right side
@@ -172,9 +158,7 @@ def get_cu_seqlens_from_pos_ids(
         # Append the padding length to the cumulative sequence lengths
         if padding_length:
             cu_seqlens = torch.cat([cu_seqlens, torch.tensor([len(row)], dtype=torch.int32, device=device)])
-        max_seq_len = (cu_seqlens[1:] - cu_seqlens[:-1]).max()
         results.append(cu_seqlens)
-        max_seq_lens.append(max_seq_len)
 
     # Find the maximum value across all tensors
     max_value = max(t.max() for t in results)
@@ -185,7 +169,7 @@ def get_cu_seqlens_from_pos_ids(
     # Pad each tensor to the same length and collect them in a list
     padded_results = [F.pad(t, (0, max_length - t.size(0)), "constant", max_value) for t in results]
 
-    return torch.stack(padded_results).to(dtype=torch.int32), torch.stack(max_seq_lens)
+    return torch.stack(padded_results).to(dtype=torch.int32)
 
 
 def update_ring_attn_params(batch: dict[str, torch.Tensor]):
@@ -197,7 +181,11 @@ def update_ring_attn_params(batch: dict[str, torch.Tensor]):
         batch: A dictionary with a batch of data. May or may not contain `position_ids`
             data; if not, we compute it.
     """
-    from ring_flash_attn import update_ring_flash_attn_params
+    if not is_ring_attn_available():
+        raise ImportError(
+            "ring-flash-attn is required for sequence parallelism with ring attention. Please install it using: "
+            "`pip install ring-flash-attn`."
+        )
 
     input_ids = batch["input_ids"]
     position_ids = batch.get("position_ids")
@@ -208,6 +196,6 @@ def update_ring_attn_params(batch: dict[str, torch.Tensor]):
         position_ids = torch.arange(0, seq_len, dtype=torch.long, device=input_ids.device).unsqueeze(0)
         batch["position_ids"] = position_ids  # Add back to batch for model use
 
-    cu_seqlens, _ = get_cu_seqlens_from_pos_ids(position_ids)
+    cu_seqlens = get_cu_seqlens_from_pos_ids(position_ids)
     cu_seqlens = cu_seqlens.squeeze().to(device=torch.cuda.current_device())
     update_ring_flash_attn_params(cu_seqlens, get_ring_attn_group())
