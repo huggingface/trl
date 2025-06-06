@@ -207,6 +207,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 if key in output:
                     output[key] = output[key][:, start:end]
 
+            # Reset position IDs for ring attention - each rank should start from 0
+            if "position_ids" in output:
+                from ..models.ring_attn import reset_ring_attn_position_ids
+                output["position_ids"] = reset_ring_attn_position_ids(output["position_ids"])
+
             # Now update ring attention params with sliced data
             from ..models.ring_attn import update_ring_attn_params
 
