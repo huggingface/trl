@@ -30,7 +30,6 @@ from transformers import (
     AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
-    DataCollatorWithFlattening,
     FeatureExtractionMixin,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -82,6 +81,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         completion_only_loss (`bool`, *optional*, defaults to `True`):
             When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
             that are no in the completion.
+        padding_free (`bool`, *optional*, defaults to `False`):
+            If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
+            generated accordingly. The attention mask will be set to 1 for all tokens.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -100,6 +102,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                           [  4,  5,  0]]),
      'attention_mask': tensor([[  1,  1,  1],
                                [  1,  1,  0]]),
+     'position_ids': tensor([[0, 1, 2],
+                             [0, 1, 0]]),
      'labels': tensor([[   1,    2,    3],
                        [   4,    5, -100]])}
     >>> # With completion mask
@@ -112,13 +116,25 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                           [  4,  5,  0]]),
      'attention_mask': tensor([[  1,  1,  1],
                                [  1,  1,  0]]),
+     'position_ids': tensor([[0, 1, 2],
+                             [0, 1, 0]]),
      'labels': tensor([[-100,    2,    3],
                        [-100,    5, -100]])}
+
+    >>> # With padding_free
+    >>> collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
+    >>> collator(examples)
+    {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1]]),
+     'position_ids': tensor([[0, 1, 2, 0, 1]]),
+     'labels': tensor([[1, 2, 3, 4, 5]])}
     ```
     """
 
     pad_token_id: int
     completion_only_loss: bool = True
+    padding_free: bool = False
+    return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
@@ -126,29 +142,49 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
         attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+        if self.return_position_ids:
+            if "position_ids" in examples[0]:
+                position_ids = [torch.tensor(example["position_ids"]) for example in examples]
+            else:
+                position_ids = [torch.arange(len(ids)) for ids in input_ids]
         labels = [torch.tensor(example["input_ids"]) for example in examples]
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
 
         # Pad
         output = {}
-        output["input_ids"] = pad(
-            input_ids,
-            padding_value=self.pad_token_id,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-        )
-        output["attention_mask"] = pad(
-            attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-        )
-        output["labels"] = pad(
-            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-        )
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = pad(
-                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        if self.padding_free:
+            output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
+            output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+            if self.return_position_ids:
+                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
+            output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
+            if self.completion_only_loss and "completion_mask" in examples[0]:
+                completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
+                output["labels"][completion_mask == 0] = -100
+
+        else:
+            output["input_ids"] = pad(
+                input_ids,
+                padding_value=self.pad_token_id,
+                padding_side="right",
+                pad_to_multiple_of=self.pad_to_multiple_of,
             )
-            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
+            output["attention_mask"] = pad(
+                attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            if self.return_position_ids:
+                output["position_ids"] = pad(
+                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
+            output["labels"] = pad(
+                labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            if self.completion_only_loss and "completion_mask" in examples[0]:
+                completion_mask = pad(
+                    completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
+                output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
 
         return output
 
@@ -290,13 +326,16 @@ class SFTTrainer(Trainer):
             model = self._prepare_peft_model(model, peft_config, args)
 
         # Data collator
-        if args.padding_free:
+        # FFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
+        # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
+        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "ffd")
+        if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
-            if args.packing:
+            if args.packing and args.packing_strategy == "wrapped":
                 warnings.warn(
-                    "You are passing `packing=True` and `padding_free=True` which is not recommended. Please refer "
-                    "to the documentation to understand why this is not recommended."
+                    "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
+                    "recommended. Please refer to the documentation to understand why this is not recommended."
                 )
             if model.config._attn_implementation != "flash_attention_2":
                 warnings.warn(
@@ -307,19 +346,19 @@ class SFTTrainer(Trainer):
                     "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
                     "attention mechanism can handle flattened sequences."
                 )
-            if args.per_device_train_batch_size == 1:
+            if args.per_device_train_batch_size == 1 and not args.packing:
                 warnings.warn(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
                 )
-            data_collator = DataCollatorWithFlattening()
 
         if args.completion_only_loss is None:
             first_example = next(iter(train_dataset))
             self.completion_only_loss = "prompt" in first_example
         else:
             self.completion_only_loss = args.completion_only_loss
+
         if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -332,7 +371,25 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as a padding token."
                 )
             data_collator = DataCollatorForLanguageModeling(
-                pad_token_id, self.completion_only_loss, args.pad_to_multiple_of
+                pad_token_id=pad_token_id,
+                completion_only_loss=self.completion_only_loss,
+                padding_free=self.padding_free,
+                # Using position_ids without flash_attn hurts the training
+                return_position_ids=model.config._attn_implementation == "flash_attention_2",
+                pad_to_multiple_of=args.pad_to_multiple_of,
+            )
+
+        if (
+            args.packing
+            and args.packing_strategy == "ffd"
+            and model.config._attn_implementation != "flash_attention_2"
+        ):
+            warnings.warn(
+                "You are using packing, but the attention implementation is not set to 'flash_attention_2'. Packing "
+                "flattens batches into a single sequence, and 'flash_attention_2' is the only known attention "
+                "mechanism that reliably supports this. Using other implementations may lead to cross-contamination "
+                "between batches. To avoid this, either disable packing by setting `packing=False`, or set "
+                "`attn_implementation='flash_attention_2'` in the model configuration."
             )
 
         # Dataset
@@ -649,6 +706,7 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
+                # Packing adds new column "position_ids" needed for document aware flash attention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -656,7 +714,7 @@ class SFTTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
-                dataset = dataset.select_columns("input_ids")
+                dataset = dataset.select_columns({"input_ids", "position_ids"}.intersection(dataset.column_names))
 
         return dataset
 
@@ -666,7 +724,7 @@ class SFTTrainer(Trainer):
         # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
-            self._signature_columns = ["input_ids", "attention_mask", "completion_mask"]
+            self._signature_columns = ["input_ids", "attention_mask", "position_ids", "completion_mask"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
