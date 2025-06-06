@@ -21,6 +21,7 @@ _import_structure = {
     "activation_offloading": ["get_act_offloading_ctx_manager"],
     "modeling_base": ["GeometricMixtureWrapper", "PreTrainedModelWrapper", "create_reference_model"],
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
+    "ring_attn": ["register_ring_attn"],
     "utils": [
         "SUPPORTED_ARCHITECTURES",
         "prepare_deepspeed",
@@ -28,7 +29,6 @@ _import_structure = {
         "setup_chat_format",
         "unwrap_model_for_generation",
     ],
-    "ring_attn": ["register_ring_attn"],
 }
 
 try:
