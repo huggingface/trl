@@ -710,7 +710,10 @@ class SFTTrainer(Trainer):
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
+                    datset_max_length = max(len(ids) for ids in dataset["input_ids"])
+                    if datset_max_length > args.max_length:
+                        warnings.warn(f"Dataset max sequence length is {datset_max_length} which longer than max_length(={args.max_length}).")
+                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset with max_length={args.max_length}"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
