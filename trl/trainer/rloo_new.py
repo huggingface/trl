@@ -500,6 +500,8 @@ class RLOOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.mask_truncated_completions = args.mask_truncated_completions
         self.normalize_advantage = args.normalize_advantage
+        self.normalize_reward = args.normalize_reward
+        self.reward_clip_range = args.reward_clip_range
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1171,6 +1173,10 @@ class RLOOTrainer(Trainer):
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+        
+        if self.normalize_reward:
+            rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+            rewards = torch.clamp(rewards, -self.reward_clip_range, self.reward_clip_range)
 
         # RLOO advantage calculation: for each reward r_i, baseline is the mean of all other rewards
         # Reshape rewards to (num_prompts, num_generations)

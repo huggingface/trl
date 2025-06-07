@@ -160,6 +160,8 @@ class RLOOConfig(TrainingArguments):
             Whether to normalize rewards.
         normalize_advantages (`bool`, *optional*, defaults to `False`):
             Whether to normalize advantages.
+        reward_clip_range (`float`, *optional*, defaults to `10.0`):
+            Clip range for rewards.
 
         > Parameters that control the logging
 
@@ -429,6 +431,10 @@ class RLOOConfig(TrainingArguments):
     normalize_advantages: bool = field(
         default=False,
         metadata={"help": "Whether to normalize advantages."},
+    )
+    reward_clip_range: float = field(
+        default=10.0,
+        metadata={"help": "Clip range for rewards."},
     )
 
     # Parameters that control the logging
