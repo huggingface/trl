@@ -120,7 +120,10 @@ def setup_chat_format(
 
     # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
     model.resize_token_embeddings(
-        new_num_tokens=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        # After studying many tokenizers, we found that len(tokenizer.vocab) is the most reliable way to get the vocab
+        # size. Avoid using tokenizer.vocab_size or tokenizer.vocab_size + len(tokenizer.added_tokens_encoder),
+        # as handling of special and added tokens varies across tokenizers.
+        new_num_tokens=len(tokenizer.vocab),
         pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
     )
     # Update the model config to use the new eos & bos tokens
