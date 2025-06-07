@@ -43,6 +43,13 @@ This approach thechnicaly ensures that:
 - The policy is updated based on relative performance between the samples
 - The variance reduction is achieved through direct comparison between samples from the same policy
 
+# GRPO vs. RLOO
+## GRPO advantage
+GRPO: Compare against your group members only
+- `advantage = (reward_i - mean(rewards_in_same_group)) / std(rewards_in_same_group)`
+## RLOO advatage
+RLOO: Compare against everyone else in the batch
+- `advantage = reward_i - mean(rewards_except_i)`
 
 # Main sources. 
 1. [RLOO Paper](https://openreview.net/pdf?id=r1lgTGL5DE)
