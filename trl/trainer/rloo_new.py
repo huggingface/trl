@@ -310,9 +310,26 @@ class RLOOTrainer(Trainer):
               loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
               in `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        reward_model (`Union[PreTrainedModel, nn.Module]`):
-            Reward model to be used for computing rewards. Should be a sequence classification model with a single
-            output label (num_labels=1). The model computes rewards for prompt-completion pairs.
+        reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
+            Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
+            functions with the prompts and completions and sum the rewards. Can be either:
+
+            - A single reward function, such as:
+                - A string: The *model ID* of a pretrained model hosted inside a model repo on huggingface.co, or a
+                path to a *directory* containing model weights saved using
+                [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+                using [`~transformers.AutoModelForSequenceClassification.from_pretrained`] with `num_labels=1` and the
+                keyword arguments in `args.model_init_kwargs`.
+                - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
+                - A custom reward function: The function is provided with the prompts and the generated completions,
+                  plus any additional columns in the dataset. It should return a list of rewards. Custom reward
+                  functions can also return None when the reward is not applicable to those samples. This is useful for
+                  multi-task training where different reward functions apply to different types of samples. When a
+                  reward function returns None for a sample, that reward function is excluded from the reward
+                  calculation for that sample. For more details, see
+                  [Using a custom reward function](#using-a-custom-reward-function).
+            - A list of reward functions, where each item can independently be any of the above types. Mixing different
+            types within the list (e.g., a string model ID and a custom reward function) is allowed.
 
         args ([`RLOOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
@@ -417,11 +434,9 @@ class RLOOTrainer(Trainer):
         if processing_class.pad_token is None:
             processing_class.pad_token = processing_class.eos_token
 
-        # Reward functions/models - convert single reward model to list for consistency
-        if reward_model is None:
-            raise ValueError("reward_model must be provided")
-        reward_funcs = [reward_model] if not isinstance(reward_model, list) else reward_model
-        
+        # Reward functions/models
+        if not isinstance(reward_funcs, list):
+            reward_funcs = [reward_funcs]
         self.reward_func_names = []
         for i, reward_func in enumerate(reward_funcs):
             if isinstance(reward_func, str):
@@ -1206,8 +1221,9 @@ class RLOOTrainer(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
-        self._metrics[mode]["reward"].append(rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(rewards.std().item())
+        self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
