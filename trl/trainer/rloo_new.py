@@ -498,8 +498,8 @@ class RLOOTrainer(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
-
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.normalize_advantage = args.normalize_advantage
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1184,6 +1184,9 @@ class RLOOTrainer(Trainer):
         # Compute advantages as r_i - baseline_i
         advantages_reshaped = rewards_reshaped - baseline  # (num_prompts, num_generations)
         advantages = advantages_reshaped.flatten()  # flatten back to original shape
+        
+        if self.normalize_advantage:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         # Slice to keep only the local part of the data
         process_slice = slice(
