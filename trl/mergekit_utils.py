@@ -73,7 +73,7 @@ class MergeConfig:
     def __init__(self, method: str = "linear"):
         if not is_mergekit_available():
             raise ImportError(
-                "MergeConfig requires the `mergekit` extra. To install, run `pip install trl[mergekit]`."
+                "MergeConfig requires the `mergekit` extra. To install, run `pip install mergekit`."
             )
         self.method = method
         self.policy_model_path = None
@@ -270,7 +270,7 @@ def merge_models(config: MergeConfig, out_path: str):
         out_path (`str`): The output path for the merged model.
     """
     if not is_mergekit_available():
-        raise ImportError("merge_models requires the `mergekit` extra. To install, run `pip install trl[mergekit]`.")
+        raise ImportError("merge_models requires the `mergekit` extra. To install, run `pip install mergekit`.")
     run_merge(
         config,
         out_path=out_path,
