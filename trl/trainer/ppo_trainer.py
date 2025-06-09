@@ -386,7 +386,7 @@ class PPOTrainer(Trainer):
                 self.policy_model.config
             )
             value_model.num_labels = 1
-            value_model.classifier = nn.Linear(self.policy_model.config.hidden_size, 1)
+            value_model.score = nn.Linear(self.policy_model.config.hidden_size, 1)
             setattr(value_model, value_model.base_model_prefix, getattr(self.policy_model, self.policy_model.base_model_prefix))
         else:
             if value_model is None:
@@ -806,7 +806,8 @@ class PPOTrainer(Trainer):
         values = torch.cat(values, 0)
         if isinstance(scores, list):
             scores = torch.cat(scores, 0)
-        del (logprob, ref_logprob, full_value, value, score, unwrapped_value_model)
+            del score
+        del (logprob, ref_logprob, full_value, value, unwrapped_value_model)
         empty_cache()
         gc.collect()
 
@@ -950,10 +951,6 @@ class PPOTrainer(Trainer):
                 raise ValueError(
                     f"Mismatch between `scores` (shape: {scores.shape[0]}) and number of answers of `query_responses` (shape: {query_part.shape[0]})."
                 )
-            else:
-                warnings.warn(
-                    "Shapes of `query_responses` and `scores` match, but padding or masking inconsistencies may still lead to incorrect results. Please verify your preprocessing."
-                )
 
     def step(
             self, 
@@ -974,12 +971,14 @@ class PPOTrainer(Trainer):
             self.input_step_shape_check(queries, query_responses, scores, query_responses_logitss)
 
         with torch.no_grad():
-            queries.to(device)
-            query_responses.to(device)
+            queries = queries.to(device)
+            query_responses = query_responses.to(device)
+            if scores is not None:
+                scores = scores.to(device)
 
             if query_responses_logitss is None:
-                output = forward(self.model, query_responses, self.processing_class.pad_token_id)
-                logitss = output.logits
+                output = forward(self.model.policy, query_responses, self.processing_class.pad_token_id)
+                logitss =  output.logits[:, self.context_length - 1 : -1]
             else:
                 logitss = query_responses_logitss
 

@@ -157,10 +157,11 @@ if __name__ == "__main__":
         model=policy,
         ref_model=ref_policy,
         reward_model=reward_model,
-        value_model=value_model,
+        # value_model=value_model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         peft_config=peft_config,
+        share_same_value_and_policy_lm_backbone=True,
     )
     trainer.train()
 
