@@ -463,8 +463,6 @@ By following this classification, you ensure that warnings, information, and exc
 > [!NOTE]
 > VERSION needs to be formatted following the `v{major}.{minor}.{patch}` convention. We need to follow this convention to be able to retrieve versioned scripts.
 
-To create the package for PyPI.
-
 #### 0. Prerequisites
 
 - Dependencies:
@@ -472,6 +470,8 @@ To create the package for PyPI.
 - Create an account in (and join the `trl` project):
    - PyPI: https://pypi.org/
    - Test PyPI: https://test.pypi.org/
+
+### Major/Minor Release
 
 #### 1. Ensure your local repository is up to date with the upstream repository
 
@@ -501,7 +501,7 @@ git checkout -b release-v{major}.{minor}
   - version: {major}.{minor-1}
   + version: {major}.{minor}
   ```    
-- `__init__.py`
+- `trl/__init__.py`
   ```diff
   - __version__ = "{major}.{minor}.0.dev0"
   + __version__ = "{major}.{minor}.0"
@@ -515,6 +515,7 @@ git checkout -b release-v{major}.{minor}
 #### 4. Commit and push these changes
 
 ```shell
+git add .github/workflows/tests_latest.yml CITATION.cff trl/__init__.py setup.cfg
 git commit -m 'Release: {major}.{minor}'
 git push origin release-v{major}.{minor}
 ```
@@ -622,7 +623,7 @@ twine upload dist/*
    ```
 
 2. Change the version in the following files:
-   1. `__init__.py`
+   1. `trl/__init__.py`
       ```diff
       - __version__ = "{major}.{minor}.0"
       + __version__ = "{major}.{minor+1}.0.dev0"
@@ -646,3 +647,121 @@ twine upload dist/*
 5. Once the pull request is approved, merge it into `main`.
 
 6. The codebase is now ready for the next development cycle, inform the team in the #trl-internal channel.
+
+
+## Making a patch release
+
+#### 1. Ensure your local repository is up to date with the upstream repository
+
+```bash
+git checkout v{major}.{minor}-release
+git pull origin main
+```
+
+#### 2. Cherry-pick the changes you want to include in the patch release
+
+```bash
+git cherry-pick <commit-hash-0>
+git cherry-pick <commit-hash-1>
+...
+```
+
+#### 3. Change the version in the following files
+
+- `trl/__init__.py`
+  ```diff
+  - __version__ = "{major}.{minor}.{patch-1}"
+  + __version__ = "{major}.{minor}.{patch}"
+  ```
+- `setup.cfg`
+  ```diff
+  - version = {major}.{minor}.{patch-1}
+  + version = {major}.{minor}.{patch}
+  ```
+
+#### 4. Commit and push these changes
+
+```shell
+git add trl/__init__.py setup.cfg
+git commit -m 'Release: {major}.{minor}.{patch}'
+git push origin v{major}.{minor}-release
+```
+
+#### 5. Wait for the CI to pass
+
+#### 6. Add a tag in git to mark the release
+
+```shell
+git tag -a v{major}.{minor}.{patch} -m 'Adds tag v{major}.{minor}.{patch} for PyPI'
+git push origin v{major}.{minor}.{patch}
+```
+
+#### 7. Create the wheels for your release
+
+These are the artifacts that will be uploaded to PyPI and installed by users via `pip install trl`.
+
+Clean previous builds:
+
+```shell
+rm -rf build dist
+```
+
+At the root of your repo, run
+
+```bash
+python -m build .
+```
+
+This will create a folders named `dist` with the new versions of your package.
+
+#### 8. Upload the package to PyPI Test
+
+> [!IMPORTANT]
+> Do not skip this step. It is important to test the package before uploading it to the main PyPI server.
+
+```shell
+twine upload dist/* -r testpypi
+```
+
+Then in a fresh environment containing all dependencies you need, try to install your new package from the PyPI test server.
+
+```bash
+pip install -i https://test.pypi.org/simple/ trl
+```
+
+You might get errors for missing dependencies since the PyPI test server does not contain all packages like PyPI does. To make sure you have everything you can do:
+
+```bash
+pip install trl
+pip uninstall trl
+```
+
+(the second line will remove trl but keep all its dependencies).
+
+Also make sure you can actually use the package! Run the following line:
+
+```bash
+python -c "from trl import *"
+```
+
+along with anything that tests:
+
+- the core feature of your package
+- the new features you’re adding in the release
+
+#### 9. Publish on PyPI
+
+> [!WARNING]
+> This can't be reverted. Make sure you have tested everything before doing this step.
+
+```shell
+twine upload dist/*
+```
+
+#### 10. Create a GitHub Release
+
+1. Go to the repo’s [releases section](https://github.com/huggingface/trl/releases) on GitHub.
+2. Click **Draft a new release**.
+3. Select the `v{major}.{minor}.{patch}` tag you just created in step 7.
+4. Add a title (`v{major}.{minor}.{patch}`) and a short description of what’s new.
+5. Click **Publish Release**.

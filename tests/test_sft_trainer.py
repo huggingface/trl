@@ -19,6 +19,7 @@ import unittest
 import numpy as np
 import torch
 from datasets import Dataset, Image, Sequence, load_dataset
+from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoProcessor,
@@ -52,31 +53,123 @@ if is_vision_available():
 
 
 class TestDataCollatorForLanguageModeling(unittest.TestCase):
-    def test_collate_padding(self):
-        collator = DataCollatorForLanguageModeling(pad_token_id=0)
+    def test_basic_padding(self):
+        """Test basic padding functionality without completion masks."""
+        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
-        output = collator(examples)
 
-        expected_input_ids = torch.tensor([[1, 2, 3], [4, 5, 0]])
-        expected_attention_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
-        expected_labels = torch.tensor([[1, 2, 3], [4, 5, -100]])
+        result = self.collator(examples)
 
-        self.assertEqual(output["input_ids"].tolist(), expected_input_ids.tolist())
-        self.assertEqual(output["attention_mask"].tolist(), expected_attention_mask.tolist())
-        self.assertEqual(output["labels"].tolist(), expected_labels.tolist())
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
-    def test_collate_no_padding(self):
-        collator = DataCollatorForLanguageModeling(pad_token_id=0)
-        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5, 6]}]
-        output = collator(examples)
+    def test_completion_mask(self):
+        """Test completion mask functionality."""
+        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        examples = [
+            {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
+            {"input_ids": [4, 5], "completion_mask": [0, 1]},
+        ]
 
-        expected_input_ids = torch.tensor([[1, 2, 3], [4, 5, 6]])
-        expected_attention_mask = torch.tensor([[1, 1, 1], [1, 1, 1]])
-        expected_labels = torch.tensor([[1, 2, 3], [4, 5, 6]])
+        result = self.collator(examples)
 
-        self.assertEqual(output["input_ids"].tolist(), expected_input_ids.tolist())
-        self.assertEqual(output["attention_mask"].tolist(), expected_attention_mask.tolist())
-        self.assertEqual(output["labels"].tolist(), expected_labels.tolist())
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
+
+    def test_completion_only_loss_disabled(self):
+        """Test behavior when completion_only_loss is disabled."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, completion_only_loss=False)
+        examples = [
+            {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
+            {"input_ids": [4, 5], "completion_mask": [0, 1]},
+        ]
+
+        result = collator(examples)
+
+        # Labels should not be masked when completion_only_loss=False
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    def test_padding_free_mode(self):
+        """Test padding-free mode where sequences are concatenated."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4, 5]]))
+
+    def test_padding_free_with_completion_mask(self):
+        """Test padding-free mode with completion masks."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
+        examples = [
+            {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
+            {"input_ids": [4, 5], "completion_mask": [1, 1]},
+        ]
+
+        result = collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, 4, 5]]))
+
+    def test_pad_to_multiple_of(self):
+        """Test padding to multiple of specified value."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, pad_to_multiple_of=4)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 0], [1, 1, 0, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0], [0, 1, 0, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, -100], [4, 5, -100, -100]]))
+
+    def test_custom_position_ids(self):
+        """Test handling of custom position IDs in examples."""
+        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        examples = [{"input_ids": [1, 2, 3], "position_ids": [0, 0, 1]}, {"input_ids": [4, 5], "position_ids": [0, 1]}]
+
+        result = self.collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 0, 1], [0, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    def test_single_example(self):
+        """Test collator with a single example."""
+        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        examples = [{"input_ids": [1, 2, 3, 4]}]
+
+        result = self.collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 3]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4]]))
+
+    def test_different_pad_token_id(self):
+        """Test with different pad token ID."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=999)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 999]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
 
 class SFTTrainerTester(unittest.TestCase):
@@ -812,7 +905,7 @@ class SFTTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
-                max_length=16,  # make sure there is at least 1 packed sequence
+                max_length=128,  # make sure there is at least 1 packed sequence
                 eval_packing=False,
                 report_to="none",
             )
@@ -824,7 +917,7 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
             self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
     def test_eval_packing(self):
@@ -832,7 +925,7 @@ class SFTTrainerTester(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_length=16,  # make sure there is at least 1 packed sequence
+                max_length=128,  # make sure there is at least 1 packed sequence
                 packing=True,
                 report_to="none",
             )
@@ -843,15 +936,15 @@ class SFTTrainerTester(unittest.TestCase):
                 eval_dataset=self.conversational_lm_dataset["test"],
             )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 46)  # w/ this dataset, we end up with 46 seqs
-            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 6)  # w/ this dataset, we end up with 6 seqs
+            self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
+            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 1)  # w/ this dataset, we end up with 6 seqs
 
     def test_no_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
-                max_length=16,  # make sure there is at least 1 packed sequence
+                max_length=128,  # make sure there is at least 1 packed sequence
                 packing=False,
                 report_to="none",
             )
@@ -1211,6 +1304,34 @@ class SFTTrainerTester2(unittest.TestCase):
                 model_init_kwargs={"attn_implementation": "flash_attention_2"},
                 bf16=True,  # flash_attention_2 only supports bf16 and fp16
                 report_to="none",
+            )
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @parameterized.expand([("ffd",), ("wrapped",)])
+    def test_train_packing(self, packing_strategy):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(
+                output_dir=tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
             )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
