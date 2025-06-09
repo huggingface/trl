@@ -196,11 +196,7 @@ class GRPOConfig(TrainingArguments):
             prompts are logged.
     """
 
-    if version.parse(transformers.__version__) <= version.parse("4.50.3"):
-        from transformers.training_args import _VALID_DICT_FIELDS
-
-        _VALID_DICT_FIELDS.append("model_init_kwargs")
-    else:
+    if version.parse(transformers.__version__) >= version.parse("4.51.0"):
         _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
