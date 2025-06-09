@@ -158,8 +158,10 @@ class DataCollatorForPreference(DataCollatorMixin):
 
 
 class DPOTrainer(Trainer):
-    r"""
-    Initialize DPOTrainer.
+    """
+    Trainer for Direct Preference Optimization (DPO) method.
+
+    This class is a wrapper around the [`transformers.Trainer`] class and inherits all of its attributes and methods.
 
     Args:
         model (`Union[str, PreTrainedModel]`):
@@ -181,18 +183,24 @@ class DPOTrainer(Trainer):
             Will default to [`~transformers.default_data_collator`] if no `processing_class` is provided, an instance
             of [`~transformers.DataCollatorWithPadding`] otherwise if the processing_class is a feature extractor or
             tokenizer.
-        train_dataset (`datasets.Dataset`):
-            Dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+            Dataset to use for training. DPO supports [preference](#preference) type and. The format of the samples can
+            be either:
+
+            - [Standard](dataset_formats#standard): Each sample contains plain text.
+            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
+              and content).
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoTokenizer.from_pretrained`].
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function that will be used to compute metrics at evaluation. Must take a [`EvalPrediction`] and return
+            a dictionary string to metric values. *Note* When passing TrainingArgs with `batch_eval_metrics` set to
+            `True`, your compute_metrics function must take a boolean `compute_result` argument. This will be triggered
+            after the last eval batch to signal that the function needs to calculate and return the global summary
+            statistics rather than accumulating the batch-level statistics.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks
             detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -202,6 +210,9 @@ class DPOTrainer(Trainer):
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+            A tuple containing the optimizer class and keyword arguments to use.
+            Overrides `optim` and `optim_args` in `args`. Incompatible with the `optimizers` argument.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
@@ -225,15 +236,18 @@ class DPOTrainer(Trainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
         # Args
         model_id = model if isinstance(model, str) else model.config._name_or_path
+        if args is None:
+            model_name = model_id.split("/")[-1]
+            args = DPOConfig(f"{model_name}-DPO")
 
         # Handle the tokenizer
         if processing_class is None:
@@ -404,10 +418,10 @@ class DPOTrainer(Trainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
+            optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
