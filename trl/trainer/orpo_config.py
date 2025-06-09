@@ -64,6 +64,8 @@ class ORPOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=1e-6,
