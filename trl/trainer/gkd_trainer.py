@@ -127,6 +127,9 @@ class GKDTrainer(SFTTrainer):
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
+        # resize the teacher's token_embeddings to the student's vocab size:
+        teacher_model.resize_token_embeddings(self.model.config.vocab_size)
+
         if self.is_deepspeed_enabled:
             self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
         else:
