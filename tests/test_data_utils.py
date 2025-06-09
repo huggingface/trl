@@ -92,6 +92,8 @@ class ApplyChatTemplateTester(unittest.TestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
         "trl-internal-testing/tiny-DbrxForCausalLM",
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         "trl-internal-testing/tiny-FalconMambaForCausalLM",
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",
@@ -142,12 +144,12 @@ class ApplyChatTemplateTester(unittest.TestCase):
     ]
 
     non_conversational_examples = [
-        {"prompt": "The sky is", "completion": " blue."},
-        {"text": "The sky is blue."},
-        {"prompt": "The sky is"},
-        {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},
-        {"chosen": "The sky is blue.", "rejected": "The sky is green."},
-        {"prompt": "The sky is", "completion": " blue.", "label": True},
+        {"text": "The sky is blue."},  # Language modeling
+        {"prompt": "The sky is"},  # Prompt only
+        {"prompt": "The sky is", "completion": " blue."},  # Prompt-completion
+        {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},  # Preference
+        {"chosen": "The sky is blue.", "rejected": "The sky is green."},  # Preference with implicit prompt
+        {"prompt": "The sky is", "completion": " blue.", "label": True},  # Unpaired preference
     ]
 
     @parameterized.expand(itertools.product(tokenizers, conversational_examples))
@@ -439,7 +441,7 @@ class TestPackExamples(unittest.TestCase):
         self.assertEqual(dataset.to_dict(), expected_output)
 
 
-class TestPackDataset(unittest.TestCase):
+class TestPackDatasetWrapped(unittest.TestCase):
     def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
@@ -451,7 +453,7 @@ class TestPackDataset(unittest.TestCase):
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length)
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         self.assertEqual(dataset.to_dict(), expected_output)
 
     def test_with_iterable_dataset(self):
@@ -465,9 +467,57 @@ class TestPackDataset(unittest.TestCase):
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length)
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
         num_examples = len(examples[next(iter(examples))])
         self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+
+class TestPackDatasetFfd(unittest.TestCase):
+    def test_simple(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
+            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
+            "position_ids": [[0, 1, 2, 3], [0, 1, 2, 0]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
+            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
+            "position_ids": [[0, 1, 2, 3], [0, 1, 2, 0]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+    def test_with_truncation(self):
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
+            "attention_mask": [[1, 1, 1, 1, 1], [1, 1], [1, 1, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
+            "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
+            "position_ids": [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 0]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        self.assertEqual(dataset.to_dict(), expected_output)
 
 
 class TestTruncateExamples(unittest.TestCase):
