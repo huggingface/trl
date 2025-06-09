@@ -374,7 +374,7 @@ class RLOOTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
+        reward_funcs: Union[RewardFunc, list[RewardFunc], None] = None,
         args: Optional[RLOOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -499,8 +499,8 @@ class RLOOTrainer(Trainer):
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.mask_truncated_completions = args.mask_truncated_completions
-        self.normalize_advantage = args.normalize_advantage
-        self.normalize_reward = args.normalize_reward
+        self.normalize_advantages = args.normalize_advantages
+        self.normalize_rewards = args.normalize_rewards
         self.reward_clip_range = args.reward_clip_range
 
         # Datasets
@@ -1174,24 +1174,25 @@ class RLOOTrainer(Trainer):
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
         
-        if self.normalize_reward:
+        if self.normalize_rewards:
             rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
             rewards = torch.clamp(rewards, -self.reward_clip_range, self.reward_clip_range)
 
-        # RLOO advantage calculation: for each reward r_i, baseline is the mean of all other rewards
-        # Reshape rewards to (num_prompts, num_generations)
-        rewards_reshaped = rewards.view(-1, self.num_generations)
+        # all other rewards within the batch
+        grouped_rewards = rewards.view(-1, self.num_generations) #(num_prompts, num_generations)
         
         # Compute leave-one-out baseline for each reward
         # baseline_i = (sum_of_all_rewards - r_i) / (num_generations - 1)
-        total_rewards = rewards_reshaped.sum(dim=1, keepdim=True)  # (num_prompts, 1)
-        baseline = (total_rewards - rewards_reshaped) / (self.num_generations - 1)  # (num_prompts, num_generations)
+        sum_all_rewards = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
+        # RLOO baseline is the mean of all other rewards in the batch 
+        baseline = (sum_all_rewards - grouped_rewards) / (self.num_generations - 1) #(num_prompts, num_generations)
+        
         
         # Compute advantages as r_i - baseline_i
-        advantages_reshaped = rewards_reshaped - baseline  # (num_prompts, num_generations)
-        advantages = advantages_reshaped.flatten()  # flatten back to original shape
+        advantages = grouped_rewards - baseline  # (num_prompts, num_generations)
+        advantages = advantages.flatten()  #(num_prompts * num_generations)
         
-        if self.normalize_advantage:
+        if self.normalize_advantages:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
         # Slice to keep only the local part of the data
@@ -1230,9 +1231,9 @@ class RLOOTrainer(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
-        self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
-        self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
+        self._metrics[mode]["reward"].append(grouped_rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(grouped_rewards.std().item())
+        #self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
@@ -1410,7 +1411,7 @@ class RLOOTrainer(Trainer):
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.append("unsloth")
-
+        #TODO: Fix citation
         citation = textwrap.dedent(
             """\
             @inproceedings{ahmadian2024back,
