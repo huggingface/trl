@@ -14,6 +14,7 @@
 
 import os
 import warnings
+from pathlib import Path
 from typing import Callable, Optional, Union
 
 import torch
@@ -451,6 +452,15 @@ class IterativeSFTTrainer(Trainer):
                 self._globalstep_last_logged = self.state.global_step
 
                 self.log(logs)
+
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
 
     def create_model_card(
         self,

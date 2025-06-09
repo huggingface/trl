@@ -20,6 +20,7 @@ import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from operator import itemgetter
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal, Optional, Union
 
 import numpy as np
@@ -1452,6 +1453,15 @@ class BCOTrainer(Trainer):
             logs[f"{prefix}{key}"] = torch.Tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
         return super().log(logs, start_time)
+
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
 
     def create_model_card(
         self,

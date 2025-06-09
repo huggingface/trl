@@ -19,6 +19,7 @@ import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Union
 
 import numpy as np
@@ -1000,6 +1001,15 @@ class ORPOTrainer(Trainer):
         shifted_input_ids.masked_fill_(shifted_input_ids == -100, self.pad_token_id)
 
         return shifted_input_ids
+
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
 
     def create_model_card(
         self,
