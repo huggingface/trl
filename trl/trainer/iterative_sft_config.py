@@ -48,6 +48,8 @@ class IterativeSFTConfig(TrainingArguments):
             Whether to optimize accelerator cache for slightly more memory-efficient training.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
     # Parameters whose default values are overridden from TrainingArguments
     logging_steps: float = field(
         default=10,
