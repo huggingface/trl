@@ -1849,3 +1849,36 @@ def print_prompt_completions_sample(
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
+
+
+def split_extra_args_into_chunks(
+        extra_args: dict,
+        i: int,
+        bsz: int
+) -> dict:
+    """
+    Split model-specific multi-modal inputs into chunks.
+
+    Args:
+        extra_args: Dict containing multi-modal inputs (e.g., pixel_values, image_grid_thw)
+        i: Current chunk index
+        bsz: Batch size for chunking
+    Returns:
+         Dictionary with properly sliced inputs for current chunk.
+    """
+    if extra_args and "image_grid_thw" in extra_args.keys():
+        return {
+                **{key: tensor[i * bsz: (i + 1) * bsz] if tensor is not None else None for key, tensor in
+                   extra_args.items() if key != "pixel_values"},
+                "pixel_values": extra_args["pixel_values"][
+                                extra_args["image_grid_thw"][:i * bsz].prod(dim=1).sum():
+                                extra_args["image_grid_thw"][:(i + 1) * bsz].prod(dim=1).sum()
+                                ] if extra_args["pixel_values"] is not None else None
+            }
+    elif extra_args:
+        return {
+                key: tensor[i * bsz: (i + 1) * bsz] if tensor is not None else None
+                for key, tensor in extra_args.items()
+            }
+    else:
+        return {}

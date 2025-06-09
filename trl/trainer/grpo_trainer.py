@@ -59,6 +59,7 @@ from .utils import (
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
+    split_extra_args_into_chunks
 )
 
 
@@ -215,13 +216,21 @@ def split_tensor_dict(
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     chunk_size = first_tensor.shape[0] // num_chunks
-    return [
+    extra_args = tensor_dict.pop("extra_args", None)
+
+    chunked_extra_args = [
+        split_extra_args_into_chunks(extra_args, i, chunk_size)
+        for i in range(num_chunks)
+    ]
+
+    tensor_dict_ret = [
         {
-            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
+            key: tensor[i * chunk_size: (i + 1) * chunk_size] if tensor is not None else None
             for key, tensor in tensor_dict.items()
         }
         for i in range(num_chunks)
     ]
+    return [{**a, "extra_args": b} for a, b in zip(tensor_dict_ret, chunked_extra_args)]
 
 
 def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
@@ -243,7 +252,19 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     batch_size = first_tensor.shape[0]
     permutation = torch.randperm(batch_size)
-    return {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
+    extra_args = tensor_dict.pop("extra_args", None)
+
+    permuted_tensor_dict = {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
+
+    if extra_args and "image_grid_thw" in extra_args.keys():
+        extra_args["image_grid_thw"] = extra_args["image_grid_thw"][permutation]
+        permuted_tensor_dict["extra_args"] = extra_args
+    elif extra_args:
+        permuted_tensor_dict["extra_args"] = {key: tensor[permutation] if tensor is not None else None for key, tensor in extra_args.items()}
+    else:
+        pass
+
+    return permuted_tensor_dict
 
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
@@ -586,6 +607,11 @@ class GRPOTrainer(Trainer):
                 raise ImportError(
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
                 )
+
+            # disable liger loss for multi-modal inputs
+            if isinstance(processing_class, ProcessorMixin):
+                raise ValueError("Liger loss is not supported with multi-modal inputs.")
+            
             # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
             self._forward_redirection = _ForwardRedirection()
 
@@ -843,16 +869,17 @@ class GRPOTrainer(Trainer):
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
-    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
+    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, **kwargs) -> torch.Tensor:
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         for i in range(0, input_ids.size(0), batch_size):
             input_ids_batch = input_ids[i : i + batch_size]
             attention_mask_batch = attention_mask[i : i + batch_size]
+            extra_args_batch = split_extra_args_into_chunks(kwargs, i, batch_size)
 
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             logits = model(
-                input_ids=input_ids_batch, attention_mask=attention_mask_batch, logits_to_keep=logits_to_keep + 1
+                input_ids=input_ids_batch, attention_mask=attention_mask_batch, logits_to_keep=logits_to_keep + 1, **extra_args_batch
             ).logits
             logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
             input_ids_batch = input_ids_batch[:, -logits_to_keep:]
@@ -1058,26 +1085,21 @@ class GRPOTrainer(Trainer):
             processor_kwargs["images"] = images
         if any(audios):
             processor_kwargs["audio"] = list(ele[0]["array"] for ele in audios)
+            processor_kwargs["audio"] = list(ele[0]["array"] if isinstance(ele[0], dict) else ele[0] for ele in audios)
         if any(videos):
             processor_kwargs["video"] = videos
 
-        if isinstance(self.processing_class, PreTrainedTokenizerBase):
-            prompt_inputs = self.processing_class(
-                **processor_kwargs,
-                return_tensors="pt",
-                padding=True,
-                padding_side="left",
-                add_special_tokens=False,
-            )
-        else:
-            prompt_inputs = self.processing_class(
-                **processor_kwargs,
-                return_tensors="pt",
-                add_special_tokens=False
-            )
+        prompt_inputs = self.processing_class(
+            **processor_kwargs,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            add_special_tokens=False,
+        )
 
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+        extra_parameter_for_model = {kk: vv for kk, vv in prompt_inputs.items() if kk not in ["input_ids", "attention_mask"]}
 
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
@@ -1216,7 +1238,7 @@ class GRPOTrainer(Trainer):
             # per_token_logps.detach() instead.
             if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
                 old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size, **extra_parameter_for_model
                 )
             else:
                 old_per_token_logps = None
@@ -1346,6 +1368,7 @@ class GRPOTrainer(Trainer):
             "completion_mask": completion_mask,
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
+            "extra_args": extra_parameter_for_model
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1413,20 +1436,24 @@ class GRPOTrainer(Trainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        extra_args = inputs.pop("extra_args", None)
+        if extra_args is not None:
+            extra_args.pop("input_ids", None)
+            extra_args.pop("attention_mask", None)
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep, **extra_args if extra_args is not None else {})
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             with torch.no_grad():
                 if self.ref_model is not None:
                     ref_per_token_logps = self._get_per_token_logps(
-                        self.ref_model, input_ids, attention_mask, logits_to_keep
+                        self.ref_model, input_ids, attention_mask, logits_to_keep, **extra_args if extra_args is not None else {}
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
                         ref_per_token_logps = self._get_per_token_logps(
-                            self.model, input_ids, attention_mask, logits_to_keep
+                            self.model, input_ids, attention_mask, logits_to_keep, **extra_args if extra_args is not None else {}
                         )
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1

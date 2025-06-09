@@ -79,6 +79,9 @@ SYSTEM_PROMPT = (
 
 def make_conversation(sample):
     images = sample.get("image", [])[:5]
+    images = list(filter(lambda k: len(k.getbands()) == 3, images))
+    if not images:
+        return None
     prompt = f"choose the correct answer from options\nquestion:{sample['question']}\noptions: {str(sample['options'])}"
     prompt_content = [
         {"role": "system", "content": [{"type": "text", "text": SYSTEM_PROMPT}]},
@@ -102,7 +105,11 @@ def format_reward(completions, **kwargs):
 def main():
     args = parse_args()
     raw_ds = load_dataset(args.dataset_name, split=args.dataset_split)
-    train_data = [make_conversation(sample) for sample in raw_ds]
+    train_data = [
+        conv
+        for sample in raw_ds
+        if (conv := make_conversation(sample)) is not None
+    ]
 
     model = AutoModelForCausalLM.from_pretrained(
         args.model_id, torch_dtype="auto", device_map="auto"
