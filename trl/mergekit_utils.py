@@ -72,9 +72,7 @@ class MergeConfig:
 
     def __init__(self, method: str = "linear"):
         if not is_mergekit_available():
-            raise ImportError(
-                "MergeConfig requires the `mergekit` extra. To install, run `pip install mergekit`."
-            )
+            raise ImportError("MergeConfig requires the `mergekit` extra. To install, run `pip install mergekit`.")
         self.method = method
         self.policy_model_path = None
         self.target_model_path = None
