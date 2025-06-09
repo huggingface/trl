@@ -344,8 +344,6 @@ class DPOTrainer(Trainer):
         self.use_logits_to_keep = args.use_logits_to_keep
 
         if args.padding_free:
-            if data_collator is not None:
-                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if model.config._attn_implementation != "flash_attention_2":
                 warnings.warn(
                     "Padding-free training is enabled, but the attention implementation is not set to "
