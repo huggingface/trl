@@ -49,11 +49,15 @@ def set_ring_attn_group(ring_attn_group: dist.ProcessGroup | None):
     RING_ATTN_GROUP = ring_attn_group
 
 
-def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int = 1):
+def register_ring_attn(world_size: int, rank: int, sequence_parallel_degree: int, heads_k_stride: int = 1):
     """
     Create ring attention group and substitute flash attn with ring flash attn.
 
     Args:
+        world_size (`int`):
+            Total number of GPUs in the distributed setup.
+        rank (`int`):
+            Rank of the current GPU in the distributed setup.
         sequence_parallel_size (`int`):
             Sequence parallelism factor.
         heads_k_stride (`int`, *optional*, defaults to `1`):
@@ -65,20 +69,11 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int = 1):
             "`pip install ring-flash-attn`."
         )
 
-    if get_ring_attn_group() is not None:
-        logger.info("Ring attention already registered, exiting early...")
-        return
-
-    if not dist.is_initialized():
-        logger.error("Distributed process group is not initialized. Cannot register ring attention.")
-        return
-
     logger.info(
         "Enabling ring attention sequence parallelism: each sequence will be processed across "
         f"{sequence_parallel_degree} GPUs"
     )
 
-    world_size = dist.get_world_size()
     if sequence_parallel_degree > world_size:
         raise ValueError(
             f"sequence_parallel_degree ({sequence_parallel_degree}) must be less than or equal to world_size "
@@ -89,7 +84,6 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int = 1):
             f"sequence_parallel_degree ({sequence_parallel_degree}) must evenly divide world_size ({world_size})"
         )
 
-    rank = dist.get_rank()
     num_groups = world_size // sequence_parallel_degree
     group_assignments = {}
     local_group = None
@@ -118,7 +112,9 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int = 1):
     if rank == 0:
         logger.info(f"Sequence parallel group assignments (GPU Rank -> Group Index): {group_assignments}")
 
-    substitute_hf_flash_attn(process_group=get_ring_attn_group(), heads_k_stride=heads_k_stride)
+    substitute_hf_flash_attn(process_group=local_group, heads_k_stride=heads_k_stride)
+
+    return group
 
 
 def update_ring_attn_params(batch: dict[str, torch.Tensor]):
