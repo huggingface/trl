@@ -15,6 +15,7 @@
 """
 accelerate launch examples/scripts/dpo_vlm.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
+    --dataset_streaming \
     --model_name_or_path HuggingFaceM4/idefics2-8b \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 32 \
@@ -100,7 +101,11 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    dataset = load_dataset(
+        script_args.dataset_name,
+        name=script_args.dataset_config,
+        streaming=script_args.dataset_streaming,
+    )
 
     ################
     # Training
