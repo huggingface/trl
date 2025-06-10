@@ -31,8 +31,8 @@ from transformers import (
     is_vision_available,
 )
 from transformers.testing_utils import (
-    require_liger_kernel,
     get_device_properties,
+    require_liger_kernel,
     require_peft,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,
     require_vision,
@@ -1266,7 +1266,7 @@ class DPOTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
-            
+
     def test_train_with_length_desensitization(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")

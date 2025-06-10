@@ -1340,7 +1340,6 @@ class DPOTrainer(Trainer):
 
         return output
 
-
     def concatenated_forward(
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]], is_ref_model: bool = False
     ):
