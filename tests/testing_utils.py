@@ -75,6 +75,13 @@ def require_rich(test_case):
     return unittest.skipUnless(is_rich_available(), "test requires rich")(test_case)
 
 
+def require_ring_flash_attn(test_case):
+    """
+    Decorator marking a test that requires ring-flash-attn. Skips the test if ring-flash-attn is not available.
+    """
+    return unittest.skipUnless(is_ring_flash_attn_available(), "test requires ring-flash-attn")(test_case)
+
+
 def require_sklearn(test_case):
     """
     Decorator marking a test that requires sklearn. Skips the test if sklearn is not available.
@@ -104,13 +111,6 @@ def require_3_accelerators(test_case):
     return unittest.skipUnless(
         torch_accelerator_module.device_count() > 3, f"test requires at least 3 {torch_device}s"
     )(test_case)
-
-
-def require_ring_flash_attn(test_case):
-    """
-    Decorator marking a test that requires ring-flash-attn. Skips the test if ring-flash-attn is not available.
-    """
-    return unittest.skipUnless(is_ring_flash_attn_available(), "test requires ring-flash-attn")(test_case)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
