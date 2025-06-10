@@ -104,7 +104,6 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         result = collator(examples)
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4, 5]]))
 
@@ -119,7 +118,6 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         result = collator(examples)
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, 4, 5]]))
 
@@ -170,6 +168,70 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
+
+    @parameterized.expand([(0,), (1,)])
+    def test_cp_simple(self, rank):
+        """Test basic padding functionality without completion masks."""
+        self.collator = DataCollatorForLanguageModeling(
+            pad_token_id=0, padding_free=True, local_rank=rank, local_world_size=2
+        )
+        examples = [{"input_ids": [1, 2]}, {"input_ids": [3, 4]}, {"input_ids": [5, 6]}]
+
+        result = self.collator(examples)
+
+        if rank == 0:
+            torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3]]))
+            torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 0]]))
+            torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3]]))
+        else:
+            torch.testing.assert_close(result["input_ids"], torch.tensor([[4, 5, 6]]))
+            torch.testing.assert_close(result["position_ids"], torch.tensor([[1, 0, 1]]))
+            torch.testing.assert_close(result["labels"], torch.tensor([[4, 5, 6]]))
+        torch.testing.assert_close(result["cu_seqlens"], torch.tensor([0, 2, 4, 6], dtype=torch.int32))
+
+    @parameterized.expand([(0,), (1,)])
+    def test_cp_with_padding(self, rank):
+        """Test basic padding functionality without completion masks."""
+        self.collator = DataCollatorForLanguageModeling(
+            pad_token_id=0, padding_free=True, local_rank=rank, local_world_size=2
+        )
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = self.collator(examples)
+
+        if rank == 0:
+            torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3]]))
+            torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2]]))
+            torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3]]))
+        else:
+            torch.testing.assert_close(result["input_ids"], torch.tensor([[4, 5, 0]]))
+            torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 0]]))
+            torch.testing.assert_close(result["labels"], torch.tensor([[4, 5, -100]]))
+        torch.testing.assert_close(result["cu_seqlens"], torch.tensor([0, 3, 5, 6], dtype=torch.int32))
+
+    @parameterized.expand([(0,), (1,), (2,)])
+    def test_cp_3_processes(self, rank):
+        """Test basic padding functionality without completion masks."""
+        self.collator = DataCollatorForLanguageModeling(
+            pad_token_id=0, padding_free=True, local_rank=rank, local_world_size=3
+        )
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}, {"input_ids": [6, 7]}]
+
+        result = self.collator(examples)
+
+        if rank == 0:
+            torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3]]))
+            torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2]]))
+            torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3]]))
+        elif rank == 1:
+            torch.testing.assert_close(result["input_ids"], torch.tensor([[4, 5, 6]]))
+            torch.testing.assert_close(result["position_ids"], torch.tensor([[3, 4, 0]]))
+            torch.testing.assert_close(result["labels"], torch.tensor([[4, 5, 6]]))
+        else:
+            torch.testing.assert_close(result["input_ids"], torch.tensor([[7, 0, 0]]))
+            torch.testing.assert_close(result["position_ids"], torch.tensor([[1, 0, 0]]))
+            torch.testing.assert_close(result["labels"], torch.tensor([[7, -100, -100]]))
+        torch.testing.assert_close(result["cu_seqlens"], torch.tensor([0, 5, 7, 9], dtype=torch.int32))
 
 
 class SFTTrainerTester(unittest.TestCase):

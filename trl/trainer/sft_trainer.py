@@ -87,9 +87,20 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             that are no in the completion.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly. The attention mask will be set to 1 for all tokens.
+            generated accordingly. The attention mask is not returned in this case.
+        return_position_ids (`bool`, *optional*, defaults to `True`):
+            If set to `True`, the position IDs will be returned in the output. This is useful for models that require
+            position IDs, such as those using FlashAttention.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
+        local_rank (`int`, *optional*, defaults to `0`):
+            Index of the current process within the context parallelism group. Only needed when using context
+            parallelism (CP). In CP, the collator splits the sequence dimension across processes, assigning each
+            process a chunk of the sequence.
+        local_world_size (`int`, *optional*, defaults to `1`):
+            Total number of processes in the context parallelism group. Set to >1 to enable CP. When CP is enabled, the
+            collator outputs `cu_seqlens` for use in context-parallel attention. When using context parallelism, you
+            must set `padding_free=True`.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
@@ -140,14 +151,15 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     padding_free: bool = False
     return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
-    return_tensors: str = "pt"
     local_rank: int = 0
     local_world_size: int = 1
+    return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
-        attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+        if not self.padding_free:
+            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
         if self.return_position_ids:
             if "position_ids" in examples[0]:
                 position_ids = [torch.tensor(example["position_ids"]) for example in examples]
@@ -163,7 +175,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             lengths = torch.tensor([len(seq) for seq in input_ids])
             output["cu_seqlens"] = torch.cat([torch.tensor([0]), torch.cumsum(lengths, dim=0)]).to(torch.int32)
             output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
-            output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
             if self.return_position_ids:
                 output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
             output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
@@ -175,8 +186,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             # If local_rank==0 and local_world_size==1, this is a no-op.
             total_seq_length = output["input_ids"].shape[1]
             pad_size = (math.ceil(total_seq_length / self.local_world_size) * self.local_world_size) - total_seq_length
-            for key in ["input_ids", "attention_mask", "position_ids", "labels"]:
-                output[key] = torch.nn.functional.pad(output[key], (0, pad_size))
+            if pad_size > 0:
+                output["cu_seqlens"] = torch.cat([output["cu_seqlens"], output["cu_seqlens"][-1:] + pad_size])
+            output["input_ids"] = torch.nn.functional.pad(output["input_ids"], (0, pad_size), value=self.pad_token_id)
+            if self.return_position_ids:
+                output["position_ids"] = torch.nn.functional.pad(output["position_ids"], (0, pad_size), value=0)
+            output["labels"] = torch.nn.functional.pad(output["labels"], (0, pad_size), value=-100)
+            for key in ["input_ids", "position_ids", "labels"]:
                 output[key] = torch.chunk(output[key], self.local_world_size, dim=1)[self.local_rank]
 
         else:
@@ -468,7 +484,9 @@ class SFTTrainer(Trainer):
 
         # Register Ring Attention for Sequence Parallelism if configured
         if self.args.sequence_parallel_size > 1:
-            register_ring_attn(
+            self.cp_group = register_ring_attn(
+                world_size=self.accelerator.num_processes,
+                rank=self.accelerator.process_index,
                 sequence_parallel_degree=self.args.sequence_parallel_size,
                 heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
             )
