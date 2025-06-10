@@ -182,7 +182,7 @@ class GRPOConfig(TrainingArguments):
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
         filter_on_entropy (`bool`, defaults to False):
-            If set to true, the tokens corresponding to positions in the completion where the entropy is not in the 
+            If set to true, the tokens corresponding to positions in the completion where the entropy is not in the
             top `token_entropy_percentile_threshold` percentile are masked out.
         token_entropy_percentile_threshold (`float`, *optional*, defaults to `0.2`):
             τ parameter from the [Beyond the 80/20 Rule](https://arxiv.org/pdf/2506.01939) paper, which finds that masking out

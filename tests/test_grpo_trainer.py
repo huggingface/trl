@@ -851,7 +851,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 filter_on_entropy=True,
-                token_entropy_percentile_threshold=0.8
+                token_entropy_percentile_threshold=0.8,
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
