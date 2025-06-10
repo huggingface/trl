@@ -29,7 +29,12 @@ from transformers import (
     PreTrainedTokenizerBase,
     is_vision_available,
 )
-from transformers.testing_utils import require_peft, require_torch_gpu_if_bnb_not_multi_backend_enabled, require_vision
+from transformers.testing_utils import (
+    get_device_properties,
+    require_peft,
+    require_torch_gpu_if_bnb_not_multi_backend_enabled,
+    require_vision,
+)
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
@@ -703,9 +708,11 @@ class DPOTrainerTester(unittest.TestCase):
     )
     @require_bitsandbytes
     @require_peft
-    @unittest.skip("You need a GPU with bf16 support in order to run these tests")
+    @unittest.skipIf(
+        get_device_properties()[0] == "cuda" and get_device_properties()[1] < 8,
+        "Skipping because bf16 not supported on CUDA GPU with capability < 8.0",
+    )
     def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
-        # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -952,7 +959,7 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
             self.assertIn(
-                "Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
                 str(context.exception),
             )
 
@@ -975,7 +982,7 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
             self.assertIn(
-                "Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
                 str(context.exception),
             )
 

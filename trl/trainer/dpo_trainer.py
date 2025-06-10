@@ -24,15 +24,16 @@ from typing import Any, Callable, Literal, Optional, Union
 
 import pandas as pd
 import torch
-import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState
 from accelerate.utils import tqdm
 from datasets import Dataset, IterableDataset
+from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
+    AutoTokenizer,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -47,7 +48,7 @@ from transformers.data.data_collator import DataCollatorMixin
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
-from transformers.utils import is_peft_available, is_torch_xpu_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
@@ -72,7 +73,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
 
 if is_wandb_available():
@@ -157,180 +158,139 @@ class DataCollatorForPreference(DataCollatorMixin):
 
 
 class DPOTrainer(Trainer):
-    r"""
-    Initialize DPOTrainer.
+    """
+    Trainer for Direct Preference Optimization (DPO) method.
+
+    This class is a wrapper around the [`transformers.Trainer`] class and inherits all of its attributes and methods.
 
     Args:
-        model (`transformers.PreTrainedModel`):
-            The model to train, preferably an `AutoModelForSequenceClassification`.
+        model (`Union[str, PreTrainedModel]`):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
+              a path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
+              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
+              in `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         ref_model (`PreTrainedModelWrapper`):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
             reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
-        args (`DPOConfig`):
-            The DPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DataCollatorForPreference`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
-            The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
-            The dataset to use for evaluation.
-        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
-            Processing class used to process the data. If provided, will be used to automatically process the inputs
-            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-            reuse the fine-tuned model.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
+        args ([`DPOConfig`], *optional*, defaults to `None`):
+            Configuration for this trainer. If `None`, a default configuration is used.
+        data_collator (`DataCollator`, *optional*):
+            Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
+            Will default to [`DataCollatorForPreference`].
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
+            Dataset to use for training. DPO supports [preference](#preference) type and. The format of the samples can
+            be either:
+
+            - [Standard](dataset_formats#standard): Each sample contains plain text.
+            - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
+              and content).
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+            Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
+            Processing class used to process the data. If `None`, the processing class is loaded from the model's name
+            with [`~transformers.AutoTokenizer.from_pretrained`].
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
-        callbacks (`list[transformers.TrainerCallback]`):
-            The callbacks to use for training.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
-            The optimizer and scheduler to use for training.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
-            The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+            The function that will be used to compute metrics at evaluation. Must take a [`EvalPrediction`] and return
+            a dictionary string to metric values. *Note* When passing TrainingArgs with `batch_eval_metrics` set to
+            `True`, your compute_metrics function must take a boolean `compute_result` argument. This will be triggered
+            after the last eval batch to signal that the function needs to calculate and return the global summary
+            statistics rather than accumulating the batch-level statistics.
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks
+            detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+
+            If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
+            method.
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
+            model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+            A tuple containing the optimizer class and keyword arguments to use.
+            Overrides `optim` and `optim_args` in `args`. Incompatible with the `optimizers` argument.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
+            A function that preprocess the logits right before caching them at each evaluation step. Must take two
+            tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
+            by this function will be reflected in the predictions received by `compute_metrics`.
+
+            Note that the labels (second parameter) will be `None` if the dataset does not have them.
+        peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
     _tag_names = ["trl", "dpo"]
 
     def __init__(
         self,
-        model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
+        model: Union[str, nn.Module, PreTrainedModel],
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[DPOConfig] = None,
-        data_collator: Optional[DataCollator] = None,
+        data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
+        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
+        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
-        peft_config: Optional[dict] = None,
+        peft_config: Optional["PeftConfig"] = None,
     ):
-        if model is None:
-            raise ValueError("No model provided. Please provide a model to train.")
+        # Args
+        model_id = model if isinstance(model, str) else model.config._name_or_path
+        if args is None:
+            model_name = model_id.split("/")[-1]
+            args = DPOConfig(f"{model_name}-DPO")
 
+        # Handle the tokenizer
+        if processing_class is None:
+            processing_class = AutoTokenizer.from_pretrained(model_id)
+
+        if args.padding_value is not None:
+            self.padding_value = args.padding_value
+        else:
+            if hasattr(processing_class, "pad_token_id") and processing_class.pad_token_id is not None:
+                self.padding_value = processing_class.pad_token_id
+            elif hasattr(processing_class, "tokenizer") and processing_class.tokenizer.pad_token_id is not None:
+                self.padding_value = processing_class.tokenizer.pad_token_id
+            else:
+                raise ValueError(
+                    "`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in the "
+                    "`processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
+                    "`tokenizer.pad_token` (e.g., `tokenizer.pad_token = tokenizer.eos_token`) before instantiating "
+                    "the trainer."
+                )
+
+        # Model
         if not isinstance(model, str) and ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
                 "same as `model`, you must mass a copy of it, or `None` if you use peft."
             )
 
-        if args.model_init_kwargs is None:
-            model_init_kwargs = {}
-        elif not isinstance(model, str):
-            raise ValueError(
-                "You passed model_init_kwargs to the DPOTrainer/DPOConfig, but your model is already instantiated."
+        if args.model_init_kwargs is not None and not isinstance(model, str):
+            warnings.warn(
+                "You passed model_init_kwargs to the `DPOConfig`, but your model is already instantiated. "
+                "The `model_init_kwargs` will be ignored."
             )
-        else:
-            model_init_kwargs = args.model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
-                    raise ValueError(
-                        f"Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
-                    )
-                model_init_kwargs["torch_dtype"] = torch_dtype
-
-        if args.ref_model_init_kwargs is None:
-            ref_model_init_kwargs = {}
-        elif not isinstance(ref_model, str):
-            raise ValueError(
-                "You passed ref_model_init_kwargs to the DPOTrainer/DPOConfig, but your ref_model is already instantiated."
-            )
-        else:
-            ref_model_init_kwargs = args.ref_model_init_kwargs
-            torch_dtype = ref_model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
-                # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
-                    raise ValueError(
-                        f"Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
-                    )
-                ref_model_init_kwargs["torch_dtype"] = torch_dtype
-
         if isinstance(model, str):
-            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
+            model = self._create_model_from_path(model, args)
 
-        if isinstance(ref_model, str):
-            ref_model = AutoModelForCausalLM.from_pretrained(ref_model, **ref_model_init_kwargs)
-
-        # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
-        # has been called in order to properly call autocast if needed.
-        self._peft_has_been_casted_to_bf16 = False
-
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+        if args.ref_model_init_kwargs is not None and not isinstance(ref_model, str):
+            warnings.warn(
+                "You passed ref_model_init_kwargs to the `DPOConfig`, but your ref_model is already instantiated. "
+                "The `ref_model_init_kwargs` will be ignored."
             )
-        elif is_peft_available() and peft_config is not None:
-            # if model is a peft model and we have a peft_config, we merge and unload it first
-            if isinstance(model, PeftModel):
-                model = model.merge_and_unload()
+        if isinstance(ref_model, str):
+            ref_model = self._create_model_from_path(ref_model, args, is_ref=True)
 
-            if ref_model is not None and not args.force_use_ref_model:
-                raise ValueError(
-                    "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
-                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
-                    " if you want to use a different ref_model."
-                )
-
-            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
-                _support_gc_kwargs = hasattr(
-                    args, "gradient_checkpointing_kwargs"
-                ) and "gradient_checkpointing_kwargs" in list(
-                    inspect.signature(prepare_model_for_kbit_training).parameters
-                )
-
-                prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
-
-                if _support_gc_kwargs:
-                    prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
-
-                model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-            elif args.gradient_checkpointing:
-                # For backward compatibility with older versions of transformers
-                if hasattr(model, "enable_input_require_grads"):
-                    model.enable_input_require_grads()
-                else:
-
-                    def make_inputs_require_grad(module, input, output):
-                        output.requires_grad_(True)
-
-                    model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-            # get peft model with the given config
-            model = get_peft_model(model, peft_config)
-            if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
-                peft_module_casting_to_bf16(model)
-                # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
-                self._peft_has_been_casted_to_bf16 = True
-
-        # For models that use gradient_checkpointing, we need to attach a hook that enables input
-        # to explicitly have `requires_grad=True`, otherwise training will either silently
-        # fail or completely fail.
-        elif args.gradient_checkpointing:
-            # For backward compatibility with older versions of transformers
-            if hasattr(model, "enable_input_require_grads"):
-                model.enable_input_require_grads()
-            else:
-
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+        # PEFT configuration and model wrapping
+        model = self._prepare_peft_model(model, ref_model, peft_config, args)
 
         if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
             raise ValueError(
@@ -353,32 +313,24 @@ class DPOTrainer(Trainer):
         else:
             self.ref_model = create_reference_model(model)
 
-        if processing_class is None:
-            raise ValueError("processing_class must be specified to tokenize a DPO dataset.")
-
-        if args.padding_value is not None:
-            self.padding_value = args.padding_value
-        else:
-            if hasattr(processing_class, "pad_token_id") and processing_class.pad_token_id is not None:
-                self.padding_value = processing_class.pad_token_id
-            elif hasattr(processing_class, "tokenizer") and processing_class.tokenizer.pad_token_id is not None:
-                self.padding_value = processing_class.tokenizer.pad_token_id
-            else:
-                raise ValueError(
-                    "`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in the "
-                    "`processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
-                    "`tokenizer.pad_token` (e.g., `tokenizer.pad_token = tokenizer.eos_token`) before instantiating "
-                    "the trainer."
-                )
-
-        if data_collator is None:
-            data_collator = DataCollatorForPreference(pad_token_id=self.padding_value)
-
         # Disable dropout in the model and reference model
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
+        # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
+        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
+        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
+        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
+        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
+        # that the warning has already been issued.
+        model.warnings_issued["estimate_tokens"] = True
+
+        # Data collator
+        if data_collator is None:
+            data_collator = DataCollatorForPreference(pad_token_id=self.padding_value)
 
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
@@ -398,6 +350,12 @@ class DPOTrainer(Trainer):
                     "other implementations may lead to unexpected behavior. To ensure compatibility, set "
                     "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
                     "attention mechanism can handle flattened sequences."
+                )
+            if args.per_device_train_batch_size == 1:
+                warnings.warn(
+                    "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
+                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "to at least 2."
                 )
         self.padding_free = args.padding_free
 
@@ -438,15 +396,6 @@ class DPOTrainer(Trainer):
         self.f_divergence_params = {FDivergenceConstants.ALPHA_DIVERGENCE_COEF_KEY: args.f_alpha_divergence_coef}
         self.dataset_num_proc = args.dataset_num_proc
 
-        # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
-        # "input_ids" key. Instead, the available keys are "prompt_input_ids", "chosen_input_ids", and
-        # "rejected_input_ids". As a result, the trainer issues the warning: "Could not estimate the number of tokens
-        # of the input, floating-point operations will not be computed." To suppress this warning, we set the
-        # "estimate_tokens" key in the model's "warnings_issued" dictionary to True. This acts as a flag to indicate
-        # that the warning has already been issued.
-        model.warnings_issued["estimate_tokens"] = True
-
         # Dataset preparation
         train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
         if eval_dataset is not None:
@@ -465,10 +414,10 @@ class DPOTrainer(Trainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            model_init=model_init,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
+            optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
@@ -520,6 +469,104 @@ class DPOTrainer(Trainer):
 
         if self.loss_type == "bco_pair":
             self.running = RunningMoments(self.accelerator)
+
+    def _create_model_from_path(self, model_path: str, args: DPOConfig, is_ref: bool = False) -> PreTrainedModel:
+        """Creates a model from a path or model identifier."""
+        if not is_ref:
+            model_init_kwargs = args.model_init_kwargs or {}
+        else:
+            model_init_kwargs = args.ref_model_init_kwargs or {}
+
+        # Handle torch dtype
+        torch_dtype = model_init_kwargs.get("torch_dtype")
+        if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
+            pass  # torch_dtype is already a torch.dtype or "auto" or None
+        elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
+            torch_dtype = getattr(torch, torch_dtype)
+            model_init_kwargs["torch_dtype"] = torch_dtype
+        else:
+            raise ValueError(
+                "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
+                f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+            )
+        # Disable caching if gradient checkpointing is enabled (not supported)
+        # if args.gradient_checkpointing:
+        #     model_init_kwargs["use_cache"] = False
+
+        # Create model
+        model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
+        return model
+
+    def _prepare_peft_model(
+        self, model: PreTrainedModel, ref_model: PreTrainedModel, peft_config: Any, args: DPOConfig
+    ) -> PreTrainedModel:
+        """Prepares a model for PEFT training."""
+        # Initialize this variable to False. This helps tracking the case when `peft_module_casting_to_bf16`
+        # has been called in order to properly call autocast if needed.
+        self._peft_has_been_casted_to_bf16 = False
+
+        if not is_peft_available() and peft_config is not None:
+            raise ValueError(
+                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+            )
+        elif is_peft_available() and peft_config is not None:
+            # if model is a peft model and we have a peft_config, we merge and unload it first
+            if isinstance(model, PeftModel):
+                model = model.merge_and_unload()
+
+            if ref_model is not None and not args.force_use_ref_model:
+                raise ValueError(
+                    "You passed both a ref_model and a peft_config. For training PEFT adapters with DPO there is no need to pass a reference"
+                    " model. Please pass `ref_model=None` in case you want to train PEFT adapters, or pass a ref_model with `force_use_ref_model=True` in DPOTrainer's init."
+                    " if you want to use a different ref_model."
+                )
+
+            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+                _support_gc_kwargs = hasattr(
+                    args, "gradient_checkpointing_kwargs"
+                ) and "gradient_checkpointing_kwargs" in list(
+                    inspect.signature(prepare_model_for_kbit_training).parameters
+                )
+
+                prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+
+                if _support_gc_kwargs:
+                    prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+
+                model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
+
+            else:
+                model = self._prepare_gradient_checkpointing(model, args)
+
+            # get peft model with the given config
+            model = get_peft_model(model, peft_config)
+            if args.bf16 and getattr(model, "is_loaded_in_4bit", False):
+                peft_module_casting_to_bf16(model)
+                # If args.bf16 we need to explicitly call `generate` with torch amp autocast context manager
+                self._peft_has_been_casted_to_bf16 = True
+
+        else:
+            model = self._prepare_gradient_checkpointing(model, args)
+
+        return model
+
+    def _prepare_gradient_checkpointing(self, model: PreTrainedModel, args: DPOConfig):
+        """Prepare the gradienting checkpointing for the model."""
+        # For models that use gradient_checkpointing, we need to attach a hook that enables input
+        # to explicitly have `requires_grad=True`, otherwise training will either silently
+        # fail or completely fail.
+        if args.gradient_checkpointing:
+            # For backward compatibility with older versions of transformers
+            if hasattr(model, "enable_input_require_grads"):
+                model.enable_input_require_grads()
+            else:
+
+                def make_inputs_require_grad(module, input, output):
+                    output.requires_grad_(True)
+
+                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+        return model
 
     def _prepare_dataset(
         self,
@@ -798,8 +845,9 @@ class DPOTrainer(Trainer):
 
     def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> dict:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
-        device_type = "xpu" if is_torch_xpu_available() else "cuda"
-        compte_ref_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        compte_ref_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
         with torch.no_grad(), compte_ref_context_manager:
             if self.ref_model is None:
                 with self.null_ref_context():
@@ -1353,9 +1401,8 @@ class DPOTrainer(Trainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
-        device_type = "xpu" if is_torch_xpu_available() else "cuda"
         compute_loss_context_manager = (
-            amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         )
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
@@ -1375,8 +1422,9 @@ class DPOTrainer(Trainer):
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch amp context manager as some hidden states are silently casted to full precision.
-        device_type = "xpu" if is_torch_xpu_available() else "cuda"
-        generate_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        generate_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with generate_context_manager:
             policy_output = model.generate(
@@ -1430,8 +1478,9 @@ class DPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        device_type = "xpu" if is_torch_xpu_available() else "cuda"
-        prediction_context_manager = amp.autocast(device_type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        prediction_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
