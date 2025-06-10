@@ -13,9 +13,11 @@
 # limitations under the License.
 
 """
+Without dataset streaming:
+
+```
 accelerate launch examples/scripts/dpo_vlm.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 32 \
@@ -27,6 +29,27 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --use_peft \
     --lora_target_modules=all-linear \
     --report_to wandb
+```
+
+With dataset streaming:
+
+```
+accelerate launch examples/scripts/dpo_vlm.py \
+    --dataset_name HuggingFaceH4/rlaif-v_formatted \
+    --dataset_streaming \
+    --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
+    --per_device_train_batch_size 2 \
+    --max_steps 100 \
+    --gradient_accumulation_steps 32 \
+    --dataset_num_proc 32 \
+    --output_dir dpo_idefics_rlaif-v \
+    --bf16 \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --use_peft \
+    --lora_target_modules=all-linear \
+    --report_to wandb
+```
 """
 
 import torch
