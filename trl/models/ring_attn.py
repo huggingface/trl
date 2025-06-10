@@ -16,7 +16,6 @@ import logging
 
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 
 from ..import_utils import is_ring_attn_available
 
@@ -122,64 +121,16 @@ def register_ring_attn(sequence_parallel_degree: int, heads_k_stride: int = 1):
     substitute_hf_flash_attn(process_group=get_ring_attn_group(), heads_k_stride=heads_k_stride)
 
 
-def get_cu_seqlens_from_pos_ids(position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Generate a cumulative sequence length mask for flash attention using pos ids"""
-    if len(position_ids.shape) == 1:
-        position_ids = position_ids.unsqueeze(0)
-
-    device = position_ids.device
-    results = []
-
-    for row in position_ids:
-        # Count the number of consecutive zeros from the right side
-        padding_length = (row == 0).int().flip(dims=[0]).cumprod(dim=0).sum().item()
-
-        # Adjust the row to exclude padding
-        adjusted_row = row[:-padding_length] if padding_length else row.clone()
-
-        # Find where the position resets to 0 (indicating a new sequence)
-        seq_starts = torch.cat(
-            [
-                torch.tensor([True], dtype=torch.bool, device=device),
-                adjusted_row[1:] == 0,
-            ]
-        )
-        # Get the indices where the sequence starts
-        start_indices = torch.cat(
-            [
-                torch.nonzero(seq_starts).unbind(dim=1)[0],
-                torch.tensor([len(adjusted_row)], dtype=torch.int32, device=device),
-            ]
-        )
-        # Calculate the sequence lengths
-        seq_lengths = start_indices[1:] - start_indices[:-1]
-        # Calculate the cumulative sequence lengths
-        cu_seqlens = torch.cat([torch.tensor([0], dtype=torch.int32, device=device), seq_lengths.cumsum(0)])
-        # Append the padding length to the cumulative sequence lengths
-        if padding_length:
-            cu_seqlens = torch.cat([cu_seqlens, torch.tensor([len(row)], dtype=torch.int32, device=device)])
-        results.append(cu_seqlens)
-
-    # Find the maximum value across all tensors
-    max_value = max(t.max() for t in results)
-
-    # Find the length of the longest tensor
-    max_length = max(t.size(0) for t in results)
-
-    # Pad each tensor to the same length and collect them in a list
-    padded_results = [F.pad(t, (0, max_length - t.size(0)), "constant", max_value) for t in results]
-
-    return torch.stack(padded_results).to(dtype=torch.int32)
-
-
 def update_ring_attn_params(batch: dict[str, torch.Tensor]):
     """
-    Calculate the cumulative sequence lengths for the current forward pass and pass the
-    value to the substituted `ring_flash_attn`.
+    Compute global cumulative sequence lengths (cu_seqlens) for ring attention.
+
+    This function gathers position_ids from all ranks, reconstructs the global sequence
+    structure, and computes cu_seqlens that satisfy ring-flash-attention requirements.
 
     Args:
-        batch: A dictionary with a batch of data. May or may not contain `position_ids`
-            data; if not, we compute it.
+        batch: Batch dictionary containing 'input_ids' and optionally 'position_ids'.
+               If 'position_ids' is missing, it will be created automatically.
     """
     if not is_ring_attn_available():
         raise ImportError(
@@ -196,24 +147,78 @@ def update_ring_attn_params(batch: dict[str, torch.Tensor]):
         position_ids = torch.arange(0, seq_len, dtype=torch.long, device=input_ids.device).unsqueeze(0)
         batch["position_ids"] = position_ids  # Add back to batch for model use
 
-    cu_seqlens = get_cu_seqlens_from_pos_ids(position_ids)
-    cu_seqlens = cu_seqlens.squeeze().to(device=torch.cuda.current_device())
-    update_ring_flash_attn_params(cu_seqlens, get_ring_attn_group())
+    batch_size, seq_len = input_ids.shape
+    ring_group = get_ring_attn_group()
+
+    if ring_group is None:
+        raise RuntimeError("Ring attention group is not initialized. Call register_ring_attn() first.")
+
+    # For ring attention, we need to compute cu_seqlens based on global sequence structure
+    # Each rank has a slice of the global sequence, so we need to gather information across ranks
+
+    world_size = dist.get_world_size(group=ring_group)
+
+    # Gather sequence lengths from all ranks to compute global sequence length
+    local_seq_len = torch.tensor([seq_len], dtype=torch.int32, device=input_ids.device)
+    all_seq_lens = [torch.zeros_like(local_seq_len) for _ in range(world_size)]
+    dist.all_gather(all_seq_lens, local_seq_len, group=ring_group)
+
+    # Compute global sequence length and verify it's the same across all ranks
+    global_seq_len = sum(tensor.item() for tensor in all_seq_lens)
+
+    # Verify that sequence length is the same across all ranks (as expected for ring attention)
+    first_rank_seq_len = all_seq_lens[0].item()
+    if not all(tensor.item() == first_rank_seq_len for tensor in all_seq_lens):
+        logger.warning(
+            f"Sequence lengths are not uniform across ranks: {[t.item() for t in all_seq_lens]}. "
+            "This may cause issues with ring attention."
+        )
+
+    # For ring attention, we typically have one global sequence split across ranks
+    # However, we need to detect sequence boundaries within the global sequence
+
+    # Gather position_ids from all ranks to reconstruct global sequence structure
+    pos_ids = position_ids[0]  # Take first batch (should be batch_size=1 for padding-free)
+    all_pos_ids = [torch.zeros(seq_len, dtype=pos_ids.dtype, device=pos_ids.device) for _ in range(world_size)]
+    dist.all_gather(all_pos_ids, pos_ids, group=ring_group)
+
+    # Concatenate to get global position_ids
+    global_pos_ids = torch.cat(all_pos_ids, dim=0)
+
+    # Find where position resets to 0 (indicates start of new sequence) in global sequence
+    resets = torch.cat(
+        [
+            torch.tensor([True], device=global_pos_ids.device),  # First position is always a start
+            global_pos_ids[1:] == 0,  # Position resets to 0 indicate new sequence starts
+        ]
+    )
+
+    # Get sequence start positions in global sequence
+    start_positions = torch.nonzero(resets, as_tuple=False).squeeze(-1)
+    if start_positions.dim() == 0:
+        start_positions = start_positions.unsqueeze(0)
+
+    # Add the final position (total global sequence length)
+    end_position = torch.tensor([global_seq_len], device=global_pos_ids.device)
+    cu_seqlens = torch.cat([start_positions, end_position]).to(dtype=torch.int32)
+
+    cu_seqlens = cu_seqlens.to(device=torch.cuda.current_device())
+    update_ring_flash_attn_params(cu_seqlens, ring_group)
 
 
 def reset_ring_attn_position_ids(position_ids: torch.Tensor) -> torch.Tensor:
     """
-    Reset position IDs for ring attention to start from 0 for each rank.
+    Reset position IDs for ring attention to be local to each rank while preserving sequence boundaries.
 
-    For ring attention, each rank should have position IDs that start from 0
-    rather than continuing from where the previous rank left off.
+    For ring attention, each rank should have position IDs that are local to its slice
+    while maintaining the sequence structure (resets to 0 at sequence boundaries).
 
     Args:
         position_ids: Original position IDs tensor with shape [batch_size, seq_len]
 
     Returns:
         Reset position IDs tensor with shape [batch_size, seq_len] where
-        each sequence starts from 0
+        position IDs are local to this rank but preserve sequence boundaries
     """
     if position_ids.dim() == 1:
         position_ids = position_ids.unsqueeze(0)
@@ -223,7 +228,25 @@ def reset_ring_attn_position_ids(position_ids: torch.Tensor) -> torch.Tensor:
 
     for batch_idx in range(batch_size):
         seq_pos_ids = position_ids[batch_idx]
-        # Reset position IDs to start from 0 for this rank's sequence slice
-        reset_position_ids[batch_idx] = torch.arange(seq_len, dtype=seq_pos_ids.dtype, device=seq_pos_ids.device)
+
+        # Find where sequences start (position_ids reset to 0 or are at the beginning)
+        seq_starts = torch.cat(
+            [
+                torch.tensor([True], device=seq_pos_ids.device),  # First position is always a start
+                seq_pos_ids[1:] == 0,  # Position resets to 0 indicate new sequence starts
+            ]
+        )
+
+        # Generate local position IDs that reset at sequence boundaries
+        local_pos_ids = torch.zeros_like(seq_pos_ids)
+        current_pos = 0
+
+        for i in range(seq_len):
+            if seq_starts[i]:
+                current_pos = 0  # Reset at sequence start
+            local_pos_ids[i] = current_pos
+            current_pos += 1
+
+        reset_position_ids[batch_idx] = local_pos_ids
 
     return reset_position_ids
