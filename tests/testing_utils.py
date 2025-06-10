@@ -26,7 +26,7 @@ from trl.import_utils import (
     is_joblib_available,
     is_llm_blender_available,
     is_mergekit_available,
-    is_ring_attn_available,
+    is_ring_flash_attn_available,
     is_vllm_available,
 )
 
@@ -106,11 +106,11 @@ def require_3_accelerators(test_case):
     )(test_case)
 
 
-def require_ring_attn(test_case):
+def require_ring_flash_attn(test_case):
     """
     Decorator marking a test that requires ring-flash-attn. Skips the test if ring-flash-attn is not available.
     """
-    return unittest.skipUnless(is_ring_attn_available(), "test requires ring-flash-attn")(test_case)
+    return unittest.skipUnless(is_ring_flash_attn_available(), "test requires ring-flash-attn")(test_case)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):

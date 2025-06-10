@@ -17,10 +17,10 @@ import logging
 import torch
 import torch.distributed as dist
 
-from ..import_utils import is_ring_attn_available
+from ..import_utils import is_ring_flash_attn_available
 
 
-if is_ring_attn_available():
+if is_ring_flash_attn_available():
     from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 
 logger = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def register_ring_attn(world_size: int, rank: int, sequence_parallel_degree: int
         heads_k_stride (`int`, *optional*, defaults to `1`):
             Sequence parallelism K head stride size. Passed through to `ring_flash_attn.substitute_hf_flash_attn`.
     """
-    if not is_ring_attn_available():
+    if not is_ring_flash_attn_available():
         raise ImportError(
             "ring-flash-attn is required for sequence parallelism with ring attention. Please install it using: "
             "`pip install ring-flash-attn`."
@@ -128,7 +128,7 @@ def update_ring_attn_params(batch: dict[str, torch.Tensor]):
         batch: Batch dictionary containing 'input_ids' and optionally 'position_ids'.
                If 'position_ids' is missing, it will be created automatically.
     """
-    if not is_ring_attn_available():
+    if not is_ring_flash_attn_available():
         raise ImportError(
             "ring-flash-attn is required for sequence parallelism with ring attention. Please install it using: "
             "`pip install ring-flash-attn`."

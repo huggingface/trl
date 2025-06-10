@@ -25,7 +25,7 @@ from trl.models.ring_attn import (
     update_ring_attn_params,
 )
 
-from .testing_utils import require_ring_attn
+from .testing_utils import require_ring_flash_attn
 
 
 class TestRingAttnHelpers(unittest.TestCase):
@@ -80,7 +80,7 @@ class TestRingAttnHelpers(unittest.TestCase):
         set_ring_attn_group(None)
         self.assertIsNone(get_ring_attn_group())
 
-    @require_ring_attn
+    @require_ring_flash_attn
     @patch("torch.distributed.all_gather")
     @patch("torch.distributed.get_rank")
     @patch("torch.distributed.get_world_size")
@@ -130,7 +130,7 @@ class TestRingAttnHelpers(unittest.TestCase):
         # Group should be passed as second argument
         self.assertEqual(args[1], mock_group)
 
-    @require_ring_attn
+    @require_ring_flash_attn
     @patch("torch.distributed.all_gather")
     @patch("torch.distributed.get_rank")
     @patch("torch.distributed.get_world_size")
@@ -183,7 +183,7 @@ class TestRingAttnHelpers(unittest.TestCase):
         expected_cu_seqlens = torch.tensor([0, 3, 8, 10], dtype=torch.int32, device=self.device)
         torch.testing.assert_close(cu_seqlens, expected_cu_seqlens)
 
-    @require_ring_attn
+    @require_ring_flash_attn
     @patch("torch.distributed.all_gather")
     @patch("torch.distributed.get_rank")
     @patch("torch.distributed.get_world_size")
@@ -232,7 +232,7 @@ class TestRingAttnHelpers(unittest.TestCase):
             "position_ids": torch.tensor([[0, 1, 2, 3]], dtype=torch.long, device=self.device),
         }
 
-        with patch("trl.models.ring_attn.is_ring_attn_available", return_value=False):
+        with patch("trl.models.ring_attn.is_ring_flash_attn_available", return_value=False):
             with self.assertRaises(ImportError) as context:
                 update_ring_attn_params(batch)
 

@@ -34,7 +34,7 @@ _llm_blender_available = _is_package_available("llm_blender")
 _mergekit_available = _is_package_available("mergekit")
 _pydantic_available = _is_package_available("pydantic")
 _requests_available = _is_package_available("requests")
-_ring_attn_available = _is_package_available("ring_flash_attn")
+_ring_flash_attn_available = _is_package_available("ring_flash_attn")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
 _vllm_ascend_available = _is_package_available("vllm_ascend")
@@ -77,8 +77,8 @@ def is_requests_available() -> bool:
     return _requests_available
 
 
-def is_ring_attn_available() -> bool:
-    return _ring_attn_available
+def is_ring_flash_attn_available() -> bool:
+    return _ring_flash_attn_available
 
 
 def is_unsloth_available() -> bool:
