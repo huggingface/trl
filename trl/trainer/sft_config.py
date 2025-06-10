@@ -38,10 +38,6 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
-        sequence_parallel_size (`int` or `None`, *optional*, defaults to `None`):
-            Degree of sequence parallelism for ring attention.
-        heads_k_stride (`int` or `None`, *optional*, defaults to `None`):
-            Sequence parallelism K head stride size for ring attention. Defaults to 1 if sequence parallelism is enabled.
 
         > Parameters that control the data preprocessing
 
@@ -75,6 +71,11 @@ class SFTConfig(TrainingArguments):
             If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
+        sequence_parallel_size (`int`, *optional*, defaults to `1`):
+            Degree of sequence parallelism for ring attention. If set to `1` (default), sequence parallelism is
+            disabled.
+        heads_k_stride (`int` or `None`, *optional*, defaults to `None`):
+            Sequence parallelism K head stride size for ring attention.
 
         > Parameters that control the training
 
@@ -118,14 +119,16 @@ class SFTConfig(TrainingArguments):
             "the `SFTTrainer` is provided as a string."
         },
     )
-    sequence_parallel_size: Optional[int] = field(
-        default=None, metadata={"help": "Degree of sequence parallelism for ring attention."}
-    )
-    heads_k_stride: Optional[int] = field(
-        default=None,
+    sequence_parallel_size: int = field(
+        default=1,
         metadata={
-            "help": "Sequence parallelism K head stride size for ring attention. Defaults to 1 if sequence parallelism is enabled."
+            "help": "Degree of sequence parallelism for ring attention. If set to 1 (default), sequence parallelism "
+            "is disabled."
         },
+    )
+    heads_k_stride: int = field(
+        default=1,
+        metadata={"help": "Sequence parallelism K head stride size for ring attention."},
     )
 
     # Parameters that control the data preprocessing

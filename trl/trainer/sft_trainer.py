@@ -14,6 +14,7 @@
 
 import contextlib
 import dataclasses
+import math
 import os
 import warnings
 from collections import defaultdict
@@ -26,6 +27,7 @@ import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset, IterableDataset
 from packaging import version
+from ring_flash_attn import update_ring_flash_attn_params
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -52,6 +54,7 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import get_act_offloading_ctx_manager
+from ..models.ring_attn import get_ring_attn_group, register_ring_attn
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -138,7 +141,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
-    sequence_parallel_size: Optional[int] = None
+    local_rank: int = 0
+    local_world_size: int = 1
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
@@ -153,9 +157,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
 
-        # Pad
+        # Pad or flatten the sequences
         output = {}
         if self.padding_free:
+            lengths = torch.tensor([len(seq) for seq in input_ids])
+            output["cu_seqlens"] = torch.cat([torch.tensor([0]), torch.cumsum(lengths, dim=0)]).to(torch.int32)
             output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
             output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
             if self.return_position_ids:
@@ -164,6 +170,14 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             if self.completion_only_loss and "completion_mask" in examples[0]:
                 completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
                 output["labels"][completion_mask == 0] = -100
+
+            # Pad to ensure that the total sequence length is divisible by the local world size, then chunk the tensors
+            # If local_rank==0 and local_world_size==1, this is a no-op.
+            total_seq_length = output["input_ids"].shape[1]
+            pad_size = (math.ceil(total_seq_length / self.local_world_size) * self.local_world_size) - total_seq_length
+            for key in ["input_ids", "attention_mask", "position_ids", "labels"]:
+                output[key] = torch.nn.functional.pad(output[key], (0, pad_size))
+                output[key] = torch.chunk(output[key], self.local_world_size, dim=1)[self.local_rank]
 
         else:
             output["input_ids"] = pad(
@@ -188,46 +202,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
                 output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
 
-        if self.sequence_parallel_size is not None and self.sequence_parallel_size > 1:
-            # Get local (start, end) for sequence parallelism slicing
-            total_seq_len = output["input_ids"].shape[1]
-            slice_size = total_seq_len // self.local_world_size
-            start = self.local_rank * slice_size
-            end = start + slice_size
-
-            # Generate proper position IDs for this rank
-            if "position_ids" not in output:
-                batch_size = output["input_ids"].shape[0]
-                position_ids = torch.arange(start, end, dtype=torch.long, device=output["input_ids"].device)
-                output["position_ids"] = position_ids.unsqueeze(0).expand(batch_size, -1)
-
-            # Slice all tensors
-            keys_to_slice = ["input_ids", "attention_mask", "labels", "position_ids"]
-            for key in keys_to_slice:
-                if key in output:
-                    output[key] = output[key][:, start:end]
-
-            # Reset position IDs for ring attention - each rank should start from 0
-            if "position_ids" in output:
-                from ..models.ring_attn import reset_ring_attn_position_ids
-
-                output["position_ids"] = reset_ring_attn_position_ids(output["position_ids"])
-
-            # Now update ring attention params with sliced data
-            from ..models.ring_attn import update_ring_attn_params
-
-            update_ring_attn_params(output)
-
         return output
-
-    def __post_init__(self):
-        if self.sequence_parallel_size is not None and self.sequence_parallel_size > 1:
-            from ..models.ring_attn import get_ring_attn_group
-
-            # Get information about our position in the SP group
-            sp_group = get_ring_attn_group()
-            self.local_rank = dist.get_rank(group=sp_group)
-            self.local_world_size = dist.get_world_size(group=sp_group)
 
 
 class SFTTrainer(Trainer):
@@ -409,6 +384,13 @@ class SFTTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
+
+            if args.sequence_parallel_size > 1:
+                # Get information about our position in the SP group
+                self.cp_group = get_ring_attn_group()
+                local_rank = dist.get_rank(group=cp_group)
+                local_world_size = dist.get_world_size(group=cp_group)
+
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=pad_token_id,
                 completion_only_loss=self.completion_only_loss,
@@ -416,9 +398,9 @@ class SFTTrainer(Trainer):
                 # Using position_ids without flash_attn hurts the training
                 return_position_ids=model.config._attn_implementation == "flash_attention_2",
                 sequence_parallel_size=args.sequence_parallel_size,
-                pad_to_multiple_of=args.sequence_parallel_size
-                if args.sequence_parallel_size is not None
-                else args.pad_to_multiple_of,
+                pad_to_multiple_of=args.pad_to_multiple_of,
+                local_rank=local_rank,
+                local_world_size=local_world_size,
             )
 
         if (
@@ -486,34 +468,11 @@ class SFTTrainer(Trainer):
         )
 
         # Register Ring Attention for Sequence Parallelism if configured
-        if self.args.sequence_parallel_size and self.args.sequence_parallel_size > 1:
-            if not dist.is_initialized():
-                warnings.warn(
-                    "torch.distributed is not initialized. Cannot register Ring Attention for Sequence Parallelism.",
-                    UserWarning,
-                )
-            else:
-                try:
-                    # Lazily import to avoid circular dependency issues if ring_attn imports Trainer parts later
-                    from ..models.ring_attn import register_ring_attn
-
-                    self.log(
-                        {
-                            "message": f"Attempting to register Ring Attention with sequence parallel size: {self.args.sequence_parallel_size}"
-                        }
-                    )
-                    register_ring_attn(
-                        sequence_parallel_degree=self.args.sequence_parallel_size,
-                        heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
-                    )
-                    self.log({"message": "Ring Attention registered successfully."})
-                except ImportError:
-                    warnings.warn(
-                        "Could not import `register_ring_attn` from `trl.models.ring_attn`. Ring Attention will not be enabled.",
-                        ImportWarning,
-                    )
-                except Exception as e:
-                    warnings.warn(f"Failed to register Ring Attention: {e}", RuntimeWarning)
+        if self.args.sequence_parallel_size > 1:
+            register_ring_attn(
+                sequence_parallel_degree=self.args.sequence_parallel_size,
+                heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
+            )
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
@@ -802,6 +761,10 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+
+        if "cu_seqlens" in inputs:
+            update_ring_flash_attn_params(inputs["cu_seqlens"], self.cp_group)
+
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
