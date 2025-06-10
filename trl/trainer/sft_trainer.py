@@ -388,8 +388,8 @@ class SFTTrainer(Trainer):
             if args.sequence_parallel_size > 1:
                 # Get information about our position in the SP group
                 self.cp_group = get_ring_attn_group()
-                local_rank = dist.get_rank(group=cp_group)
-                local_world_size = dist.get_world_size(group=cp_group)
+                local_rank = dist.get_rank(group=self.cp_group)
+                local_world_size = dist.get_world_size(group=self.cp_group)
 
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=pad_token_id,
