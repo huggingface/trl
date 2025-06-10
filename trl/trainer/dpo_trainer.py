@@ -1503,7 +1503,7 @@ class DPOTrainer(Trainer):
         if self.args.rpo_alpha is not None:
             # Only use the chosen logits for the RPO loss
             chosen_logits = logits[:num_examples, :-1] if not self.is_encoder_decoder else logits[:num_examples]
-            chosen_labels = labels[:num_examples, 1:] if not self.is_encoder_decoder else labels[:num_examples]
+            chosen_labels = labels[:num_examples, :-1] if not self.is_encoder_decoder else labels[:num_examples]
 
             # Compute the log probabilities of the labels
             output["nll_loss"] = F.cross_entropy(
