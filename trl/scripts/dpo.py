@@ -28,6 +28,7 @@ python trl/scripts/dpo.py \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns
+    --report_to wandb
 
 # LoRA:
 python trl/scripts/dpo.py \
@@ -47,6 +48,7 @@ python trl/scripts/dpo.py \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16
+    --report_to wandb
 """
 
 import argparse
