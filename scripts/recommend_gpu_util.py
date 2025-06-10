@@ -2,7 +2,7 @@
 # Script: recommend_gpu_mem_util.py
 # Description:
 #     Estimates the GPU mem reqs for GRPO experiment w/ colocate mode
-#     It parses the model config (e.g., https://huggingface.co/Qwen/Qwen2.5-Math-1.5B/blob/main/config.json) and GRPO experiment config,
+#     It parses the model config (e.g., downloadable link https://huggingface.co/Qwen/Qwen2.5-Math-1.5B/resolve/main/config.json) and GRPO experiment config,
 #     estimates model size, KV cache size, and buffer.
 #     Outputs recommended GPU memory utilization.
 #
