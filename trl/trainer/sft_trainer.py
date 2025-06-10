@@ -397,7 +397,6 @@ class SFTTrainer(Trainer):
                 padding_free=self.padding_free,
                 # Using position_ids without flash_attn hurts the training
                 return_position_ids=model.config._attn_implementation == "flash_attention_2",
-                sequence_parallel_size=args.sequence_parallel_size,
                 pad_to_multiple_of=args.pad_to_multiple_of,
                 local_rank=local_rank,
                 local_world_size=local_world_size,
