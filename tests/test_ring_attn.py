@@ -18,7 +18,6 @@ from unittest.mock import MagicMock, patch
 import torch
 from transformers.testing_utils import require_torch, torch_device
 
-from trl.import_utils import is_ring_attn_available
 from trl.models.ring_attn import (
     get_cu_seqlens_from_pos_ids,
     get_ring_attn_group,
@@ -27,12 +26,7 @@ from trl.models.ring_attn import (
     update_ring_attn_params,
 )
 
-
-def require_ring_attn(test_case):
-    """
-    Decorator marking a test that requires ring-flash-attn. Skips the test if ring-flash-attn is not available.
-    """
-    return unittest.skipUnless(is_ring_attn_available(), "test requires ring-flash-attn")(test_case)
+from .testing_utils import require_ring_attn
 
 
 class TestRingAttnHelpers(unittest.TestCase):
@@ -284,7 +278,6 @@ class TestRingAttnHelpers(unittest.TestCase):
 
         cu_seqlens = get_cu_seqlens_from_pos_ids(position_ids)
 
-        # Expected boundaries: [0, 5, 8, 15, 17]
         expected_boundaries = [0, 5, 8, 15, 17]
         for i, expected_boundary in enumerate(expected_boundaries):
             self.assertEqual(cu_seqlens[0, i].item(), expected_boundary)
