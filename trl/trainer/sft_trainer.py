@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
 import torch
-import torch.distributed as dist
 import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset, IterableDataset
@@ -54,7 +53,7 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import get_act_offloading_ctx_manager
-from ..models.ring_attn import get_ring_attn_group, register_ring_attn
+from ..models.ring_attn import register_ring_attn
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -358,7 +357,9 @@ class SFTTrainer(Trainer):
         # Data collator
         # FFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "ffd")
+        self.padding_free = (
+            args.padding_free or (args.packing and args.packing_strategy == "ffd") or args.sequence_parallel_size > 1
+        )
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -401,12 +402,15 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as a padding token."
                 )
 
+            # Register Ring Attention for Sequence Parallelism if configured
             if args.sequence_parallel_size > 1:
-                # Get information about our position in the SP group
-                self.cp_group = get_ring_attn_group()
-                local_rank = dist.get_rank(group=self.cp_group)
-                local_world_size = dist.get_world_size(group=self.cp_group)
-
+                self.cp_group = register_ring_attn(
+                    world_size=args.world_size,
+                    rank=args.process_index,
+                    sequence_parallel_degree=args.sequence_parallel_size,
+                    heads_k_stride=args.heads_k_stride,  # register_ring_attn handles default if None
+                )
+            # Create the data collator
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=pad_token_id,
                 completion_only_loss=self.completion_only_loss,
@@ -414,8 +418,8 @@ class SFTTrainer(Trainer):
                 # Using position_ids without flash_attn hurts the training
                 return_position_ids=model.config._attn_implementation == "flash_attention_2",
                 pad_to_multiple_of=args.pad_to_multiple_of,
-                local_rank=local_rank,
-                local_world_size=local_world_size,
+                local_rank=args.process_index % args.sequence_parallel_size,
+                local_world_size=args.sequence_parallel_size,
             )
 
         if (
@@ -482,14 +486,6 @@ class SFTTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Register Ring Attention for Sequence Parallelism if configured
-        if self.args.sequence_parallel_size > 1:
-            self.cp_group = register_ring_attn(
-                world_size=self.accelerator.num_processes,
-                rank=self.accelerator.process_index,
-                sequence_parallel_degree=self.args.sequence_parallel_size,
-                heads_k_stride=self.args.heads_k_stride,  # register_ring_attn handles default if None
-            )
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
@@ -779,6 +775,7 @@ class SFTTrainer(Trainer):
         """
         mode = "train" if self.model.training else "eval"
 
+        # Update the ring flash attention parameters if CP enabled
         if "cu_seqlens" in inputs:
             update_ring_flash_attn_params(inputs["cu_seqlens"], self.cp_group)
 
