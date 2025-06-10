@@ -16,7 +16,7 @@
 accelerate launch examples/scripts/dpo_vlm.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --dataset_streaming \
-    --model_name_or_path HuggingFaceM4/idefics2-8b \
+    --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
