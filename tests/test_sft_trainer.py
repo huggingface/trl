@@ -17,6 +17,7 @@ import tempfile
 import unittest
 
 import numpy as np
+import pytest
 import torch
 from datasets import Dataset, Image, Sequence, load_dataset
 from parameterized import parameterized
@@ -28,12 +29,19 @@ from transformers import (
     TrainingArguments,
     is_vision_available,
 )
-from transformers.testing_utils import require_flash_attn, require_peft, require_vision
+from transformers.testing_utils import (
+    require_flash_attn,
+    require_peft,
+    require_torch_multi_accelerator,
+    require_vision,
+)
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
+
+from .testing_utils import require_ring_flash_attn
 
 
 def formatting_prompts_func(example):
@@ -1394,6 +1402,39 @@ class SFTTrainerTester2(unittest.TestCase):
             # Initialize the trainer
             training_args = SFTConfig(
                 output_dir=tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
+            )
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @require_ring_flash_attn
+    @require_torch_multi_accelerator
+    @pytest.mark.accelerate
+    def test_train_cp(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                model_init_kwargs={"attn_implementation": "flash_attention_2", "torch_dtype": torch.bfloat16},
+                sequence_parallel_size=2,
+                report_to="none",
             )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
