@@ -24,10 +24,12 @@ from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import (
+    backend_empty_cache,
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
     require_torch_multi_accelerator,
+    torch_device,
 )
 from transformers.utils import is_peft_available
 
@@ -60,7 +62,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
     def tearDown(self):
         gc.collect()
-        torch.cuda.empty_cache()
+        backend_empty_cache(torch_device)
         gc.collect()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
@@ -420,3 +422,39 @@ class SFTTrainerSlowTester(unittest.TestCase):
             trainer.train()
 
         release_memory(trainer.model, trainer)
+
+    @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
+    @require_torch_accelerator
+    def test_train_offloading(self, model_name, packing):
+        """Test that activation offloading works with SFTTrainer."""
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                activation_offloading=True,
+                report_to="none",
+                per_device_train_batch_size=2,
+                max_steps=2,
+                packing=packing,
+                max_length=self.max_length,
+            )
+            trainer = SFTTrainer(
+                model=model_name, args=training_args, train_dataset=self.train_dataset, eval_dataset=self.eval_dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+            release_memory(trainer.model, trainer)

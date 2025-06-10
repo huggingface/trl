@@ -32,6 +32,7 @@ from transformers import (
 )
 from transformers.testing_utils import (
     require_liger_kernel,
+    get_device_properties,
     require_peft,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,
     require_vision,
@@ -709,9 +710,11 @@ class DPOTrainerTester(unittest.TestCase):
     )
     @require_bitsandbytes
     @require_peft
-    @unittest.skip("You need a GPU with bf16 support in order to run these tests")
+    @unittest.skipIf(
+        get_device_properties()[0] == "cuda" and get_device_properties()[1] < 8,
+        "Skipping because bf16 not supported on CUDA GPU with capability < 8.0",
+    )
     def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
-        # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
 
         lora_config = LoraConfig(
@@ -958,7 +961,7 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
             self.assertIn(
-                "Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
                 str(context.exception),
             )
 
@@ -981,7 +984,7 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
             self.assertIn(
-                "Invalid `torch_dtype` passed to the DPOConfig. Expected a string with either `torch.dtype` or 'auto', but got -1.",
+                "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
                 str(context.exception),
             )
 
@@ -1263,6 +1266,37 @@ class DPOTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
+            
+    def test_train_with_length_desensitization(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                learning_rate=9e-1,
+                ld_alpha=0.5,
+                report_to="none",
+            )
+            trainer = DPOTrainer(
+                model=model_id,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the parameters have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # ignore 0 biases
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
     @require_liger_kernel
@@ -1423,13 +1457,15 @@ class DPOVisionTrainerTester(unittest.TestCase):
                         "trl-internal-testing/tiny-LlavaForConditionalGeneration",
                         "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
                     ] and (
-                        n.startswith("vision_tower.vision_model.encoder.layers.1")
-                        or n == "vision_tower.vision_model.post_layernorm.weight"
+                        "vision_tower.vision_model.encoder.layers.1" in n
+                        or "vision_tower.vision_model.post_layernorm.weight" in n
                     ):
                         # For some reason, these params are not updated. This is probably not related to TRL, but to
                         # the model itself. We should investigate this further, but for now we just skip these params.
                         continue
-                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+                    self.assertFalse(
+                        torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+                    )
 
 
 if __name__ == "__main__":

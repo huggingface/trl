@@ -14,7 +14,7 @@ Sequence lengths in the dataset can vary widely. When data is batched, sequences
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png" alt="Truncation prompt completion" width="600"/>
 </div>
 
-To reduce memory usage, it’s important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
+To reduce memory usage, it's important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
 <hfoptions id="truncation">
 <hfoption id="DPO">
@@ -77,10 +77,16 @@ This technique applies only to SFT.
 Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
 
 <div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing.png" alt="Packing" width="600"/>
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png" alt="Packing" width="600"/>
 </div>
 
-Packing eliminates padding, preserves all sequence information, and allows for flexible sequence lengths, making it a more efficient alternative to truncation. To enable packing, use `packing=True` in the [`SFTConfig`]:
+Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` and in the [`SFTConfig`].
+
+<Tip>
+
+In TRL 0.18 and earlier, packing used a more aggressive method that reduced padding to almost nothing, but had the downside of breaking sequence continuity for a large fraction of the dataset. To revert to this strategy, use `packing_strategy="wrapped"` in `SFTConfig`.
+
+</Tip>
 
 ```python
 from trl import SFTConfig
@@ -141,6 +147,42 @@ training_args = SFTConfig(..., padding_free=True, model_init_kwargs={"attn_imple
 
 </hfoption>
 </hfoptions>
+
+## Activation offloading
+
+Activation offloading is a memory efficiency technique that reduces GPU VRAM usage by temporarily moving activation tensors to CPU RAM during the forward pass and bringing them back only when needed for the backward pass. This significantly reduces peak memory usage at the cost of slightly increased training time.
+
+To enable activation offloading in your SFT training configuration:
+
+</hfoption>
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., activation_offloading=True)
+```
+
+</hfoption>
+</hfoptions>
+
+<Tip warning={true}>
+
+When using activation offloading with models that use Liger kernels, you must disable Liger cross entropy due to compatibility issues. The issue occurs specifically with `use_liger_kernel=True` because Liger cross entropy performs in-place operations which conflict with activation offloading. The default setting (`use_liger_kernel=False`) works:
+
+```python
+# When using activation offloading with a model that uses Liger kernels:
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    activation_offloading=True,
+    use_liger_kernel=False,  # Disable Liger cross entropy
+    # Other parameters...
+)
+```
+</Tip>
+
+Under the hood, activation offloading implements PyTorch's [`saved_tensors_hooks`](https://pytorch.org/tutorials/intermediate/autograd_saved_tensors_hooks_tutorial.html#hooks-for-autograd-saved-tensors) to intercept activations during the forward pass. It intelligently manages which tensors to offload based on size and context, avoiding offloading output tensors which would be inefficient. For performance optimization, it can optionally use CUDA streams to overlap computation with CPU-GPU transfers.
 
 ## Disabling model gathering for generation in online methods
 
