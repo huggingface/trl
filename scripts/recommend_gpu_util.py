@@ -7,7 +7,7 @@
 #     Outputs recommended GPU memory utilization.
 #
 # Usage:
-#     python recommend_gpu_mem_util.py \
+#     python recommend_gpu_util.py \
 #         --model_config path/to/model.json \
 #         --exp_config path/to/experiment.yaml \
 #         [--gpu_memory <in billions - e.g., 79>] \
