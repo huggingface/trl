@@ -1299,8 +1299,8 @@ class DPOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
-    @require_liger_kernel
     @parameterized.expand([(0.1,), (0.5,)])
+    @require_liger_kernel
     def test_dpo_trainer_with_liger(self, beta):
         """Test DPO trainer with Liger loss enabled.
 
