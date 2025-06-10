@@ -72,10 +72,10 @@ class SFTConfig(TrainingArguments):
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
         sequence_parallel_size (`int`, *optional*, defaults to `1`):
-            Degree of sequence parallelism for ring attention. If set to `1` (default), sequence parallelism is
-            disabled.
+            Enables context parallelism when set to a value greater than `1`. In this mode, the input sequence is split
+            across `sequence_parallel_size` processes.
         heads_k_stride (`int` or `None`, *optional*, defaults to `None`):
-            Sequence parallelism K head stride size for ring attention.
+            Sequence parallelism K head stride size. Only relevant when `sequence_parallel_size > 1`.
 
         > Parameters that control the training
 
@@ -122,13 +122,13 @@ class SFTConfig(TrainingArguments):
     sequence_parallel_size: int = field(
         default=1,
         metadata={
-            "help": "Degree of sequence parallelism for ring attention. If set to 1 (default), sequence parallelism "
-            "is disabled."
+            "help": "Enables context parallelism when set to a value greater than 1. In this mode, the input sequence "
+            "is split across `sequence_parallel_size` processes. This is useful for training large models "
         },
     )
     heads_k_stride: int = field(
         default=1,
-        metadata={"help": "Sequence parallelism K head stride size for ring attention."},
+        metadata={"help": "Sequence parallelism K head stride size. Only relevant when `sequence_parallel_size > 1`."},
     )
 
     # Parameters that control the data preprocessing
