@@ -653,6 +653,8 @@ class GRPOTrainer(Trainer):
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
+                    # Latest vLLM v1 memory profiler is misled by the high default value - thinking there's not enough memory
+                    max_num_batched_tokens = 4096
                 )
 
             # vLLM specific sampling arguments
