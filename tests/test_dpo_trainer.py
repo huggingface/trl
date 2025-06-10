@@ -1138,7 +1138,7 @@ class DPOTrainerTester(unittest.TestCase):
             output = trainer.concatenated_forward(model, batch)
             output2 = trainer2.concatenated_forward(model, batch)
 
-            np.testing.assert_allclose(output["nll_loss"].item(), output2["nll_loss"].item(), atol=4e-5)
+            np.testing.assert_allclose(output["nll_loss"].item(), output2["nll_loss"].item(), atol=1e-5)
             np.testing.assert_allclose(
                 output["mean_chosen_logits"].item(), output2["mean_chosen_logits"].item(), atol=1e-5
             )
