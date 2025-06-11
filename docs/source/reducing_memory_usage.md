@@ -183,7 +183,7 @@ Activation offloading is a memory efficiency technique that reduces GPU VRAM usa
 
 To enable activation offloading in your SFT training configuration:
 
-</hfoption>
+<hfoption>
 <hfoption id="SFT">
 
 ```python
