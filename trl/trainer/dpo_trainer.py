@@ -75,7 +75,6 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
-
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
 
@@ -84,7 +83,7 @@ if is_wandb_available():
     import wandb
 
 
-def shift_tokens_right(input_ids: torch.Tensor, pad_token_id: int, decoder_start_token_id: int) -> torch.Tensor:
+def shift_tokens_right(input_ids: torch.Tensor, decoder_start_token_id: int) -> torch.Tensor:
     """Shift input ids one token to the right, and pad with pad_token_id"""
     shifted_input_ids = input_ids.new_zeros(input_ids.shape)
     shifted_input_ids[:, 1:] = input_ids[:, :-1].clone()
@@ -336,6 +335,11 @@ class DPOTrainer(Trainer):
                 raise ImportError(
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
+                )
+            if args.loss_type != "sigmoid":
+                raise ValueError(
+                    "You set `use_liger_loss=True` but the loss type is not `sigmoid`. "
+                    "Please set `loss_type='sigmoid'` to use the liger kernel."
                 )
             self.dpo_loss_fn = LigerFusedLinearDPOLoss(
                 ignore_index=args.label_pad_token_id,
@@ -1166,7 +1170,6 @@ class DPOTrainer(Trainer):
             # 2. Prepare decoder inputs
             decoder_input_ids = shift_tokens_right(
                 concatenated_batch["completion_input_ids"],
-                self.padding_value,
                 unwrapped_model.config.decoder_start_token_id,
             )
             # 3. Get decoder outputs
@@ -1264,7 +1267,11 @@ class DPOTrainer(Trainer):
             else:
                 base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
 
-            outputs = base_model(input_ids, use_cache=False, **model_kwargs)
+            outputs = base_model(
+                input_ids,
+                use_cache=False,
+                **model_kwargs,
+            )
             hidden_states = outputs.last_hidden_state[:, :-1]
 
             # Get reference hidden states if needed
@@ -1577,7 +1584,7 @@ class DPOTrainer(Trainer):
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
-        if self.args.use_liger_loss and self.loss_type == "sigmoid":
+        if self.args.use_liger_loss:
             model_output = self._compute_loss_liger(model, batch)
             losses = model_output["loss"]
             chosen_rewards = model_output["chosen_rewards"]
