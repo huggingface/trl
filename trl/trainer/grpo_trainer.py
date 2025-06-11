@@ -18,11 +18,13 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
+from functools import partial
 from typing import Any, Callable, Optional, Union
 
 import datasets
 import torch
 import torch.utils.data
+import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging import version
