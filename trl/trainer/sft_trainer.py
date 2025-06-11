@@ -406,7 +406,7 @@ class SFTTrainer(Trainer):
             if args.sequence_parallel_size > 1:
                 self.cp_group = register_ring_attn(
                     world_size=args.world_size,
-                    rank=args.process_index,
+                    rank=args.process_index % args.sequence_parallel_size,
                     sequence_parallel_degree=args.sequence_parallel_size,
                     heads_k_stride=args.heads_k_stride,  # register_ring_attn handles default if None
                 )

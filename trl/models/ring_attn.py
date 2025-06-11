@@ -114,7 +114,7 @@ def register_ring_attn(world_size: int, rank: int, sequence_parallel_degree: int
 
     substitute_hf_flash_attn(process_group=local_group, heads_k_stride=heads_k_stride)
 
-    return group
+    return local_group
 
 
 def update_ring_attn_params(batch: dict[str, torch.Tensor]):
