@@ -102,6 +102,10 @@ Packing may cause batch contamination, where adjacent sequences influence one an
 
 ## Liger for reducing peak memory usage
 
+> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduces memory usage by 60%.
+
+For more information, see [Liger Kernel Integration](liger_kernel_integration)
+
 <hfoptions id="liger">
 <hfoption id="DPO">
 
@@ -112,6 +116,31 @@ from trl import DPOConfig
 
 training_args = DPOConfig(..., use_liger_loss=True)
 ```
+
+</hfoption>
+<hfoption id="GRPO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+  
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+  
+```python
+from trl import KTOConfig
+
+training_args = KTOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+</hfoptions>
 
 ## Padding-free
 
