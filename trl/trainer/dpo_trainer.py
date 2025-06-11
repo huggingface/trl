@@ -75,6 +75,7 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 
+
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
 
@@ -1263,11 +1264,7 @@ class DPOTrainer(Trainer):
             else:
                 base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
 
-            outputs = base_model(
-                input_ids,
-                use_cache=False,
-                **model_kwargs,
-            )
+            outputs = base_model(input_ids, use_cache=False, **model_kwargs)
             hidden_states = outputs.last_hidden_state[:, :-1]
 
             # Get reference hidden states if needed
