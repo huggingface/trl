@@ -1137,6 +1137,7 @@ class DPOTrainer(Trainer):
         return losses, chosen_rewards, rejected_rewards
 
     def _compute_loss_liger(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
+        unwrapped_model = self.accelerator.unwrap_model(model)
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
 
         model_kwargs = {}
@@ -1156,17 +1157,19 @@ class DPOTrainer(Trainer):
 
         if self.is_encoder_decoder:
             # 1. Get encoder outputs
-            encoder_outputs = model.get_encoder()(
+            encoder_outputs = unwrapped_model.get_encoder()(
                 concatenated_batch["prompt_input_ids"],
                 attention_mask=concatenated_batch["prompt_attention_mask"],
                 return_dict=True,
             )
             # 2. Prepare decoder inputs
             decoder_input_ids = shift_tokens_right(
-                concatenated_batch["completion_input_ids"], self.padding_value, model.config.decoder_start_token_id
+                concatenated_batch["completion_input_ids"],
+                self.padding_value,
+                unwrapped_model.config.decoder_start_token_id,
             )
             # 3. Get decoder outputs
-            decoder_outputs = model.get_decoder()(
+            decoder_outputs = unwrapped_model.get_decoder()(
                 input_ids=decoder_input_ids,
                 attention_mask=concatenated_batch["completion_attention_mask"],
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
@@ -1177,12 +1180,13 @@ class DPOTrainer(Trainer):
 
             ref_hidden_states = None
             if not self.reference_free and self.ref_model is not None:
-                ref_encoder_outputs = self.ref_model.get_encoder()(
+                unwrapped_ref_model = self.accelerator.unwrap_model(self.ref_model)
+                ref_encoder_outputs = unwrapped_ref_model.get_encoder()(
                     concatenated_batch["prompt_input_ids"],
                     attention_mask=concatenated_batch["prompt_attention_mask"],
                     return_dict=True,
                 )
-                ref_decoder_outputs = self.ref_model.get_decoder()(
+                ref_decoder_outputs = unwrapped_ref_model.get_decoder()(
                     input_ids=decoder_input_ids,
                     attention_mask=concatenated_batch["completion_attention_mask"],
                     encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
@@ -1192,12 +1196,12 @@ class DPOTrainer(Trainer):
                 ref_hidden_states = ref_decoder_outputs.last_hidden_state
             elif not self.reference_free:
                 with self.null_ref_context():
-                    ref_encoder_outputs = model.get_encoder()(
+                    ref_encoder_outputs = unwrapped_model.get_encoder()(
                         concatenated_batch["prompt_input_ids"],
                         attention_mask=concatenated_batch["prompt_attention_mask"],
                         return_dict=True,
                     )
-                    ref_decoder_outputs = model.get_decoder()(
+                    ref_decoder_outputs = unwrapped_model.get_decoder()(
                         input_ids=decoder_input_ids,
                         attention_mask=concatenated_batch["completion_attention_mask"],
                         encoder_hidden_states=ref_encoder_outputs.last_hidden_state,
@@ -1242,6 +1246,8 @@ class DPOTrainer(Trainer):
                 logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1
                 model_kwargs["logits_to_keep"] = logits_to_keep
 
+            model_kwargs["output_hidden_states"] = True
+
             # Add padding-free training support
             if self.padding_free:
                 input_ids = input_ids[attention_mask.bool()].unsqueeze(0)
@@ -1252,10 +1258,10 @@ class DPOTrainer(Trainer):
                 model_kwargs["attention_mask"] = attention_mask
 
             # Get the base model outputs (before LM head)
-            if hasattr(model, "get_decoder"):
-                base_model = model.get_decoder()
+            if hasattr(unwrapped_model, "get_decoder"):
+                base_model = unwrapped_model.get_decoder()
             else:
-                base_model = getattr(model, self.args.base_model_attribute_name, model)
+                base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
 
             outputs = base_model(
                 input_ids,
@@ -1267,10 +1273,13 @@ class DPOTrainer(Trainer):
             # Get reference hidden states if needed
             ref_hidden_states = None
             if not self.reference_free and self.ref_model is not None:
-                if hasattr(self.ref_model, "get_decoder"):
-                    ref_base_model = self.ref_model.get_decoder()
+                unwrapped_ref_model = self.accelerator.unwrap_model(self.ref_model)
+                if hasattr(unwrapped_ref_model, "get_decoder"):
+                    ref_base_model = unwrapped_ref_model.get_decoder()
                 else:
-                    ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name, self.ref_model)
+                    ref_base_model = getattr(
+                        unwrapped_ref_model, self.args.base_model_attribute_name, unwrapped_ref_model
+                    )
 
                 ref_outputs = ref_base_model(
                     input_ids,
@@ -1279,10 +1288,10 @@ class DPOTrainer(Trainer):
                 )
                 ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
             elif not self.reference_free:
-                if hasattr(model, "get_decoder"):
-                    ref_base_model = model.get_decoder()
+                if hasattr(unwrapped_model, "get_decoder"):
+                    ref_base_model = unwrapped_model.get_decoder()
                 else:
-                    ref_base_model = getattr(model, self.args.base_model_attribute_name, model)
+                    ref_base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
                 with self.null_ref_context():
                     ref_outputs = ref_base_model(
                         input_ids,
@@ -1296,17 +1305,18 @@ class DPOTrainer(Trainer):
             labels = masked_input_ids[:, 1:]  # Shift right for casual LM
 
         # Get the LM head
-        lm_head = model.get_output_embeddings()
+        lm_head = unwrapped_model.get_output_embeddings()
 
         # Get reference model weights if needed
         ref_weight = None
         ref_bias = None
         if not self.reference_free:
             if self.ref_model is not None:
-                ref_lm_head = self.ref_model.get_output_embeddings()
+                unwrapped_ref_model = self.accelerator.unwrap_model(self.ref_model)
+                ref_lm_head = unwrapped_ref_model.get_output_embeddings()
             else:
                 with self.null_ref_context():
-                    ref_lm_head = model.get_output_embeddings()
+                    ref_lm_head = unwrapped_model.get_output_embeddings()
             ref_weight = ref_lm_head.weight
             ref_bias = ref_lm_head.bias if hasattr(ref_lm_head, "bias") else None
 
@@ -1436,6 +1446,8 @@ class DPOTrainer(Trainer):
                 first_compute_index = loss_mask.nonzero(as_tuple=True)[1].min()
                 logits_to_keep = (loss_mask.shape[1] - first_compute_index).item() + 1  # +1 for the first label
                 model_kwargs["logits_to_keep"] = logits_to_keep
+
+            model_kwargs["output_hidden_states"] = True
 
             if self.padding_free:
                 # Flatten the input_ids, position_ids, and loss_mask
