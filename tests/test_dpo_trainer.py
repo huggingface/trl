@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import tempfile
 import unittest
 from unittest.mock import MagicMock
@@ -31,6 +32,7 @@ from transformers import (
 )
 from transformers.testing_utils import (
     get_device_properties,
+    require_liger_kernel,
     require_peft,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,
     require_vision,
@@ -1295,6 +1297,76 @@ class DPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
+    @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
+    @parameterized.expand([(0.1,), (0.5,)])
+    @require_liger_kernel
+    def test_dpo_trainer_with_liger(self, beta):
+        """Test DPO trainer with Liger loss enabled.
+
+        This test verifies that:
+        1. Training runs successfully with Liger loss
+        2. Model parameters update as expected
+        3. Loss values are reasonable and finite
+        4. Training works with both default and custom beta values
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                do_eval=True,
+                eval_steps=1,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                beta=beta,
+                use_liger_loss=True,  # Enable Liger loss
+                report_to="none",
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=self.ref_model,  # Add reference model
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            # Store initial parameters
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            train_output = trainer.train()
+
+            # Verify training completed successfully
+            self.assertIsNotNone(train_output)
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Verify loss is finite
+            self.assertTrue(np.isfinite(trainer.state.log_history[-1]["train_loss"]))
+
+            # Check parameters have been updated
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # Only check non-zero parameters
+                if param.sum() != 0:
+                    self.assertFalse(torch.equal(param, new_param))
+                    # Verify new parameters are finite
+                    self.assertTrue(torch.isfinite(new_param).all())
+
+            # Verify model can still do forward pass after training
+            dummy_batch = next(iter(trainer.get_train_dataloader()))
+            model_inputs = {
+                "input_ids": dummy_batch["prompt_input_ids"],
+                "attention_mask": dummy_batch["prompt_attention_mask"],
+            }
+            with torch.no_grad():
+                output = trainer.model(**model_inputs)
+            self.assertIsNotNone(output)
+            self.assertFalse("loss" in output.keys())
 
 
 @require_vision
