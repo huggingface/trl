@@ -222,9 +222,7 @@ class SFTTrainer(Trainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator (`DataCollator`, *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to [`~transformers.default_data_collator`] if no `processing_class` is provided, an instance
-            of [`~transformers.DataCollatorWithPadding`] otherwise if the processing_class is a feature extractor or
-            tokenizer.
+            Will default to [`DataCollatorForLanguageModeling`].
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. SFT supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
