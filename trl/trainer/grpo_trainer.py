@@ -18,13 +18,16 @@ import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
+from functools import partial
 from typing import Any, Callable, Optional, Union
 
 import datasets
 import torch
 import torch.utils.data
+import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
+from packaging import version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -275,6 +278,11 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     return torch.max(tensor[~torch.isnan(tensor)])
 
 
+def identity(x):
+    """Do we really need docs for this?"""
+    return x
+
+
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -481,10 +489,6 @@ class GRPOTrainer(Trainer):
                 reward_processing_classes[i] = reward_processing_class
         self.reward_processing_classes = reward_processing_classes
 
-        # Data collator
-        def data_collator(features):  # No data collation is needed in GRPO
-            return features
-
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
@@ -539,7 +543,7 @@ class GRPOTrainer(Trainer):
         super().__init__(
             model=model,
             args=args,
-            data_collator=data_collator,
+            data_collator=identity,  # No data collation is needed in GRPO
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
@@ -748,7 +752,13 @@ class GRPOTrainer(Trainer):
         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
             dataloader_params["sampler"] = self._get_train_sampler()
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = seed_worker
+            if version.parse(transformers.__version__) >= version.parse("4.52.0"):
+                # from transformers 4.52.0, the `seed_worker` requires the `num_workers` and `rank` arguments
+                dataloader_params["worker_init_fn"] = partial(
+                    seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+                )
+            else:
+                dataloader_params["worker_init_fn"] = seed_worker
             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
