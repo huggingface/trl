@@ -83,6 +83,14 @@ if is_wandb_available():
     import wandb
 
 
+def link_function(logprob,alpha, gamma,clip_min=-88, clip_max=20):
+
+    logz = gamma * logprob 
+
+    z = torch.exp(torch.clamp(alpha * logprob,min=clip_min,max=clip_max).to(torch.float32)).to(logprob.dtype)
+return z + logz
+
+
 def shift_tokens_right(input_ids: torch.Tensor, decoder_start_token_id: int) -> torch.Tensor:
     """Shift input ids one token to the right, and pad with pad_token_id"""
     shifted_input_ids = input_ids.new_zeros(input_ids.shape)
@@ -405,6 +413,8 @@ class DPOTrainer(Trainer):
             raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
 
         self.beta = args.beta
+        self.chi_alpha = args.chi_alpha
+        self.chi_gamma = args.chi_gamma
         self.label_smoothing = args.label_smoothing
         self.loss_type = args.loss_type
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
@@ -1131,10 +1141,29 @@ class DPOTrainer(Trainer):
             # Blend between logistic and exponential component based on log ratio modulation
             losses = logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
 
+        elif self.loss_type == "chisquare":
+            chosen_logratios = chosen_logps -ref_chosen_logps
+            rejected_logratios = rejected_logps - ref_rejected_logps
+            
+            chosen_logits  = link_function(chosen_logratios, self.chi_alpa, self.chi_gamma)
+            rejected_logits = link_function(rejected_logratios, self.chi_alpha,self.chi_gamma)
+            
+            logits = chosen_logits - rejected_logits
+            
+            losses = (-F.logsigmoid(self.beta * logits) * (1-self.label_smoothing)
+                      -F.logsigmoid(self.beta * logits) * self.label_smoothing
+                     )
+            chosen_rewards = (self.beta * chosen_logits).detach()
+            rejected_rewards = (self.beta * rejected_logits).detach()
+            return losses, chosen_rewards, rejected_rewards
+            
+
+            
+
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', 'apo_down']"
+                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', 'apo_down', 'chipo']"
             )
 
         chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
