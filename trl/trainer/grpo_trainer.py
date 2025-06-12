@@ -278,6 +278,11 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     return torch.max(tensor[~torch.isnan(tensor)])
 
 
+def noop_data_collator(features):
+    # No data collation is needed in GRPO
+    return features
+
+
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -485,8 +490,7 @@ class GRPOTrainer(Trainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Data collator
-        def data_collator(features):  # No data collation is needed in GRPO
-            return features
+        self.data_collator = noop_data_collator
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
