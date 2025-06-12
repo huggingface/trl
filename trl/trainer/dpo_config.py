@@ -320,6 +320,7 @@ class DPOConfig(TrainingArguments):
                 "discopop",
                 "apo_zero",
                 "apo_down",
+                "chisquare",
             ],
         },
     )
@@ -352,6 +353,22 @@ class DPOConfig(TrainingArguments):
     f_alpha_divergence_coef: float = field(
         default=1.0,
         metadata={"help": "α coefficient in the α-divergence u^-α regularization function for DPO loss."},
+    )
+
+    chi_alpha : float = field(
+        default = 1.25,
+        metadata={
+            "help": "Parameter controlling the deviation from the reference model. "
+            "Higher β means less deviation from the reference model."
+        },
+    )
+
+    chi_gamma : float = field(
+        default = 1.25,
+            metadata={
+            "help": "Parameter controlling the deviation from the reference model. "
+            "Higher β means less deviation from the reference model."
+        },
     )
     reference_free: bool = field(
         default=False,
