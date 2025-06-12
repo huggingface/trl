@@ -279,6 +279,7 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
 
 
 def identity(x):
+    """Do we really need docs for this?"""
     return x
 
 
