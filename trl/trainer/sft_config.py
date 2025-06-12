@@ -89,6 +89,8 @@ class SFTConfig(TrainingArguments):
             Whether to offload the activations to the CPU.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=2e-5,
