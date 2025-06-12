@@ -1368,6 +1368,41 @@ class DPOTrainerTester(unittest.TestCase):
             self.assertIsNotNone(output)
             self.assertFalse("loss" in output.keys())
 
+    def test_train_with_iterable_dataset(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset(
+            "trl-internal-testing/zen",
+            "standard_preference",
+            split="train",
+            streaming=True,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                max_steps=3,
+                report_to="none",
+            )
+            trainer = DPOTrainer(
+                model=model_id,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the parameters have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # ignore 0 biases
+                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
 
 @require_vision
 class DPOVisionTrainerTester(unittest.TestCase):
