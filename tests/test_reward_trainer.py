@@ -23,6 +23,7 @@ from transformers.utils import is_peft_available
 
 from trl import RewardConfig, RewardTrainer, maybe_apply_chat_template
 from trl.trainer.reward_trainer import _tokenize
+from trl.trainer.utils import RewardDataCollatorWithPadding
 
 
 if is_peft_available():
@@ -233,3 +234,108 @@ class RewardTrainerTester(unittest.TestCase):
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             self.assertEqual(trainer.model.model_tags, trainer._tag_names)
+
+    def test_collator_args(self):
+        """Tests whether the Trainer passes data collator args to the default data collator"""
+        pad_to_multiple_of = 31415926
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+
+            training_args = RewardConfig(
+                output_dir=tmp_dir,
+                report_to="none",
+                pad_to_multiple_of=pad_to_multiple_of,
+                bf16=False,
+            )
+
+            trainer = RewardTrainer(
+                model=self.model,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+            )
+
+            self.assertEqual(trainer.data_collator.pad_to_multiple_of, pad_to_multiple_of)
+
+    def test_custom_collator(self):
+        """Tests passing an instantiated data collator to the Trainer"""
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+
+            training_args = RewardConfig(
+                output_dir=tmp_dir,
+                report_to="none",
+            )
+
+            collator = RewardDataCollatorWithPadding(
+                tokenizer=self.tokenizer,
+            )
+
+            RewardTrainer(
+                model=self.model,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+                data_collator=collator,
+            )
+
+    def test_padding_collator_with_different_sequence_lengths(self):
+        """Tests the RewardDataCollatorWithPadding collator with chosen and rejected inputs of different sizes."""
+        collator = RewardDataCollatorWithPadding(
+            tokenizer=self.tokenizer,
+        )
+
+        # Test with a longer rejected sequence
+        batch_size = 8
+        chosen_seq_len = 10
+        rejected_seq_len = 1024
+
+        tokenized_batch = [
+            {
+                "input_ids_chosen": [1 for _ in range(chosen_seq_len)],
+                "input_ids_rejected": [1 for _ in range(chosen_seq_len)],
+                "attention_mask_chosen": [1 for _ in range(rejected_seq_len)],
+                "attention_mask_rejected": [1 for _ in range(rejected_seq_len)],
+            }
+        ] * batch_size
+
+        padded_batch = collator(tokenized_batch)
+
+        # Test the batch size - should be unaffected
+        self.assertEqual(padded_batch["input_ids_chosen"].shape[0], batch_size)
+
+        # Test the input_ids - should match on both dimensions
+        self.assertEqual(padded_batch["input_ids_chosen"].shape[1], padded_batch["input_ids_rejected"].shape[1])
+
+        # Test the attention_mask - should match on both dimensions
+        self.assertEqual(
+            padded_batch["attention_mask_chosen"].shape[1], padded_batch["attention_mask_rejected"].shape[1]
+        )
+
+        # Test with a longer accepted sequence
+        batch_size = 8
+        chosen_seq_len = 1024
+        rejected_seq_len = 10
+
+        tokenized_batch = [
+            {
+                "input_ids_chosen": [1 for _ in range(chosen_seq_len)],
+                "input_ids_rejected": [1 for _ in range(chosen_seq_len)],
+                "attention_mask_chosen": [1 for _ in range(rejected_seq_len)],
+                "attention_mask_rejected": [1 for _ in range(rejected_seq_len)],
+            }
+        ] * batch_size
+
+        padded_batch = collator(tokenized_batch)
+
+        # Test the batch size - should be unaffected
+        self.assertEqual(padded_batch["input_ids_chosen"].shape[0], batch_size)
+
+        # Test the input_ids - should match on both dimensions
+        self.assertEqual(padded_batch["input_ids_chosen"].shape[1], padded_batch["input_ids_rejected"].shape[1])
+
+        # Test the attention_mask - should match on both dimensions
+        self.assertEqual(
+            padded_batch["attention_mask_chosen"].shape[1], padded_batch["attention_mask_rejected"].shape[1]
+        )
