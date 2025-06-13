@@ -168,7 +168,7 @@ def clone_chat_template(
             new vocabulary size to the nearest multiple of this value.
 
     Returns:
-    model (`PreTrainedModel`):
+        model (`PreTrainedModel`):
             Updated model with resized token embeddings and EOS token configured.
         tokenizer (`~transformers.PreTrainedTokenizer`):
             Updated tokenizer with the chat template and special tokens applied.
