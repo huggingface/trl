@@ -292,10 +292,16 @@ class DataCollatorForChatML:
                     add_special_tokens=False,
                 )
                 input_ids.append(tokenized_message["input_ids"])
-                attention_mask.append(tokenized_message["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(tokenized_message["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
             else:
                 input_ids.append(example["input_ids"])
-                attention_mask.append(example["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(example["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(example["input_ids"]))
 
             tokenized_prompt = self.tokenizer(
                 formatted_prompt,
@@ -1072,6 +1078,15 @@ class OnPolicyConfig(TrainingArguments):
             "help": (
                 "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
                 "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
             )
         },
     )
