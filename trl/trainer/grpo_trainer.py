@@ -556,15 +556,13 @@ class GRPOTrainer(Trainer):
         if self.beta == 0.0:
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
-        elif is_deepspeed_zero3_enabled() or self.is_fsdp_enabled:
-            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
             self.ref_model = None
         else:
-            # If PEFT configuration is not provided, create a reference model based on the initial model.
-            self.ref_model = create_reference_model(model)
+            # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
+            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
