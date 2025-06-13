@@ -65,12 +65,17 @@ class SFTConfig(TrainingArguments):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
-            batch structure. When packing is enabled with strategy `"ffd"`, padding-free is enabled, regardless of the
-            value of this parameter.
+            batch structure. When packing is enabled with strategy `"ffd"` or when context parallelism is enabled
+            (`sequence_parallel_size > 1`), padding-free is enabled, regardless of the value of this parameter.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
+        sequence_parallel_size (`int`, *optional*, defaults to `1`):
+            Enables context parallelism when set to a value greater than `1`. In this mode, the input sequence is split
+            across `sequence_parallel_size` processes.
+        heads_k_stride (`int` or `None`, *optional*, defaults to `None`):
+            Sequence parallelism K head stride size. Only relevant when `sequence_parallel_size > 1`.
 
         > Parameters that control the training
 
@@ -183,8 +188,9 @@ class SFTConfig(TrainingArguments):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
             "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
-            "handle the flattened batch structure. When packing is enabled with strategy `'ffd'`, padding-free is "
-            "enabled, regardless of the value of this parameter."
+            "handle the flattened batch structure. When packing is enabled with strategy `'ffd'` or when context "
+            "parallelism is enabled (`sequence_parallel_size > 1`), padding-free is enabled, regardless of the value "
+            "of this parameter."
         },
     )
     pad_to_multiple_of: Optional[int] = field(
@@ -194,6 +200,17 @@ class SFTConfig(TrainingArguments):
     eval_packing: Optional[bool] = field(
         default=None,
         metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
+    )
+    sequence_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "Enables context parallelism when set to a value greater than 1. In this mode, the input sequence "
+            "is split across `sequence_parallel_size` processes. This is useful for training large models "
+        },
+    )
+    heads_k_stride: int = field(
+        default=1,
+        metadata={"help": "Sequence parallelism K head stride size. Only relevant when `sequence_parallel_size > 1`."},
     )
 
     # Parameters that control the training

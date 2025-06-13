@@ -25,5 +25,6 @@ known-first-party = ["trl"]
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "low-priority: marks tests as low priority (deselect with '-m \"not low-priority\"')"
+    "low-priority: marks tests as low priority (deselect with '-m \"not low-priority\"')",
+    "accelerate: marks tests that should be run with accelerate launch (deselect with '-m \"not accelerate\"')"
 ]
