@@ -65,7 +65,8 @@ class SFTConfig(TrainingArguments):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
-            batch structure.
+            batch structure. When packing is enabled with strategy `"ffd"`, padding-free is enabled, regardless of the
+            value of this parameter.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
@@ -81,8 +82,9 @@ class SFTConfig(TrainingArguments):
             the full sequence for [language modeling](#language-modeling) datasets.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
-
     """
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -100,6 +102,22 @@ class SFTConfig(TrainingArguments):
         default=True,
         metadata={
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
+            )
+        },
+    )
+    average_tokens_across_devices: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
+            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
         },
     )
 
@@ -169,7 +187,8 @@ class SFTConfig(TrainingArguments):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
             "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
-            "handle the flattened batch structure."
+            "handle the flattened batch structure. When packing is enabled with strategy `'ffd'`, padding-free is "
+            "enabled, regardless of the value of this parameter."
         },
     )
     pad_to_multiple_of: Optional[int] = field(

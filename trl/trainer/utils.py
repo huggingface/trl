@@ -292,10 +292,16 @@ class DataCollatorForChatML:
                     add_special_tokens=False,
                 )
                 input_ids.append(tokenized_message["input_ids"])
-                attention_mask.append(tokenized_message["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(tokenized_message["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
             else:
                 input_ids.append(example["input_ids"])
-                attention_mask.append(example["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(example["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(example["input_ids"]))
 
             tokenized_prompt = self.tokenizer(
                 formatted_prompt,
@@ -918,9 +924,7 @@ def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesCon
 
 
 def get_kbit_device_map() -> Optional[dict[str, int]]:
-    if is_torch_xpu_available():
-        return {"": f"xpu:{PartialState().local_process_index}"}
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available() or is_torch_xpu_available():
         return {"": PartialState().local_process_index}
     else:
         return None
@@ -1079,6 +1083,15 @@ class OnPolicyConfig(TrainingArguments):
         default=True,
         metadata={
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
+            )
         },
     )
 

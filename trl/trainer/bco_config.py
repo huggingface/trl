@@ -77,6 +77,8 @@ class BCOConfig(TrainingArguments):
             Maximum value of the density ratio. The estimated density ratio is clamped to this value.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
+
     # Parameters whose default values are overridden from TrainingArguments
     logging_steps: float = field(
         default=10,
@@ -89,6 +91,15 @@ class BCOConfig(TrainingArguments):
         default=True,
         metadata={
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
+            )
         },
     )
 

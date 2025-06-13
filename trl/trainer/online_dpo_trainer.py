@@ -16,16 +16,15 @@ import os
 import textwrap
 import warnings
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import datasets
 import jinja2
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
-import transformers
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
@@ -42,7 +41,7 @@ from transformers import (
     is_apex_available,
     is_wandb_available,
 )
-from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, seed_worker
+from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
@@ -695,9 +694,8 @@ class OnlineDPOTrainer(Trainer):
         return loss.detach() / self.args.gradient_accumulation_steps
 
     # Same as Trainer._maybe_log_save_evaluate but log our metrics
-    # start_time defaults to None to allow compatibility with transformers<=4.46
     def _maybe_log_save_evaluate(
-        self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time=None, learning_rate=None
+        self, tr_loss, grad_norm, model, trial, epoch, ignore_keys_for_eval, start_time, learning_rate=None
     ):
         if self.control.should_log and self.state.global_step > self._globalstep_last_logged:
             logs: dict[str, float] = {}
@@ -724,11 +722,7 @@ class OnlineDPOTrainer(Trainer):
             self._total_loss_scalar += tr_loss_scalar
             self._globalstep_last_logged = self.state.global_step
             self.store_flos()
-
-            if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
-                self.log(logs, start_time)
-            else:  # transformers<=4.46
-                self.log(logs)
+            self.log(logs, start_time)
 
         metrics = None
         if self.control.should_evaluate:
@@ -742,47 +736,14 @@ class OnlineDPOTrainer(Trainer):
             self._save_checkpoint(model, trial)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
-    # Copy-pasted from transformers.Trainer to maintain compatibility with earlier versions.
-    # This can be removed once the minimum transformers version is updated to 4.47.
-    # Refer to https://github.com/huggingface/trl/pull/2288 for more details.
-    def _determine_best_metric(self, metrics, trial):
-        """
-        Determine if the model should be saved based on the evaluation metrics.
-        If args.metric_for_best_model is not set, the loss is used.
-        Returns:
-            bool: True if a new best metric was found, else False
-        """
-        is_new_best_metric = False
-
-        if self.args.metric_for_best_model is not None:
-            metric_to_check = self.args.metric_for_best_model
-
-            if not metric_to_check.startswith("eval_"):
-                metric_to_check = f"eval_{metric_to_check}"
-
-            try:
-                metric_value = metrics[metric_to_check]
-            except KeyError as exc:
-                raise KeyError(
-                    f"The `metric_for_best_model` training argument is set to '{metric_to_check}', which is not found in the evaluation metrics. "
-                    f"The available evaluation metrics are: {list(metrics.keys())}. Consider changing the `metric_for_best_model` via the TrainingArguments."
-                ) from exc
-
-            operator = np.greater if self.args.greater_is_better else np.less
-
-            if self.state.best_metric is None:
-                self.state.best_metric = float("-inf") if self.args.greater_is_better else float("inf")
-
-            if operator(metric_value, self.state.best_metric):
-                run_dir = self._get_output_dir(trial=trial)
-                checkpoint_folder = f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}"
-                output_dir = os.path.join(run_dir, checkpoint_folder)
-                self.state.best_metric = metric_value
-                self.state.best_model_checkpoint = output_dir
-
-                is_new_best_metric = True
-
-        return is_new_best_metric
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
 
     def create_model_card(
         self,
@@ -809,12 +770,14 @@ class OnlineDPOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
+        tags = tags or set()
         if isinstance(tags, str):
-            tags = [tags]
+            tags = {tags}
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         citation = textwrap.dedent("""\
         @article{guo2024direct,

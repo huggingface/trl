@@ -509,12 +509,14 @@ class NashMDTrainer(OnlineDPOTrainer):
         else:
             base_model = None
 
-        tags = tags or []
+        tags = tags or set()
         if isinstance(tags, str):
-            tags = [tags]
+            tags = {tags}
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         citation = textwrap.dedent("""\
         @inproceedings{munos2024nash,

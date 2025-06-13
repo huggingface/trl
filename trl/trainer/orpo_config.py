@@ -64,6 +64,8 @@ class ORPOConfig(TrainingArguments):
             Number of processes to use for processing the dataset.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=1e-6,
@@ -80,6 +82,15 @@ class ORPOConfig(TrainingArguments):
         default=True,
         metadata={
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
+            )
         },
     )
 

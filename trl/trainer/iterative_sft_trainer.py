@@ -14,6 +14,7 @@
 
 import os
 import warnings
+from pathlib import Path
 from typing import Callable, Optional, Union
 
 import torch
@@ -87,7 +88,7 @@ class IterativeSFTTrainer(Trainer):
         truncation_mode (`str`, *optional*, deprecated):
             The truncation mode to use. Use `args.truncation_mode` instead.
         optimize_device_cache (`bool`, *optional*, deprecated):
-            Whether to optimize CUDA cache. Use `args.optimize_device_cache` instead.
+            Whether to optimize accelerator cache. Use `args.optimize_device_cache` instead.
     """
 
     _tag_names = ["trl", "iterative-sft"]
@@ -452,6 +453,15 @@ class IterativeSFTTrainer(Trainer):
 
                 self.log(logs)
 
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -477,12 +487,14 @@ class IterativeSFTTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
+        tags = tags or set()
         if isinstance(tags, str):
-            tags = [tags]
+            tags = {tags}
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         model_card = generate_model_card(
             base_model=base_model,

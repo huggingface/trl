@@ -16,6 +16,7 @@
 # Full training
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
+    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-7 \
     --num_train_epochs 1 \
@@ -27,10 +28,12 @@ python trl/scripts/dpo.py \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns
+    --report_to wandb
 
 # LoRA:
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
+    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-6 \
     --num_train_epochs 1 \
@@ -45,6 +48,7 @@ python trl/scripts/dpo.py \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16
+    --report_to wandb
 """
 
 import argparse
@@ -108,7 +112,11 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    dataset = load_dataset(
+        script_args.dataset_name,
+        name=script_args.dataset_config,
+        streaming=script_args.dataset_streaming,
+    )
 
     ##########
     # Training
