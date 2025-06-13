@@ -292,10 +292,16 @@ class DataCollatorForChatML:
                     add_special_tokens=False,
                 )
                 input_ids.append(tokenized_message["input_ids"])
-                attention_mask.append(tokenized_message["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(tokenized_message["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
             else:
                 input_ids.append(example["input_ids"])
-                attention_mask.append(example["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(example["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(example["input_ids"]))
 
             tokenized_prompt = self.tokenizer(
                 formatted_prompt,
