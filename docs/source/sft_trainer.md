@@ -63,7 +63,7 @@ If you’d like to compute loss on both the prompt **and** the completion while 
 ### Add Special Tokens for Chat Format
 
 Adding special tokens to a language model is crucial for training chat models. These tokens are added between the different roles in a conversation, such as the user, assistant, and system, and help the model recognize the structure and flow of a conversation. This setup is essential for enabling the model to generate coherent and contextually appropriate responses in a chat environment. 
-The [`clone_chat_template`] function in `trl` easily sets up a model and tokenizer for conversational AI tasks. This function:
+The [`clone_chat_template`] function is a useful utility to prepare a model and tokenizer for conversational AI tasks. This function:
 - Adds special tokens to the tokenizer, e.g., `<|im_start|>` and `<|im_end|>`, to indicate the start and end of a conversation.
 - Resizes the model’s embedding layer to accommodate the new tokens.
 - Sets the `chat_template` of the tokenizer, which is used to format the input data into a chat-like format.
