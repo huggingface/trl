@@ -19,6 +19,7 @@ from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
 from functools import partial
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import datasets
@@ -1457,6 +1458,15 @@ class GRPOTrainer(Trainer):
                     df = df.drop_duplicates(subset=["prompt"])
                 wandb.log({"completions": wandb.Table(dataframe=df)})
 
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -1482,12 +1492,14 @@ class GRPOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
+        tags = tags or set()
         if isinstance(tags, str):
-            tags = [tags]
+            tags = {tags}
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         citation = textwrap.dedent(
             """\
