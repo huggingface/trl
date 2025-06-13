@@ -397,7 +397,7 @@ class RewardDataCollatorWithPadding:
                 }
             )
 
-            if len(feature["input_ids_chosen"]) > max_length:
+            if len(feature["input_ids_rejected"]) > max_length:
                 max_length = len(feature["input_ids_rejected"])
 
             features_rejected.append(
