@@ -19,7 +19,7 @@ from unittest.mock import patch
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, AutoProcessor
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
@@ -222,6 +222,28 @@ class GRPOTrainerTester(unittest.TestCase):
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             train_dataset=dataset,
         )
+
+    def test_custom_processor_disables_vllm(self):
+        # custom ProcessorMixin passing in should disable vLLM and emit a warning
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_completion_length=1,
+                report_to="none",
+            )
+            processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
+            with self.assertWarns(UserWarning):
+                trainer = GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=config,
+                    train_dataset=dataset,
+                    processing_class=processor,
+                )
+            self.assertFalse(trainer.use_vllm)
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training(self, config_name):
