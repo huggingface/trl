@@ -228,6 +228,15 @@ training_args = GRPOConfig(
 
 Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
 
+We provide a small script to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. The script is located in the `/scripts/recommend_gpu_mem_util.py`. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation. 
+
+```bash
+python recommend_gpu_mem_util.py --model_config model.json --exp_config experiment.yaml
+```
+
+> Note: If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
+
+
 </Tip>
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
