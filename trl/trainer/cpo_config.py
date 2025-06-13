@@ -95,6 +95,15 @@ class CPOConfig(TrainingArguments):
             )
         },
     )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
+            )
+        },
+    )
 
     max_length: Optional[int] = field(
         default=1024,
