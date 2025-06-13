@@ -35,6 +35,8 @@ class RewardConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch, filters out entries that exceed the
             limit. This argument is required if you want to use the default data collator.
+        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
+            If set, the sequences will be padded to a multiple of this value.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
         dataset_num_proc (`int`, *optional*, defaults to `None`):
@@ -80,6 +82,10 @@ class RewardConfig(TrainingArguments):
             "help": "Maximum length of the sequences (prompt + completion) in the batch, filters out entries that "
             "exceed the limit. This argument is required if you want to use the default data collator."
         },
+    )
+    pad_to_multiple_of: Optional[int] = field(
+        default=None,
+        metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
     disable_dropout: bool = field(
         default=True,
