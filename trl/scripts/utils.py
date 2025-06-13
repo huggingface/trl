@@ -46,6 +46,8 @@ class ScriptArguments:
             Dataset split to use for training.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
             Dataset split to use for evaluation.
+        dataset_streaming (`bool`, *optional*, defaults to `False`):
+            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
@@ -63,6 +65,10 @@ class ScriptArguments:
     )
     dataset_train_split: str = field(default="train", metadata={"help": "Dataset split to use for training."})
     dataset_test_split: str = field(default="test", metadata={"help": "Dataset split to use for evaluation."})
+    dataset_streaming: bool = field(
+        default=False,
+        metadata={"help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode."},
+    )
     gradient_checkpointing_use_reentrant: bool = field(
         default=False,
         metadata={"help": "Whether to apply `use_reentrant` for gradient checkpointing."},
