@@ -72,8 +72,18 @@ if is_wandb_available():
 @dataclass
 class DataCollatorForLanguageModeling(DataCollatorMixin):
     """
-    Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch if
-    they are not all of the same length.
+    Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
+
+    This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
+    If the input contains a `"completion_mask"`, it is used to set the labels to `-100` for tokens that are not in the
+    completion. If `"assistant_masks"` are present, they are used to set the labels to `-100` for tokens that are not
+    in the assistant part of the sequence. The collator returns a dictionary containing the following keys:
+    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
+    - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
+    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
+    - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `completion_only_loss` is set to
+    `True`, tokens that are not in the completion are set to -100. If `assistant_masks` are present, tokens that are
+    not in the assistant part of the sequence are set to -100.
 
     Args:
         pad_token_id (`int`):
@@ -150,6 +160,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         labels = [torch.tensor(example["input_ids"]) for example in examples]
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
+        if "assistant_masks" in examples[0]:
+            assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
 
         # Pad
         output = {}
@@ -162,6 +174,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             if self.completion_only_loss and "completion_mask" in examples[0]:
                 completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
                 output["labels"][completion_mask == 0] = -100
+            if "assistant_masks" in examples[0]:
+                assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
+                output["labels"][assistant_masks == 0] = -100
 
         else:
             output["input_ids"] = pad(
@@ -185,7 +200,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                     completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
                 )
                 output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-
+            if "assistant_masks" in examples[0]:
+                assistant_masks = pad(
+                    assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+                )
+                output["labels"][assistant_masks == 0] = -100
         return output
 
 
@@ -388,6 +407,11 @@ class SFTTrainer(Trainer):
                 "mechanism that reliably supports this. Using other implementations may lead to cross-contamination "
                 "between batches. To avoid this, either disable packing by setting `packing=False`, or set "
                 "`attn_implementation='flash_attention_2'` in the model configuration."
+            )
+        if args.assistant_only_loss and not is_conversational(train_dataset[0]):
+            raise ValueError(
+                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
+                "supported for conversational datasets."
             )
 
         # Dataset
@@ -638,7 +662,7 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field):
+                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
                             prompt_ids = processing_class.apply_chat_template(example["prompt"])
@@ -665,7 +689,18 @@ class SFTTrainer(Trainer):
 
                     else:  # language modeling case
                         if is_conversational(example):
-                            processed = {"input_ids": processing_class.apply_chat_template(example["messages"])}
+                            processed = processing_class.apply_chat_template(
+                                example["messages"], return_dict=True, return_assistant_tokens_mask=assistant_only_loss
+                            )
+                            if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
+                                raise RuntimeError(
+                                    "You're using `assistant_only_loss=True`, but at least one example has no "
+                                    "assistant tokens. This usually means the tokenizer's chat template doesn't "
+                                    "generate assistant masks — it may be missing the `{% generation %}` tag. Please "
+                                    "check the template and ensure it's correctly configured to support assistant "
+                                    "masking."
+                                )
+                            processed = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
                             processed = {"input_ids": processing_class(text=example[dataset_text_field]).input_ids}
                     return processed
@@ -675,6 +710,7 @@ class SFTTrainer(Trainer):
                     fn_kwargs={
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
+                        "assistant_only_loss": args.assistant_only_loss,
                     },
                     **map_kwargs,
                 )
@@ -704,7 +740,13 @@ class SFTTrainer(Trainer):
         # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
-            self._signature_columns = ["input_ids", "attention_mask", "position_ids", "completion_mask"]
+            self._signature_columns = [
+                "input_ids",
+                "attention_mask",
+                "position_ids",
+                "completion_mask",
+                "assistant_masks",
+            ]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """

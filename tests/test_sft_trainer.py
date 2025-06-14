@@ -171,6 +171,21 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
+    def test_assistant_masks(self):
+        """Test handling of assistant masks in examples."""
+        self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
+        examples = [
+            {"input_ids": [1, 2, 3], "assistant_masks": [0, 1, 1]},
+            {"input_ids": [4, 5], "assistant_masks": [0, 1]},
+        ]
+
+        result = self.collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
+
 
 class SFTTrainerTester(unittest.TestCase):
     r""" """
@@ -1335,6 +1350,31 @@ class SFTTrainerTester2(unittest.TestCase):
             )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_assistant_only(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, assistant_only_loss=True, report_to="none")
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
             )
 
             # Save the initial parameters to compare them later
