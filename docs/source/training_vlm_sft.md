@@ -362,7 +362,7 @@ We save the fine-tuned model to the Hub, making it easily accessible for future 
 <!-- Add Wandb training results -->
 ### Results
 
-During and after trainig, we can inspect the results using **Weights & Biases (Wandb)** or **TensorBoard**. For example:
+During and after training, we can inspect the results using **Weights & Biases (Wandb)** or **TensorBoard**. For example:
 
 * [**gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft (Single Image+Text)**](https://huggingface.co/sergiopaniego/gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft)
 
