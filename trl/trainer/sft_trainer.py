@@ -704,7 +704,7 @@ class SFTTrainer(Trainer):
         # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
-            self._signature_columns = ["input_ids", "attention_mask", "position_ids", "completion_mask"]
+            self._signature_columns = ["input_ids", "labels", "attention_mask", "position_ids", "completion_mask"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
