@@ -57,7 +57,7 @@ In this section, we build the script needed to fine-tune a multimodal model for 
 Before fine-tuning, we need to install the required dependencies. Let's start by setting up the environment:  
 
 ```bash
-# Install the required libraries. Futher details: https://huggingface.co/docs/trl/installation 
+# Install the required libraries. Further details: https://huggingface.co/docs/trl/installation 
 pip install -U -q trl bitsandbytes peft hf_xet tensorboard
 ```
 
