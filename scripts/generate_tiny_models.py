@@ -128,9 +128,10 @@ for model_id, config_class, model_class, suffix in [
     ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, None),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, "2.5"),
     ("Qwen/Qwen2.5-Coder-0.5B", Qwen2Config, Qwen2ForCausalLM, "2.5-Coder"),
-    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForCausalLM, None),
+    ("Qwen/Qwen3-8B", Qwen3Config, Qwen3ForCausalLM, None),
 ]:
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    revision = "refs/pr/14" if model_id == "Qwen/Qwen3-8B" else "main"  # chat template with {% generation %}
+    tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
     config = config_class(
         vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
         hidden_size=8,
