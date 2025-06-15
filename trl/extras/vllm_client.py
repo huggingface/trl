@@ -16,6 +16,7 @@ import atexit
 import logging
 import socket
 import time
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -172,6 +173,7 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
+        stop: Optional[list[str]] = None,
     ) -> list[list[int]]:
         """
         Generates model completions for the provided prompts.
@@ -195,6 +197,8 @@ class VLLMClient:
                 Maximum number of tokens to generate for each prompt.
             guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
                 Regular expression to guide the decoding process.
+            stop (`list[str]` or `None`, *optional*, defaults to `None`):
+                List of stop sequences. The generation will stop when any of these sequences is encountered.
 
         Returns:
             `list[list[int]]`:
@@ -213,6 +217,7 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
+                "stop": stop,
             },
         )
         if response.status_code == 200:
@@ -309,6 +314,21 @@ class VLLMClient:
         else:
             if response.status_code != 200:
                 raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+
+@dataclass
+class VLLMClientGenerationConfig:
+    """Configuration for VLLM client generation parameters"""
+
+    n: int
+    repetition_penalty: float
+    temperature: float
+    top_p: float
+    top_k: Optional[int]
+    min_p: float
+    max_tokens: int
+    guided_decoding_regex: Optional[str] = None
+    stop: Optional[list[str]] = None
 
 
 # Example usage
