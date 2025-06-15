@@ -23,6 +23,7 @@ from trl.data_utils import (
     apply_chat_template,
     extract_prompt,
     is_conversational,
+    is_conversational_from_value,
     maybe_apply_chat_template,
     maybe_convert_to_chatml,
     maybe_extract_prompt,
@@ -86,6 +87,30 @@ class IsConversationalTester(unittest.TestCase):
     @parameterized.expand(itertools.product(non_conversational_examples))
     def test_non_conversational(self, example):
         self.assertFalse(is_conversational(example))
+
+
+class IsConversationalFromValueTester(unittest.TestCase):
+    def test_positive_1(self):
+        example = {
+            "conversations": [
+                {"from": "user", "value": "What color is the sky?"},
+                {"from": "assistant", "value": "It is blue."},
+            ],
+        }
+        self.assertTrue(is_conversational_from_value(example))
+
+    def test_negative_1(self):
+        example = {
+            "messages": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+        }
+        self.assertFalse(is_conversational_from_value(example))
+
+    def test_negative_2(self):
+        example = {"text": "The sky is blue."}
+        self.assertFalse(is_conversational_from_value(example))
 
 
 class ApplyChatTemplateTester(unittest.TestCase):

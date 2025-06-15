@@ -35,8 +35,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
     Args:
         example (`dict[str, Any]`):
-            A single data entry of a dataset. The example can have different keys depending on the
-            dataset type.
+            A single data entry of a dataset. The example can have different keys depending on the dataset type.
 
     Returns:
         `bool`:
@@ -60,7 +59,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
     if example_keys:
         key = example_keys.pop()  # take the first supported key
         maybe_messages = example[key]
-        # It must be a list of messages,
+        # It must be a list of messages
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
             # Each message must a list of dictionaries with keys "role" and "content"
@@ -714,6 +713,44 @@ def truncate_dataset(
             **map_kwargs,
         )
     return dataset
+
+
+def is_conversational_from_value(example: dict[str, Any]) -> bool:
+    r"""
+    Check if the example is in a conversational format (from/value). Note that this format isn't recommended. Prefer
+    the ChatML format (role/content)
+
+    Args:
+        example (`dict[str, Any]`):
+            A single data entry of a dataset. The example can have different keys depending on the dataset type.
+
+    Returns:
+        `bool`:
+            `True` if the data is in a conversational Chatformat, `False` otherwise.
+
+    Examples:
+
+    ```python
+    >>> example = {"conversations": [{"from": "user", "value": "What color is the sky?"}]}
+    >>> is_conversational_from_value(example)
+    True
+    >>> example = {"conversations": [{"role": "user", "content": "What color is the sky?"}]}
+    >>> is_conversational_from_value(example)
+    False
+    >>> example = {"conversations": "The sky is"})
+    >>> is_conversational_from_value(example)
+    False
+    ```
+    """
+    maybe_messages = example.get("conversations")
+    # It must be a list of messages
+    if isinstance(maybe_messages, list):
+        maybe_message = maybe_messages[0]
+        # Each message must a list of dictionaries with keys "from" and "value"
+        if isinstance(maybe_message, dict) and "from" in maybe_message and "value" in maybe_message:
+            return True
+
+    return False
 
 
 def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
