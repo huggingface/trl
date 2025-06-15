@@ -175,9 +175,10 @@ class RewardTrainer(Trainer):
                     "A processing_class must be specified when using the default RewardDataCollatorWithPadding"
                 )
 
-            max_length = args.max_length
-
-            data_collator = RewardDataCollatorWithPadding(processing_class)
+            data_collator = RewardDataCollatorWithPadding(
+                tokenizer=processing_class,
+                pad_to_multiple_of=args.pad_to_multiple_of,
+            )
 
             if args.remove_unused_columns:
                 try:  # for bc before https://github.com/huggingface/transformers/pull/25435
@@ -218,7 +219,8 @@ class RewardTrainer(Trainer):
                 # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
                 # user might get surprised if N samples are missing from training.
                 train_dataset = train_dataset.filter(
-                    lambda x: len(x["input_ids_chosen"]) <= max_length and len(x["input_ids_rejected"]) <= max_length,
+                    lambda x: len(x["input_ids_chosen"]) <= args.max_length
+                    and len(x["input_ids_rejected"]) <= args.max_length,
                     num_proc=args.dataset_num_proc,
                 )
                 if eval_dataset is not None:
@@ -235,8 +237,8 @@ class RewardTrainer(Trainer):
                     # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
                     # user might get surprised if N samples are missing from training.
                     eval_dataset = eval_dataset.filter(
-                        lambda x: len(x["input_ids_chosen"]) <= max_length
-                        and len(x["input_ids_rejected"]) <= max_length,
+                        lambda x: len(x["input_ids_chosen"]) <= args.max_length
+                        and len(x["input_ids_rejected"]) <= args.max_length,
                         num_proc=args.dataset_num_proc,
                     )
 
