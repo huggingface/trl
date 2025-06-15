@@ -189,6 +189,11 @@ class ScriptArguments:
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
+        quantization (`str` or `None`, *optional*, defaults to `None`):
+            If set, all Linear modules (except for the final lm_head) have their weights quantized down to the chosen
+            precision with a per-tensor scale. Possible choices: `"awq"`, `"gptq"`, and `"fp8"` (experimental).
+            If `None`, it first checks the `quantization_config` attribute in the model config file. If that is` None`,
+            it assumes the model weights are not quantized and use dtype to determine the data type of the weights.
     """
 
     model: str = field(
@@ -266,6 +271,16 @@ class ScriptArguments:
             "'trace'."
         },
     )
+    quantization: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If set, all Linear modules (except for the final lm_head) have their weights quantized down to "
+            "the chosen precision with a per-tensor scale. Possible choices: 'awq', 'gptq', and 'fp8' (experimental). "
+            "If `None`, it first checks the `quantization_config` attribute in the model config file. If that is "
+            "`None`, it assumes the model weights are not quantized and use dtype to determine the data type of "
+            "the weights."
+        },
+    )
 
 
 def llm_worker(
@@ -291,6 +306,7 @@ def llm_worker(
         kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+        quantization=script_args.quantization,
     )
 
     # Send ready signal to parent process
