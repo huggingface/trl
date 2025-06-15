@@ -21,6 +21,7 @@ _import_structure = {
     "activation_offloading": ["get_act_offloading_ctx_manager"],
     "modeling_base": ["GeometricMixtureWrapper", "PreTrainedModelWrapper", "create_reference_model"],
     "modeling_value_head": ["AutoModelForCausalLMWithValueHead", "AutoModelForSeq2SeqLMWithValueHead"],
+    "ring_attn": ["register_ring_attn"],
     "utils": [
         "SUPPORTED_ARCHITECTURES",
         "clone_chat_template",
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
     from .activation_offloading import get_act_offloading_ctx_manager
     from .modeling_base import GeometricMixtureWrapper, PreTrainedModelWrapper, create_reference_model
     from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
+    from .ring_attn import register_ring_attn
     from .utils import (
         SUPPORTED_ARCHITECTURES,
         clone_chat_template,

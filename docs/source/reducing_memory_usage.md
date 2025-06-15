@@ -259,3 +259,21 @@ training_args = RLOOConfig(..., ds3_gather_for_generation=False)
 </hfoptions>
 
 This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.
+
+
+## Ring Attention
+
+Ring Attention is a memory-efficient attention mechanism that can be used to reduce memory usage during training. It is particularly useful for large models that require a lot of memory.
+
+To enable Ring Attention, install the `ring-flash-attn` package and set the `sequence_parallel_size` parameter to the number of GPUs you want to use for sequence parallelism.
+
+</hfoption>
+<hfoption id="SFT">
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(..., sequence_parallel_size=4, ...)
+```
+</hfoption>
+</hfoptions>

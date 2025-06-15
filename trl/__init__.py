@@ -43,6 +43,7 @@ _import_structure = {
         "PreTrainedModelWrapper",
         "clone_chat_template",
         "create_reference_model",
+        "register_ring_attn",
         "setup_chat_format",
     ],
     "trainer": [
@@ -139,6 +140,7 @@ if TYPE_CHECKING:
         PreTrainedModelWrapper,
         clone_chat_template,
         create_reference_model,
+        register_ring_attn,
         setup_chat_format,
     )
     from .scripts import ScriptArguments, TrlParser, init_zero_verbose

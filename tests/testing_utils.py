@@ -26,6 +26,7 @@ from trl.import_utils import (
     is_joblib_available,
     is_llm_blender_available,
     is_mergekit_available,
+    is_ring_flash_attn_available,
     is_vllm_available,
 )
 
@@ -72,6 +73,13 @@ def require_rich(test_case):
     Decorator marking a test that requires rich. Skips the test if rich is not available.
     """
     return unittest.skipUnless(is_rich_available(), "test requires rich")(test_case)
+
+
+def require_ring_flash_attn(test_case):
+    """
+    Decorator marking a test that requires ring-flash-attn. Skips the test if ring-flash-attn is not available.
+    """
+    return unittest.skipUnless(is_ring_flash_attn_available(), "test requires ring-flash-attn")(test_case)
 
 
 def require_sklearn(test_case):
