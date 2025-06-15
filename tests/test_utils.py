@@ -37,7 +37,8 @@ from trl.trainer.utils import (
     get_peft_config,
     pad,
     print_prompt_completions_sample,
-    selective_log_softmax,
+    rowise_entropy,
+    selective_log_softmax
 )
 
 from .testing_utils import require_rich
@@ -616,3 +617,22 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
                 """),
         ]
         self.assertIn(output, possible_outputs)
+
+class TestRowiseEntropy(unittest.TestCase):
+    
+    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
+    def test_rowise_entopy(self, dtype):
+        batch_size = 64
+        seq_len = 384
+        vocab_size = 768
+
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+        log_probs = torch.log_softmax(logits, dim=-1)
+        expected_entropy = - torch.exp(log_probs) * log_probs
+        expected_entropy = expected_entropy.sum(-1)
+        predicted_entropy = rowise_entropy(logits)
+        if dtype in [torch.float16, torch.bfloat16]:
+            # half-precision dtypes fall back to an exact method
+            self.assertTrue(torch.equal(predicted_entropy, expected_entropy))
+        else:
+            torch.testing.assert_close(predicted_entropy, expected_entropy, rtol=1e-5, atol=1e-5)

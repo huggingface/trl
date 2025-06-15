@@ -1763,6 +1763,27 @@ def selective_log_softmax(logits, index):
     return per_token_logps
 
 
+def rowise_entropy(logits):
+    """
+    Computes the entropy of a tensor of shape [B, S, V] row-wise to reduce the memory
+    consumed by the softmax operation.
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+    Returns:
+        `torch.Tensor`:
+            Entropy of each position in a sequence
+    """
+    per_token_entropies = []
+    for (row_logits,) in zip(logits):  # loop to reduce peak mem consumption
+        row_logps = F.log_softmax(row_logits, dim=-1)
+        row_entropy = -torch.exp(row_logps) * row_logps
+        per_token_entropies.append(row_entropy)
+    per_token_entropies = torch.stack(per_token_entropies)
+    return per_token_entropies.sum(-1)
+
+
 def print_prompt_completions_sample(
     prompts: list[str],
     completions: list[str],

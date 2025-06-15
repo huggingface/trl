@@ -181,15 +181,12 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-        filter_on_entropy (`bool`, defaults to `False`):
-            If set to true, the tokens corresponding to positions in the completion where the entropy is not in the
-            top `token_entropy_percentile_threshold` percentile are masked out.
-        token_entropy_percentile_threshold (`float`, *optional*, defaults to `0.2`):
+        token_entropy_percentile_threshold (`float`, *optional*, defaults to `0.0`):
             τ parameter from the [Beyond the 80/20 Rule](https://huggingface/papers/2506.01939) paper, which finds that
-            masking out the bottom (1-τ) percentile of tokens based on the entropy of the probability distribution at a
+            masking out the bottom τ percentile of tokens based on the entropy of the probability distribution at a
             given sequence position, in the policy loss term yields better results. The range of the parameter is
-            (0.0-1.0) a value of 0 means that all the tokens are filtered out and 1 means that none of the tokens are
-            masked.
+            [0.0-1.0] a value of 0.0 means that none the tokens are filtered out and 1.0 means that all the tokens are
+            masked. Recommended value is `0.8`.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
 
@@ -490,18 +487,12 @@ class GRPOConfig(TrainingArguments):
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
-    filter_on_entropy: bool = field(
-        default=False,
-        metadata={
-            "help": "If set to true, the tokens corresponding to positions in the completion where the entropy is not in the "
-            "top `token_entropy_percentile_threshold` percentile are masked out."
-        },
-    )
     token_entropy_percentile_threshold: float = field(
-        default=0.8,
+        default=0.0,
         metadata={
-            "help": "Percentile threshold for filtering tokens based on entropy. Positions in the completion with "
-            "entropy below this percentile are masked out."
+            "help": "Percentile threshold for filtering out tokens in the policy loss based on entropy."
+            "Positions in the completion with entropy below this percentile are masked out."
+            "0.8 is the recommended value if you'd like to enable entropy based masking."
         },
     )
     use_liger_loss: bool = field(
