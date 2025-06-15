@@ -503,7 +503,6 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
-        self.filter_on_entropy = args.filter_on_entropy
         self.token_entropy_percentile_threshold = args.token_entropy_percentile_threshold
 
         # Datasets
