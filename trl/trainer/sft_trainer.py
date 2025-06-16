@@ -17,9 +17,10 @@ import dataclasses
 import os
 import warnings
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, TypeVar, Union
 
 import torch
 import torch.nn as nn
@@ -67,6 +68,40 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+
+TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
+
+
+def prune_none_values(example: TListOrMapping) -> TListOrMapping:
+    """
+    Recursively removes entries with `None` values from a nested structure (list or dictionary).
+
+    Args:
+        example (`list` or `Mapping`):
+            Input nested structure (list or dictionary) from which to remove `None`.
+
+    Example:
+    ```python
+    >>> [{
+    ...     "a": {"aa": None,
+    ...           "ab": 1},
+    ...     "b": "my_string",
+    ... }]
+    >>> prune_none_values(example)
+    [{'a': {'ab': 1}, 'b': 'my_string'}]
+    ```
+    """
+    if isinstance(example, list):
+        return [prune_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
+    elif isinstance(example, Mapping):
+        return {
+            key: prune_none_values(value) if isinstance(value, (dict, list)) else value
+            for key, value in example.items()
+            if value is not None
+        }
+    else:
+        raise TypeError("Input must be a list or a dictionary.")
 
 
 @dataclass
@@ -639,6 +674,10 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize(example, processing_class, dataset_text_field):
+                    # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean
+                    # them from sampled data.
+                    example = prune_none_values(example)
+
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
                             prompt_ids = processing_class.apply_chat_template(example["prompt"])
