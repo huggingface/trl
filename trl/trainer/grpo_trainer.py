@@ -1143,7 +1143,7 @@ class GRPOTrainer(Trainer):
                 )
             else:
                 old_per_token_logps = None
-            
+
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
