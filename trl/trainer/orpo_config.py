@@ -80,12 +80,12 @@ class ORPOConfig(TrainingArguments):
             )
         },
     )
-    bf16: bool = field(
-        default=True,
+    bf16: Optional[bool] = field(
+        default=None,
         metadata={
             "help": (
                 "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
+                "architecture or intel XPU or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
             )
         },
     )
@@ -158,3 +158,11 @@ class ORPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
+
+    def __post_init__(self):
+        if self.fp16 and self.bf16 is None:
+            self.bf16 = False
+        else:
+            self.bf16 = True
+
+        super().__post_init__()
