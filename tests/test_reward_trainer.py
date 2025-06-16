@@ -17,7 +17,7 @@ import unittest
 
 import torch
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
@@ -280,62 +280,39 @@ class RewardTrainerTester(unittest.TestCase):
                 data_collator=collator,
             )
 
-    def test_padding_collator_with_different_sequence_lengths(self):
-        """Tests the RewardDataCollatorWithPadding collator with chosen and rejected inputs of different sizes."""
-        collator = RewardDataCollatorWithPadding(
-            tokenizer=self.tokenizer,
-        )
+    def test_train_with_wrong_model(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            misconfigured_model = AutoModelForCausalLM.from_pretrained(self.model_id)
 
-        # Test with a longer rejected sequence
-        batch_size = 8
-        chosen_seq_len = 10
-        rejected_seq_len = 1024
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
 
-        tokenized_batch = [
-            {
-                "input_ids_chosen": [1 for _ in range(chosen_seq_len)],
-                "input_ids_rejected": [1 for _ in range(chosen_seq_len)],
-                "attention_mask_chosen": [1 for _ in range(rejected_seq_len)],
-                "attention_mask_rejected": [1 for _ in range(rejected_seq_len)],
-            }
-        ] * batch_size
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
 
-        padded_batch = collator(tokenized_batch)
+            trainer = RewardTrainer(
+                model=misconfigured_model,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+            )
 
-        # Test the batch size - should be unaffected
-        self.assertEqual(padded_batch["input_ids_chosen"].shape[0], batch_size)
+            with self.assertWarns(expected_warning=Warning):
+                trainer.compute_loss(
+                    model=trainer.model,
+                    inputs={
+                        "input_ids_chosen": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                        "attention_mask_chosen": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                        "input_ids_rejected": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                        "attention_mask_rejected": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                    },
+                )
 
-        # Test the input_ids - should match on both dimensions
-        self.assertEqual(padded_batch["input_ids_chosen"].shape[1], padded_batch["input_ids_rejected"].shape[1])
-
-        # Test the attention_mask - should match on both dimensions
-        self.assertEqual(
-            padded_batch["attention_mask_chosen"].shape[1], padded_batch["attention_mask_rejected"].shape[1]
-        )
-
-        # Test with a longer accepted sequence
-        batch_size = 8
-        chosen_seq_len = 1024
-        rejected_seq_len = 10
-
-        tokenized_batch = [
-            {
-                "input_ids_chosen": [1 for _ in range(chosen_seq_len)],
-                "input_ids_rejected": [1 for _ in range(chosen_seq_len)],
-                "attention_mask_chosen": [1 for _ in range(rejected_seq_len)],
-                "attention_mask_rejected": [1 for _ in range(rejected_seq_len)],
-            }
-        ] * batch_size
-
-        padded_batch = collator(tokenized_batch)
-
-        # Test the batch size - should be unaffected
-        self.assertEqual(padded_batch["input_ids_chosen"].shape[0], batch_size)
-
-        # Test the input_ids - should match on both dimensions
-        self.assertEqual(padded_batch["input_ids_chosen"].shape[1], padded_batch["input_ids_rejected"].shape[1])
-
-        # Test the attention_mask - should match on both dimensions
-        self.assertEqual(
-            padded_batch["attention_mask_chosen"].shape[1], padded_batch["attention_mask_rejected"].shape[1]
-        )
+                with self.assertRaises(expected_exception=RuntimeError):
+                    trainer.compute_loss(
+                        model=trainer.model,
+                        inputs={
+                            "input_ids_chosen": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                            "attention_mask_chosen": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                            "input_ids_rejected": torch.ones((2, 6), dtype=torch.int).to(trainer.model.device),
+                            "attention_mask_rejected": torch.ones((2, 6), dtype=torch.int).to(trainer.model.device),
+                        },
+                    )

@@ -277,6 +277,32 @@ class RewardTrainer(Trainer):
             attention_mask=inputs["attention_mask_rejected"],
             return_dict=True,
         )["logits"]
+
+        if self.state.global_step == 0:
+            # Only runs on the first training step as a check
+            if len(rewards_chosen.shape) != 2 or len(rewards_rejected.shape) != 2:
+                # Make sure that the rewards are defined at the sequence level
+                warnings.warn(
+                    message="The output of the model is of unexpected shape. "
+                    f"Chosen rewards: {rewards_chosen.shape}. "
+                    f"Rejected rewards: {rewards_rejected.shape}. "
+                    "The expected output does not have a sequence length. "
+                    "This can happen if the model is not setup for sequence classification. "
+                    "Please check your model configuration.",
+                    category=RuntimeWarning,
+                )
+
+        if rewards_chosen.shape != rewards_rejected.shape:
+            raise RuntimeError(
+                "The output of the model is incompatible. "
+                f"Chosen rewards: {rewards_chosen.shape}. "
+                f"Rejected rewards: {rewards_rejected.shape}. "
+                "The shapes of the rewards should match exactly. "
+                "This will raise a RuntimeError when computing the loss. "
+                "This can happen if the model is not setup for sequence classification. "
+                "Please check your model configuration.",
+            )
+
         # calculate loss, optionally modulate with margin
         if "margin" in inputs:
             loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()

@@ -370,9 +370,6 @@ class RewardDataCollatorWithPadding:
         features_rejected = []
         margin = []
 
-        # The length of the longest sequence in either the chosen or rejected samples
-        max_length = 0
-
         # check if we have a margin. If we do, we need to batch it as well
         has_margin = "margin" in features[0]
         for feature in features:
@@ -387,18 +384,12 @@ class RewardDataCollatorWithPadding:
                     "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
                 )
 
-            if len(feature["input_ids_chosen"]) > max_length:
-                max_length = len(feature["input_ids_chosen"])
-
             features_chosen.append(
                 {
                     "input_ids": feature["input_ids_chosen"],
                     "attention_mask": feature["attention_mask_chosen"],
                 }
             )
-
-            if len(feature["input_ids_rejected"]) > max_length:
-                max_length = len(feature["input_ids_rejected"])
 
             features_rejected.append(
                 {
@@ -412,16 +403,14 @@ class RewardDataCollatorWithPadding:
 
         batch_chosen = self.tokenizer.pad(
             features_chosen,
-            padding="max_length",
-            max_length=max_length,
+            padding=True,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
 
         batch_rejected = self.tokenizer.pad(
             features_rejected,
-            padding="max_length",
-            max_length=max_length,
+            padding=True,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
