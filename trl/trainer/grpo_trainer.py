@@ -504,6 +504,10 @@ class GRPOTrainer(Trainer):
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
         self.token_entropy_percentile_threshold = args.token_entropy_percentile_threshold
+        if self.use_liger_loss and self.token_entropy_percentile_threshold > 0.0:
+            raise NotImplementedError(
+                "Liger Kernels don't currently support masking token positions based on entropy."
+            )
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1345,11 +1349,9 @@ class GRPOTrainer(Trainer):
             )
             per_token_logps = logs_and_entropies["logps"]
             entropies = logs_and_entropies["entropies"]
-            # we need to find the entropy threshold based on all tokens in the
-            # batch and not just along a given batch index.
+            # compute the entropy threshold across all tokens in the batch  
+
             entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
-            # Create a mask for tokens corresponding to positions in the completion
-            # where the entropy is not in the top `token_entropy_percentile_threshold` percentile.
             entropy_mask = entropies >= entropy_threshold
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
@@ -1393,7 +1395,6 @@ class GRPOTrainer(Trainer):
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if entropy_mask is not None:
-            # mask out tokens based on entropy
             per_token_loss = per_token_loss * entropy_mask
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
