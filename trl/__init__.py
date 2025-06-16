@@ -41,6 +41,7 @@ _import_structure = {
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
         "PreTrainedModelWrapper",
+        "clone_chat_template",
         "create_reference_model",
         "setup_chat_format",
     ],
@@ -136,6 +137,7 @@ if TYPE_CHECKING:
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
         PreTrainedModelWrapper,
+        clone_chat_template,
         create_reference_model,
         setup_chat_format,
     )
