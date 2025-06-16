@@ -38,6 +38,8 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
+        chat_template (`str` or `None`, *optional*, defaults to `None`):
+            Chat template.
 
         > Parameters that control the data preprocessing
 
@@ -123,6 +125,13 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `SFTTrainer` is provided as a string."
+        },
+    )
+    chat_template: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Chat template to use for the model. If `None`, the default chat template is used. "
+            "This is only used if the model supports chat templates."
         },
     )
 

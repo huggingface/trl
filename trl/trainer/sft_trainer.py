@@ -50,7 +50,7 @@ from ..data_utils import (
     pack_dataset,
     truncate_dataset,
 )
-from ..models import get_act_offloading_ctx_manager
+from ..models import clone_chat_template, get_act_offloading_ctx_manager
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -318,6 +318,9 @@ class SFTTrainer(Trainer):
             )
         if isinstance(model, str):
             model = self._create_model_from_path(model, args)
+
+        if args.chat_template is not None:
+            clone_chat_template(model, processing_class, args.chat_template)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
