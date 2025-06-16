@@ -190,8 +190,8 @@ class DPOConfig(TrainingArguments):
             )
         },
     )
-    bf16: bool = field(
-        default=True,
+    bf16: Optional[bool] = field(
+        default=None,
         metadata={
             "help": (
                 "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -434,3 +434,11 @@ class DPOConfig(TrainingArguments):
             "Comet during evaluation."
         },
     )
+
+    def __post_init__(self):
+        if self.fp16 and self.bf16 is None:
+            self.bf16 = False
+        else:
+            self.bf16 = True
+
+        super().__post_init__()
