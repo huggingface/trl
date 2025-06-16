@@ -186,6 +186,9 @@ class ScriptArguments:
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
         kv_cache_dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for KV cache. If set to `"auto"`, the dtype will default to the model data type.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to trust remote code when loading models. Set to `True` to allow executing code from model
+            repositories. This is required for some custom models but introduces security risks.
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
@@ -259,6 +262,13 @@ class ScriptArguments:
             "help": "Data type to use for KV cache. If set to 'auto', the dtype will default to the model data type."
         },
     )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to trust remote code when loading models. Set to True to allow executing code from model "
+            "repositories. This is required for some custom models but introduces security risks."
+        },
+    )
     log_level: str = field(
         default="info",
         metadata={
@@ -291,6 +301,7 @@ def llm_worker(
         kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+        trust_remote_code=script_args.trust_remote_code,
     )
 
     # Send ready signal to parent process

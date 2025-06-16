@@ -20,6 +20,7 @@ import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Union
 
 import pandas as pd
@@ -239,8 +240,8 @@ class DPOTrainer(Trainer):
         ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         args: Optional[DPOConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
@@ -604,9 +605,10 @@ class DPOTrainer(Trainer):
         dataset_name: str,
     ) -> Union[Dataset, IterableDataset]:
         # Build the kwargs for the `map` function
-        map_kwargs = {"writer_batch_size": 10}
-        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
+        map_kwargs = {}
+        if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc nor writer_batch_size
             map_kwargs["num_proc"] = args.dataset_num_proc
+            map_kwargs["writer_batch_size"] = 10
 
         with PartialState().main_process_first():
             # Extract prompt if needed
@@ -1843,6 +1845,15 @@ class DPOTrainer(Trainer):
         del self._stored_metrics[train_eval]
         return super().log(logs, start_time)
 
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -1868,12 +1879,14 @@ class DPOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
+        tags = tags or set()
         if isinstance(tags, str):
-            tags = [tags]
+            tags = {tags}
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         citation = textwrap.dedent(
             """\
