@@ -134,6 +134,25 @@ preference_example = {
 
 Conversational datasets are useful for training chat models, but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
+#### Tool-calling
+
+Some chat templates support tool calling, which allows the model to interact with external functions—called *tools*—during generation. This extends the conversational format by letting the assistant output a `"tool_calls"` field instead of a `"content"` message whenever it decides to invoke a tool.
+
+After the assistant initiates a tool call, the tool responds with its output. This may be followed by a final assistant message to continue the conversation.
+
+Here’s an example of a tool-calling interaction:
+
+```python
+messages = [
+    {"role": "user", "content": "Turn on the living room lights."},
+    {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "control_light", "arguments": {"room": "living room", "state": "on"}}}]},
+    {"role": "tool", "name": "control_light", "content": "Lights turned on"},
+    {"role": "assistant", "content": "The living room lights are now on."},
+]
+```
+
+For more information on tool calling, refer to the [Tool calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use) blog post.
+
 ### Types
 
 #### Language modeling
