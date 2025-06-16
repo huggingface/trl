@@ -320,7 +320,7 @@ class SFTTrainer(Trainer):
             model = self._create_model_from_path(model, args)
 
         if args.chat_template is not None:
-            clone_chat_template(model, processing_class, args.chat_template)
+            clone_chat_template(model, processing_class, args.chat_template_source)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
