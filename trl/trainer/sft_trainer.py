@@ -282,7 +282,7 @@ class SFTTrainer(Trainer):
         optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Union[Callable[[dict], str], Callable[[dict], list[str]]]] = None,
+        formatting_func: Optional[Callable[[dict], str]] = None,
     ):
         # Args
         model_id = model if isinstance(model, str) else model.config._name_or_path

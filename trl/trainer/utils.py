@@ -44,6 +44,7 @@ from transformers import (
     is_comet_available,
 )
 from transformers.utils import (
+    ModelOutput,
     is_peft_available,
     is_rich_available,
     is_torch_mlu_available,
@@ -1197,7 +1198,7 @@ class OnPolicyConfig(TrainingArguments):
     )
 
 
-def first_true_indices(bools: torch.Tensor, dtype=torch.long):
+def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
     """
     Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
     the position of the first True in each "row".
@@ -1274,7 +1275,7 @@ def forward(
     model: torch.nn.Module,
     query_responses: torch.Tensor,
     pad_token_id: int,
-) -> torch.nn.Module:
+) -> ModelOutput:
     """
     Performs a forward pass through the model with the given query responses and pad token ID.
 
@@ -1287,7 +1288,7 @@ def forward(
             The token ID representing the pad token.
 
     Returns:
-        `torch.nn.Module`:
+        `ModelOutput`:
             The output of the model, including hidden states.
     """
     attention_mask = query_responses != pad_token_id
@@ -1304,7 +1305,7 @@ def forward(
 
 def prepare_deepspeed(
     model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-):
+) -> torch.nn.Module:
     """
     Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based on the model and
     batch size.
@@ -1356,7 +1357,7 @@ def prepare_deepspeed(
     return model
 
 
-def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor):
+def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
     """
     Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
 
@@ -1752,7 +1753,7 @@ def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tenso
     return flushed_mask, *flushed_tensors
 
 
-def selective_log_softmax(logits, index):
+def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
 
