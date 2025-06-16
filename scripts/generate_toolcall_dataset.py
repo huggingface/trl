@@ -53,7 +53,7 @@ def main(test_size, push_to_hub, repo_id):
             [
                 {"role": "user", "content": "Set a timer for 10 minutes."},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "start_timer", "arguments": {"duration": 600}}}]},
-                {"role": "tool","name": "start_timer","content": "OK"},
+                {"role": "tool", "name": "start_timer", "content": "OK"},
                 {"role": "assistant", "content": "Timer set for 10 minutes."},
             ],
             [
@@ -75,28 +75,28 @@ def main(test_size, push_to_hub, repo_id):
                 {"role": "assistant", "content": "Enjoy the jazz tunes!"},
             ],
             [
-                {"role": "user","content": "What's the weather like tomorrow in Berlin?"},
-                {"role": "assistant","tool_calls": [{"type": "function","function": {"name": "get_weather_forecast","arguments": {"city": "Berlin", "date": "2025-06-16"}}}]},
-                {"role": "tool","name": "get_weather_forecast","content": "Partly cloudy, 22°C"},
-                {"role": "assistant","content": "Tomorrow in Berlin will be partly cloudy with a high of 22°C."}
+                {"role": "user", "content": "What's the weather like tomorrow in Berlin?"},
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_weather_forecast", "arguments": {"city": "Berlin", "date": "2025-06-16"}}}]},
+                {"role": "tool", "name": "get_weather_forecast", "content": "Partly cloudy, 22°C"},
+                {"role": "assistant", "content": "Tomorrow in Berlin will be partly cloudy with a high of 22°C."}
             ],
             [
-                {"role": "user","content": "Turn on the living room lights."},
-                {"role": "assistant","tool_calls": [{"type": "function","function": {"name": "control_light","arguments": {"room": "living room", "state": "on"}}}]},
-                {"role": "tool","name": "control_light","content": "Lights turned on"},
-                {"role": "assistant","content": "The living room lights are now on."}
+                {"role": "user", "content": "Turn on the living room lights."},
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "control_light", "arguments": {"room": "living room", "state": "on"}}}]},
+                {"role": "tool", "name": "control_light", "content": "Lights turned on"},
+                {"role": "assistant", "content": "The living room lights are now on."}
             ],
             [
-                {"role": "user","content": "Remind me to call mom at 7 PM."},
-                {"role": "assistant","tool_calls": [{"type": "function","function": {"name": "create_reminder","arguments": {"time": "19:00", "note": "Call mom"}}}]},
-                {"role": "tool","name": "create_reminder","content": "Reminder set"},
-                {"role": "assistant","content": "Okay, I’ll remind you to call mom at 7 PM."}
+                {"role": "user", "content": "Remind me to call mom at 7 PM."},
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "create_reminder", "arguments": {"time": "19:00", "note": "Call mom"}}}]},
+                {"role": "tool", "name": "create_reminder", "content": "Reminder set"},
+                {"role": "assistant", "content": "Okay, I’ll remind you to call mom at 7 PM."}
             ],
             [
-                {"role": "user","content": "How strong is the wind in Chicago right now?"},
-                {"role": "assistant","tool_calls": [{"type": "function","function": {"name": "get_wind_conditions", "arguments": {"city": "Chicago", "unit": "mph"}}}]},
-                {"role": "tool","name": "get_wind_conditions","content": "14 mph, NW"},
-                {"role": "assistant","content": "The wind in Chicago is blowing at 14 mph from the northwest."}
+                {"role": "user", "content": "How strong is the wind in Chicago right now?"},
+                {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_wind_conditions", "arguments": {"city": "Chicago", "unit": "mph"}}}]},
+                {"role": "tool", "name": "get_wind_conditions", "content": "14 mph, NW"},
+                {"role": "assistant", "content": "The wind in Chicago is blowing at 14 mph from the northwest."}
             ]
         ],
     })
