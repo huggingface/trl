@@ -68,7 +68,7 @@ if is_comet_available():
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
 
-if is_peft_available():
+if is_clearml_available():
     import clearml
 
 
