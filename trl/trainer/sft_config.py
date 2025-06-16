@@ -128,7 +128,7 @@ class SFTConfig(TrainingArguments):
             "the `SFTTrainer` is provided as a string."
         },
     )
-    chat_template_source: Optional[str] = field(
+    chat_template: Optional[str] = field(
         default=None,
         metadata={
             "help": "If specified, sets the model's chat template using the tokenizer located at this path. The path "

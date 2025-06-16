@@ -1357,7 +1357,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, chat_template_source="Qwen/Qwen3-4B", report_to="none")
+            training_args = SFTConfig(output_dir=tmp_dir, chat_template="Qwen/Qwen3-4B", report_to="none")
             # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-GPTNeoXForCausalLM", args=training_args, train_dataset=dataset
