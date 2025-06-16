@@ -112,9 +112,7 @@ class PRMConfig(TrainingArguments):
     )
 
     def __post_init__(self):
-        if self.fp16 and self.bf16 is None:
-            self.bf16 = False
-        else:
-            self.bf16 = True
+        if self.bf16 is None:
+            self.bf16 = True if not self.fp16 else False
 
         super().__post_init__()
