@@ -50,6 +50,7 @@ from .utils import (
     disable_dropout_in_model,
     generate_model_card,
     get_comet_experiment_url,
+    log_table_to_clearml_task,
     log_table_to_comet_experiment,
     print_rich_table,
 )
@@ -324,8 +325,10 @@ class RewardTrainer(Trainer):
         return loss, logits, labels
 
     def evaluate(self, *args, **kwargs):
-        num_print_samples = kwargs.pop("num_print_samples", 4)
-        self.visualize_samples(num_print_samples)
+        num_print_samples = kwargs.pop("num_print_samples", self.args.num_print_samples)
+
+        self.visualize_samples(num_print_samples=num_print_samples)
+
         return super().evaluate(*args, **kwargs)
 
     def visualize_samples(self, num_print_samples: int):
@@ -334,25 +337,42 @@ class RewardTrainer(Trainer):
 
         Args:
             num_print_samples (`int`, defaults to `4`):
-                The number of samples to print. Set to `-1` to print all samples.
+                The number of samples to print. Set to `0` to print nothing.
+                Set to `-1` to print all samples.
         """
         eval_dataloader = self.get_eval_dataloader()
         table = defaultdict(list)
         for _, inputs in enumerate(eval_dataloader):
             _, logits, _ = self.prediction_step(self.model, inputs, prediction_loss_only=False)
+
             chosen_text = decode_and_strip_padding(inputs["input_ids_chosen"], self.processing_class)
+
             rejected_text = decode_and_strip_padding(inputs["input_ids_rejected"], self.processing_class)
+
             table["chosen_text"].extend(gather_object(chosen_text))
+
             table["rejected_text"].extend(gather_object(rejected_text))
+
             table["logits"].extend(
                 gather_object([[round(inner_item, 4) for inner_item in item] for item in logits.tolist()])
             )
+
+            # Add margin to the table, if it exists
+            if "margin" in inputs:
+                table["margin"].extend(
+                    gather_object(
+                        [round(margin.tolist(), 4) for margin in inputs["margin"]],
+                    ),
+                )
+
             if num_print_samples >= 0 and len(table["chosen_text"]) >= num_print_samples:
                 break
+
         df = pd.DataFrame(table)
         if self.accelerator.process_index == 0:
             if is_rich_available():
                 print_rich_table(df[:num_print_samples])
+
             if "wandb" in self.args.report_to:
                 import wandb
 
@@ -363,6 +383,13 @@ class RewardTrainer(Trainer):
                 log_table_to_comet_experiment(
                     name="completions.csv",
                     table=df,
+                )
+
+            if "clearml" in self.args.report_to:
+                log_table_to_clearml_task(
+                    title="completions",
+                    table=df,
+                    iteration=self.state.global_step,
                 )
 
     # Ensure the model card is saved along with the checkpoint

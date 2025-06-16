@@ -45,6 +45,9 @@ class RewardConfig(TrainingArguments):
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if
             the dataset is pretokenized.
+        num_print_samples (`int`, *optional*, defaults to `4`):
+            The number of reward predictions to print during evaluation. Use `0` if no reward predictions
+            should be logged. Use `-1` if predictions for the entire evaluation dataset should be logged.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -92,5 +95,12 @@ class RewardConfig(TrainingArguments):
         metadata={
             "help": "Whether to remove the columns that are not used by the model's forward pass. Can be `True` only "
             "if the dataset is pretokenized."
+        },
+    )
+    num_print_samples: int = field(
+        default=4,
+        metadata={
+            "help": "The number of reward predictions to print during evaluation. Use `0` if no reward predictions "
+            "should be logged. Use `-1` if predictions for the entire evaluation dataset should be logged."
         },
     )

@@ -41,6 +41,7 @@ from transformers import (
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
+    is_clearml_available,
     is_comet_available,
 )
 from transformers.utils import (
@@ -65,6 +66,9 @@ if is_comet_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+if is_peft_available():
+    import clearml
 
 
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
@@ -1624,11 +1628,66 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
             The Pandas DataFrame containing the table to log.
     """
     if not is_comet_available():
-        raise ModuleNotFoundError("The comet-ml is not installed. Please install it first: pip install comet-ml")
+        raise ModuleNotFoundError("comet-ml is not installed. Please install it first: pip install comet-ml")
 
     experiment = comet_ml.get_running_experiment()
     if experiment is not None:
         experiment.log_table(tabular_data=table, filename=name)
+
+
+def get_clearml_experiment_url() -> Optional[str]:
+    """
+    If ClearML integration is enabled, return the URL of the current ClearML task; otherwise, return `None`.
+    """
+    if not is_clearml_available():
+        return None
+
+    clearml_task = clearml.Task.current_task()
+    if clearml_task is not None:
+        return clearml_task.get_output_log_web_page()
+
+    return None
+
+
+def log_table_to_clearml_task(
+    title: str,
+    table: pd.DataFrame,
+    series: str | None = None,
+    iteration: int | None = None,
+) -> None:
+    """
+    If ClearML integration is enabled logs a table to the ClearML task if it is currently running.
+
+    Args:
+        name (`str`):
+            Table name.
+        series (`str`):
+            The table series name.
+        iteration (`int`):
+            The iteration at which this table was produced.
+        table (`pd.DataFrame`):
+            The Pandas DataFrame containing the table to log.
+    """
+    if not is_clearml_available():
+        raise ModuleNotFoundError(
+            "ClearMl is not installed. Please install it first: pip install clearml",
+        )
+
+    clearml_task = clearml.Task.current_task()
+    if clearml_task is not None:
+        clearml_logger = clearml_task.get_logger()
+
+        try:
+            clearml_logger.report_table(
+                title=title,
+                series=series if series is not None else title,
+                iteration=iteration,
+                table_plot=table,
+            )
+        except OverflowError as e:
+            raise TypeError(
+                "Table probably contains non JSON compatible values.",
+            ) from e
 
 
 def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
