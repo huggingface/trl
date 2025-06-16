@@ -45,7 +45,6 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
-    apply_chat_template,
     is_conversational,
     maybe_convert_to_chatml,
     pack_dataset,
@@ -283,7 +282,7 @@ class SFTTrainer(Trainer):
         optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Union[Callable[[dict], str], Callable[[dict], list[str]]]] = None,
+        formatting_func: Optional[Callable[[dict], str]] = None,
     ):
         # Args
         model_id = model if isinstance(model, str) else model.config._name_or_path
@@ -617,23 +616,7 @@ class SFTTrainer(Trainer):
 
                 # Apply the chat template if needed
                 first_example = next(iter(dataset))
-                if is_conversational(first_example):
-                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                        map_kwargs["desc"] = f"Applying chat template to {dataset_name} dataset"
-                    column_names = first_example.keys()
-                    dataset = dataset.map(
-                        apply_chat_template,
-                        fn_kwargs={"tokenizer": processing_class},
-                        remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
-                        **map_kwargs,
-                    )
-                    # Subsequent tokenization won't add special tokens (mostly for bos).
-                    # See https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-                    add_special_tokens = False
-                # When dataset is not conversational, we need to add the EOS token at the end of each example
-                # We don't need to do this for conversational datasets as this is already handled by the
-                # `apply_chat_template` function.
-                else:
+                if not is_conversational(first_example):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
 
@@ -650,27 +633,25 @@ class SFTTrainer(Trainer):
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
-                    # Subsequent tokenization will add special tokens (mostly for bos).
-                    # See https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-                    add_special_tokens = True
 
                 # Tokenize the dataset
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field, add_special_tokens):
+                def tokenize(example, processing_class, dataset_text_field):
                     if "prompt" in example:  # prompt-completion case
-                        processed_prompt = processing_class(
-                            text=example["prompt"],
-                            add_special_tokens=add_special_tokens,
-                        )
-                        processed = processing_class(
-                            text=example["prompt"] + example["completion"], add_special_tokens=add_special_tokens
-                        )
+                        if is_conversational(example):
+                            prompt_ids = processing_class.apply_chat_template(example["prompt"])
+                            prompt_completion_ids = processing_class.apply_chat_template(
+                                example["prompt"] + example["completion"]
+                            )
+                        else:
+                            prompt_ids = processing_class(text=example["prompt"]).input_ids
+                            prompt_completion_ids = processing_class(
+                                text=example["prompt"] + example["completion"]
+                            ).input_ids
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        prompt_ids = processed_prompt["input_ids"]
-                        prompt_completion_ids = processed["input_ids"]
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
                             warnings.warn(
                                 "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
@@ -680,12 +661,13 @@ class SFTTrainer(Trainer):
 
                         # Create a completion mask
                         completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        processed = {**processed, "completion_mask": completion_mask}
+                        processed = {"input_ids": prompt_completion_ids, "completion_mask": completion_mask}
 
                     else:  # language modeling case
-                        processed = processing_class(
-                            text=example[dataset_text_field], add_special_tokens=add_special_tokens
-                        )
+                        if is_conversational(example):
+                            processed = {"input_ids": processing_class.apply_chat_template(example["messages"])}
+                        else:
+                            processed = {"input_ids": processing_class(text=example[dataset_text_field]).input_ids}
                     return processed
 
                 dataset = dataset.map(
@@ -693,7 +675,6 @@ class SFTTrainer(Trainer):
                     fn_kwargs={
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
-                        "add_special_tokens": add_special_tokens,
                     },
                     **map_kwargs,
                 )

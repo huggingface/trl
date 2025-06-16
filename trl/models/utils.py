@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import torch.nn as nn
 from packaging import version
-from transformers import PreTrainedModel, PreTrainedTokenizer
+from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
@@ -82,6 +82,10 @@ def setup_chat_format(
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
 
+    <Tip warning="true">
+    We recommend using [`clone_chat_template`] instead of this function.
+    </Tip>
+
     If the model already has a chat template, this will throw an error. If you want to overwrite it, please set `tokenizer.chat_template` to `None`.
 
     Args:
@@ -116,7 +120,11 @@ def setup_chat_format(
 
     # resize embedding layer to a multiple of 64, https://x.com/karpathy/status/1621578354024677377
     model.resize_token_embeddings(
-        len(tokenizer), pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None
+        # After studying many tokenizers, we found that len(tokenizer.vocab) is the most reliable way to get the vocab
+        # size. Avoid using tokenizer.vocab_size or tokenizer.vocab_size + len(tokenizer.added_tokens_encoder),
+        # as handling of special and added tokens varies across tokenizers.
+        new_num_tokens=len(tokenizer.vocab),
+        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
     )
     # Update the model config to use the new eos & bos tokens
     if getattr(model, "config", None) is not None:
@@ -128,6 +136,75 @@ def setup_chat_format(
         model.generation_config.bos_token_id = tokenizer.bos_token_id
         model.generation_config.eos_token_id = tokenizer.eos_token_id
         model.generation_config.pad_token_id = tokenizer.pad_token_id
+
+    return model, tokenizer
+
+
+def clone_chat_template(
+    model: PreTrainedModel,
+    tokenizer: PreTrainedTokenizer,
+    source_tokenizer_path: str,
+    resize_to_multiple_of: Optional[int] = 64,
+) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+    """
+    Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
+
+    This function:
+    - Copies the chat template from a source tokenizer to the target tokenizer.
+    - Adds any new tokens from the source tokenizer to the target tokenizer.
+    - Sets and synchronizes the EOS token across the tokenizer and model.
+    - Resizes the model's token embeddings to match the new vocabulary size, optionally rounding it up to a multiple of
+      a specified value.
+
+    Args:
+        model (`PreTrainedModel`):
+            Model to update.
+        tokenizer (`PreTrainedTokenizer`):
+            Tokenizer to update.
+        source_tokenizer_path (`str`):
+            Path or identifier of the pretrained tokenizer to clone from.
+        resize_to_multiple_of (`int` or `None`, *optional*, defaults to `64`):
+            The embedding layer will be resized to the new vocabulary size. If this is not `None`, it will round up the
+            new vocabulary size to the nearest multiple of this value.
+
+    Returns:
+        model (`PreTrainedModel`):
+            Updated model with resized token embeddings and EOS token configured.
+        tokenizer (`~transformers.PreTrainedTokenizer`):
+            Updated tokenizer with the chat template and special tokens applied.
+
+    Example:
+    ```python
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl import clone_chat_template
+
+    model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
+    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
+    model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+    ```
+    """
+    # Load the source tokenizer containing the desired chat template
+    tokenizer_source = AutoTokenizer.from_pretrained(source_tokenizer_path)
+
+    # Copy the chat template from the source tokenizer
+    tokenizer.chat_template = tokenizer_source.get_chat_template()
+
+    # Ensure all added tokens from the source are available in the target tokenizer
+    tokenizer.add_tokens(list(tokenizer_source.added_tokens_decoder.values()))
+
+    # Set the EOS token from the source tokenizer (important for generation)
+    tokenizer.eos_token = tokenizer_source.eos_token
+    model.config.eos_token_id = tokenizer.eos_token_id
+    model.generation_config.eos_token_id = tokenizer.eos_token_id
+
+    # Resize model embeddings to include any new tokens, optionally rounding up to a multiple
+    model.resize_token_embeddings(
+        # After studying many tokenizers, we found that len(tokenizer.vocab) is the most reliable way to get the vocab
+        # size. Avoid using tokenizer.vocab_size or tokenizer.vocab_size + len(tokenizer.added_tokens_encoder),
+        # as handling of special and added tokens varies across tokenizers.
+        new_num_tokens=len(tokenizer.vocab),
+        pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
+    )
 
     return model, tokenizer
 
