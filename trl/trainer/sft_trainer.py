@@ -296,16 +296,6 @@ class SFTTrainer(Trainer):
         formatting_func (`Optional[Callable]`):
             Formatting function applied to the dataset before tokenization. Applying the formatting function explicitly
             converts the dataset into a [language modeling](#language-modeling) type.
-        tools (`list[Union[dict, Callable]]`, *optional*, defaults to `None`):
-            A list of tools (i.e., callable functions or JSON Schemas) that the model can access. Use this argument
-            when your dataset includes tool-calling interactions (see [Tool-calling data section]()). Make sure that
-            the chat template you are using supports function calling. Each tool can be provided either as:
-
-            - A Python function (which will be automatically converted to a JSON Schema with a name, description, and
-              argument types), or
-            - A dictionary already formatted as a JSON Schema.
-            For more details on the conversion process, see [`transformers.utils.get_json_schema`]. To learn more about
-            tool calling and chat templates, refer to the [chat templating guide](https://huggingface.co/docs/transformers/main/en/chat_templating#automated-function-conversion-for-tool-use).
     """
 
     _tag_names = ["trl", "sft"]
@@ -328,7 +318,6 @@ class SFTTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable[[dict], str]] = None,
-        tools: Optional[list[Union[dict, Callable]]] = None,
     ):
         # Args
         model_id = model if isinstance(model, str) else model.config._name_or_path
@@ -355,9 +344,6 @@ class SFTTrainer(Trainer):
                     "in the vocabulary before using it as an EOS token."
                 )
             processing_class.eos_token_id = eos_token_id
-
-        # Tools
-        self.tools = tools
 
         # Model
         if args.model_init_kwargs is not None and not isinstance(model, str):
@@ -687,10 +673,11 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field, tools):
+                def tokenize(example, processing_class, dataset_text_field):
                     # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean
                     # them from sampled data.
                     example = prune_none_values(example)
+                    tools = example.get("tools", None)
 
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
@@ -730,7 +717,6 @@ class SFTTrainer(Trainer):
                     fn_kwargs={
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
-                        "tools": self.tools,
                     },
                     **map_kwargs,
                 )

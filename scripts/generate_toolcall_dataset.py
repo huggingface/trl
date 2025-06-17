@@ -18,6 +18,7 @@ from datasets import Dataset
 from transformers import HfArgumentParser
 from transformers.utils import get_json_schema
 
+
 @dataclass
 class ScriptArguments:
     r"""
@@ -45,6 +46,7 @@ class ScriptArguments:
         metadata={"help": "Hugging Face repository ID to push the dataset to."},
     )
 
+
 def main(test_size, push_to_hub, repo_id):
     # Fictitious functions to simulate tool calls
     def start_timer(duration: int) -> int:
@@ -59,7 +61,6 @@ def main(test_size, push_to_hub, repo_id):
         """
         return duration
 
-
     def get_current_time(location: str) -> str:
         """
         Returns the current time in the specified location.
@@ -72,7 +73,6 @@ def main(test_size, push_to_hub, repo_id):
         """
         return "06:22:48"
 
-
     def get_air_quality_index(location: str) -> int:
         """
         Returns the air quality index for the specified location.
@@ -84,7 +84,6 @@ def main(test_size, push_to_hub, repo_id):
             The air quality index for the specified location.
         """
         return 53
-
 
     def play_music(title: str, artist: str) -> dict:
         """
@@ -99,7 +98,6 @@ def main(test_size, push_to_hub, repo_id):
         """
         return {"status": "Playing"}
 
-
     def get_weather_forecast(city: str, date: str) -> dict:
         """
         Returns the weather forecast for the specified city and date.
@@ -112,7 +110,6 @@ def main(test_size, push_to_hub, repo_id):
             A dictionary containing the temperature and weather condition.
         """
         return {"temperature": 22, "condition": "partly cloudy"}
-
 
     def control_light(room: str, state: str) -> dict:
         """
@@ -127,7 +124,6 @@ def main(test_size, push_to_hub, repo_id):
         """
         return {"state": state}
 
-
     def create_reminder(time: str, note: str) -> str:
         """
         Creates a reminder for the specified time and note.
@@ -141,7 +137,6 @@ def main(test_size, push_to_hub, repo_id):
         """
         return "I'll remind you to call mom at 7 PM."
 
-
     def get_wind_conditions(city: str, unit: str) -> tuple[int, str]:
         """
         Returns the wind conditions for the specified city.
@@ -154,7 +149,6 @@ def main(test_size, push_to_hub, repo_id):
             A tuple containing the wind speed and direction.
         """
         return 14, "NW"
-
 
     start_timer = get_json_schema(start_timer)
     get_current_time = get_json_schema(get_current_time)
@@ -189,20 +183,20 @@ def main(test_size, push_to_hub, repo_id):
             [
                 {"role": "user", "content": "Play some music."},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "play_music", "arguments": {"title": "Take Five", "artist": "Dave Brubeck"}}}]},
-                {"role": "tool", "name": "play_music", "content": {"status": "Playing"}},
+                {"role": "tool", "name": "play_music", "content": "{'status': 'Playing'}"},
                 {"role": "assistant", "content": "Enjoy the jazz tunes!"},
             ],
             [
                 {"role": "user", "content": "What's the weather like tomorrow in Berlin?"},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_weather_forecast", "arguments": {"city": "Berlin", "date": "2025-06-16"}}}]},
-                {"role": "tool", "name": "get_weather_forecast", "content": {"temperature": 22, "condition": "partly cloudy"}},
+                {"role": "tool", "name": "get_weather_forecast", "content": "{'temperature': 22, 'condition': 'partly cloudy'}"},
                 {"role": "assistant", "content": "Tomorrow in Berlin will be partly cloudy with a high of 22°C."}
             ],
             [
                 {"role": "user", "content": "Turn on the living room lights."},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "control_light", "arguments": {"room": "living room", "state": "on"}}}]},
-                {"role": "tool", "name": "control_light", "content": {"state": "on"}},
-                {"role": "assistant", "content": r"{'state': 'on'}"},
+                {"role": "tool", "name": "control_light", "content": "{'state': 'on'}"},
+                {"role": "assistant", "content": "The living room lights are now on."}
             ],
             [
                 {"role": "user", "content": "Remind me to call mom at 7 PM."},

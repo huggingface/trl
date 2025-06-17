@@ -151,6 +151,9 @@ messages = [
 ]
 ```
 
+Quand tu utilises SFT, il est improtant que ton dataset contienne également une colonne applée `tools` qui contient la liste des outils disponibles pour le modèle. Cette colonne est utilisée pour construire le systeme prompt.
+
+
 For more information on tool calling, refer to the [Tool calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use) blog post.
 
 ### Types
