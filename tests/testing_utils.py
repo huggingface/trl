@@ -124,3 +124,14 @@ class RandomPairwiseJudge(BasePairwiseJudge):
             return [random.randint(0, len(completion) - 1) for completion in completions]
         else:
             return [random.random() for _ in range(len(prompts))]
+
+
+   
+def start_timer(duration):
+    """
+    Starts a timer for the specified duration in seconds.
+
+    Args:
+        duration: Duration in seconds for the timer.
+    """
+    return f"Timer set for {duration // 60} minutes."
