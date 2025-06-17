@@ -1350,3 +1350,36 @@ class SFTTrainerTester2(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_with_chat_template_kwargs(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+
+            tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+            # The following template is a simplified version of the Qwen chat template, where an additional argument
+            # `role_capital` is used to control the capitalization of roles.
+            tokenizer.chat_template = '{%- if messages[0]["role"] == "system" -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\n" + messages[0]["content"] + "<|im_end|>\\n" }}{%- else -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\\n" }}{%- endif -%}{%- for message in messages -%}    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) -%}        {{ "<|im_start|>" + (message.role.upper() if role_capital else message.role) + "\\n" + message.content + "<|im_end|>\\n" }}    {%- elif message.role == "assistant" -%}        {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") }}        {%- if message.content -%}            {{ "\\n" + message.content }}        {%- endif -%}        {{ "<|im_end|>\\n" }}    {%- elif message.role == "tool" -%}        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") -%}            {{ "<|im_start|>" + ("USER" if role_capital else "user") }}        {%- endif -%}        {{ "\\n<tool_response>\\n" + message.content + "\\n</tool_response>" }}        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") -%}            {{ "<|im_end|>\\n" }}        {%- endif -%}    {%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}    {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") + "\\n" }}{%- endif -%}'
+
+            dataset.add_column("chat_template_kwargs", [{"role_capital": bool(i % 2)} for i in range(len(dataset))])
+
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
