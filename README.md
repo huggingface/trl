@@ -25,6 +25,8 @@ This repo is an internal fork of the TRL library that is used for fast-paced pro
 > [!NOTE]
 > The main dev work of this repo is in the `smollm3` branch.
 
+* **Leaderboard:** [HuggingFaceTB/smollm3-post-training-leaderboard](https://huggingface.co/spaces/HuggingFaceTB/smollm3-post-training-leaderboard)
+
 ## Installation
 
 ### Clone and set up the internal fork
@@ -101,7 +103,42 @@ This will also install PyTorch `v2.6.0` and it is **very important** to use this
 GIT_LFS_SKIP_SMUDGE=1 uv pip install -e ".[dev]"
 ```
 
-## Training examples
+Finally to evaluate models on IFEval, download an additional resource by running:
+
+```shell
+python -m nltk.downloader punkt punkt_tab
+```
+
+## Training models
+
+### Evaluating models mid-training
+
+To evaluate models mid-training, we provide a `push_to_hub_revision` callback that lets you specify which benchmarks you want to run in the `benchmarks` field of the training config. For example, to evaluate on the `aime24` benchmark, add:
+
+```yaml
+callbacks:
+- push_to_hub_revision
+benchmarks:
+  - aime24
+```
+
+This will run the evaluation whenever the model is saved during training, which can be controlled via the `save_strategy` and `save_steps` fields in the training config. The list of supported benchmarks can be found by running:
+
+```shell
+python examples/smollm3/scripts/run_benchmarks.py --list_benchmarks
+```
+
+Some models like Qwen3 support a dual reasoning / non-reasoning mode for inference, which can be toggled by adding either `/think` or `/no_think` as a system prompt. To run evals for both modes, provide the system prompts in the `benchmark_system_prompts` field of the training config. For example, to evaluate on the `aime24` benchmark in reasoning mode, add:
+
+```yaml
+callbacks:
+- push_to_hub_revision
+benchmarks:
+  - aime24
+benchmark_system_prompts:
+- "/think"
+- "/no_think"
+```
 
 ### SFT example with Qwen2.5-1.5B-Instruct on a dev node
 
@@ -112,11 +149,42 @@ accelerate launch --num_processes=2 --config_file=examples/accelerate_configs/de
 ### SFT example with Qwen2.5-1.5B-Instruct on a prod node
 
 ```shell
-TODO
+sbatch examples/smollm3/slurm/train.slurm --model Qwen2.5-1.5B-Instruct --task sft --config demo --accelerator deepspeed_zero3 --args '--OPTIONAL_ARGS'
 ```
 
 
 ### Alignment (port TODO)
+
+## Evaluate a model on one or more benchmarks
+
+View supported benchmarks:
+
+```shell
+python examples/smollm3/scripts/run_benchmarks.py \
+    --list_benchmarks
+```
+
+Launch evaluation jobs:
+
+```shell
+python examples/smollm3/scripts/run_benchmarks.py \
+    --model_id Qwen/Qwen3-0.6B \
+    --benchmarks aime24 gpqa  # space-separated
+```
+
+Launch evaluation jobs with custom system prompts:
+
+```shell
+python examples/smollm3/scripts/run_benchmarks.py \
+    --model_id Qwen/Qwen3-0.6B \
+    --benchmarks aime24 gpqa  # space-separated
+    --system_prompt "/no_think"
+```
+
+Results will be visible on our internal leaderboards:
+
+* **Leaderboard:** [HuggingFaceTB/smollm3-post-training-leaderboard](https://huggingface.co/spaces/HuggingFaceTB/smollm3-post-training-leaderboard)
+
 
 ## Overview
 
