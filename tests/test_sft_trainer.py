@@ -1359,7 +1359,10 @@ class SFTTrainerTester2(unittest.TestCase):
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
             trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset, tools=tools
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                tools=tools,
             )
 
             # Save the initial parameters to compare them later
