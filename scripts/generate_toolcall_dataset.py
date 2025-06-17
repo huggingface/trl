@@ -53,7 +53,7 @@ def main(test_size, push_to_hub, repo_id):
             [
                 {"role": "user", "content": "Set a timer for 10 minutes."},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "start_timer", "arguments": {"duration": 600}}}]},
-                {"role": "tool", "name": "start_timer", "content": "OK"},
+                {"role": "tool", "name": "start_timer", "content": 600},
                 {"role": "assistant", "content": "Timer set for 10 minutes."},
             ],
             [
@@ -65,25 +65,25 @@ def main(test_size, push_to_hub, repo_id):
             [
                 {"role": "user", "content": "Is the air clean today in Lisbon?"},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_air_quality_index", "arguments": {"location": "Lisbon, Portugal"}}}]},
-                {"role": "tool", "name": "get_air_quality", "content": "53"},
+                {"role": "tool", "name": "get_air_quality", "content": 53},
                 {"role": "assistant", "content": "The air quality is moderate."},
             ],
             [
                 {"role": "user", "content": "Play some music."},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "play_music", "arguments": {"title": "Take Five", "artist": "Dave Brubeck"}}}]},
-                {"role": "tool", "name": "play_music", "content": "OK"},
+                {"role": "tool", "name": "play_music", "content": {"status": "Playing"}},
                 {"role": "assistant", "content": "Enjoy the jazz tunes!"},
             ],
             [
                 {"role": "user", "content": "What's the weather like tomorrow in Berlin?"},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "get_weather_forecast", "arguments": {"city": "Berlin", "date": "2025-06-16"}}}]},
-                {"role": "tool", "name": "get_weather_forecast", "content": "Partly cloudy, 22°C"},
+                {"role": "tool", "name": "get_weather_forecast", "content": {"temperature": 22, "condition": "partly cloudy"}},
                 {"role": "assistant", "content": "Tomorrow in Berlin will be partly cloudy with a high of 22°C."}
             ],
             [
                 {"role": "user", "content": "Turn on the living room lights."},
                 {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "control_light", "arguments": {"room": "living room", "state": "on"}}}]},
-                {"role": "tool", "name": "control_light", "content": "Lights turned on"},
+                {"role": "tool", "name": "control_light", "content": {"state": "on"}},
                 {"role": "assistant", "content": "The living room lights are now on."}
             ],
             [
