@@ -618,9 +618,12 @@ class SFTTrainer(Trainer):
                         processed_prompt = processing_class(
                             text=example["prompt"],
                             add_special_tokens=add_special_tokens,
+                            **example.get("chat_template_kwargs", {}),
                         )
                         processed = processing_class(
-                            text=example["prompt"] + example["completion"], add_special_tokens=add_special_tokens
+                            text=example["prompt"] + example["completion"],
+                            add_special_tokens=add_special_tokens,
+                            **example.get("chat_template_kwargs", {}),
                         )
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
