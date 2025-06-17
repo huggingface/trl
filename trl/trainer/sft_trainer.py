@@ -670,7 +670,7 @@ class SFTTrainer(Trainer):
                             processed = {
                                 "input_ids": processing_class.apply_chat_template(
                                     example["messages"], **example.get("chat_template_kwargs", {})
-                                ).input_ids
+                                )
                             }
                         else:
                             processed = {"input_ids": processing_class(text=example[dataset_text_field]).input_ids}
