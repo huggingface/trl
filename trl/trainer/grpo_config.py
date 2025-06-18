@@ -85,6 +85,10 @@ class GRPOConfig(TrainingArguments):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
+        generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Additional keyword arguments to pass to the model's `generate` method. If `None`, it defaults to an empty
+            dictionary. This can be used to customize the generation behavior, such as setting `supress_tokens`,
+            `num_beams`, etc. These generation arguments will override the default recommended generation arguments.
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
 
@@ -317,6 +321,15 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    generation_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to the model's `generate` method. If `None`, it defaults to "
+            "an empty dictionary. This can be used to customize the generation behavior, such as setting "
+            "`supress_tokens`, `num_beams`, etc. These generation arguments will override the default recommended "
+            "generation arguments."
         },
     )
     repetition_penalty: float = field(

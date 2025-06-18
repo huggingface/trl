@@ -507,7 +507,22 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.generation_kwargs = args.generation_kwargs or {}
 
+        if self.generation_kwargs:
+                default_args = [
+                    ("top_p", self.top_p),
+                    ("top_k", self.top_k),
+                    ("temperature", self.temperature),
+                    ("min_p", self.min_p),
+                    ("repetition_penalty", self.repetition_penalty),
+                    ("max_new_tokens", self.max_completion_length),
+                    ("do_sample", True),
+                ]
+                for key, value in default_args:
+                    if key not in self.generation_kwargs:
+                        self.generation_kwargs[key] = value
+            
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -671,19 +686,13 @@ class GRPOTrainer(Trainer):
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
-        else:
+        else:    
             self.generation_config = GenerationConfig(
-                max_new_tokens=self.max_completion_length,
-                do_sample=True,
                 pad_token_id=processing_class.pad_token_id,
                 bos_token_id=processing_class.bos_token_id,
                 eos_token_id=processing_class.eos_token_id,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                min_p=self.min_p,
-                repetition_penalty=self.repetition_penalty,
                 cache_implementation=args.cache_implementation,
+                **self.generation_kwargs,
             )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -1052,13 +1061,9 @@ class GRPOTrainer(Trainer):
                     guided_decoding = None
                 sampling_params = SamplingParams(
                     n=1,  # vLLM on each GPU generates only 1 in colocate mode
-                    repetition_penalty=self.repetition_penalty,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    top_k=-1 if self.top_k is None else self.top_k,
-                    min_p=0.0 if self.min_p is None else self.min_p,
                     max_tokens=self.max_completion_length,
                     guided_decoding=guided_decoding,
+                    **self.generation_kwargs,
                 )
 
                 if self.vllm_tensor_parallel_size > 1:

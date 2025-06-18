@@ -223,6 +223,21 @@ class GRPOTrainerTester(unittest.TestCase):
             train_dataset=dataset,
         )
 
+    def test_init_with_generation_kwargs(self):
+        # Test that GRPOTrainer can be instantiated with generation_kwargs
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        generation_kwargs = {"do_sample": True, "top_k": 50}
+        training_args = GRPOConfig(
+            generation_kwargs=generation_kwargs,
+            bf16=False,
+        )
+        GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            train_dataset=dataset,
+            args=training_args,
+        )
+
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
