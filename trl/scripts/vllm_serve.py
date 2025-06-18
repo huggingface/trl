@@ -181,7 +181,7 @@ class ScriptArguments:
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
-        enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
+        enforce_eager (`bool`, *optional*, defaults to `False`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
         kv_cache_dtype (`str`, *optional*, defaults to `"auto"`):
@@ -249,7 +249,7 @@ class ScriptArguments:
         },
     )
     enforce_eager: Optional[bool] = field(
-        default=None,
+        default=False,
         metadata={
             "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
             "execute the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager "
