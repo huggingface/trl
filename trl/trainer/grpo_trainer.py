@@ -1326,7 +1326,6 @@ class GRPOTrainer(Trainer):
                         ref_per_token_logps = self._get_per_token_logps_and_entropies(
                             self.model, input_ids, attention_mask, logits_to_keep
                         )["logps"]
-
         # get the last hidden state of the model
         last_hidden_state = self._get_last_hidden_state(unwrapped_model, input_ids, attention_mask, logits_to_keep)
 
@@ -1400,7 +1399,7 @@ class GRPOTrainer(Trainer):
                         ref_per_token_logps = self._get_per_token_logps_and_entropies(
                             self.model, input_ids, attention_mask, logits_to_keep
                         )["logps"]
-                    
+
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )

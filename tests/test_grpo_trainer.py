@@ -850,7 +850,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
-                filter_on_entropy=True,
                 token_entropy_percentile_threshold=0.8,
             )
             trainer = GRPOTrainer(
