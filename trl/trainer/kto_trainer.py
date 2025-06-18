@@ -1687,7 +1687,7 @@ class KTOTrainer(Trainer):
             tags = set()
         elif isinstance(tags, str):
             tags = {tags}
-        else:                    
+        else:
             tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
