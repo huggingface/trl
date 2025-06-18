@@ -46,7 +46,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10)
+training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO")
 trainer = DPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
@@ -113,7 +113,6 @@ accelerate launch trl/scripts/dpo.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback_binarized \
     --num_train_epochs 1 \
-    --logging_steps 25 \
     --output_dir Qwen2-0.5B-DPO
 ```
 
@@ -195,8 +194,8 @@ First install `unsloth` according to the [official documentation](https://github
 + model = FastLanguageModel.get_peft_model(model)
   train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-- training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10)
-+ training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", logging_steps=10, bf16=True)
+- training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO")
++ training_args = DPOConfig(output_dir="Qwen2-0.5B-DPO", bf16=True)
   trainer = DPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
   trainer.train()
 

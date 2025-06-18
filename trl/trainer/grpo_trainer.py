@@ -43,7 +43,6 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
-from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
@@ -51,7 +50,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -557,15 +556,13 @@ class GRPOTrainer(Trainer):
         if self.beta == 0.0:
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
-        elif is_deepspeed_zero3_enabled() or self.is_fsdp_enabled:
-            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
             self.ref_model = None
         else:
-            # If PEFT configuration is not provided, create a reference model based on the initial model.
-            self.ref_model = create_reference_model(model)
+            # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
+            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
@@ -1144,6 +1141,20 @@ class GRPOTrainer(Trainer):
             else:
                 old_per_token_logps = None
 
+            # Compute the per-token log probabilities for the reference model
+            if self.beta != 0.0:
+                if self.ref_model is not None:
+                    ref_per_token_logps = self._get_per_token_logps(
+                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                    )
+                else:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps = self._get_per_token_logps(
+                            self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                        )
+            else:
+                ref_per_token_logps = None
+
         # Decode the generated completions
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
@@ -1269,6 +1280,7 @@ class GRPOTrainer(Trainer):
             "completion_mask": completion_mask,
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
+            "ref_per_token_logps": ref_per_token_logps,
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1278,20 +1290,6 @@ class GRPOTrainer(Trainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-
-        # Compute the KL divergence between the model and the reference model
-        ref_per_token_logps = None
-        if self.beta != 0.0:
-            with torch.no_grad():
-                if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps(
-                        self.ref_model, input_ids, attention_mask, logits_to_keep
-                    )
-                else:
-                    with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps(
-                            self.model, input_ids, attention_mask, logits_to_keep
-                        )
 
         # get the last hidden state of the model
         last_hidden_state = self._get_last_hidden_state(unwrapped_model, input_ids, attention_mask, logits_to_keep)
@@ -1305,7 +1303,7 @@ class GRPOTrainer(Trainer):
             advantages=inputs["advantages"],
             bias=unwrapped_model.lm_head.bias,
             old_per_token_logps=inputs["old_per_token_logps"],
-            ref_per_token_logps=ref_per_token_logps,
+            ref_per_token_logps=inputs["ref_per_token_logps"],
         )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
@@ -1341,16 +1339,7 @@ class GRPOTrainer(Trainer):
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
-            with torch.no_grad():
-                if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps(
-                        self.ref_model, input_ids, attention_mask, logits_to_keep
-                    )
-                else:
-                    with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps(
-                            self.model, input_ids, attention_mask, logits_to_keep
-                        )
+            ref_per_token_logps = inputs["ref_per_token_logps"]
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
@@ -1492,9 +1481,13 @@ class GRPOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or set()
-        if isinstance(tags, str):
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
             tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")

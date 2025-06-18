@@ -26,7 +26,6 @@ python examples/scripts/bco.py \
     --learning_rate 1e-6 \
     --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
-    --logging_steps 0.01 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir=bco-aligned-model \
@@ -48,7 +47,6 @@ python examples/scripts/bco.py \
     --learning_rate 1e-6 \
     --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
-    --logging_steps 0.01 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir=bco-aligned-model-lora \

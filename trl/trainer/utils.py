@@ -1775,7 +1775,7 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
         per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
     else:
-        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficent approach
+        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
         per_token_logps = []
         for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
             row_logps = F.log_softmax(row_logits, dim=-1)
