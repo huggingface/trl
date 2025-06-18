@@ -36,7 +36,7 @@ dataset = load_dataset("trl-lib/tldr", split="train")
 def reward_len(completions, **kwargs):
     return [-abs(20 - len(completion)) for completion in completions]
 
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO", logging_steps=10)
+training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
     reward_funcs=reward_len,
@@ -306,7 +306,6 @@ def main():
         per_device_train_batch_size=4,
         bf16=True,
         gradient_checkpointing=True,
-        logging_steps=10,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )

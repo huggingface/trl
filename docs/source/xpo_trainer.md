@@ -35,7 +35,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 judge = PairRMJudge()
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO", logging_steps=10)
+training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO")
 trainer = XPOTrainer(
     model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
@@ -124,7 +124,6 @@ python examples/scripts/xpo.py \
     --judge pair_rm \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --logging_steps 25 \
     --output_dir Qwen2.5-0.5B-XPO-PairRM \
     --warmup_ratio 0.1 \
     --push_to_hub
