@@ -24,7 +24,6 @@ python trl/scripts/sft.py \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eos_token '<|im_end|>' \
-    --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 100 \
     --output_dir Qwen2-0.5B-SFT \
@@ -41,7 +40,6 @@ python trl/scripts/sft.py \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eos_token '<|im_end|>' \
-    --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 100 \
     --use_peft \
