@@ -26,7 +26,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<iframe src="https://trl-lib-trackio.hf.space/?project=fake-training&metrics=train/loss,train/mean_token_accuracy&sidebar=hidden" width=1600 height=500 frameBorder="0"></iframe>
+<iframe src="https://trl-lib-trackio.hf.space/?project=huggingface&metrics=train/loss,train/mean_token_accuracy&sidebar=hidden" width=700 height=600 frameBorder="0"></iframe>
 
 You can also construct a model outside of the trainer and pass it as follows:
 
