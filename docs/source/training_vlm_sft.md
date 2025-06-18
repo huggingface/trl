@@ -253,7 +253,6 @@ training_args = SFTConfig(
     gradient_accumulation_steps=4,                                  # Number of steps before performing a backward/update pass to accumulate gradients. multi-image -> gradient_accumulation_steps=1
     gradient_checkpointing=True,                                    # Enable gradient checkpointing to reduce memory usage during training.
     optim="adamw_torch_fused",                                      # Use the fused AdamW optimizer for better performance.
-    logging_steps=10,                                               # Frequency of logging training progress (log every 10 steps).
     save_strategy="epoch",                                          # Save checkpoints at the end of each epoch.
     learning_rate=2e-05,                                            # Learning rate for training.
     bf16=True,                                                      # Enable bfloat16 precision for training to save memory and speed up computations.
