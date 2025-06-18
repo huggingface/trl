@@ -230,13 +230,12 @@ Depending on the model size and the overall GPU memory requirements for training
 
 We provide a small script to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation. 
 
-<script
-	type="module"
-	src="https://gradio.s3-us-west-2.amazonaws.com/5.33.2/gradio.js"
-></script>
-
-<gradio-app src="https://trl-lib-recommend-vllm-memory.hf.space"></gradio-app>
-
+<iframe
+	src="https://trl-lib-recommend-vllm-memory.hf.space"
+	frameborder="0"
+	width="850"
+	height="450"
+></iframe>
 
 > Note: If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
 
