@@ -51,8 +51,9 @@ class BestOfNSampler:
             n_candidates (`int`):
                 Number of candidates to return for each query
             generation_config (`GenerationConfig`, *optional*):
-                Generation config passed to the underlying model's `generate` method.
-                See `GenerationConfig` (https://huggingface.co/docs/transformers/v4.29.1/en/main_classes/text_generation#transformers.GenerationConfig) for more details
+                Generation config passed to the underlying model's `generate` method. See `GenerationConfig`
+                (https://huggingface.co/docs/transformers/v4.29.1/en/main_classes/text_generation#transformers.GenerationConfig)
+                for more details
         """
         if seed is not None:
             set_seed(seed)
@@ -87,14 +88,15 @@ class BestOfNSampler:
 
         Args:
             tokenized_query (`list[int]` or `torch.Tensor` or `list[torch.Tensor]` or `list[int]`):
-                represents either a single tokenized query (a single tensor or a list of integers) or a batch of tokenized queries (a list of tensors or a list of lists of integers)
+                represents either a single tokenized query (a single tensor or a list of integers) or a batch of
+                tokenized queries (a list of tensors or a list of lists of integers)
             skip_special_tokens (`bool`):
                 Whether to remove the special tokens from the output
             device (`str` or `torch.device`, *optional*):
                 The device on which the model will be loaded
             **generation_kwargs (`dict`, *optional*):
-                Additional keyword arguments passed along to the underlying model's `generate` method.
-                This is used to override generation config
+                Additional keyword arguments passed along to the underlying model's `generate` method. This is used to
+                override generation config
 
         Returns:
             list[list[str]]: A list of lists of generated texts

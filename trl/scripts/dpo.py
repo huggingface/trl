@@ -14,6 +14,7 @@
 
 """
 # Full training
+```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
     --dataset_streaming \
@@ -28,8 +29,10 @@ python trl/scripts/dpo.py \
     --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns
     --report_to wandb
+```
 
 # LoRA:
+```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
     --dataset_streaming \
@@ -47,6 +50,7 @@ python trl/scripts/dpo.py \
     --lora_r 32 \
     --lora_alpha 16
     --report_to wandb
+```
 """
 
 import argparse

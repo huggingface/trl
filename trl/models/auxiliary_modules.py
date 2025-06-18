@@ -42,9 +42,9 @@ class MLP(nn.Module):
 
 class AestheticScorer(torch.nn.Module):
     """
-    This model attempts to predict the aesthetic score of an image. The aesthetic score
-    is a numerical approximation of how much a specific image is liked by humans on average.
-    This is from https://github.com/christophschuhmann/improved-aesthetic-predictor
+    This model attempts to predict the aesthetic score of an image. The aesthetic score is a numerical approximation of
+    how much a specific image is liked by humans on average. This is from
+    https://github.com/christophschuhmann/improved-aesthetic-predictor
     """
 
     def __init__(self, *, dtype, model_id, model_filename):
