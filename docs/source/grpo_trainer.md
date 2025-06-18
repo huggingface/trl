@@ -228,7 +228,7 @@ training_args = GRPOConfig(
 
 Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
 
-We provide a small script to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation. 
+We provide a [small script](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
 
 <iframe
 	src="https://trl-lib-recommend-vllm-memory.hf.space"
@@ -237,7 +237,7 @@ We provide a small script to help estimate the recommended GPU memory utilizatio
 	height="450"
 ></iframe>
 
-> Note: If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
+If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
 
 </Tip>
 
