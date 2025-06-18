@@ -2,31 +2,31 @@
 
 [![](https://img.shields.io/badge/All_models-SFT-blue)](https://huggingface.co/models?other=sft,trl) [![](https://img.shields.io/badge/smol_course-Chapter_1-yellow)](https://github.com/huggingface/smol-course/tree/main/1_instruction_tuning)
 
-Supervised fine-tuning (SFT) is the most common step in post-training foundation models, and also one of the most effective. In TRL, we provide a simple API to train models with SFT in a few lines of code; for a complete training script, check out [`trl/scripts/sft.py`](https://github.com/huggingface/trl/tree/main/trl/scripts/sft.py). Experimental support for Vision Language Models is also included in [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/tree/main/examples/scripts/sft_vlm.py).
+## Overview
+
+TRL supports the Supervised Fine-Tuning (SFT) trainer for training language models.
+Supervised Fine-Tuning (SFT) is typically the first stage of alignment after pretraining. In this stage, the model is fine-tuned on a curated dataset enabling it to learn how to generate helpful, safe, and high-quality outputs.
+
+This post-training method was contributed by [Younes Belkada](https://huggingface.co/ybelkada).
 
 ## Quickstart
 
-If you have a dataset hosted on the 🤗 Hub, you can easily fine-tune your SFT model using [`SFTTrainer`] from TRL. Let us assume your dataset is `imdb`, the text you want to predict is inside the `text` field of the dataset, and you want to fine-tune the `facebook/opt-350m` model.
-The following code-snippet takes care of all the data pre-processing and training for you:
+This example demonstrates how to train a language model using the [`SFTTrainer`] from TRL. We train a [Qwen 3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model on the [Stanford IMDB dataset](https://huggingface.co/datasets/stanfordnlp/imdb) to predict movie reviews.
 
 ```python
 from datasets import load_dataset
-from trl import SFTConfig, SFTTrainer
+from trl import SFTTrainer
 
 dataset = load_dataset("stanfordnlp/imdb", split="train")
 
-training_args = SFTConfig(
-    max_length=512,
-    output_dir="/tmp",
-)
 trainer = SFTTrainer(
-    "facebook/opt-350m",
+    "Qwen/Qwen3-0.6B",
     train_dataset=dataset,
-    args=training_args,
 )
 trainer.train()
 ```
-Make sure to pass the correct value for `max_length` as the default value will be set to `min(tokenizer.model_max_length, 1024)`.
+
+<iframe src="https://trl-lib-trackio.hf.space/?project=fake-training&metrics=train/loss,train/mean_token_accuracy&sidebar=hidden" width=1600 height=500 frameBorder="0"></iframe>
 
 You can also construct a model outside of the trainer and pass it as follows:
 
