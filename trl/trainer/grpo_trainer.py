@@ -510,19 +510,19 @@ class GRPOTrainer(Trainer):
         self.generation_kwargs = args.generation_kwargs or {}
 
         if self.generation_kwargs:
-                default_args = [
-                    ("top_p", self.top_p),
-                    ("top_k", self.top_k),
-                    ("temperature", self.temperature),
-                    ("min_p", self.min_p),
-                    ("repetition_penalty", self.repetition_penalty),
-                    ("max_new_tokens", self.max_completion_length),
-                    ("do_sample", True),
-                ]
-                for key, value in default_args:
-                    if key not in self.generation_kwargs:
-                        self.generation_kwargs[key] = value
-            
+            default_args = [
+                ("top_p", self.top_p),
+                ("top_k", self.top_k),
+                ("temperature", self.temperature),
+                ("min_p", self.min_p),
+                ("repetition_penalty", self.repetition_penalty),
+                ("max_new_tokens", self.max_completion_length),
+                ("do_sample", True),
+            ]
+            for key, value in default_args:
+                if key not in self.generation_kwargs:
+                    self.generation_kwargs[key] = value
+
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
 
@@ -686,7 +686,7 @@ class GRPOTrainer(Trainer):
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
-        else:    
+        else:
             self.generation_config = GenerationConfig(
                 pad_token_id=processing_class.pad_token_id,
                 bos_token_id=processing_class.bos_token_id,
