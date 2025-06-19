@@ -73,7 +73,7 @@ if is_wandb_available():
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
 
-def prune_none_values(example: TListOrMapping) -> TListOrMapping:
+def remove_none_values(example: TListOrMapping) -> TListOrMapping:
     """
     Recursively removes entries with `None` values from a nested structure (list or dictionary).
 
@@ -88,15 +88,15 @@ def prune_none_values(example: TListOrMapping) -> TListOrMapping:
     ...           "ab": 1},
     ...     "b": "my_string",
     ... }]
-    >>> prune_none_values(example)
+    >>> remove_none_values(example)
     [{'a': {'ab': 1}, 'b': 'my_string'}]
     ```
     """
     if isinstance(example, list):
-        return [prune_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
+        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
     elif isinstance(example, Mapping):
         return {
-            key: prune_none_values(value) if isinstance(value, (dict, list)) else value
+            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
             for key, value in example.items()
             if value is not None
         }
@@ -676,7 +676,7 @@ class SFTTrainer(Trainer):
                 def tokenize(example, processing_class, dataset_text_field):
                     # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean
                     # them from sampled data.
-                    example = prune_none_values(example)
+                    example = remove_none_values(example)
                     tools = example.get("tools", None)
 
                     if "prompt" in example:  # prompt-completion case
