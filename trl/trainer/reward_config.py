@@ -43,8 +43,8 @@ class RewardConfig(TrainingArguments):
             Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
             https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if
-            the dataset is pretokenized.
+            Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if the
+            dataset is pretokenized.
         num_print_samples (`int`, *optional*, defaults to `4`):
             The number of reward predictions to print during evaluation. Use `0` if no reward predictions
             should be logged. Use `-1` if predictions for the entire evaluation dataset should be logged.
