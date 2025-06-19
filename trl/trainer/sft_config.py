@@ -49,7 +49,8 @@ class SFTConfig(TrainingArguments):
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         eos_token (`str` or `None`, *optional*, defaults to `None`):
-            Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`.
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to
+            `processing_class.eos_token`.
         pad_token (`int` or `None`, *optional*, defaults to `None`):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
@@ -78,8 +79,8 @@ class SFTConfig(TrainingArguments):
             Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
             only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
             `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
-            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
-            the full sequence for [language modeling](#language-modeling) datasets.
+            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
+            sequence for [language modeling](#language-modeling) datasets.
         assistant_only_loss (`bool`, *optional*, defaults to `False`):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed
             only on the assistant, which is supported only for [conversational](#conversational) datasets. If `False`,

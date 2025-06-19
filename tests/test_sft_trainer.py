@@ -632,7 +632,8 @@ class SFTTrainerTester(unittest.TestCase):
         data_collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, mlm=False)
 
         text1 = """\n\n### Instructions:\nHello all this should be masked\n\n### Response:\nI have not been masked correctly."""
-        text2 = """\n\n### Instructions:\nThis is another longer text that should also be masked. This text is significantly longer than the previous one.\n\n### Response:\nI have not been masked correctly."""
+        text2 = """\n\n### Instructions:\nThis is another longer text that should also be masked. This text is significantly longer than
+the previous one.\n\n### Response:\nI have not been masked correctly."""
 
         encoded_text1 = tokenizer(text1)
         encoded_text2 = tokenizer(text2)
@@ -657,7 +658,8 @@ class SFTTrainerTester(unittest.TestCase):
             mlm=False,
         )
 
-        text = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked too.### Assistant: I should not be masked too."""
+        text = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked
+too.### Assistant: I should not be masked too."""
         encoded_text = self.tokenizer(text)
 
         examples = [encoded_text]
@@ -682,7 +684,8 @@ class SFTTrainerTester(unittest.TestCase):
         )
 
         text1 = """### Human: Hello all this should be masked.### Assistant: I should not be masked."""
-        text2 = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked too.### Assistant: I should not be masked too."""
+        text2 = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked
+too.### Assistant: I should not be masked too."""
         encoded_text1 = tokenizer(text1)
         encoded_text2 = tokenizer(text2)
 
@@ -1023,7 +1026,12 @@ class SFTTrainerTester(unittest.TestCase):
             )
             processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
 
-            processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
+            processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious
+user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's
+questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for
+item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image'
+%}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if
+add_generation_prompt %}ASSISTANT: {% endif %}"""
 
             def collate_fn(examples):
                 # Get the texts and images, and apply the chat template
