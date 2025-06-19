@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """
+# Full training
 ```
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \

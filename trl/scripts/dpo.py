@@ -13,6 +13,7 @@
 # limitations under the License.
 
 """
+# Full training
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \

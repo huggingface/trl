@@ -83,6 +83,12 @@ def setup_chat_format(
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
     embedding layer of the model based on the new special tokens.
 
+    <Tip warning="true">
+
+    We recommend using [`clone_chat_template`] instead of this function.
+
+    </Tip>
+
     If the model already has a chat template, this will throw an error. If you want to overwrite it, please set
     `tokenizer.chat_template` to `None`.
 
@@ -93,8 +99,10 @@ def setup_chat_format(
         resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
-        model (`~transformers.PreTrainedModel`): The modified model. tokenizer (`~transformers.PreTrainedTokenizer`):
-        The modified tokenizer.
+        model (`~transformers.PreTrainedModel`):
+            The modified model.
+        tokenizer (`~transformers.PreTrainedTokenizer`):
+            The modified tokenizer.
     """
     # check if model already had a chat template
     if tokenizer.chat_template is not None:

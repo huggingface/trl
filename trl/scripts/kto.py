@@ -16,6 +16,7 @@
 Run the KTO training script with the commands below. In general, the optimal configuration for KTO will be similar to
 that of DPO.
 
+# Full training:
 ```bash
 python trl/scripts/kto.py \
     --dataset_name trl-lib/kto-mix-14k \

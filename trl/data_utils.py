@@ -307,7 +307,6 @@ def maybe_unpair_preference_dataset(
     ...     "chosen": [" blue.", "in the sky."],
     ...     "rejected": [" green.", " in the sea."],
     ... }
-
     >>> dataset = Dataset.from_dict(dataset_dict)
     >>> dataset = unpair_preference_dataset(dataset)
     >>> dataset
