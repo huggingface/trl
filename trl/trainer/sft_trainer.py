@@ -668,9 +668,11 @@ class SFTTrainer(Trainer):
                 def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
-                            prompt_ids = processing_class.apply_chat_template(example["prompt"])
+                            prompt_ids = processing_class.apply_chat_template(
+                                example["prompt"], **example.get("chat_template_kwargs", {})
+                            )
                             prompt_completion_ids = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"]
+                                example["prompt"] + example["completion"], **example.get("chat_template_kwargs", {})
                             )
                         else:
                             prompt_ids = processing_class(text=example["prompt"]).input_ids
@@ -693,7 +695,7 @@ class SFTTrainer(Trainer):
                     else:  # language modeling case
                         if is_conversational(example):
                             processed = processing_class.apply_chat_template(
-                                example["messages"], return_dict=True, return_assistant_tokens_mask=assistant_only_loss
+                                example["messages"], return_dict=True, return_assistant_tokens_mask=assistant_only_loss, **example.get("chat_template_kwargs", {})
                             )
                             if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
                                 raise RuntimeError(
