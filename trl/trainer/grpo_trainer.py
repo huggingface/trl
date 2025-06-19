@@ -506,21 +506,16 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
-        self.generation_kwargs = args.generation_kwargs or {}
-
-        if self.generation_kwargs:
-            default_args = [
-                ("top_p", self.top_p),
-                ("top_k", self.top_k),
-                ("temperature", self.temperature),
-                ("min_p", self.min_p),
-                ("repetition_penalty", self.repetition_penalty),
-                ("max_new_tokens", self.max_completion_length),
-                ("do_sample", True),
-            ]
-            for key, value in default_args:
-                if key not in self.generation_kwargs:
-                    self.generation_kwargs[key] = value
+        self.generation_kwargs = {
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "temperature": self.temperature,
+            "min_p": self.min_p,
+            "repetition_penalty": self.repetition_penalty,
+            "max_new_tokens": self.max_completion_length,
+            "do_sample": True,
+        }
+        self.generation_kwargs.update(args.generation_kwargs)
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
