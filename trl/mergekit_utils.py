@@ -40,8 +40,8 @@ class MergeConfig:
     r"""
     Configuration class for merging two models using `mergekit`.
 
-    This class provides a structured way to configure and generate merge configurations for various merge methods,
-    such as `linear`, `ties`, `dare_ties`, and `slerp`.
+    This class provides a structured way to configure and generate merge configurations for various merge methods, such
+    as `linear`, `ties`, `dare_ties`, and `slerp`.
 
     Args:
         method (`str`, *optional*, defaults to `"linear"`):
@@ -54,8 +54,8 @@ class MergeConfig:
 
     Note:
 
-        For more details about the merge methods and how they are implemented, see the
-        [MergeKit GitHub repository](https://github.com/arcee-ai/mergekit?tab=readme-ov-file#merge-methods).
+        For more details about the merge methods and how they are implemented, see the [MergeKit GitHub
+        repository](https://github.com/arcee-ai/mergekit?tab=readme-ov-file#merge-methods).
 
     Attributes:
         method (`str`): The merge method to use.
