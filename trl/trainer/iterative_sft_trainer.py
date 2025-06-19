@@ -360,6 +360,13 @@ class IterativeSFTTrainer(Trainer):
                 "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
             )
 
+        # Convert Column to list if not already
+        input_ids = input_ids[:] if input_ids is not None else None
+        attention_mask = attention_mask[:] if attention_mask is not None else None
+        labels = labels[:] if labels is not None else None
+        texts = texts[:] if texts is not None else None
+        texts_labels = texts_labels[:] if texts_labels is not None else None
+
         input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(
             input_ids, attention_mask, labels, texts, texts_labels
         )
