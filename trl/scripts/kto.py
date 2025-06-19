@@ -13,9 +13,11 @@
 # limitations under the License.
 
 """
-Run the KTO training script with the commands below. In general, the optimal configuration for KTO will be similar to that of DPO.
+Run the KTO training script with the commands below. In general, the optimal configuration for KTO will be similar to
+that of DPO.
 
 # Full training:
+```bash
 python trl/scripts/kto.py \
     --dataset_name trl-lib/kto-mix-14k \
     --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
@@ -24,14 +26,16 @@ python trl/scripts/kto.py \
     --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
     --output_dir=kto-aligned-model \
     --warmup_ratio 0.1 \
     --report_to wandb \
     --bf16 \
     --logging_first_step
+```
 
+# QLoRA:
+```bash
 # QLoRA:
 python trl/scripts/kto.py \
     --dataset_name trl-lib/kto-mix-14k \
@@ -41,7 +45,6 @@ python trl/scripts/kto.py \
     --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
     --output_dir=kto-aligned-model-lora \
     --warmup_ratio 0.1 \
@@ -53,6 +56,7 @@ python trl/scripts/kto.py \
     --lora_target_modules=all-linear \
     --lora_r=16 \
     --lora_alpha=16
+```
 """
 
 import argparse
