@@ -14,6 +14,7 @@
 
 import os
 import warnings
+from pathlib import Path
 from typing import Callable, Optional, Union
 
 import torch
@@ -61,7 +62,7 @@ class IterativeSFTTrainer(Trainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments in
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         args ([`IterativeSFTConfig`], *optional*, defaults to `None`):
@@ -88,7 +89,7 @@ class IterativeSFTTrainer(Trainer):
         truncation_mode (`str`, *optional*, deprecated):
             The truncation mode to use. Use `args.truncation_mode` instead.
         optimize_device_cache (`bool`, *optional*, deprecated):
-            Whether to optimize CUDA cache. Use `args.optimize_device_cache` instead.
+            Whether to optimize accelerator cache. Use `args.optimize_device_cache` instead.
     """
 
     _tag_names = ["trl", "iterative-sft"]
@@ -359,6 +360,13 @@ class IterativeSFTTrainer(Trainer):
                 "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
             )
 
+        # Convert Column to list if not already
+        input_ids = input_ids[:] if input_ids is not None else None
+        attention_mask = attention_mask[:] if attention_mask is not None else None
+        labels = labels[:] if labels is not None else None
+        texts = texts[:] if texts is not None else None
+        texts_labels = texts_labels[:] if texts_labels is not None else None
+
         input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(
             input_ids, attention_mask, labels, texts, texts_labels
         )
@@ -455,6 +463,15 @@ class IterativeSFTTrainer(Trainer):
 
                 self.log(logs)
 
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -480,12 +497,18 @@ class IterativeSFTTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         model_card = generate_model_card(
             base_model=base_model,

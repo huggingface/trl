@@ -44,6 +44,7 @@ from transformers import (
     is_comet_available,
 )
 from transformers.utils import (
+    ModelOutput,
     is_peft_available,
     is_rich_available,
     is_torch_mlu_available,
@@ -294,10 +295,16 @@ class DataCollatorForChatML:
                     add_special_tokens=False,
                 )
                 input_ids.append(tokenized_message["input_ids"])
-                attention_mask.append(tokenized_message["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(tokenized_message["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
             else:
                 input_ids.append(example["input_ids"])
-                attention_mask.append(example["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(example["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(example["input_ids"]))
 
             tokenized_prompt = self.tokenizer(
                 formatted_prompt,
@@ -441,12 +448,19 @@ def pad(
             A single tensor containing the padded tensors.
 
     Examples:
-        >>> import torch >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])]) tensor([[1, 2, 3],
-                [4, 5, 0]])
-        >>> pad([torch.tensor([[1, 2], [3, 4]]), torch.tensor([[5, 6]])]) tensor([[[1, 2],
-                [3, 4]],
+    ```python
+    >>> import torch
 
-                [[5, 6], [0, 0]]])
+    >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])])
+    tensor([[1, 2, 3],
+            [4, 5, 0]])
+
+    >>> pad([torch.tensor([[1, 2], [3, 4]]), torch.tensor([[5, 6]])])
+    tensor([[[1, 2],
+            [3, 4]],
+            [[5, 6],
+            [0, 0]]])
+    ```
     """
     # Determine the maximum shape for each dimension
     output_shape = np.max([t.shape for t in tensors], 0).tolist()
@@ -915,9 +929,7 @@ def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesCon
 
 
 def get_kbit_device_map() -> Optional[dict[str, int]]:
-    if is_torch_xpu_available():
-        return {"": f"xpu:{PartialState().local_process_index}"}
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available() or is_torch_xpu_available():
         return {"": PartialState().local_process_index}
     else:
         return None
@@ -951,12 +963,15 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
 def get_exp_cap(value, decimal=4):
     """
     Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow. The formula is :
-    log(value.dtype.max) E.g.
-      For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
-    ```
-    Args: value (`torch.Tensor`): The input tensor to obtain the data type decimal (`int`): The number of decimal
-    points of the output exponent cap. eg: direct calling exp(log(torch.float32.max)) will result in inf so we cap the
-    exponent to 88.7228 to avoid overflow."""
+    log(value.dtype.max) E.g. For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
+
+    Args:
+        value (`torch.Tensor`):
+            The input tensor to obtain the data type
+        decimal (`int`):
+            The number of decimal points of the output exponent cap. eg: direct calling exp(log(torch.float32.max))
+            will result in inf so we cap the exponent to 88.7228 to avoid overflow.
+    """
     vdtype_max = torch.zeros([1]).to(value.dtype) + torch.finfo(value.dtype).max
     vdtype_log_max = torch.log(vdtype_max).to(value.device)
     return torch.floor(vdtype_log_max * 10**decimal) / 10**decimal if decimal > 0 else vdtype_log_max
@@ -997,6 +1012,10 @@ class OnlineTrainerState(TrainerState):
 class OnPolicyConfig(TrainingArguments):
     r"""
     Base configuration class for on-policy trainers.
+
+    This class includes only the parameters that are specific to some on-policy training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -1053,6 +1072,26 @@ class OnPolicyConfig(TrainingArguments):
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
     """
+
+    # Parameters whose default values are overridden from TrainingArguments
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": (
+                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
+                "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
+            )
+        },
+    )
 
     run_name: Optional[str] = field(
         default=None,
@@ -1151,7 +1190,7 @@ class OnPolicyConfig(TrainingArguments):
     )
 
 
-def first_true_indices(bools: torch.Tensor, dtype=torch.long):
+def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
     """
     Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving the position of the
     first True in each "row".
@@ -1228,7 +1267,7 @@ def forward(
     model: torch.nn.Module,
     query_responses: torch.Tensor,
     pad_token_id: int,
-) -> torch.nn.Module:
+) -> ModelOutput:
     """
     Performs a forward pass through the model with the given query responses and pad token ID.
 
@@ -1241,7 +1280,7 @@ def forward(
             The token ID representing the pad token.
 
     Returns:
-        `torch.nn.Module`:
+        `ModelOutput`:
             The output of the model, including hidden states.
     """
     attention_mask = query_responses != pad_token_id
@@ -1258,7 +1297,7 @@ def forward(
 
 def prepare_deepspeed(
     model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-):
+) -> torch.nn.Module:
     """
     Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based
     on the model and batch size.
@@ -1310,7 +1349,7 @@ def prepare_deepspeed(
     return model
 
 
-def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor):
+def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
     """
     Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
 
@@ -1609,7 +1648,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
         experiment.log_table(tabular_data=table, filename=name)
 
 
-def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the left.
 
@@ -1649,31 +1688,62 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
             [5, 6, 0]])
     ```
     """
+    _, M = mask.shape
+
     # Create copy of mask and tensors
-    mask = mask.clone()
+    mask_copy = mask.clone()
     tensors = [t.clone() for t in tensors]
 
     # Shift non-zero values to the left
-    for i in range(mask.size(0)):
-        first_one_idx = torch.nonzero(mask[i])[0].item()
-        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
-        for tensor in tensors:
-            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+    first_non_zero = mask_copy.argmax(dim=1)
+    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
+    idx_roll = (pos + first_non_zero.unsqueeze(1)) % M
+    mask_roll = mask_copy.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
 
-    # Get the first column idx that is all zeros and remove every column after that
-    empty_cols = torch.sum(mask, dim=0) == 0
-    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
-    mask = mask[:, :first_empty_col]
-    for i, tensor in enumerate(tensors):
-        tensors[i] = tensor[:, :first_empty_col]
+    # Truncate trailing columns that are all zeros in mask_roll
+    col_sums = mask_roll.sum(dim=0)
+    empty_cols = col_sums == 0
+    first_empty_col = int(empty_cols.to(torch.int8).argmax()) if empty_cols.any() else M
+    flushed_mask = mask_roll[:, :first_empty_col]
+    flushed_tensors = [t[:, :first_empty_col] for t in rolled_tensors]
 
-    if not tensors:
-        return mask
-    else:
-        return mask, *tensors
+    if not flushed_tensors:
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
 
 
-def selective_log_softmax(logits, index):
+def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the right. See `flush_left` for details.
+    """
+    _, M = mask.shape
+
+    # Create copy of mask and tensors
+    mask_copy = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the right
+    flipped_mask = torch.fliplr(mask_copy)
+    first_non_zero = flipped_mask.argmax(dim=1)
+    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
+    idx_roll = (pos - first_non_zero.unsqueeze(1)) % M
+    mask_roll = mask_copy.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
+
+    # Truncate leading columns that are all zeros in mask_roll
+    col_sums = mask_roll.sum(dim=0)
+    non_empty_cols = col_sums != 0
+    first_non_empty_col = int(non_empty_cols.to(torch.int8).argmax()) if non_empty_cols.any() else M
+    flushed_mask = mask_roll[:, first_non_empty_col:]
+    flushed_tensors = [t[:, first_non_empty_col:] for t in rolled_tensors]
+
+    if not flushed_tensors:
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
+
+
+def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
 
@@ -1698,7 +1768,7 @@ def selective_log_softmax(logits, index):
         logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
         per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
     else:
-        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficent approach
+        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
         per_token_logps = []
         for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
             row_logps = F.log_softmax(row_logits, dim=-1)
@@ -1709,7 +1779,12 @@ def selective_log_softmax(logits, index):
 
 
 def print_prompt_completions_sample(
-    prompts: list[str], completions: list[str], rewards: dict[str, list[float]], step: int, num_samples: int = None
+    prompts: list[str],
+    completions: list[str],
+    rewards: dict[str, list[float]],
+    advantages: list[float],
+    step: int,
+    num_samples: int = None,
 ) -> None:
     """
     Print out a sample of model completions to the console with multiple reward metrics.
@@ -1724,6 +1799,8 @@ def print_prompt_completions_sample(
             List of completions corresponding to the prompts.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
+        advantages (`list[float]`):
+            List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
         num_samples (`int` or `None`, *optional*, defaults to `None`):
@@ -1736,16 +1813,17 @@ def print_prompt_completions_sample(
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
     >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
-    >>> print_prompt_completions_sample(prompts, completions, rewards, 42)
-    ╭────────────────────── Step 42 ───────────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │        0.12 │   0.79 │ │
-    │ ├────────────┼──────────────┼─────────────┼────────┤ │
-    │ │ The sun is │  in the sky. │        0.46 │   0.10 │ │
-    │ └────────────┴──────────────┴─────────────┴────────┘ │
-    ╰──────────────────────────────────────────────────────╯
+    >>> advantages = [0.987, 0.654]
+    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
+    ╭──────────────────────────── Step 42 ─────────────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+    ╰──────────────────────────────────────────────────────────────────╯
     ```
     """
     if not is_rich_available():
@@ -1761,6 +1839,7 @@ def print_prompt_completions_sample(
     table.add_column("Completion", style="bright_green")
     for reward_name in rewards.keys():
         table.add_column(reward_name, style="bold cyan", justify="right")
+    table.add_column("Advantage", style="bold magenta", justify="right")
 
     # Some basic input validation
     if num_samples is not None:
@@ -1775,10 +1854,11 @@ def print_prompt_completions_sample(
         prompts = [prompts[i] for i in indices]
         completions = [completions[i] for i in indices]
         rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
+        advantages = [advantages[i] for i in indices]
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
-        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values)
+        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values, f"{advantages[i]:.2f}")
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")

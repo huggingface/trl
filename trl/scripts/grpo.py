@@ -14,6 +14,8 @@
 
 import argparse
 import importlib
+import os
+import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -82,6 +84,7 @@ def main(script_args, training_args, model_args):
                 reward_funcs.append(reward_funcs_registry[func_name])
             elif "." in func_name:
                 module_path, func_name = func_name.rsplit(".", 1)
+                sys.path.insert(0, os.getcwd())
                 module = importlib.import_module(module_path)
                 reward_func = getattr(module, func_name)
                 reward_funcs.append(reward_func)

@@ -46,6 +46,8 @@ class ScriptArguments:
             Dataset split to use for training.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
             Dataset split to use for evaluation.
+        dataset_streaming (`bool`, *optional*, defaults to `False`):
+            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
@@ -64,6 +66,10 @@ class ScriptArguments:
     )
     dataset_train_split: str = field(default="train", metadata={"help": "Dataset split to use for training."})
     dataset_test_split: str = field(default="test", metadata={"help": "Dataset split to use for evaluation."})
+    dataset_streaming: bool = field(
+        default=False,
+        metadata={"help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode."},
+    )
     gradient_checkpointing_use_reentrant: bool = field(
         default=False,
         metadata={"help": "Whether to apply `use_reentrant` for gradient checkpointing."},
@@ -175,7 +181,10 @@ class TrlParser(HfArgumentParser):
         super().__init__(dataclass_types=dataclass_types, **kwargs)
 
     def parse_args_and_config(
-        self, args: Optional[Iterable[str]] = None, return_remaining_strings: bool = False
+        self,
+        args: Optional[Iterable[str]] = None,
+        return_remaining_strings: bool = False,
+        fail_with_unknown_args: bool = True,
     ) -> tuple[DataClass, ...]:
         """
         Parse command-line args and config file into instances of the specified dataclass types.
@@ -214,6 +223,11 @@ class TrlParser(HfArgumentParser):
         if return_remaining_strings:
             args_remaining_strings = output[-1]
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
+        elif fail_with_unknown_args and config_remaining_strings:
+            raise ValueError(
+                f"Unknown arguments from config file: {config_remaining_strings}. Please remove them, add them to the "
+                "dataclass, or set `fail_with_unknown_args=False`."
+            )
         else:
             return output
 

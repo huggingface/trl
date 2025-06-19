@@ -15,6 +15,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from transformers import TrainingArguments
+
 from .sft_config import SFTConfig
 
 
@@ -22,6 +24,9 @@ from .sft_config import SFTConfig
 class GKDConfig(SFTConfig):
     """
     Configuration class for [`GKDTrainer`].
+
+    This class includes only the parameters that are specific to GKD training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
 
     Args:
         temperature (`float`, *optional*, defaults to `0.9`):
@@ -46,6 +51,8 @@ class GKDConfig(SFTConfig):
             Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
             teacher-generated output).
     """
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
 
     temperature: float = field(
         default=0.9,

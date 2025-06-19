@@ -59,8 +59,12 @@ class OffloadActivations(saved_tensors_hooks):
         ValueError: if `max_fwd_stash_size` is not at least `1`.
 
     Example:
-        >>> with OffloadActivations(): >>> outputs = model(inputs, labels=labels) >>> loss = outputs.loss >>>
-        loss.backward()
+    ```python
+    >>> with OffloadActivations():
+    ...     outputs = model(inputs, labels=labels)
+    >>> loss = outputs.loss
+    >>> loss.backward()
+    ```
     """
 
     def __init__(

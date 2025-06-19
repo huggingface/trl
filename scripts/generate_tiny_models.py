@@ -29,6 +29,8 @@ from transformers import (
     CohereForCausalLM,
     DbrxConfig,
     DbrxForCausalLM,
+    DeepseekV3Config,
+    DeepseekV3ForCausalLM,
     FalconMambaConfig,
     FalconMambaForCausalLM,
     Gemma2Config,
@@ -109,6 +111,9 @@ for model_id, config_class, model_class, suffix in [
     ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),
     ("CohereForAI/aya-expanse-8b", CohereConfig, CohereForCausalLM, None),
     ("databricks/dbrx-instruct", DbrxConfig, DbrxForCausalLM, None),
+    ("deepseek-ai/DeepSeek-R1", DeepseekV3Config, DeepseekV3ForCausalLM, None),
+    # It's important to have R1-0528 as it doesn't have the same chat template
+    ("deepseek-ai/DeepSeek-R1-0528", DeepseekV3Config, DeepseekV3ForCausalLM, "0528"),
     ("tiiuae/falcon-7b-instruct", FalconMambaConfig, FalconMambaForCausalLM, None),
     ("google/gemma-2-2b-it", Gemma2Config, Gemma2ForCausalLM, None),
     ("google/gemma-7b-it", GemmaConfig, GemmaForCausalLM, None),
@@ -123,9 +128,10 @@ for model_id, config_class, model_class, suffix in [
     ("microsoft/Phi-3.5-mini-instruct", Phi3Config, Phi3ForCausalLM, None),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForCausalLM, "2.5"),
     ("Qwen/Qwen2.5-Coder-0.5B", Qwen2Config, Qwen2ForCausalLM, "2.5-Coder"),
-    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForCausalLM, None),
+    ("Qwen/Qwen3-8B", Qwen3Config, Qwen3ForCausalLM, None),
 ]:
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    revision = "refs/pr/14" if model_id == "Qwen/Qwen3-8B" else "main"  # chat template with {% generation %}
+    tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
     config = config_class(
         vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
         hidden_size=8,

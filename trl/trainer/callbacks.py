@@ -250,8 +250,8 @@ class WinRateCallback(TrainerCallback):
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*, defaults to `None`):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
-            the evaluation dataset.
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples
+            in the evaluation dataset.
         shuffle_order (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the order of the completions before judging.
         use_soft_judge (`bool`, *optional*, defaults to `False`):
@@ -525,6 +525,8 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
+    !pip install trl[mergekit]
+
     from trl.mergekit_utils import MergeConfig
     from trl import MergeModelCallback
 
@@ -542,7 +544,7 @@ class MergeModelCallback(TrainerCallback):
     ):
         if not is_mergekit_available():
             raise ImportError(
-                "MergeModelCallback requires the `mergekit` extra. To install, run `pip install trl[mergekit]`."
+                "MergeModelCallback requires the `mergekit` extra. To install, run `pip install mergekit`."
             )
         self.merge_config = merge_config or MergeConfig()
         self.merge_at_every_checkpoint = merge_at_every_checkpoint

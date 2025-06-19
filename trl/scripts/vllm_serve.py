@@ -181,11 +181,14 @@ class ScriptArguments:
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
-        enforce_eager (`bool` or `None`, *optional*, defaults to `None`):
+        enforce_eager (`bool`, *optional*, defaults to `False`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
         kv_cache_dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for KV cache. If set to `"auto"`, the dtype will default to the model data type.
+        trust_remote_code (`bool`, *optional*, defaults to `False`):
+            Whether to trust remote code when loading models. Set to `True` to allow executing code from model
+            repositories. This is required for some custom models but introduces security risks.
         log_level (`str`, *optional*, defaults to `"info"`):
             Log level for uvicorn. Possible choices: `"critical"`, `"error"`, `"warning"`, `"info"`, `"debug"`,
             `"trace"`.
@@ -246,7 +249,7 @@ class ScriptArguments:
         },
     )
     enforce_eager: Optional[bool] = field(
-        default=None,
+        default=False,
         metadata={
             "help": "Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always "
             "execute the model in eager mode. If `False` (default behavior), we will use CUDA graph and eager "
@@ -257,6 +260,13 @@ class ScriptArguments:
         default="auto",
         metadata={
             "help": "Data type to use for KV cache. If set to 'auto', the dtype will default to the model data type."
+        },
+    )
+    trust_remote_code: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to trust remote code when loading models. Set to True to allow executing code from model "
+            "repositories. This is required for some custom models but introduces security risks."
         },
     )
     log_level: str = field(
@@ -291,6 +301,7 @@ def llm_worker(
         kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+        trust_remote_code=script_args.trust_remote_code,
     )
 
     # Send ready signal to parent process
@@ -321,8 +332,16 @@ def chunk_list(lst: list, n: int) -> list[list]:
     Split list `lst` into `n` evenly distributed sublists.
 
     Example:
-        >>> chunk_list([1, 2, 3, 4, 5, 6], 2) [[1, 2, 3], [4, 5, 6]] >>> chunk_list([1, 2, 3, 4, 5, 6], 4) [[1, 2], [3,
-        4], [5], [6]] >>> chunk_list([1, 2, 3, 4, 5, 6], 8) [[1], [2], [3], [4], [5], [6], [], []]
+    ```python
+    >>> chunk_list([1, 2, 3, 4, 5, 6], 2)
+    [[1, 2, 3], [4, 5, 6]]
+
+    >>> chunk_list([1, 2, 3, 4, 5, 6], 4)
+    [[1, 2], [3, 4], [5], [6]]
+
+    >>> chunk_list([1, 2, 3, 4, 5, 6], 8)
+    [[1], [2], [3], [4], [5], [6], [], []]
+    ```
     """
     k, r = divmod(len(lst), n)
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]

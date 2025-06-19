@@ -78,8 +78,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
             - **v_head_init_strategy** (`str`, `optional`, defaults to `None`) -- The initialization strategy for the
                 `ValueHead`. Currently, the supported strategies are:
                 - **`None`** -- Initializes the weights of the `ValueHead` with a random distribution. This is the
-                  default
-                    strategy.
+                  default strategy.
                 - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
     """
 
