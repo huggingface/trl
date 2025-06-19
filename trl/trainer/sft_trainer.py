@@ -644,9 +644,11 @@ class SFTTrainer(Trainer):
                 def tokenize(example, processing_class, dataset_text_field):
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
-                            prompt_ids = processing_class.apply_chat_template(example["prompt"])
+                            prompt_ids = processing_class.apply_chat_template(
+                                example["prompt"], **example.get("chat_template_kwargs", {})
+                            )
                             prompt_completion_ids = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"]
+                                example["prompt"] + example["completion"], **example.get("chat_template_kwargs", {})
                             )
                         else:
                             prompt_ids = processing_class(text=example["prompt"]).input_ids
@@ -668,7 +670,11 @@ class SFTTrainer(Trainer):
 
                     else:  # language modeling case
                         if is_conversational(example):
-                            processed = {"input_ids": processing_class.apply_chat_template(example["messages"])}
+                            processed = {
+                                "input_ids": processing_class.apply_chat_template(
+                                    example["messages"], **example.get("chat_template_kwargs", {})
+                                )
+                            }
                         else:
                             processed = {"input_ids": processing_class(text=example[dataset_text_field]).input_ids}
                     return processed
