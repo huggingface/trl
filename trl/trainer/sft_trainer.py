@@ -711,9 +711,13 @@ class SFTTrainer(Trainer):
 
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
-                            prompt_ids = processing_class.apply_chat_template(example["prompt"], tools=tools, **example.get("chat_template_kwargs", {}))
+                            prompt_ids = processing_class.apply_chat_template(
+                                example["prompt"], tools=tools, **example.get("chat_template_kwargs", {})
+                            )
                             prompt_completion_ids = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"], tools=tools
+                                example["prompt"] + example["completion"],
+                                tools=tools,
+                                **example.get("chat_template_kwargs", {}),
                             )
                         else:
                             prompt_ids = processing_class(text=example["prompt"]).input_ids
@@ -739,7 +743,7 @@ class SFTTrainer(Trainer):
                                 example["messages"],
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                tools=tools
+                                tools=tools,
                                 **example.get("chat_template_kwargs", {}),
                             )
                             if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:

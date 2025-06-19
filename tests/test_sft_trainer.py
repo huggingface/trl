@@ -1377,9 +1377,10 @@ class SFTTrainerTester2(unittest.TestCase):
     def test_train_with_chat_template_kwargs(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+
             tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
             # The following template is a simplified version of the Qwen chat template, where an additional argument
             # `role_capital` is used to control the capitalization of roles.
@@ -1433,6 +1434,7 @@ class SFTTrainerTester2(unittest.TestCase):
     def test_train_toolcall_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", split="train")
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
