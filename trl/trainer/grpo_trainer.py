@@ -1224,7 +1224,9 @@ class GRPOTrainer(Trainer):
         else:
             completions = completions_text
 
-        # Calculate rewards for each reward function
+        # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
+        # important because rewards will be normalized per group, and completions are distributed. We will later slice
+        # rewards_per_func to extract each process's subset.
         rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
 
         # Apply weights to each reward function's output and sum
