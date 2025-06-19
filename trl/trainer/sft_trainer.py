@@ -93,11 +93,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     Examples:
     ```python
     >>> from trl import DataCollatorForLanguageModeling
+
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
-    >>> examples = [
-    ...     {"input_ids": [1, 2, 3]},
-    ...     {"input_ids": [4, 5]}
-    ... ]
+    >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
     >>> collator(examples)
     {'input_ids': tensor([[  1,  2,  3],
                           [  4,  5,  0]]),
@@ -107,10 +105,11 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                              [0, 1, 0]]),
      'labels': tensor([[   1,    2,    3],
                        [   4,    5, -100]])}
+
     >>> # With completion mask
     >>> examples = [
     ...     {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
-    ...     {"input_ids": [4, 5], "completion_mask": [0, 1]}
+    ...     {"input_ids": [4, 5], "completion_mask": [0, 1]},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[  1,  2,  3],
@@ -148,7 +147,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 position_ids = [torch.tensor(example["position_ids"]) for example in examples]
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
-        labels = [torch.tensor(example["input_ids"]) for example in examples]
+        if "labels" in examples[0]:
+            labels = [torch.tensor(example["labels"]) for example in examples]
+        else:
+            labels = [torch.tensor(example["input_ids"]) for example in examples]
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
 
@@ -212,11 +214,11 @@ class SFTTrainer(Trainer):
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
 
-            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
-              a path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
-              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
-              in `args.model_init_kwargs`.
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
@@ -238,8 +240,8 @@ class SFTTrainer(Trainer):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoTokenizer.from_pretrained`].
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
-            List of callbacks to customize the training loop. Will add those to the list of default callbacks
-            detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
+            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
@@ -247,10 +249,11 @@ class SFTTrainer(Trainer):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
-            A tuple containing the optimizer class and keyword arguments to use.
-            Overrides `optim` and `optim_args` in `args`. Incompatible with the `optimizers` argument.
+            A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
+            `args`. Incompatible with the `optimizers` argument.
 
-            Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before initializing the Trainer.
+            Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before
+            initializing the Trainer.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
@@ -644,9 +647,11 @@ class SFTTrainer(Trainer):
                 def tokenize(example, processing_class, dataset_text_field):
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
-                            prompt_ids = processing_class.apply_chat_template(example["prompt"])
+                            prompt_ids = processing_class.apply_chat_template(
+                                example["prompt"], **example.get("chat_template_kwargs", {})
+                            )
                             prompt_completion_ids = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"]
+                                example["prompt"] + example["completion"], **example.get("chat_template_kwargs", {})
                             )
                         else:
                             prompt_ids = processing_class(text=example["prompt"]).input_ids
@@ -668,7 +673,11 @@ class SFTTrainer(Trainer):
 
                     else:  # language modeling case
                         if is_conversational(example):
-                            processed = {"input_ids": processing_class.apply_chat_template(example["messages"])}
+                            processed = {
+                                "input_ids": processing_class.apply_chat_template(
+                                    example["messages"], **example.get("chat_template_kwargs", {})
+                                )
+                            }
                         else:
                             processed = {"input_ids": processing_class(text=example[dataset_text_field]).input_ids}
                     return processed
@@ -707,7 +716,7 @@ class SFTTrainer(Trainer):
         # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
-            self._signature_columns = ["input_ids", "attention_mask", "position_ids", "completion_mask"]
+            self._signature_columns = ["input_ids", "labels", "attention_mask", "position_ids", "completion_mask"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
