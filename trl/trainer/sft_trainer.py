@@ -698,7 +698,10 @@ class SFTTrainer(Trainer):
                     else:  # language modeling case
                         if is_conversational(example):
                             processed = processing_class.apply_chat_template(
-                                example["messages"], return_dict=True, return_assistant_tokens_mask=assistant_only_loss, **example.get("chat_template_kwargs", {})
+                                example["messages"],
+                                return_dict=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
+                                **example.get("chat_template_kwargs", {}),
                             )
                             if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
                                 raise RuntimeError(
