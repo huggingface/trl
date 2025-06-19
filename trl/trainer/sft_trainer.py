@@ -14,6 +14,7 @@
 
 import contextlib
 import dataclasses
+import math
 import os
 import warnings
 from collections import defaultdict
@@ -26,6 +27,7 @@ import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset, IterableDataset
 from packaging import version
+from ring_flash_attn import update_ring_flash_attn_params
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -51,6 +53,7 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import get_act_offloading_ctx_manager
+from ..models.ring_attn import register_ring_attn
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -83,9 +86,20 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             that are no in the completion.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly. The attention mask will be set to 1 for all tokens.
+            generated accordingly. The attention mask is not returned in this case.
+        return_position_ids (`bool`, *optional*, defaults to `True`):
+            If set to `True`, the position IDs will be returned in the output. This is useful for models that require
+            position IDs, such as those using FlashAttention.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
+        local_rank (`int`, *optional*, defaults to `0`):
+            Index of the current process within the context parallelism group. Only needed when using context
+            parallelism (CP). In CP, the collator splits the sequence dimension across processes, assigning each
+            process a chunk of the sequence.
+        local_world_size (`int`, *optional*, defaults to `1`):
+            Total number of processes in the context parallelism group. Set to >1 to enable CP. When CP is enabled, the
+            collator outputs `cu_seqlens` for use in context-parallel attention. When using context parallelism, you
+            must set `padding_free=True`.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
@@ -136,12 +150,15 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     padding_free: bool = False
     return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
+    local_rank: int = 0
+    local_world_size: int = 1
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
-        attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+        if not self.padding_free:
+            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
         if self.return_position_ids:
             if "position_ids" in examples[0]:
                 position_ids = [torch.tensor(example["position_ids"]) for example in examples]
@@ -151,17 +168,31 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
 
-        # Pad
+        # Pad or flatten the sequences
         output = {}
         if self.padding_free:
+            lengths = torch.tensor([len(seq) for seq in input_ids])
+            output["cu_seqlens"] = torch.cat([torch.tensor([0]), torch.cumsum(lengths, dim=0)]).to(torch.int32)
             output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
-            output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
             if self.return_position_ids:
                 output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
             output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
             if self.completion_only_loss and "completion_mask" in examples[0]:
                 completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
                 output["labels"][completion_mask == 0] = -100
+
+            # Pad to ensure that the total sequence length is divisible by the local world size, then chunk the tensors
+            # If local_rank==0 and local_world_size==1, this is a no-op.
+            total_seq_length = output["input_ids"].shape[1]
+            pad_size = (math.ceil(total_seq_length / self.local_world_size) * self.local_world_size) - total_seq_length
+            if pad_size > 0:
+                output["cu_seqlens"] = torch.cat([output["cu_seqlens"], output["cu_seqlens"][-1:] + pad_size])
+            output["input_ids"] = torch.nn.functional.pad(output["input_ids"], (0, pad_size), value=self.pad_token_id)
+            if self.return_position_ids:
+                output["position_ids"] = torch.nn.functional.pad(output["position_ids"], (0, pad_size), value=0)
+            output["labels"] = torch.nn.functional.pad(output["labels"], (0, pad_size), value=-100)
+            for key in ["input_ids", "position_ids", "labels"]:
+                output[key] = torch.chunk(output[key], self.local_world_size, dim=1)[self.local_rank]
 
         else:
             output["input_ids"] = pad(
@@ -326,7 +357,9 @@ class SFTTrainer(Trainer):
         # Data collator
         # FFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "ffd")
+        self.padding_free = (
+            args.padding_free or (args.packing and args.packing_strategy == "ffd") or args.sequence_parallel_size > 1
+        )
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -347,7 +380,7 @@ class SFTTrainer(Trainer):
             if args.per_device_train_batch_size == 1 and not args.packing:
                 warnings.warn(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
+                    "of 1 annihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
                 )
 
@@ -368,13 +401,26 @@ class SFTTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
+
+            # Register Ring Attention for Sequence Parallelism if configured
+            if args.sequence_parallel_size > 1:
+                self.cp_group = register_ring_attn(
+                    world_size=args.world_size,
+                    rank=args.process_index % args.sequence_parallel_size,
+                    sequence_parallel_degree=args.sequence_parallel_size,
+                    heads_k_stride=args.heads_k_stride,  # register_ring_attn handles default if None
+                )
+            # Create the data collator
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=pad_token_id,
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
                 # Using position_ids without flash_attn hurts the training
-                return_position_ids=model.config._attn_implementation == "flash_attention_2",
+                return_position_ids=model.config._attn_implementation == "flash_attention_2"
+                or args.sequence_parallel_size > 1,
                 pad_to_multiple_of=args.pad_to_multiple_of,
+                local_rank=args.process_index % args.sequence_parallel_size,
+                local_world_size=args.sequence_parallel_size,
             )
 
         if (
@@ -711,6 +757,11 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+
+        # Update the ring flash attention parameters if CP enabled
+        if "cu_seqlens" in inputs:
+            update_ring_flash_attn_params(inputs["cu_seqlens"], self.cp_group)
+
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
