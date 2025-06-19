@@ -47,7 +47,8 @@ class KTOConfig(TrainingArguments):
             Type of loss to use. Possible values are:
 
                 - `"kto"`: KTO loss from the [KTO](https://huggingface.co/papers/2402.01306) paper.
-                - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the
+                  [APO](https://huggingface.co/papers/2408.06266) paper.
 
         desirable_weight (`float`, *optional*, defaults to `1.0`):
             Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
@@ -61,8 +62,8 @@ class KTOConfig(TrainingArguments):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet during
-            evaluation.
+            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
+            during evaluation.
         is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
