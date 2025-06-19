@@ -134,27 +134,82 @@ preference_example = {
 
 Conversational datasets are useful for training chat models, but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
-#### Tool-calling
+## Tool Calling
 
-Some chat templates support tool calling, which allows the model to interact with external functions—called *tools*—during generation. This extends the conversational format by letting the assistant output a `"tool_calls"` field instead of a `"content"` message whenever it decides to invoke a tool.
+Some chat templates support *tool calling*, which allows the model to interact with external functions—referred to as **tools**—during generation. This extends the conversational capabilities of the model by enabling it to output a `"tool_calls"` field instead of a standard `"content"` message whenever it decides to invoke a tool.
 
-After the assistant initiates a tool call, the tool responds with its output. This may be followed by a final assistant message to continue the conversation.
+After the assistant initiates a tool call, the tool executes and returns its output. The assistant can then process this output and continue the conversation accordingly.
 
-Here’s an example of a tool-calling interaction:
+### Example of Tool Calling
+
+Here’s a simple example of a tool-calling interaction:
 
 ```python
 messages = [
     {"role": "user", "content": "Turn on the living room lights."},
-    {"role": "assistant", "tool_calls": [{"type": "function", "function": {"name": "control_light", "arguments": {"room": "living room", "state": "on"}}}]},
-    {"role": "tool", "name": "control_light", "content": "Lights turned on"},
-    {"role": "assistant", "content": "The living room lights are now on."},
+    {"role": "assistant", "tool_calls": [
+        {"type": "function", "function": {
+            "name": "control_light",
+            "arguments": {"room": "living room", "state": "on"}
+        }}]
+    },
+    {"role": "tool", "name": "control_light", "content": "The lights in the living room are now on."},
+    {"role": "assistant", "content": "Done!"}
 ]
 ```
 
-Quand tu utilises SFT, il est improtant que ton dataset contienne également une colonne applée `tools` qui contient la liste des outils disponibles pour le modèle. Cette colonne est utilisée pour construire le systeme prompt.
+When preparing datasets for Supervised Fine-Tuning (SFT) with tool calling, it is important that your dataset includes an additional column named `tools`. This column contains the list of available tools for the model, which is usually used to by the chat template construct the system prompt.
 
+The tools must be specified in a codified JSON schema format. You can automatically generate this schema from Python function signatures using the [`~transformers.utils.get_json_schema`] utility:
 
-For more information on tool calling, refer to the [Tool calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use) blog post.
+```python
+from transformers.utils import get_json_schema
+
+def control_light(room: str, state: str) -> str:
+    """
+    Controls the lights in a room.
+
+    Args:
+        room: The name of the room.
+        state: The desired state of the light ("on" or "off").
+
+    Returns:
+        str: A message indicating the new state of the lights.
+    """
+    return f"The lights in {room} are now {state}."
+
+# Generate JSON schema
+json_schema = get_json_schema(control_light)
+```
+
+The generated schema would look like:
+
+```python
+{
+    "type": "function",
+    "function": {
+        "name": "control_light",
+        "description": "Controls the lights in a room.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "room": {"type": "string", "description": "The name of the room."},
+                "state": {"type": "string", "description": 'The desired state of the light ("on" or "off").'},
+            },
+            "required": ["room", "state"],
+        },
+        "return": {"type": "string", "description": "str: A message indicating the new state of the lights."},
+    },
+}
+```
+
+A complete dataset entry for SFT might look like:
+
+```python
+{"messages": messages, "tools": [json_schema]}
+```
+
+For more detailed information on tool calling, refer to the [Tool Calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the blog post [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use).
 
 ### Types
 
