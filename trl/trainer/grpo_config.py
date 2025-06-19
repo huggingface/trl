@@ -196,11 +196,7 @@ class GRPOConfig(TrainingArguments):
             prompts are logged.
     """
 
-    if version.parse(transformers.__version__) <= version.parse("4.50.3"):
-        from transformers.training_args import _VALID_DICT_FIELDS
-
-        _VALID_DICT_FIELDS.append("model_init_kwargs")
-    else:
+    if version.parse(transformers.__version__) >= version.parse("4.51.0"):
         _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -214,6 +210,15 @@ class GRPOConfig(TrainingArguments):
             "help": (
                 "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
                 "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
             )
         },
     )

@@ -523,7 +523,7 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
-    !pip install trl[mergekit]
+    !pip install mergekit
 
     from trl.mergekit_utils import MergeConfig
     from trl import MergeModelCallback
@@ -542,7 +542,7 @@ class MergeModelCallback(TrainerCallback):
     ):
         if not is_mergekit_available():
             raise ImportError(
-                "MergeModelCallback requires the `mergekit` extra. To install, run `pip install trl[mergekit]`."
+                "MergeModelCallback requires the `mergekit` extra. To install, run `pip install mergekit`."
             )
         self.merge_config = merge_config or MergeConfig()
         self.merge_at_every_checkpoint = merge_at_every_checkpoint

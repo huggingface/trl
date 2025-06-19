@@ -45,8 +45,10 @@ class IterativeSFTConfig(TrainingArguments):
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             The truncation mode to use, either `"keep_end"` or `"keep_start"`.
         optimize_device_cache (`bool`, *optional*, defaults to `False`):
-            Whether to optimize CUDA cache for slightly more memory-efficient training.
+            Whether to optimize accelerator cache for slightly more memory-efficient training.
     """
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     logging_steps: float = field(
@@ -55,6 +57,15 @@ class IterativeSFTConfig(TrainingArguments):
             "help": (
                 "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
                 "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
             )
         },
     )
@@ -81,7 +92,7 @@ class IterativeSFTConfig(TrainingArguments):
     )
     optimize_device_cache: bool = field(
         default=False,
-        metadata={"help": "Whether to optimize CUDA cache for slightly more memory-efficient training."},
+        metadata={"help": "Whether to optimize accelerator cache for slightly more memory-efficient training."},
     )
 
     def __post_init__(self):
