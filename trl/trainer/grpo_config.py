@@ -40,8 +40,8 @@ class GRPOConfig(TrainingArguments):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string.
         disable_dropout (`bool`, *optional*, defaults to `False`):
-            Whether to disable dropout in the model. This is useful for training with a reference model, as it
-            prevents the model from generating different logprobs for the same input.
+            Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
+            the model from generating different logprobs for the same input.
 
         > Parameters that control the data preprocessing
 
@@ -51,8 +51,8 @@ class GRPOConfig(TrainingArguments):
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `8`):
-            Number of generations per prompt to sample. The effective batch size (num_processes *
-            per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
+            Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
+            * gradient_accumulation_steps) must be evenly divisible by this value.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -193,13 +193,13 @@ class GRPOConfig(TrainingArguments):
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
-            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is
-            installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
+            Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
+            it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
         num_completions_to_print (`int` or `None`, *optional*, defaults to `None`):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
-            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all
-            prompts are logged.
+            Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
+            are logged.
     """
 
     if version.parse(transformers.__version__) >= version.parse("4.51.0"):
