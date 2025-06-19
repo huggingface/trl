@@ -80,13 +80,15 @@ def setup_chat_format(
     resize_to_multiple_of: Optional[int] = None,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
-    Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the embedding layer of the model based on the new special tokens.
+    Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
+    embedding layer of the model based on the new special tokens.
 
-    <Tip warning="true">
-    We recommend using [`clone_chat_template`] instead of this function.
+    <Tip warning="true"> We recommend using [`clone_chat_template`] instead of this function.
+
     </Tip>
 
-    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set `tokenizer.chat_template` to `None`.
+    If the model already has a chat template, this will throw an error. If you want to overwrite it, please set
+    `tokenizer.chat_template` to `None`.
 
     Args:
         model (`~transformers.PreTrainedModel`): The model to be modified.
@@ -95,8 +97,10 @@ def setup_chat_format(
         resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
-        model (`~transformers.PreTrainedModel`): The modified model.
-        tokenizer (`~transformers.PreTrainedTokenizer`): The modified tokenizer.
+        model (`~transformers.PreTrainedModel`):
+            The modified model.
+        tokenizer (`~transformers.PreTrainedTokenizer`):
+            The modified tokenizer.
     """
     # check if model already had a chat template
     if tokenizer.chat_template is not None:
@@ -304,7 +308,8 @@ def unwrap_model_for_generation(
 def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
     """Prepares the model for DeepSpeed inference or evaluation by initializing it with the appropriate configuration.
 
-    Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
+    Adapted from accelerate:
+    https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
     """
     import deepspeed  # local import (instead of top-level) to avoid DS init interfering with other backends (like vllm): https://github.com/deepspeedai/DeepSpeed/issues/7252
 
@@ -371,7 +376,8 @@ def prepare_fsdp(model, accelerator):
 class _ForwardRedirection:
     """Implements the `forward-redirection`.
 
-    Taken from Pytorch-lightning: https://github.com/Lightning-AI/pytorch-lightning/blob/02311d03fb982560246eead7c08104481fac9579/src/lightning/pytorch/strategies/strategy.py#L602
+    Taken from Pytorch-lightning:
+    https://github.com/Lightning-AI/pytorch-lightning/blob/02311d03fb982560246eead7c08104481fac9579/src/lightning/pytorch/strategies/strategy.py#L602
 
     A method call to a wrapped module gets rerouted through the wrapper's `forward` method instead.
 

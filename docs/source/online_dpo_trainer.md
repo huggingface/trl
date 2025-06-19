@@ -36,7 +36,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 judge = PairRMJudge()
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = OnlineDPOConfig(output_dir="Qwen2-0.5B-OnlineDPO", logging_steps=10)
+training_args = OnlineDPOConfig(output_dir="Qwen2-0.5B-OnlineDPO")
 trainer = OnlineDPOTrainer(
     model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
@@ -125,7 +125,6 @@ python examples/scripts/dpo_online.py \
     --judge pair_rm \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --logging_steps 25 \
     --output_dir Qwen2.5-0.5B-Online-DPO-PairRM \
     --warmup_ratio 0.1 \
     --push_to_hub
@@ -171,7 +170,6 @@ accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
     --max_new_tokens 53 \
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
-    --logging_steps 20 \
     --save_steps 0.1 \
     --push_to_hub
 
@@ -191,7 +189,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --warmup_ratio 0.1 \
     --missing_eos_penalty 1.0 \
     --bf16 \
-    --logging_steps 20 \
     --save_steps 0.1 \
     --push_to_hub
 
@@ -212,7 +209,6 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --missing_eos_penalty 1.0 \
     --bf16 \
     --gradient_checkpointing \
-    --logging_steps 20 \
     --save_steps 0.1 \
     --push_to_hub
 ```
