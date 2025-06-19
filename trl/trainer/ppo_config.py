@@ -48,10 +48,10 @@ class PPOConfig(OnPolicyConfig):
         kl_coef (`float`, *optional*, defaults to `0.05`):
             KL coefficient.
         kl_estimator (`Literal["k1", "k3"]`, *optional*, defaults to `"k1"`):
-            Which estimator for KL-Divergence to use from [Approximating KL Divergence](http://joschu.net/blog/kl-approx.html).
-            Defaults to "k1", a straightforward, unbiased estimator. Can be set to "k3", an unbiased estimator with
-            lower variance which "appears to be a strictly better estimator". Cannot be set to "k2", as it is used for
-            logging purposes.
+            Which estimator for KL-Divergence to use from [Approximating KL
+            Divergence](http://joschu.net/blog/kl-approx.html). Defaults to "k1", a straightforward, unbiased
+            estimator. Can be set to "k3", an unbiased estimator with lower variance which "appears to be a strictly
+            better estimator". Cannot be set to "k2", as it is used for logging purposes.
         cliprange (`float`, *optional*, defaults to `0.2`):
             Clip range.
         vf_coef (`float`, *optional*, defaults to `0.1`):

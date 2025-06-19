@@ -39,9 +39,9 @@ logger = get_logger(__name__)
 
 class AlignPropTrainer(PyTorchModelHubMixin):
     """
-    The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
-    Note, this trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
-    As of now only Stable Diffusion based pipelines are supported
+    The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models. Note, this trainer is
+    heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/ As of now only Stable Diffusion based
+    pipelines are supported
 
     Attributes:
         config (`AlignPropConfig`):
@@ -203,7 +203,8 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         Side Effects:
             - Model weights are updated
             - Logs the statistics to the accelerator trackers.
-            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step, and the accelerator tracker.
+            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step,
+              and the accelerator tracker.
 
         Returns:
             global_step (int): The updated global step.
@@ -274,8 +275,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
                 Differentiable reward scalars for each generated image, shape: [batch_size]
 
         Returns:
-            loss (torch.Tensor)
-            (all of these are of shape (1,))
+            loss (torch.Tensor) (all of these are of shape (1,))
         """
         #  Loss is specific to Aesthetic Reward function used in AlignProp (https://huggingface.co/papers/2310.03739)
         loss = 10.0 - (rewards).mean()
@@ -427,9 +427,13 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         else:
             base_model = None
 
-        tags = tags or set()
-        if isinstance(tags, str):
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
             tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")

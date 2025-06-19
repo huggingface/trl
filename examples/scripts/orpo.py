@@ -24,7 +24,6 @@ python examples/scripts/orpo.py \
     --max_steps 1000 \
     --learning_rate 8e-6 \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="gpt2-aligned-orpo" \
     --warmup_steps 150 \
@@ -41,7 +40,6 @@ python examples/scripts/orpo.py \
     --max_steps 1000 \
     --learning_rate 8e-5 \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="gpt2-lora-aligned-orpo" \
     --optim rmsprop \

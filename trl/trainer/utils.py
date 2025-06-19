@@ -44,6 +44,7 @@ from transformers import (
     is_comet_available,
 )
 from transformers.utils import (
+    ModelOutput,
     is_peft_available,
     is_rich_available,
     is_torch_mlu_available,
@@ -70,15 +71,17 @@ if is_peft_available():
 class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
     """
     Data collator used for completion tasks. It ensures that all the tokens of the labels are set to an 'ignore_index'
-    when they do not come from the assistant. This ensure that the loss is only
-    calculated on the completion made by the assistant.
+    when they do not come from the assistant. This ensure that the loss is only calculated on the completion made by
+    the assistant.
 
     Args:
-        response_template (`Union[str, list[int]]`): the template form that indicates the start of the response, typically something like
-            '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
+        response_template (`Union[str, list[int]]`):
+            the template form that indicates the start of the response, typically something like '### Response:\n'. It
+            can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
             differently if it does not have proper context.
-        instruction_template (`Union[str, list[int]]`): the template form that indicates the start of the human instruction, typically something like
-            '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
+        instruction_template (`Union[str, list[int]]`):
+            the template form that indicates the start of the human instruction, typically something like '###
+            Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
         mlm (`bool`, *optional*, defaults to `False`): Whether to use masked language modeling in the underlying
             `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
              for flexibility and backwards-compatibility.
@@ -445,16 +448,19 @@ def pad(
             A single tensor containing the padded tensors.
 
     Examples:
-        >>> import torch
-        >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])])
-        tensor([[1, 2, 3],
-                [4, 5, 0]])
-        >>> pad([torch.tensor([[1, 2], [3, 4]]), torch.tensor([[5, 6]])])
-        tensor([[[1, 2],
-                [3, 4]],
+    ```python
+    >>> import torch
 
-                [[5, 6],
-                [0, 0]]])
+    >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])])
+    tensor([[1, 2, 3],
+            [4, 5, 0]])
+
+    >>> pad([torch.tensor([[1, 2], [3, 4]]), torch.tensor([[5, 6]])])
+    tensor([[[1, 2],
+            [3, 4]],
+            [[5, 6],
+            [0, 0]]])
+    ```
     """
     # Determine the maximum shape for each dimension
     output_shape = np.max([t.shape for t in tensors], 0).tolist()
@@ -570,9 +576,8 @@ class DPODataCollatorWithPadding:
 
 class ConstantLengthDataset(IterableDataset):
     """
-    Iterable dataset that returns constant length chunks of tokens from stream of text files.
-    The dataset also formats the text before tokenization with a specific format that is provided
-    by the user.
+    Iterable dataset that returns constant length chunks of tokens from stream of text files. The dataset also formats
+    the text before tokenization with a specific format that is provided by the user.
 
     Args:
         tokenizer (`transformers.PreTrainedTokenizer`):
@@ -583,8 +588,8 @@ class ConstantLengthDataset(IterableDataset):
             Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         formatting_func (`Callable`, *optional*):
-            Function that formats the text before tokenization. Usually it is recommended to follow a certain
-            pattern such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
+            Function that formats the text before tokenization. Usually it is recommended to follow a certain pattern
+            such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
             `formatting_func` should be provided.
         infinite (`bool`, *optional*, defaults to `False`):
             If True the iterator is reset after dataset reaches end else stops.
@@ -957,19 +962,16 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
 
 def get_exp_cap(value, decimal=4):
     """
-    Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow.
-    The formula is : log(value.dtype.max)
-    E.g.
+    Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow. The formula is :
+    log(value.dtype.max) E.g.
       For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
-    ```
 
     Args:
         value (`torch.Tensor`):
             The input tensor to obtain the data type
         decimal (`int`):
-            The number of decimal points of the output exponent cap.
-            eg: direct calling exp(log(torch.float32.max)) will result in inf
-            so we cap the exponent to 88.7228 to avoid overflow.
+            The number of decimal points of the output exponent cap. eg: direct calling exp(log(torch.float32.max))
+            will result in inf so we cap the exponent to 88.7228 to avoid overflow.
     """
     vdtype_max = torch.zeros([1]).to(value.dtype) + torch.finfo(value.dtype).max
     vdtype_log_max = torch.log(vdtype_max).to(value.device)
@@ -1048,8 +1050,8 @@ class OnPolicyConfig(TrainingArguments):
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
-            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
-            to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
+            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
+            generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
@@ -1062,7 +1064,8 @@ class OnPolicyConfig(TrainingArguments):
         local_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
         batch_size (`int` or `None`, *optional*, defaults to `None`):
-            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`).
+            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` *
+            `gradient_accumulation_steps`).
         local_mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Mini batch size per GPU.
         mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
@@ -1188,10 +1191,10 @@ class OnPolicyConfig(TrainingArguments):
     )
 
 
-def first_true_indices(bools: torch.Tensor, dtype=torch.long):
+def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
     """
-    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
-    the position of the first True in each "row".
+    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving the position of the
+    first True in each "row".
 
     Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
 
@@ -1203,8 +1206,8 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
     Returns:
         `torch.Tensor`:
-            An (N-1)-dimensional tensor of integers indicating the position of the first True
-            in each row. If no True value is found in a row, returns the length of the row.
+            An (N-1)-dimensional tensor of integers indicating the position of the first True in each row. If no True
+            value is found in a row, returns the length of the row.
     """
     row_len = bools.size(-1)
     zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
@@ -1265,7 +1268,7 @@ def forward(
     model: torch.nn.Module,
     query_responses: torch.Tensor,
     pad_token_id: int,
-) -> torch.nn.Module:
+) -> ModelOutput:
     """
     Performs a forward pass through the model with the given query responses and pad token ID.
 
@@ -1278,7 +1281,7 @@ def forward(
             The token ID representing the pad token.
 
     Returns:
-        `torch.nn.Module`:
+        `ModelOutput`:
             The output of the model, including hidden states.
     """
     attention_mask = query_responses != pad_token_id
@@ -1295,10 +1298,10 @@ def forward(
 
 def prepare_deepspeed(
     model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-):
+) -> torch.nn.Module:
     """
-    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based on the model and
-    batch size.
+    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based
+    on the model and batch size.
 
     Args:
         model (`torch.nn.Module`):
@@ -1347,7 +1350,7 @@ def prepare_deepspeed(
     return model
 
 
-def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor):
+def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
     """
     Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
 
@@ -1508,8 +1511,8 @@ def truncate_right(
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
 
-    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA)
-    and empties the cache of the first available device it finds.
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
+    the first available device it finds.
 
     If none of the specific devices are available, it defaults to emptying the CUDA cache.
     """
@@ -1660,7 +1663,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor
     ```
 
     Args:
-
         mask (`torch.Tensor`):
             2D tensor (binary mask) with shape `(N, M)`.
         *tensors (`torch.Tensor`)
@@ -1675,14 +1677,13 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor
 
     Example:
     ```python
-    >>> mask = torch.tensor([[0, 0, 1, 1, 1],
-    ...                      [0, 1, 1, 0, 0]])
-    >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
-    ...                        [9, 5, 6, 9, 9]])
+    >>> mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+    >>> tensor = torch.tensor([[9, 9, 2, 3, 4], [9, 5, 6, 9, 9]])
     >>> new_mask, new_tensor = flush_left(mask, tensor)
     >>> print(new_mask)
     tensor([[1, 1, 1],
             [1, 1, 0]])
+
     >>> print(new_tensor)
     tensor([[2, 3, 4],
             [5, 6, 0]])
@@ -1743,7 +1744,7 @@ def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tenso
     return flushed_mask, *flushed_tensors
 
 
-def selective_log_softmax(logits, index):
+def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
 
@@ -1768,7 +1769,7 @@ def selective_log_softmax(logits, index):
         logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
         per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
     else:
-        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficent approach
+        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
         per_token_logps = []
         for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
             row_logps = F.log_softmax(row_logits, dim=-1)
@@ -1809,6 +1810,7 @@ def print_prompt_completions_sample(
     Example:
     ```python
     >>> from trl.trainer.utils import print_prompt_completions_sample
+
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
     >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}

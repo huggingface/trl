@@ -57,7 +57,7 @@ In this section, we build the script needed to fine-tune a multimodal model for 
 Before fine-tuning, we need to install the required dependencies. Let's start by setting up the environment:  
 
 ```bash
-# Install the required libraries. Futher details: https://huggingface.co/docs/trl/installation 
+# Install the required libraries. Further details: https://huggingface.co/docs/trl/installation 
 pip install -U -q trl bitsandbytes peft hf_xet tensorboard
 ```
 
@@ -253,7 +253,6 @@ training_args = SFTConfig(
     gradient_accumulation_steps=4,                                  # Number of steps before performing a backward/update pass to accumulate gradients. multi-image -> gradient_accumulation_steps=1
     gradient_checkpointing=True,                                    # Enable gradient checkpointing to reduce memory usage during training.
     optim="adamw_torch_fused",                                      # Use the fused AdamW optimizer for better performance.
-    logging_steps=10,                                               # Frequency of logging training progress (log every 10 steps).
     save_strategy="epoch",                                          # Save checkpoints at the end of each epoch.
     learning_rate=2e-05,                                            # Learning rate for training.
     bf16=True,                                                      # Enable bfloat16 precision for training to save memory and speed up computations.
@@ -362,7 +361,7 @@ We save the fine-tuned model to the Hub, making it easily accessible for future 
 <!-- Add Wandb training results -->
 ### Results
 
-During and after trainig, we can inspect the results using **Weights & Biases (Wandb)** or **TensorBoard**. For example:
+During and after training, we can inspect the results using **Weights & Biases (Wandb)** or **TensorBoard**. For example:
 
 * [**gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft (Single Image+Text)**](https://huggingface.co/sergiopaniego/gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft)
 
