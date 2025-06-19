@@ -59,7 +59,7 @@ The above snippets will use the default training arguments from the [`SFTConfig`
 To train on assistant messages only, use a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset and set `assistant_only_loss=True` in the [`SFTConfig`]. This setting ensures that loss is computed **only** on the assistant responses, ignoring user and system and user messages.
 
 > [!WARNING]
-> This functionality is only available for chat templates that support returning the  assistant tokens mask via the `{% generation %}` keyword. For an example of such an template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
+> This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% generation %}` keyword. For an example of such an template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
 
 ### Train on completions only
 
