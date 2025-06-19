@@ -62,7 +62,7 @@ class IterativeSFTTrainer(Trainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments in
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         args ([`IterativeSFTConfig`], *optional*, defaults to `None`):
