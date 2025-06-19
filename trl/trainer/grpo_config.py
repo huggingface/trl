@@ -86,9 +86,10 @@ class GRPOConfig(TrainingArguments):
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
         generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
-            Additional keyword arguments to pass to the model's `generate` method. If `None`, it defaults to an empty
-            dictionary. This can be used to customize the generation behavior, such as setting `supress_tokens`,
-            `num_beams`, etc. These generation arguments will override the default recommended generation arguments.
+            "Additional keyword arguments to pass to `GenerationConfig` or `SamplingParams` (if using vLLM) when sampling responses."
+            "If `None`, it defaults to an empty dictionary. This can be used to customize the generation behavior, such as setting "
+            "`supress_tokens`, `num_beams`, etc. These generation arguments will override the default recommended generation configs and "
+            "any generation config passed like min_p."
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
 
@@ -326,10 +327,10 @@ class GRPOConfig(TrainingArguments):
     generation_kwargs: Optional[dict] = field(
         default=None,
         metadata={
-            "help": "Additional keyword arguments to pass to the model's `generate` method. If `None`, it defaults to "
-            "an empty dictionary. This can be used to customize the generation behavior, such as setting "
-            "`supress_tokens`, `num_beams`, etc. These generation arguments will override the default recommended "
-            "generation arguments."
+            "help": "Additional keyword arguments to pass to `GenerationConfig` or `SamplingParams` (if using vLLM) when sampling responses."
+            "If `None`, it defaults to an empty dictionary. This can be used to customize the generation behavior, such as setting "
+            "`supress_tokens`, `num_beams`, etc. These generation arguments will override the default recommended generation configs and "
+            "any generation config passed like min_p."
         },
     )
     repetition_penalty: float = field(
