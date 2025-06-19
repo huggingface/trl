@@ -699,7 +699,7 @@ class SFTTrainer(Trainer):
                                 raise RuntimeError(
                                     "You're using `assistant_only_loss=True`, but at least one example has no "
                                     "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                    "generate assistant masks — it may be missing the `{% generation %}` tag. Please "
+                                    "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
                                     "check the template and ensure it's correctly configured to support assistant "
                                     "masking."
                                 )

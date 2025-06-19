@@ -219,7 +219,7 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": (
                 "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
-                "computed only on the assistant, which is supported only for conversational datasets. If `False`, "
+                "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
                 "loss is computed on the entire sequence."
             )
         },
