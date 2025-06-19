@@ -154,12 +154,19 @@ class GKDTrainer(SFTTrainer):
         of https://huggingface.co/papers/2306.13649 for the definition.
 
         Args:
-            student_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
-            teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
-            labels: Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing loss
-            beta: Interpolation coefficient between 0 and 1 (default: 0.5)
-            temperature: Softmax temperature (default: 1.0)
-            reduction: Specifies the reduction to apply to the output (default: 'batchmean')
+            student_logits:
+                Tensor of shape (batch_size, sequence_length, vocab_size)
+            teacher_logits:
+                Tensor of shape (batch_size, sequence_length, vocab_size)
+            labels:
+                Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing
+                loss
+            beta:
+                Interpolation coefficient between 0 and 1 (default: 0.5)
+            temperature:
+                Softmax temperature (default: 1.0)
+            reduction:
+                Specifies the reduction to apply to the output (default: 'batchmean')
 
         Returns:
             loss: Scalar tensor with the generalized JSD loss
@@ -273,9 +280,9 @@ class GKDTrainer(SFTTrainer):
         """
         Perform a training step for the Generalized Knowledge Distillation (GKD) model.
 
-        This method implements the on-policy learning approach described in the GKD paper.
-        With probability `self.lmbda`, it generates new responses using the student model,
-        which are then used for training instead of the original inputs.
+        This method implements the on-policy learning approach described in the GKD paper. With probability
+        `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
+        the original inputs.
         """
         if self.seq_kd:
             with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
