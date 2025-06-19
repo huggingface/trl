@@ -14,6 +14,7 @@
 
 """
 # Full training
+```
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
@@ -28,8 +29,10 @@ python trl/scripts/sft.py \
     --eval_steps 100 \
     --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
+```
 
 # LoRA
+```
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
@@ -47,6 +50,7 @@ python trl/scripts/sft.py \
     --lora_alpha 16 \
     --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
+```
 """
 
 import argparse
