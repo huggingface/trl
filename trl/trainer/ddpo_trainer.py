@@ -16,6 +16,7 @@ import os
 import textwrap
 from collections import defaultdict
 from concurrent import futures
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 from warnings import warn
 
@@ -40,14 +41,14 @@ logger = get_logger(__name__)
 
 class DDPOTrainer(PyTorchModelHubMixin):
     """
-    The DDPOTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
-    Note, this trainer is heavily inspired by the work here: https://github.com/kvablack/ddpo-pytorch
-    As of now only Stable Diffusion based pipelines are supported
+    The DDPOTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models. Note, this trainer is heavily
+    inspired by the work here: https://github.com/kvablack/ddpo-pytorch As of now only Stable Diffusion based pipelines
+    are supported
 
     Attributes:
-        **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more
+        **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more:
          details.
-        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used
+        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used:
         **prompt_function** (Callable[[], tuple[str, Any]]) -- Function to generate prompts to guide model
         **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
         **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
@@ -228,7 +229,8 @@ class DDPOTrainer(PyTorchModelHubMixin):
         Side Effects:
             - Model weights are updated
             - Logs the statistics to the accelerator trackers.
-            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step, and the accelerator tracker.
+            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step,
+              and the accelerator tracker.
 
         Returns:
             global_step (int): The updated global step.
@@ -333,18 +335,18 @@ class DDPOTrainer(PyTorchModelHubMixin):
             timesteps (torch.Tensor):
                 The timesteps sampled from the diffusion model, shape: [batch_size]
             next_latents (torch.Tensor):
-                The next latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height, width]
+                The next latents sampled from the diffusion model, shape: [batch_size, num_channels_latents, height,
+                width]
             log_probs (torch.Tensor):
                 The log probabilities of the latents, shape: [batch_size]
             advantages (torch.Tensor):
                 The advantages of the latents, shape: [batch_size]
             embeds (torch.Tensor):
-                The embeddings of the prompts, shape: [2*batch_size or batch_size, ...]
-                Note: the "or" is because if train_cfg is True, the expectation is that negative prompts are concatenated to the embeds
+                The embeddings of the prompts, shape: [2*batch_size or batch_size, ...] Note: the "or" is because if
+                train_cfg is True, the expectation is that negative prompts are concatenated to the embeds
 
         Returns:
-            loss (torch.Tensor), approx_kl (torch.Tensor), clipfrac (torch.Tensor)
-            (all of these are of shape (1,))
+            loss (torch.Tensor), approx_kl (torch.Tensor), clipfrac (torch.Tensor) (all of these are of shape (1,))
         """
         with self.autocast():
             if self.config.train_cfg:
@@ -593,6 +595,15 @@ class DDPOTrainer(PyTorchModelHubMixin):
         self.sd_pipeline.save_pretrained(save_directory)
         self.create_model_card()
 
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -618,12 +629,18 @@ class DDPOTrainer(PyTorchModelHubMixin):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         citation = textwrap.dedent("""\
         @inproceedings{black2024training,

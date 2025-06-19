@@ -36,7 +36,7 @@ dataset = load_dataset("trl-lib/tldr", split="train")
 def reward_len(completions, **kwargs):
     return [-abs(20 - len(completion)) for completion in completions]
 
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO", logging_steps=10)
+training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
     reward_funcs=reward_len,
@@ -151,10 +151,10 @@ This constant is recommended to be the maximum completion length. To use this fo
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
 - `completions/mean_length`: The average length of generated completions.
-- `completions/min_length`: The minimun length of generated completions.
+- `completions/min_length`: The minimum length of generated completions.
 - `completions/max_length`: The maximum length of generated completions.
 - `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
-- `completions/min_terminated_length`: The minimun length of generated completions that terminate with EOS.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
 - `completions/clipped_ratio` : The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
@@ -294,7 +294,6 @@ def main():
         per_device_train_batch_size=4,
         bf16=True,
         gradient_checkpointing=True,
-        logging_steps=10,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )

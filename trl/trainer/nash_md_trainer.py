@@ -71,8 +71,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         model (`transformers.PreTrainedModel`):
             The model to train, preferably an `AutoModelForCausalLM`.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
         reward_model (`transformers.PreTrainedModel`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
@@ -80,8 +81,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         args (`NashMDConfig`):
             The NashMD config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -93,8 +95,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         peft_config (`dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -509,12 +511,18 @@ class NashMDTrainer(OnlineDPOTrainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         citation = textwrap.dedent("""\
         @inproceedings{munos2024nash,

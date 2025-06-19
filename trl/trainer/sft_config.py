@@ -49,7 +49,8 @@ class SFTConfig(TrainingArguments):
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         eos_token (`str` or `None`, *optional*, defaults to `None`):
-            Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`.
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to
+            `processing_class.eos_token`.
         pad_token (`int` or `None`, *optional*, defaults to `None`):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
@@ -78,8 +79,12 @@ class SFTConfig(TrainingArguments):
             Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
             only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
             `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
-            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
-            the full sequence for [language modeling](#language-modeling) datasets.
+            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
+            sequence for [language modeling](#language-modeling) datasets.
+        assistant_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed
+            only on the assistant responses, which is supported only for [conversational](#conversational) datasets. If `False`,
+            loss is computed on the entire sequence.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -97,6 +102,15 @@ class SFTConfig(TrainingArguments):
             "help": (
                 "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
                 "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
             )
         },
     )
@@ -197,6 +211,16 @@ class SFTConfig(TrainingArguments):
                 "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
                 "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
                 "language modeling datasets."
+            )
+        },
+    )
+    assistant_only_loss: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
+                "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
+                "loss is computed on the entire sequence."
             )
         },
     )

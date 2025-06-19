@@ -50,7 +50,8 @@ class CPOConfig(TrainingArguments):
             Type of loss to use. Possible values are:
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
-                - `"hinge"`: hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper.
+                - `"hinge"`: hinge loss on the normalized likelihood from the
+                  [SLiC](https://huggingface.co/papers/2305.10425) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
                 - `"simpo"`: SimPO loss from the [SimPO](https://huggingface.co/papers/2405.14734) paper.
 
@@ -92,6 +93,15 @@ class CPOConfig(TrainingArguments):
             "help": (
                 "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
                 "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
             )
         },
     )

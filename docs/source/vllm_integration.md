@@ -39,7 +39,6 @@ training_args = GRPOConfig(
     use_vllm=True,
     bf16=True,
     gradient_checkpointing=True,
-    logging_steps=10,
 )
 
 trainer = GRPOTrainer(

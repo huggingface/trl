@@ -53,8 +53,8 @@ class BCOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet during
-            evaluation.
+            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
+            during evaluation.
         is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
@@ -86,6 +86,15 @@ class BCOConfig(TrainingArguments):
             "help": (
                 "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
                 "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
             )
         },
     )

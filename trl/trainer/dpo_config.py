@@ -63,8 +63,8 @@ class DPOConfig(TrainingArguments):
             Whether to disable dropout in the model and reference model.
         use_logits_to_keep (`bool`, *optional*, defaults to `False`):
             If `True`, only a specified number of logits are computed in the forward pass. This can be useful for
-            saving memory and speeding up training by not computing the logits for all tokens, especially in
-            scenarios when working with very long prompts where labels are ignored (-100).
+            saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
+            when working with very long prompts where labels are ignored (-100).
 
         > Parameters that control the data preprocessing
 
@@ -98,8 +98,8 @@ class DPOConfig(TrainingArguments):
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
         tools (`Optional[list[Union[dict, Callable]]]`, *optional*, defaults to `None`):
-            List of tools (callable functions) that will be accessible to the model.
-            If the template does not support function calling, this argument will have no effect.
+            List of tools (callable functions) that will be accessible to the model. If the template does not support
+            function calling, this argument will have no effect.
 
         > Parameters that control the training
 
@@ -107,16 +107,21 @@ class DPOConfig(TrainingArguments):
             Type of loss to use. Possible values are:
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
-                - `"hinge"`: hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper.
+                - `"hinge"`: hinge loss on the normalized likelihood from the
+                  [SLiC](https://huggingface.co/papers/2305.10425) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
                 - `"exo_pair"`: pairwise EXO loss from the [EXO](https://huggingface.co/papers/2402.00856) paper.
                 - `"nca_pair"`: pairwise NCA loss from the [NCA](https://huggingface.co/papers/2402.05369) paper.
-                - `"robust"`: unbiased estimate of the DPO loss that is robust to preference noise from the [Robust DPO](https://huggingface.co/papers/2403.00409) paper.
+                - `"robust"`: unbiased estimate of the DPO loss that is robust to preference noise from the [Robust
+                  DPO](https://huggingface.co/papers/2403.00409) paper.
                 - `"bco_pair"`: pairwise BCO loss from the [BCO](https://huggingface.co/papers/2404.04656) paper.
-                - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675) paper.
+                - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
+                  paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
+                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
+                  paper.
+                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
+                  [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
 
@@ -137,8 +142,8 @@ class DPOConfig(TrainingArguments):
             Whether to ignore the provided reference model and implicitly use a reference model that assigns equal
             probability to all responses.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
-            Robust DPO label smoothing parameter from the [cDPO report](https://ericmitchell.ai/cdpo.pdf) and
-            [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
+            Robust DPO label smoothing parameter from the [cDPO report](https://ericmitchell.ai/cdpo.pdf) and [Robust
+            DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
         use_weighting (`bool`, *optional*, defaults to `False`):
             Whether to weight the loss as done in the [WPO paper](https://huggingface.co/papers/2406.11827).
         rpo_alpha (`float`, *optional*, defaults to `None`):
@@ -187,6 +192,15 @@ class DPOConfig(TrainingArguments):
             "help": (
                 "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
                 "If smaller than 1, will be interpreted as ratio of total training steps."
+            )
+        },
+    )
+    bf16: bool = field(
+        default=True,
+        metadata={
+            "help": (
+                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
             )
         },
     )
