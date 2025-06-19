@@ -38,7 +38,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
 
-training_args = KTOConfig(output_dir="Qwen2-0.5B-KTO", logging_steps=10)
+training_args = KTOConfig(output_dir="Qwen2-0.5B-KTO")
 trainer = KTOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
@@ -89,7 +89,6 @@ accelerate launch trl/scripts/kto.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/kto-mix-14k \
     --num_train_epochs 1 \
-    --logging_steps 25 \
     --output_dir Qwen2-0.5B-KTO
 ```
 

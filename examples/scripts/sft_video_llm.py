@@ -27,7 +27,6 @@ accelerate launch \
     --gradient_accumulation_steps=4 \
     --num_train_epochs=4 \
     --optim="adamw_torch_fused" \
-    --logging_steps=1 \
     --log_level="debug" \
     --log_level_replica="debug" \
     --save_strategy="steps" \
