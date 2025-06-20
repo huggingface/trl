@@ -172,7 +172,7 @@ To properly format your input, make sure to process all the examples by looping 
 The SFT trainer fully supports fine-tuning models with *tool calling* capabilities. In this case, each dataset example should include:
 
 * The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
-* The list of available tools in the `tool` column, typically provided as JSON schemas
+* The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](#tool-calling) section.
 
