@@ -1491,8 +1491,8 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-            if version.parse(transformers.__version__) >= version.parse("4.47.0"):
-                # Saving in the chat template in a dedicated file was introduced in transformers 4.47.0
+            if version.parse(transformers.__version__) >= version.parse("4.52.0"):
+                # Saving in the chat template in a dedicated file by default was introduced in transformers 4.52.0
 
                 # Check that the template saved in the output directory is the same as the one used for training
                 template_path = pathlib.Path(tmp_dir) / "checkpoint-9" / "chat_template.jinja"
