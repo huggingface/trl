@@ -487,8 +487,7 @@ def main(script_args: ScriptArguments):
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
         }
-        if request.generation_kwargs is not None:
-            generation_kwargs.update(request.generation_kwargs)
+        generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
