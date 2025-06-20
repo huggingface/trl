@@ -19,7 +19,9 @@ import unittest
 
 import numpy as np
 import torch
+import transformers
 from datasets import Dataset, Image, Sequence, load_dataset
+from packaging import version
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -1489,14 +1491,17 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-            # Check that the template saved in the output directory is the same as the one used for training
-            template_path = pathlib.Path(tmp_dir) / "checkpoint-9" / "chat_template.jinja"
-            self.assertTrue(template_path.exists(), f"Chat template not found at {template_path}")
+            if version.parse(transformers.__version__) >= version.parse("4.47.0"):
+                # Saving in the chat template in a dedicated file was introduced in transformers 4.47.0
 
-            with open(template_path) as f:
-                template_content = f.read()
-            with open(training_args.chat_template_path) as f:
-                original_template_content = f.read()
-            self.assertEqual(
-                template_content, original_template_content, "Chat template content does not match the original"
-            )
+                # Check that the template saved in the output directory is the same as the one used for training
+                template_path = pathlib.Path(tmp_dir) / "checkpoint-9" / "chat_template.jinja"
+                self.assertTrue(template_path.exists(), f"Chat template not found at {template_path}")
+
+                with open(template_path) as f:
+                    template_content = f.read()
+                with open(training_args.chat_template_path) as f:
+                    original_template_content = f.read()
+                self.assertEqual(
+                    template_content, original_template_content, "Chat template content does not match the original"
+                )
