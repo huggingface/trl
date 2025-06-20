@@ -347,7 +347,7 @@ class SFTTrainer(Trainer):
                 with open(args.chat_template_path, encoding="utf-8") as chat_template_file:
                     processing_class.chat_template = chat_template_file.read()
             else:
-                model, processing_class = clone_chat_template(model, processing_class, args.chat_template_patch)
+                model, processing_class = clone_chat_template(model, processing_class, args.chat_template_path)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
