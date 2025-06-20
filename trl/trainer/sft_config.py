@@ -39,7 +39,7 @@ class SFTConfig(TrainingArguments):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
         chat_template_path (`str` or `None`, *optional*, defaults to `None`):
-            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory  
+            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
             ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
             embedding layer is resized accordingly.
