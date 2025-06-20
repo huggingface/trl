@@ -38,9 +38,11 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
-        chat_template (`str` or `None`, *optional*, defaults to `None`):
-            If specified, sets the model's chat template using the tokenizer located at this path. The path can refer
-            to either a local directory or a model on the Hugging Face Hub.
+        chat_template_path (`str` or `None`, *optional*, defaults to `None`):
+            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory  
+            or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
+            ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
+            embedding layer is resized accordingly.
 
         > Parameters that control the data preprocessing
 
@@ -133,11 +135,13 @@ class SFTConfig(TrainingArguments):
             "the `SFTTrainer` is provided as a string."
         },
     )
-    chat_template: Optional[str] = field(
+    chat_template_path: Optional[str] = field(
         default=None,
         metadata={
-            "help": "If specified, sets the model's chat template using the tokenizer located at this path. The path "
-            "can refer to either a local directory or a model on the Hugging Face Hub."
+            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
+            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
+            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
+            "that the model's embedding layer is resized accordingly."
         },
     )
 

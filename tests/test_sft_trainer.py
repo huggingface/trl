@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+import pathlib
 import tempfile
 import unittest
 
@@ -1432,13 +1433,43 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-    def test_train_with_set_chat_template(self):
+    def test_train_with_set_chat_template_from_model(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, chat_template="Qwen/Qwen3-4B", report_to="none")
+            training_args = SFTConfig(output_dir=tmp_dir, chat_template_path="Qwen/Qwen3-4B", report_to="none")
+            # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-GPTNeoXForCausalLM", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_with_set_chat_template_from_path(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
+                report_to="none",
+            )
             # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-GPTNeoXForCausalLM", args=training_args, train_dataset=dataset
