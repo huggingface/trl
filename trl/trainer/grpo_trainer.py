@@ -678,19 +678,22 @@ class GRPOTrainer(Trainer):
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
         else:
-            self.generation_config = GenerationConfig(
-                max_new_tokens=self.max_completion_length,
-                do_sample=True,
-                pad_token_id=processing_class.pad_token_id,
-                bos_token_id=processing_class.bos_token_id,
-                eos_token_id=processing_class.eos_token_id,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                min_p=self.min_p,
-                repetition_penalty=self.repetition_penalty,
-                cache_implementation=args.cache_implementation,
-            )
+            generation_kwargs = {
+                "max_new_tokens": self.max_completion_length,
+                "do_sample": True,
+                "pad_token_id": processing_class.pad_token_id,
+                "bos_token_id": processing_class.bos_token_id,
+                "eos_token_id": processing_class.eos_token_id,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "min_p": self.min_p,
+                "repetition_penalty": self.repetition_penalty,
+                "cache_implementation": args.cache_implementation,
+            }
+            if args.generation_kwargs is not None:
+                generation_kwargs.update(args.generation_kwargs)
+            self.generation_config = GenerationConfig(**generation_kwargs)
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -1061,6 +1064,9 @@ class GRPOTrainer(Trainer):
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+            prompts_text = self.processing_class.batch_decode(
+                prompt_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1088,6 +1094,7 @@ class GRPOTrainer(Trainer):
                             min_p=0.0 if self.min_p is None else self.min_p,
                             max_tokens=self.max_completion_length,
                             guided_decoding_regex=self.guided_decoding_regex,
+                            generation_kwargs=self.args.generation_kwargs,
                         )
                 else:
                     completion_ids = [None] * len(all_prompts_text)
@@ -1106,16 +1113,19 @@ class GRPOTrainer(Trainer):
                     guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
                 else:
                     guided_decoding = None
-                sampling_params = SamplingParams(
-                    n=1,  # vLLM on each GPU generates only 1 in colocate mode
-                    repetition_penalty=self.repetition_penalty,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    top_k=-1 if self.top_k is None else self.top_k,
-                    min_p=0.0 if self.min_p is None else self.min_p,
-                    max_tokens=self.max_completion_length,
-                    guided_decoding=guided_decoding,
-                )
+
+                generation_kwargs = {
+                    "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
+                    "repetition_penalty": self.repetition_penalty,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": -1 if self.top_k is None else self.top_k,
+                    "min_p": 0.0 if self.min_p is None else self.min_p,
+                    "max_tokens": self.max_completion_length,
+                    "guided_decoding": guided_decoding,
+                }
+                generation_kwargs.update(self.args.generation_kwargs)
+                sampling_params = SamplingParams(**generation_kwargs)
 
                 if self.vllm_tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group and flatten.

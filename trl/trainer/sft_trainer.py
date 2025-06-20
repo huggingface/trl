@@ -52,7 +52,7 @@ from ..data_utils import (
     pack_dataset,
     truncate_dataset,
 )
-from ..models import get_act_offloading_ctx_manager
+from ..models import clone_chat_template, get_act_offloading_ctx_manager
 from .sft_config import SFTConfig
 from .utils import (
     ConstantLengthDataset,
@@ -376,6 +376,13 @@ class SFTTrainer(Trainer):
             )
         if isinstance(model, str):
             model = self._create_model_from_path(model, args)
+
+        if args.chat_template_path is not None:
+            if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
+                with open(args.chat_template_path, encoding="utf-8") as chat_template_file:
+                    processing_class.chat_template = chat_template_file.read()
+            else:
+                model, processing_class = clone_chat_template(model, processing_class, args.chat_template_path)
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
