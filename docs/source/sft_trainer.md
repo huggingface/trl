@@ -174,7 +174,7 @@ The SFT trainer fully supports fine-tuning models with *tool calling* capabiliti
 * The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
 * The list of available tools in the `tools` column, typically provided as JSON schemas
 
-For details on the expected dataset structure, see the [Dataset Format — Tool Calling](#tool-calling) section.
+For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
 ### Packing dataset
 
