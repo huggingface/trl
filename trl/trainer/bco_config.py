@@ -199,3 +199,8 @@ class BCOConfig(TrainingArguments):
         default=10.0,
         metadata={"help": "Maximum value of the density ratio. The estimated density ratio is clamped to this value."},
     )
+
+    def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        super().__post_init__()

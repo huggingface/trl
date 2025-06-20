@@ -187,7 +187,6 @@ class CPOConfig(TrainingArguments):
     )
 
     def __post_init__(self):
-        if self.bf16 is None:
-            self.bf16 = True if not self.fp16 else False
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
