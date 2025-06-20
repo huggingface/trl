@@ -470,11 +470,16 @@ class SFTTrainer(Trainer):
                     "completion-only loss. To resolve this, apply your formatting function before passing the "
                     "dataset, or disable `completion_only_loss` in `SFTConfig`."
                 )
-
+            # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them
+            # from sampled data.
+            train_dataset = train_dataset.with_transform(remove_none_values)
             train_dataset = self._prepare_dataset(
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
             )
             if eval_dataset is not None:
+                # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean
+                # them from sampled data.
+                eval_dataset = eval_dataset.with_transform(remove_none_values)
                 packing = args.packing if args.eval_packing is None else args.eval_packing
                 if isinstance(eval_dataset, dict):
                     eval_dataset = {
@@ -711,19 +716,16 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
-                    # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean
-                    # them from sampled data.
-                    example = remove_none_values(example)
-                    tools = example.get("tools", None)
-
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
                             prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"], tools=tools, **example.get("chat_template_kwargs", {})
+                                example["prompt"],
+                                tools=example.get("tools"),
+                                **example.get("chat_template_kwargs", {}),
                             )
                             prompt_completion_ids = processing_class.apply_chat_template(
                                 example["prompt"] + example["completion"],
-                                tools=tools,
+                                tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
                         else:
@@ -750,7 +752,7 @@ class SFTTrainer(Trainer):
                                 example["messages"],
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                tools=tools,
+                                tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
                             if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
