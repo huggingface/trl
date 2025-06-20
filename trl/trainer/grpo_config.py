@@ -87,6 +87,11 @@ class GRPOConfig(TrainingArguments):
             tokens.
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
+        generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
+            using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
+            as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
+            parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -314,6 +319,15 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Minimum token probability, which will be scaled by the probability of the most likely token. It "
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
+        },
+    )
+    generation_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
+            "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
+            "generation behavior, such as setting `supress_tokens`, `num_beams`, etc. If it contains keys that "
+            "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
     repetition_penalty: float = field(
