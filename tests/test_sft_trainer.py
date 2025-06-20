@@ -1381,6 +1381,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
 
             tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
             # The following template is a simplified version of the Qwen chat template, where an additional argument
@@ -1431,7 +1432,6 @@ class SFTTrainerTester2(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
-
 
     def test_train_with_set_chat_template_from_model(self):
         # Get the dataset
@@ -1488,7 +1488,6 @@ class SFTTrainerTester2(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
-
 
     def test_train_toolcall_data(self):
         # Get the dataset
