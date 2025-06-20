@@ -470,16 +470,10 @@ class SFTTrainer(Trainer):
                     "completion-only loss. To resolve this, apply your formatting function before passing the "
                     "dataset, or disable `completion_only_loss` in `SFTConfig`."
                 )
-            # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them
-            # from sampled data.
-            train_dataset = train_dataset.with_transform(remove_none_values)
             train_dataset = self._prepare_dataset(
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
             )
             if eval_dataset is not None:
-                # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean
-                # them from sampled data.
-                eval_dataset = eval_dataset.with_transform(remove_none_values)
                 packing = args.packing if args.eval_packing is None else args.eval_packing
                 if isinstance(eval_dataset, dict):
                     eval_dataset = {
@@ -638,6 +632,10 @@ class SFTTrainer(Trainer):
         # Convert the dataset to an IterableDataset if it is a ConstantLengthDataset
         if isinstance(dataset, ConstantLengthDataset):
             return dataset
+
+        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
+        # sampled data.
+        dataset = dataset.with_transform(remove_none_values)
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = list(next(iter(dataset)).keys())
