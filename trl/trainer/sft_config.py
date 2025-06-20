@@ -100,11 +100,15 @@ class SFTConfig(TrainingArguments):
         default=10,
         metadata={
             "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
-            "will be interpreted as ratio of total training steps."lt=None,
+            "will be interpreted as ratio of total training steps."
+        },
+    )
+    bf16: Optional[bool] = field(
+        default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-                "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
-                "`fp16` is not set."
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
         },
     )
     average_tokens_across_devices: bool = field(
