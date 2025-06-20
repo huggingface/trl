@@ -1061,6 +1061,9 @@ class GRPOTrainer(Trainer):
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+            prompts_text = self.processing_class.batch_decode(
+                prompt_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
+            )
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
