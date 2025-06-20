@@ -140,8 +140,6 @@ Some chat templates support *tool calling*, which allows the model to interact w
 
 After the assistant initiates a tool call, the tool executes and returns its output. The assistant can then process this output and continue the conversation accordingly.
 
-### Example of Tool Calling
-
 Here’s a simple example of a tool-calling interaction:
 
 ```python
