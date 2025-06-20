@@ -1488,3 +1488,15 @@ class SFTTrainerTester2(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+            # Check that the template saved in the output directory is the same as the one used for training
+            template_path = pathlib.Path(tmp_dir) / "checkpoint-9" / "chat_template.jinja"
+            self.assertTrue(template_path.exists(), f"Chat template not found at {template_path}")
+
+            with open(template_path) as f:
+                template_content = f.read()
+            with open(training_args.chat_template_path) as f:
+                original_template_content = f.read()
+            self.assertEqual(
+                template_content, original_template_content, "Chat template content does not match the original"
+            )
