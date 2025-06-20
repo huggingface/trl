@@ -99,14 +99,8 @@ class SFTConfig(TrainingArguments):
     logging_steps: float = field(
         default=10,
         metadata={
-            "help": (
-                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
-                "If smaller than 1, will be interpreted as ratio of total training steps."
-            )
-        },
-    )
-    bf16: Optional[bool] = field(
-        default=None,
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."lt=None,
         metadata={
             "help": (
                 "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -239,7 +233,7 @@ class SFTConfig(TrainingArguments):
     )
 
     def __post_init__(self):
-        self.bf16 = not(self.fp16) if self.bf16 is None else self.bf16  
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
 
