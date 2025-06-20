@@ -17,9 +17,10 @@ import dataclasses
 import os
 import warnings
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Union
+from typing import Any, Callable, Optional, TypeVar, Union
 
 import torch
 import torch.nn as nn
@@ -68,6 +69,40 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+
+TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
+
+
+def remove_none_values(example: TListOrMapping) -> TListOrMapping:
+    """
+    Recursively removes entries with `None` values from a nested structure (list or dictionary).
+
+    Args:
+        example (`list` or `Mapping`):
+            Input nested structure (list or dictionary) from which to remove `None`.
+
+    Example:
+    ```python
+    >>> [{
+    ...     "a": {"aa": None,
+    ...           "ab": 1},
+    ...     "b": "my_string",
+    ... }]
+    >>> remove_none_values(example)
+    [{'a': {'ab': 1}, 'b': 'my_string'}]
+    ```
+    """
+    if isinstance(example, list):
+        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
+    elif isinstance(example, Mapping):
+        return {
+            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
+            for key, value in example.items()
+            if value is not None
+        }
+    else:
+        raise TypeError("Input must be a list or a dictionary.")
 
 
 @dataclass
@@ -435,7 +470,6 @@ class SFTTrainer(Trainer):
                     "completion-only loss. To resolve this, apply your formatting function before passing the "
                     "dataset, or disable `completion_only_loss` in `SFTConfig`."
                 )
-
             train_dataset = self._prepare_dataset(
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
             )
@@ -599,6 +633,11 @@ class SFTTrainer(Trainer):
         if isinstance(dataset, ConstantLengthDataset):
             return dataset
 
+        # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
+        # sampled data.
+        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
+            dataset = dataset.with_transform(remove_none_values)
+
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = list(next(iter(dataset)).keys())
         is_processed = "input_ids" in column_names
@@ -679,10 +718,14 @@ class SFTTrainer(Trainer):
                     if "prompt" in example:  # prompt-completion case
                         if is_conversational(example):
                             prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"], **example.get("chat_template_kwargs", {})
+                                example["prompt"],
+                                tools=example.get("tools"),
+                                **example.get("chat_template_kwargs", {}),
                             )
                             prompt_completion_ids = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"], **example.get("chat_template_kwargs", {})
+                                example["prompt"] + example["completion"],
+                                tools=example.get("tools"),
+                                **example.get("chat_template_kwargs", {}),
                             )
                         else:
                             prompt_ids = processing_class(text=example["prompt"]).input_ids
@@ -708,6 +751,7 @@ class SFTTrainer(Trainer):
                                 example["messages"],
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
+                                tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
                             if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
