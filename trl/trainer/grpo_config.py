@@ -85,13 +85,13 @@ class GRPOConfig(TrainingArguments):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
-        generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
-            "Additional keyword arguments to pass to `GenerationConfig` or `SamplingParams` (if using vLLM) when sampling responses."
-            "If `None`, it defaults to an empty dictionary. This can be used to customize the generation behavior, such as setting "
-            "`supress_tokens`, `num_beams`, etc. These generation arguments will override the default recommended generation configs and "
-            "any generation config passed like min_p."
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
+        generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
+            using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
+            as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
+            parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
 
@@ -327,10 +327,10 @@ class GRPOConfig(TrainingArguments):
     generation_kwargs: Optional[dict] = field(
         default=None,
         metadata={
-            "help": "Additional keyword arguments to pass to `GenerationConfig` or `SamplingParams` (if using vLLM) when sampling responses."
-            "If `None`, it defaults to an empty dictionary. This can be used to customize the generation behavior, such as setting "
-            "`supress_tokens`, `num_beams`, etc. These generation arguments will override the default recommended generation configs and "
-            "any generation config passed like min_p."
+            "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
+            "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
+            "generation behavior, such as setting `supress_tokens`, `num_beams`, etc. If it contains keys that "
+            "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
     repetition_penalty: float = field(
