@@ -167,6 +167,15 @@ trainer.train()
 ```
 To properly format your input, make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example of how to use SFTTrainer on the alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763)
 
+## Tool Calling with SFT
+
+The SFT trainer fully supports fine-tuning models with *tool calling* capabilities. In this case, each dataset example should include:
+
+* The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+* The list of available tools in the `tool` column, typically provided as JSON schemas
+
+For details on the expected dataset structure, see the [Dataset Format — Tool Calling](#tool-calling) section.
+
 ### Packing dataset
 
 [`SFTTrainer`] supports _example packing_, where multiple short examples are packed in the same input sequence to increase training efficiency. To enable the usage of this dataset class, simply pass `packing=True` to the [`SFTConfig`] constructor.
