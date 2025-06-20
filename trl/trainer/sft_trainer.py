@@ -635,7 +635,8 @@ class SFTTrainer(Trainer):
 
         # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
         # sampled data.
-        dataset = dataset.with_transform(remove_none_values)
+        if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
+            dataset = dataset.with_transform(remove_none_values)
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
         column_names = list(next(iter(dataset)).keys())
