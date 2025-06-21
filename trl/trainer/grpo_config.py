@@ -183,6 +183,8 @@ class GRPOConfig(TrainingArguments):
             set `sync_ref_model=True`.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
+        entropy_coef (`float` or `None`, *optional*, defaults to `0.0`):
+            Coef of entropy regularization loss. If not specified, default to 0.0
 
         > Parameters that control the logging
 
@@ -493,6 +495,12 @@ class GRPOConfig(TrainingArguments):
     use_liger_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
+    entropy_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Ceof of entropy regularization loss. If not specified, it defaults to 0. "
+        },
     )
 
     # Parameters that control the logging

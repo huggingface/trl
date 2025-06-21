@@ -61,6 +61,7 @@ from .utils import (
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
+    entropy_from_logits,
 )
 
 
@@ -549,6 +550,9 @@ class GRPOTrainer(Trainer):
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
+        # Entropy loss coef
+        self.entropy_coef = args.entropy_coef
+
         super().__init__(
             model=model,
             args=args,
@@ -853,6 +857,7 @@ class GRPOTrainer(Trainer):
     def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
+        all_entropy = []
         for i in range(0, input_ids.size(0), batch_size):
             input_ids_batch = input_ids[i : i + batch_size]
             attention_mask_batch = attention_mask[i : i + batch_size]
@@ -868,7 +873,9 @@ class GRPOTrainer(Trainer):
             logits = logits / self.temperature
             logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
             all_logps.append(logps)
-        return torch.cat(all_logps, dim=0)
+            entropy = entropy_from_logits(logits)
+            all_entropy.append(entropy)
+        return torch.cat(all_logps, dim=0), torch.cat(all_entropy, dim=0)
 
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
@@ -1344,7 +1351,9 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+        per_token_logps, entropys = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+
+        entropy_loss = (entropys * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)  # average entropy over the completion tokens
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
@@ -1382,6 +1391,8 @@ class GRPOTrainer(Trainer):
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
+
+        loss = loss + entropy_loss * self.entropy_coef
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"

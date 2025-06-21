@@ -1778,6 +1778,21 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
         per_token_logps = torch.stack(per_token_logps)
     return per_token_logps
 
+def entropy_from_logits(logits: torch.Tensor):
+    """
+    Calculate entropy from logits.
+    This function computes the entropy of the distribution represented by the logits.
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`.
+
+    Returns:
+        `torch.Tensor`:
+            Entropy from logits of shape `(...)`.
+    """
+    pd = torch.nn.functional.softmax(logits, dim=-1)
+    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
+    return entropy
 
 def print_prompt_completions_sample(
     prompts: list[str],
