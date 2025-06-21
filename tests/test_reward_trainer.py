@@ -17,12 +17,13 @@ import unittest
 
 import torch
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import RewardConfig, RewardTrainer, maybe_apply_chat_template
 from trl.trainer.reward_trainer import _tokenize
+from trl.trainer.utils import RewardDataCollatorWithPadding
 
 
 if is_peft_available():
@@ -233,3 +234,85 @@ class RewardTrainerTester(unittest.TestCase):
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
             self.assertEqual(trainer.model.model_tags, trainer._tag_names)
+
+    def test_collator_args(self):
+        """Tests whether the Trainer passes data collator args to the default data collator"""
+        pad_to_multiple_of = 31415926
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+
+            training_args = RewardConfig(
+                output_dir=tmp_dir,
+                report_to="none",
+                pad_to_multiple_of=pad_to_multiple_of,
+                bf16=False,
+            )
+
+            trainer = RewardTrainer(
+                model=self.model,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+            )
+
+            self.assertEqual(trainer.data_collator.pad_to_multiple_of, pad_to_multiple_of)
+
+    def test_custom_collator(self):
+        """Tests passing an instantiated data collator to the Trainer"""
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+
+            training_args = RewardConfig(
+                output_dir=tmp_dir,
+                report_to="none",
+            )
+
+            collator = RewardDataCollatorWithPadding(
+                tokenizer=self.tokenizer,
+            )
+
+            RewardTrainer(
+                model=self.model,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+                data_collator=collator,
+            )
+
+    def test_train_with_wrong_model(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            misconfigured_model = AutoModelForCausalLM.from_pretrained(self.model_id)
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
+
+            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+
+            trainer = RewardTrainer(
+                model=misconfigured_model,
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+            )
+
+            with self.assertWarns(expected_warning=Warning):
+                trainer.compute_loss(
+                    model=trainer.model,
+                    inputs={
+                        "input_ids_chosen": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                        "attention_mask_chosen": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                        "input_ids_rejected": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                        "attention_mask_rejected": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                    },
+                )
+
+                with self.assertRaises(expected_exception=RuntimeError):
+                    trainer.compute_loss(
+                        model=trainer.model,
+                        inputs={
+                            "input_ids_chosen": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                            "attention_mask_chosen": torch.ones((2, 8), dtype=torch.int).to(trainer.model.device),
+                            "input_ids_rejected": torch.ones((2, 6), dtype=torch.int).to(trainer.model.device),
+                            "attention_mask_rejected": torch.ones((2, 6), dtype=torch.int).to(trainer.model.device),
+                        },
+                    )
