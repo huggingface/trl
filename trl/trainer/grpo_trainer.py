@@ -49,7 +49,7 @@ from transformers.utils import is_datasets_available, is_peft_available, is_rich
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_liger_kernel_available, is_vllm_available
+from ..import_utils import is_liger_kernel_available, is_sglang_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
@@ -76,6 +76,11 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+if is_sglang_available():
+    import requests
+    from sglang.srt.utils import MultiprocessingSerializer
+
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -508,6 +513,7 @@ class GRPOTrainer(Trainer):
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
         self.use_vllm = args.use_vllm
+        self.use_sglang = args.use_sglang
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
@@ -619,7 +625,32 @@ class GRPOTrainer(Trainer):
         # it's safer to set it in all cases.
         set_seed(args.seed, device_specific=True)
 
-        if self.use_vllm:
+        # Initialization for the inference backend
+        if self.use_sglang:
+            if not is_sglang_available():
+                raise ImportError(
+                    "SGLang is not available and `use_sglang` is set to True. Please install SGLang with "
+                    "`pip install sglang` to use it."
+                )
+            # Use externally managed SGLang server.
+            # The server URL is provided via configuration, e.g., "http://localhost:32232"
+            if not args.sglang_server_url:
+                raise ValueError("SGLang is enabled but no server URL was provided (use --sglang_server_url).")
+            self.sglang_server_url = args.sglang_server_url
+            if self.accelerator.is_main_process:
+                self.sglang_sampling_params = {
+                    "temperature": self.temperature,
+                    "max_new_tokens": self.max_completion_length,
+                    "n": self.num_generations,
+                    "repetition_penalty": self.repetition_penalty,
+                    "top_p": self.top_p,
+                    "top_k": -1 if self.top_k is None else self.top_k,
+                    "min_p": 0.0 if self.min_p is None else self.min_p,
+                }
+
+            self._last_loaded_step = -1
+            self.accelerator.wait_for_everyone()
+        elif self.use_vllm:
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
@@ -902,6 +933,35 @@ class GRPOTrainer(Trainer):
                         llm_model.load_weights([(full_name, param.data)])
 
     @profiling_decorator
+    def _update_sglang_weights(self):
+        """
+        Update the model weights on the SGLang server via its tensor-based update API.
+        This function only be called in main_process.
+        """
+        payload = {
+            "serialized_named_tensors": [
+                MultiprocessingSerializer.serialize(list(self.model.named_parameters()), output_str=True)
+            ],
+            "flush_cache": True,  # flush cache after update weights
+        }
+        try:
+            response = requests.post(
+                f"{self.sglang_server_url}/update_weights_from_tensor",
+                json=payload,
+                timeout=60,
+            )
+            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+        except requests.RequestException as e:
+            # Keep the original exception context
+            raise RuntimeError(f"Weight update request failed: {e}") from e
+        res_json = response.json()
+        if not res_json.get("success", False):
+            # No underlying exception to chain from here, as it's a logic error from the server response
+            raise RuntimeError(
+                f"Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}"
+            )
+
+    @profiling_decorator
     def _move_model_to_vllm(self):
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
@@ -1068,8 +1128,42 @@ class GRPOTrainer(Trainer):
                 prompt_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False
             )
 
-        # Generate completions using either vLLM or regular generation
-        if self.use_vllm:
+        # Generation branch: choose SGLang, vLLM, or default generation.
+        if self.use_sglang:
+            # Update weights if the training step has advanced.
+            if self.state.global_step != self._last_loaded_step:
+                if self.accelerator.is_main_process:
+                    self._update_sglang_weights()
+                self._last_loaded_step = self.state.global_step
+
+            # Gather all prompt texts from all processes.
+            all_prompts_text = gather_object(prompts_text)
+            if self.accelerator.is_main_process:
+                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                payload = {
+                    "text": ordered_set_of_prompts,
+                    "sampling_params": self.sglang_sampling_params,
+                }
+                response = requests.post(f"{self.sglang_server_url}/generate", json=payload)
+                generated_texts = [item.get("text") for item in response.json()]
+                completion_ids = [self.processing_class.encode(text) for text in generated_texts]
+            else:
+                completion_ids = [None] * len(all_prompts_text)
+
+            # Broadcast the completions from the main process to all processes, ensuring each process receives its
+            # corresponding slice.
+            completion_ids = broadcast_object_list(completion_ids, from_process=0)
+            process_slice = slice(
+                self.accelerator.process_index * len(prompts),
+                (self.accelerator.process_index + 1) * len(prompts),
+            )
+            completion_ids = completion_ids[process_slice]
+
+            # Pad the completions, and concatenate them with the prompts
+            completion_ids = [torch.tensor(ids, device=device, dtype=torch.int64) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        elif self.use_vllm:
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
