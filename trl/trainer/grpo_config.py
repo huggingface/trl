@@ -141,7 +141,7 @@ class GRPOConfig(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        delta: (`float` or `None`, *optional*, defaults to `None`):
+        delta (`float` or `None`, *optional*, defaults to `None`):
             Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
             GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
             the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).

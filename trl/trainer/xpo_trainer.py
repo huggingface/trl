@@ -572,10 +572,9 @@ class XPOTrainer(OnlineDPOTrainer):
 
         citation = textwrap.dedent("""\
         @article{jung2024binary,
-            title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
-            author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
-            year         = 2024,
-            eprint       = {arXiv:2405.21046}
+            title = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient
+            RLHF}}, author = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed
+            Awadallah and Alexander Rakhlin}, year = 2024, eprint = {arXiv:2405.21046}
         }""")
 
         model_card = generate_model_card(
