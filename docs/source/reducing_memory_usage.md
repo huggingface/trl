@@ -61,6 +61,14 @@ training_args = SFTConfig(..., max_length=...)
 </hfoption>
 </hfoptions>
 
+### How to choose the `max_length` value?
+
+If `max_length` is too small, a significant portion of your tokens will be discarded and won't contribute to training. If it's too large, memory usage can spike, potentially leading to OOM (Out-Of-Memory) errors. Without packing, a large `max_length` may also result in inefficient training, as many tokens will be padding.
+
+To help you choose an appropriate value, we provide a utility to visualize the sequence length distribution in your dataset.
+
+<iframe src="https://trl-lib-dataset-length-profiler.hf.space" frameborder="0" width="500" height="1000"></iframe>
+
 ## Packing
 
 <Tip>
