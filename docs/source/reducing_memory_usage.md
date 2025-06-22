@@ -67,7 +67,7 @@ If `max_length` is too small, a significant portion of your tokens will be disca
 
 To help you choose an appropriate value, we provide a utility to visualize the sequence length distribution in your dataset.
 
-<iframe src="https://trl-lib-dataset-length-profiler.hf.space" frameborder="0" width="500" height="1000"></iframe>
+<iframe src="https://trl-lib-dataset-length-profiler.hf.space" frameborder="0" width="100%" height="1000"></iframe>
 
 ## Packing
 
