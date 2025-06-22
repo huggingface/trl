@@ -56,12 +56,12 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     disable_dropout_in_model,
+    entropy_from_logits,
     generate_model_card,
     get_comet_experiment_url,
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
-    entropy_from_logits,
 )
 
 
@@ -1372,7 +1372,9 @@ class GRPOTrainer(Trainer):
 
         per_token_logps, entropys = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
-        entropy_loss = (entropys * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)  # average entropy over the completion tokens
+        entropy_loss = (entropys * completion_mask).sum() / completion_mask.sum().clamp(
+            min=1.0
+        )  # average entropy over the completion tokens
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
