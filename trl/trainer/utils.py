@@ -1795,7 +1795,7 @@ def entropy_from_logits(logits: torch.Tensor):
         `torch.Tensor`:
             Entropy from logits of shape `(...)`.
     """
-    pd = torch.nn.functional.softmax(logits, dim=-1)
+    pd = F.softmax(logits, dim=-1)
     entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)
     return entropy
 
