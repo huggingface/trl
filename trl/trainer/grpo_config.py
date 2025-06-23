@@ -168,6 +168,10 @@ class GRPOConfig(TrainingArguments):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
             [DAPO](https://huggingface.co/papers/2503.14476) paper, this is a good practice for training stability.
+        do_pack_completions (`bool`, *optional*, defaults to `False`):
+            If enabled, we will pack all the completions/responses corresponding to the same group into a single
+            row along the batch dimension. This is helpful in cases where the prompt is very long and prevents us from
+            computing tensors for the same prompt multiple times.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originates from the
@@ -466,6 +470,14 @@ class GRPOConfig(TrainingArguments):
             "help": "When enabled, truncated completions are excluded from the loss calculation, preventing them from "
             "being incorrectly penalized and introducing noise during training. According to the DAPO paper, this is "
             "a good practice for training stability."
+        },
+    )
+    do_pack_completions: bool = field(
+        default=False,
+        metadata={
+            "help": "If enabled, we will pack all the completions/responses corresponding to the same group into a "
+            "single row along the batch dimension. This is helpful in cases where the prompt is very long and prevents "
+            "us from computing tensors for the same prompt multiple times."
         },
     )
     sync_ref_model: bool = field(

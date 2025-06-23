@@ -985,6 +985,45 @@ class GRPOTrainer(Trainer):
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
+    def _pack_responses_in_a_group(
+        self, 
+        prompt_ids: torch.Tensor, 
+        completion_ids: torch.Tensor, 
+        prompt_mask: torch.Tensor,
+        completion_mask: torch.Tensor,
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        # Packs all the responses in a given group. This prevents the compuation of tensors related to the prompt
+        # multiple times.
+        packed_inputs = []
+        packed_position_ids = []
+        num_unique_prompts = len(prompt_ids) // self.num_generations
+        prompt_lengths = prompt_mask.sum(dim=-1)
+        completion_lengths = completion_mask.sum(dim=-1)
+        
+        for group_ind in range(num_unique_prompts):
+            prompt_end_index = prompt_lengths[group_ind * self.num_genertions]
+            prompt_ids_of_packed_group = prompt_ids[group_ind * self.num_generations][: prompt_end_index]
+            prompt_position_ids = torch.arange(
+                prompt_ids_of_packed_group.size(0), device=prompt_ids_of_packed_group.device
+            )
+            unpadded_completions_for_group = []
+            for comp_ind in range(self.num_generations):
+                completion_end_index = completion_lengths[group_ind * self.num_generations + comp_ind]
+                completion_ids = completion_ids[group_ind * self.num_generations + comp_ind][
+                    : completion_end_index
+                ]
+                unpadded_completion_position_ids = torch.arange(
+                    completion_ids.size(0), device=completion_ids.device
+                )
+                unpadded_completions_for_group.extend(completion_ids)
+            
+            packed_inputs.append(prompt_ids_of_packed_group + unpadded_completions_for_group)
+            packed_position_ids.append(torch.cat([prompt_position_ids, unpadded_completion_position_ids]))
+        
+        return packed_inputs, packed_position_ids
+
+
+    
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
