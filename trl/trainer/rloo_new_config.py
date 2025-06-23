@@ -21,7 +21,7 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class RLOOConfig(TrainingArguments):
+class RLOOConfig_NEW(TrainingArguments):
     r"""
     Configuration class for the [`RLOOTrainer`].
 

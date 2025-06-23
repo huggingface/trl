@@ -52,7 +52,7 @@ from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 
 from .callbacks import SyncRefModelCallback
-from .rloo_new_config import RLOOConfig
+from .rloo_new_config import RLOOConfig_NEW
 from .utils import (
     disable_dropout_in_model,
     generate_model_card,
@@ -274,7 +274,7 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     return torch.max(tensor[~torch.isnan(tensor)])
 
 
-class RLOOTrainer(Trainer):
+class RLOOTrainer_NEW(Trainer):
     """
     Trainer for the REINFORCE Leave One-Out (RLOO) method. This algorithm was initially proposed in the
     paper [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740).
@@ -331,7 +331,7 @@ class RLOOTrainer(Trainer):
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
 
-        args ([`RLOOConfig`], *optional*, defaults to `None`):
+        args ([`RLOOConfig_NEW`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
@@ -375,7 +375,7 @@ class RLOOTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc], None] = None,
-        args: Optional[RLOOConfig] = None,
+        args: Optional[RLOOConfig_NEW] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -388,7 +388,7 @@ class RLOOTrainer(Trainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = RLOOConfig(f"{model_name}-RLOO")
+            args = RLOOConfig_NEW(f"{model_name}-RLOO")
 
         # Models
         # Trained model
@@ -403,7 +403,7 @@ class RLOOTrainer(Trainer):
                 model_init_kwargs["torch_dtype"] = torch_dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `RLOOConfig`. Expected either 'auto' or a string representing "
+                    "Invalid `torch_dtype` passed to `RLOOConfig_NEW`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
@@ -415,7 +415,7 @@ class RLOOTrainer(Trainer):
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 raise ValueError(
-                    "You passed `model_init_kwargs` to the `RLOOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `RLOOConfig_NEW`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
 
@@ -779,7 +779,7 @@ class RLOOTrainer(Trainer):
             seed=self.args.seed,
         )
 
-    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: RLOOConfig) -> PreTrainedModel:
+    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: RLOOConfig_NEW) -> PreTrainedModel:
         """Enables gradient checkpointing for the model."""
         # Ensure use_cache is disabled
         model.config.use_cache = False
