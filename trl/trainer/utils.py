@@ -1796,10 +1796,10 @@ def rowise_entropy(logits):
     per_token_entropies = []
     for (row_logits,) in zip(logits):  # loop to reduce peak mem consumption
         row_logps = F.log_softmax(row_logits, dim=-1)
-        row_entropy = -torch.exp(row_logps) * row_logps
+        row_entropy = - (torch.exp(row_logps) * row_logps).sum(-1)
         per_token_entropies.append(row_entropy)
     per_token_entropies = torch.stack(per_token_entropies)
-    return per_token_entropies.sum(-1)
+    return per_token_entropies
 
 
 def print_prompt_completions_sample(
