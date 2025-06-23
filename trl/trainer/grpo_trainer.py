@@ -1124,7 +1124,7 @@ class GRPOTrainer(Trainer):
                     "max_tokens": self.max_completion_length,
                     "guided_decoding": guided_decoding,
                 }
-                if self.args.generation_kwargs is not None: 
+                if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
 
