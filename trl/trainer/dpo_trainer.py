@@ -94,8 +94,8 @@ def shift_tokens_right(input_ids: torch.Tensor, decoder_start_token_id: int) -> 
 @dataclass
 class DataCollatorForPreference(DataCollatorMixin):
     """
-    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they
-    are not all of the same length.
+    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they are
+    not all of the same length.
 
     Args:
         pad_token_id (`int`):
@@ -106,10 +106,11 @@ class DataCollatorForPreference(DataCollatorMixin):
     Examples:
     ```python
     >>> from trl import DataCollatorForPreference
+
     >>> collator = DataCollatorForPreference(pad_token_id=0)
     >>> examples = [
     ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
-    ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
+    ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]},
     ... ]
     >>> collator(examples)
     {'prompt_input_ids': tensor([[1, 2, 3],
@@ -178,15 +179,16 @@ class DPOTrainer(Trainer):
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
 
-            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
-              a path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
-              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
-              in `args.model_init_kwargs`.
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
         args ([`DPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator (`DataCollator`, *optional*):
@@ -211,8 +213,8 @@ class DPOTrainer(Trainer):
             after the last eval batch to signal that the function needs to calculate and return the global summary
             statistics rather than accumulating the batch-level statistics.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
-            List of callbacks to customize the training loop. Will add those to the list of default callbacks
-            detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
+            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
@@ -220,8 +222,8 @@ class DPOTrainer(Trainer):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
-            A tuple containing the optimizer class and keyword arguments to use.
-            Overrides `optim` and `optim_args` in `args`. Incompatible with the `optimizers` argument.
+            A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
+            `args`. Incompatible with the `optimizers` argument.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
@@ -669,6 +671,7 @@ class DPOTrainer(Trainer):
         Example:
         ```python
         >>> from transformers import GPT2Tokenizer
+
         >>> tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         >>> features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
         >>> DPOTrainer.tokenize_row(
@@ -891,16 +894,19 @@ class DPOTrainer(Trainer):
         batch: dict[str, Union[list, torch.LongTensor]], padding_value: int
     ) -> dict[str, torch.LongTensor]:
         """
-        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
-        and completion sequences.
+        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt and
+        completion sequences.
 
         Args:
             batch (`dict[str, Union[list, torch.LongTensor]]`):
                 A batch of input data. The batch must contain the following keys:
 
-                - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
-                - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen completion input IDs.
-                - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected completion input IDs.
+                - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input
+                  IDs.
+                - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen
+                  completion input IDs.
+                - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected
+                  completion input IDs.
                 - `"prompt_pixel_values"` (optional): Tensor for pixel values, if available.
                 - `"prompt_pixel_attention_mask"` (optional): Tensor for pixel attention masks, if available.
 
@@ -912,15 +918,19 @@ class DPOTrainer(Trainer):
             `dict[str, torch.LongTensor]`: A dictionary containing:
 
                 - `"prompt_input_ids"`: Concatenated prompt input IDs of shape `(2 * batch_size, prompt_length)`.
-                - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 * batch_size, max_completion_length)`.
-                - `"prompt_attention_mask"`: Concatenated prompt attention masks of shape `(2 * batch_size, prompt_length)`.
-                - `"completion_attention_mask"`: Concatenated chosen and rejected attention masks of shape `(2 * batch_size, max_completion_length)`.
+                - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 *
+                  batch_size, max_completion_length)`.
+                - `"prompt_attention_mask"`: Concatenated prompt attention masks of shape `(2 * batch_size,
+                  prompt_length)`.
+                - `"completion_attention_mask"`: Concatenated chosen and rejected attention masks of shape `(2 *
+                  batch_size, max_completion_length)`.
                 - `"pixel_values"` (optional): Concatenated pixel values if `"prompt_pixel_values"` are present.
-                - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if `"prompt_pixel_attention_mask"` are present.
+                - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if
+                  `"prompt_pixel_attention_mask"` are present.
 
         Notes:
-            The completion input IDs and attention masks are padded to the maximum completion length of the chosen
-            or rejected sequences.
+            The completion input IDs and attention masks are padded to the maximum completion length of the chosen or
+            rejected sequences.
         """
         output = {}
 
@@ -977,10 +987,9 @@ class DPOTrainer(Trainer):
                 Log probabilities of the reference model for the rejected responses. Shape: `(batch_size,)`.
 
         Returns:
-            A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`.
-            The losses tensor contains the DPO loss for each example in the batch.
-            The `chosen_rewards` and `rejected_rewards` tensors contain the rewards for the chosen and rejected
-            responses, respectively.
+            A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`. The losses tensor contains the DPO
+            loss for each example in the batch. The `chosen_rewards` and `rejected_rewards` tensors contain the rewards
+            for the chosen and rejected responses, respectively.
         """
         device = self.accelerator.device
 
@@ -1783,8 +1792,8 @@ class DPOTrainer(Trainer):
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
-        Overriding built-in evaluation loop to store metrics for each batch.
-        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
+        Overriding built-in evaluation loop to store metrics for each batch. Prediction/evaluation loop, shared by
+        `Trainer.evaluate()` and `Trainer.predict()`.
 
         Works both with or without labels.
         """

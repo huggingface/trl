@@ -54,6 +54,13 @@ The above snippets will use the default training arguments from the [`SFTConfig`
 
 ## Advanced usage
 
+### Train on assistant messages only
+
+To train on assistant messages only, use a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset and set `assistant_only_loss=True` in the [`SFTConfig`]. This setting ensures that loss is computed **only** on the assistant responses, ignoring user and system and user messages.
+
+> [!WARNING]
+> This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% generation %}` keyword. For an example of such an template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
+
 ### Train on completions only
 
 To train on completions only, simply use a [prompt-completion](dataset_formats#prompt-completion) dataset. In this mode, loss is computed solely on the completion part.
@@ -159,6 +166,15 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 To properly format your input, make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example of how to use SFTTrainer on the alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763)
+
+## Tool Calling with SFT
+
+The SFT trainer fully supports fine-tuning models with *tool calling* capabilities. In this case, each dataset example should include:
+
+* The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+* The list of available tools in the `tools` column, typically provided as JSON schemas
+
+For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
 ### Packing dataset
 
