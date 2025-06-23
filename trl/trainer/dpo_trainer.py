@@ -645,7 +645,13 @@ class DPOTrainer(Trainer):
         return dataset
 
     @staticmethod
-    def tokenize_row(features: dict[str, str], processing_class: PreTrainedTokenizerBase, max_prompt_length: Optional[int] = None, max_completion_length: Optional[int] = None, add_special_tokens: bool = True) -> dict[str, list[int]]:
+    def tokenize_row(
+        features: dict[str, str],
+        processing_class: PreTrainedTokenizerBase,
+        max_prompt_length: Optional[int] = None,
+        max_completion_length: Optional[int] = None,
+        add_special_tokens: bool = True,
+    ) -> dict[str, list[int]]:
         """
         Tokenize a row of the dataset.
 
@@ -708,7 +714,13 @@ class DPOTrainer(Trainer):
         }
 
     @staticmethod
-    def process_row(features:  dict[str, str], processing_class: PreTrainedTokenizerBase, max_prompt_length: Optional[int] = None, max_completion_length: Optional[int] = None, add_special_tokens: bool = True) -> dict[str, list[int]]:
+    def process_row(
+        features: dict[str, str],
+        processing_class: PreTrainedTokenizerBase,
+        max_prompt_length: Optional[int] = None,
+        max_completion_length: Optional[int] = None,
+        add_special_tokens: bool = True,
+    ) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
         """
@@ -1152,7 +1164,9 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    def _compute_loss_liger(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]) -> dict[str, torch.Tensor]:
+    def _compute_loss_liger(
+        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
+    ) -> dict[str, torch.Tensor]:
         unwrapped_model = self.accelerator.unwrap_model(model)
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
 
