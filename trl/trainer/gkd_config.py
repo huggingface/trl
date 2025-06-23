@@ -15,6 +15,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from transformers import TrainingArguments
+
 from .sft_config import SFTConfig
 
 
@@ -38,16 +40,16 @@ class GKDConfig(SFTConfig):
         max_new_tokens (`int`, *optional*, defaults to `128`):
             Maximum number of tokens to generate per completion.
         teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
-            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model
-            being trained.
+            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
+            trained.
         teacher_model_init_kwargs (`dict[str, Any]]` or `None`, *optional*, defaults to `None`):
             Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
             from a string.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
         seq_kd (`bool`, *optional*, defaults to `False`):
-            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT
-            on teacher-generated output).
+            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
+            teacher-generated output).
         student_use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions from the student model. Requires `vllm` to be installed.
         student_vllm_mode (`str`, *optional*, defaults to `"server"`):
@@ -69,6 +71,8 @@ class GKDConfig(SFTConfig):
         student_vllm_sync_frequency (`int`, *optional*, defaults to `1`):
             Frequency (in training steps) to synchronize student model weights to vLLM engine. Set to 1 to sync after every step.
     """
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["teacher_model_init_kwargs"]
 
     temperature: float = field(
         default=0.9,

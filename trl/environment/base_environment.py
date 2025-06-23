@@ -231,15 +231,24 @@ class TextEnvironment:
         Initialize TextEnvironment.
 
         Args:
-            model (`PreTrainedModelWrapper`): The model to use for generation.
-            tokenizer (`transformers.PreTrainedTokenizer`): The tokenizer to use for generation.
-            tools (list): A list of tools to use for interaction.
-            reward_fn (function): A function that takes a string and returns a reward.
-            prompt (str): The base prompt to use for generation. Is prepended to the tasks.
-            max_turns (Optional[int]): The maximum number of turns to allow.
-            max_tool_response (Optional[int]): The maximum number of characters to allow in a tool response.
-            max_length (Optional[int]): The maximum number of tokens to allow in an episode.
-            generation_kwargs (Optional[dict]): A dictionary of keyword arguments to pass to the model's generate method.
+            model (`PreTrainedModelWrapper`):
+                The model to use for generation.
+            tokenizer (`transformers.PreTrainedTokenizer`):
+                The tokenizer to use for generation.
+            tools (list):
+                A list of tools to use for interaction.
+            reward_fn (function):
+                A function that takes a string and returns a reward.
+            prompt (str):
+                The base prompt to use for generation. Is prepended to the tasks.
+            max_turns (Optional[int]):
+                The maximum number of turns to allow.
+            max_tool_response (Optional[int]):
+                The maximum number of characters to allow in a tool response.
+            max_length (Optional[int]):
+                The maximum number of tokens to allow in an episode.
+            generation_kwargs (Optional[dict]):
+                A dictionary of keyword arguments to pass to the model's generate method.
         """
         warnings.warn(
             "This class is deprecated and will be removed in version 0.21.0. To enable tool use with LLMs, check out smolagents (https://huggingface.co/docs/smolagents/index)",

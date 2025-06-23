@@ -36,7 +36,6 @@ def main():
     # Train model
     training_args = SFTConfig(
         output_dir=f"{model_id}-codeforces-SFT",
-        logging_steps=10,
         bf16=True,
         use_liger_kernel=True,
         gradient_checkpointing=True,

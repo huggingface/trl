@@ -46,11 +46,14 @@ class ScriptArguments:
             Dataset split to use for training.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
             Dataset split to use for evaluation.
+        dataset_streaming (`bool`, *optional*, defaults to `False`):
+            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
             Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar
-            type, inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
+            type, inplace operation. See
+            https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
     dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
@@ -63,6 +66,10 @@ class ScriptArguments:
     )
     dataset_train_split: str = field(default="train", metadata={"help": "Dataset split to use for training."})
     dataset_test_split: str = field(default="test", metadata={"help": "Dataset split to use for evaluation."})
+    dataset_streaming: bool = field(
+        default=False,
+        metadata={"help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode."},
+    )
     gradient_checkpointing_use_reentrant: bool = field(
         default=False,
         metadata={"help": "Whether to apply `use_reentrant` for gradient checkpointing."},
@@ -79,8 +86,8 @@ class ScriptArguments:
 
 def init_zero_verbose():
     """
-    Perform zero verbose init - use this method on top of the CLI modules to make
-    logging and warning output cleaner. Uses Rich if available, falls back otherwise.
+    Perform zero verbose init - use this method on top of the CLI modules to make logging and warning output cleaner.
+    Uses Rich if available, falls back otherwise.
     """
     import logging
     import warnings
@@ -130,10 +137,12 @@ class TrlParser(HfArgumentParser):
     from dataclasses import dataclass
     from trl import TrlParser
 
+
     @dataclass
     class MyArguments:
         arg1: int
         arg2: str = "alpha"
+
 
     parser = TrlParser(dataclass_types=[MyArguments])
     training_args = parser.parse_args_and_config()
@@ -172,7 +181,10 @@ class TrlParser(HfArgumentParser):
         super().__init__(dataclass_types=dataclass_types, **kwargs)
 
     def parse_args_and_config(
-        self, args: Optional[Iterable[str]] = None, return_remaining_strings: bool = False
+        self,
+        args: Optional[Iterable[str]] = None,
+        return_remaining_strings: bool = False,
+        fail_with_unknown_args: bool = True,
     ) -> tuple[DataClass, ...]:
         """
         Parse command-line args and config file into instances of the specified dataclass types.
@@ -211,6 +223,11 @@ class TrlParser(HfArgumentParser):
         if return_remaining_strings:
             args_remaining_strings = output[-1]
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
+        elif fail_with_unknown_args and config_remaining_strings:
+            raise ValueError(
+                f"Unknown arguments from config file: {config_remaining_strings}. Please remove them, add them to the "
+                "dataclass, or set `fail_with_unknown_args=False`."
+            )
         else:
             return output
 
@@ -218,8 +235,7 @@ class TrlParser(HfArgumentParser):
         """
         Overrides the parser's default values with those provided via keyword arguments, including for subparsers.
 
-        Any argument with an updated default will also be marked as not required
-        if it was previously required.
+        Any argument with an updated default will also be marked as not required if it was previously required.
 
         Returns a list of strings that were not consumed by the parser.
         """
