@@ -645,7 +645,7 @@ class DPOTrainer(Trainer):
         return dataset
 
     @staticmethod
-    def tokenize_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+    def tokenize_row(features: dict[str, str], processing_class: PreTrainedTokenizerBase, max_prompt_length: Optional[int] = None, max_completion_length: Optional[int] = None, add_special_tokens: bool = True) -> dict[str, list[int]]:
         """
         Tokenize a row of the dataset.
 
@@ -708,7 +708,7 @@ class DPOTrainer(Trainer):
         }
 
     @staticmethod
-    def process_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+    def process_row(features:  dict[str, str], processing_class: PreTrainedTokenizerBase, max_prompt_length: Optional[int] = None, max_completion_length: Optional[int] = None, add_special_tokens: bool = True) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
         """
@@ -876,7 +876,7 @@ class DPOTrainer(Trainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> dict:
+    def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
         compte_ref_context_manager = (
             autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
@@ -1152,7 +1152,7 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    def _compute_loss_liger(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
+    def _compute_loss_liger(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]) -> dict[str, torch.Tensor]:
         unwrapped_model = self.accelerator.unwrap_model(model)
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
 
@@ -1384,7 +1384,7 @@ class DPOTrainer(Trainer):
 
     def concatenated_forward(
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]], is_ref_model: bool = False
-    ):
+    ) -> dict[str, torch.Tensor]:
         """
         Runs the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
@@ -1605,10 +1605,10 @@ class DPOTrainer(Trainer):
 
     def get_batch_loss_metrics(
         self,
-        model,
+        model: Union[PreTrainedModel, nn.Module],
         batch: dict[str, Union[list, torch.LongTensor]],
         train_eval: Literal["train", "eval"] = "train",
-    ):
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
@@ -1677,7 +1677,7 @@ class DPOTrainer(Trainer):
         inputs: dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
         num_items_in_batch=None,
-    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, float]]]:
         compute_loss_context_manager = (
             autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         )
@@ -1748,7 +1748,7 @@ class DPOTrainer(Trainer):
         inputs: dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
         ignore_keys: Optional[list[str]] = None,
-    ):
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         if ignore_keys is None:
             if hasattr(model, "config"):
                 ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
