@@ -1209,3 +1209,56 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+class PackingTester(unittest.TestCase):
+    def test_pack_responses_in_a_group(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        num_generations = 4
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=8,  # reduce the batch size to reduce memory usage
+                num_generations=4,
+                report_to="none",
+                bf16=False
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+        prompt_shape = (8, 8)
+        completion_shape = (8, 12)
+
+        # pick two random indices to start padding from
+        prompt_pad_start_idx = torch.randint(1, prompt_shape[1]-1, (2, ))
+        completion_pad_start_idx = torch.randint(1, completion_shape[1]-1, (8, ))
+
+        prompt_ids = torch.arange(prompt_shape[0] * prompt_shape[1]).reshape(prompt_shape)
+        completion_ids = torch.arange(completion_shape[0] * completion_shape[1]).reshape(completion_shape)
+        prompt_mask = torch.ones(prompt_shape, dtype=torch.bool)
+        completion_mask = torch.ones(completion_shape, dtype=torch.bool)
+        
+        for ind, _ in enumerate(range(0, prompt_shape[0], num_generations)):
+            start_idx = ind * num_generations
+            end_idx = (ind + 1) * num_generations
+            prompt_ids[start_idx: end_idx, prompt_pad_start_idx[ind] + 1 :] = trainer.processing_class.pad_token_id
+            completion_ids[start_idx: end_idx, completion_pad_start_idx[ind] + 1 :] = trainer.processing_class.pad_token_id
+            prompt_mask[start_idx: end_idx, prompt_pad_start_idx[ind] + 1 :] = 0
+            completion_mask[start_idx: end_idx, completion_pad_start_idx[ind] + 1 :] = 0
+
+        packed_sequence = trainer._pack_responses_in_a_group(
+            prompt_ids, completion_ids, prompt_mask, completion_mask
+        )
+
+        packed_input_ids = packed_sequence["input_ids"]
+        packed_position_ids = packed_sequence["position_ids"]
+        packed_attention_mask = packed_sequence["attention_mask"]
+
+        num_unique_prompts = len(prompt_ids) // num_generations
+        assert len(packed_input_ids) == num_unique_prompts
+        assert len(packed_position_ids) == num_unique_prompts
+        assert len(packed_attention_mask) == num_unique_prompts

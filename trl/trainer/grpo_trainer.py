@@ -1001,26 +1001,36 @@ class GRPOTrainer(Trainer):
         completion_lengths = completion_mask.sum(dim=-1)
         
         for group_ind in range(num_unique_prompts):
-            prompt_end_index = prompt_lengths[group_ind * self.num_genertions]
+            prompt_end_index = prompt_lengths[group_ind * self.num_generations]
             prompt_ids_of_packed_group = prompt_ids[group_ind * self.num_generations][: prompt_end_index]
             prompt_position_ids = torch.arange(
                 prompt_ids_of_packed_group.size(0), device=prompt_ids_of_packed_group.device
             )
             unpadded_completions_for_group = []
+            unpadded_completion_position_ids_for_group = []
             for comp_ind in range(self.num_generations):
                 completion_end_index = completion_lengths[group_ind * self.num_generations + comp_ind]
-                completion_ids = completion_ids[group_ind * self.num_generations + comp_ind][
+                completion_ids_in_group = completion_ids[group_ind * self.num_generations + comp_ind][
                     : completion_end_index
                 ]
                 unpadded_completion_position_ids = torch.arange(
-                    completion_ids.size(0), device=completion_ids.device
+                    prompt_end_index, prompt_end_index + completion_end_index, device=completion_ids.device
                 )
-                unpadded_completions_for_group.extend(completion_ids)
+                unpadded_completions_for_group.extend(completion_ids_in_group)
+                unpadded_completion_position_ids_for_group.extend(unpadded_completion_position_ids)
             
-            packed_inputs.append(prompt_ids_of_packed_group + unpadded_completions_for_group)
-            packed_position_ids.append(torch.cat([prompt_position_ids, unpadded_completion_position_ids]))
+            packed_inputs.append(torch.cat([prompt_ids_of_packed_group, torch.Tensor(unpadded_completions_for_group)]))
+            packed_position_ids.append(torch.cat([prompt_position_ids, torch.Tensor(unpadded_completion_position_ids_for_group)]))
         
-        return packed_inputs, packed_position_ids
+        packed_inputs = pad(packed_inputs, padding_value=self.processing_class.pad_token_id)
+        packed_position_ids = pad(packed_position_ids, 0)
+        packed_attention_mask = packed_inputs != self.processing_class.pad_token_id
+        
+        return {
+            "input_ids": packed_inputs,
+            "attention_mask": packed_attention_mask,
+            "position_ids": packed_position_ids,
+        }
 
 
     
