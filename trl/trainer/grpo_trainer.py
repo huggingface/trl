@@ -1338,19 +1338,6 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        # Compute the KL divergence between the model and the reference model
-        ref_per_token_logps = None
-        if self.beta != 0.0:
-            with torch.no_grad():
-                if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                        self.ref_model, input_ids, attention_mask, logits_to_keep
-                    )["logps"]
-                else:
-                    with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                            self.model, input_ids, attention_mask, logits_to_keep
-                        )["logps"]
         # get the last hidden state of the model
         last_hidden_state = self._get_last_hidden_state(unwrapped_model, input_ids, attention_mask, logits_to_keep)
 
@@ -1402,7 +1389,7 @@ class GRPOTrainer(Trainer):
             )
             per_token_logps = logs_and_entropies["logps"]
             entropies = logs_and_entropies["entropies"]
-            # compute the entropy threshold across all tokens in the batch  
+            # compute the entropy threshold across all tokens in the batch
 
             entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
             entropy_mask = entropies >= entropy_threshold

@@ -38,7 +38,7 @@ from trl.trainer.utils import (
     pad,
     print_prompt_completions_sample,
     rowise_entropy,
-    selective_log_softmax
+    selective_log_softmax,
 )
 
 from .testing_utils import require_rich
@@ -618,21 +618,21 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         ]
         self.assertIn(output, possible_outputs)
 
-class TestRowiseEntropy(unittest.TestCase):
-    
-    @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
-    def test_rowise_entopy(self, dtype):
-        batch_size = 64
-        seq_len = 384
-        vocab_size = 768
-
-        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
-        log_probs = torch.log_softmax(logits, dim=-1)
-        expected_entropy = - torch.exp(log_probs) * log_probs
-        expected_entropy = expected_entropy.sum(-1)
-        predicted_entropy = rowise_entropy(logits)
-        if dtype in [torch.float16, torch.bfloat16]:
-            # half-precision dtypes fall back to an exact method
-            self.assertTrue(torch.equal(predicted_entropy, expected_entropy))
-        else:
-            torch.testing.assert_close(predicted_entropy, expected_entropy, rtol=1e-5, atol=1e-5)
+        class TestRowiseEntropy(unittest.TestCase):
+            @parameterized.expand(
+                [
+                    (dtype, chunk_size)
+                    for dtype in (torch.float64, torch.float32, torch.float16, torch.bfloat16)
+                    for chunk_size in (2048, 16)
+                ]
+            )
+            def test_rowise_entropy(self, dtype, chunk_size):
+                batch_size, seq_len, vocab_size = 64, 384, 768
+                logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+                log_probs = torch.log_softmax(logits, dim=-1)
+                expected_entropy = -(torch.exp(log_probs) * log_probs).sum(-1)
+                predicted_entropy = rowise_entropy(logits, chunk_size=chunk_size)
+                if dtype in [torch.float16, torch.bfloat16]:
+                    self.assertTrue(torch.equal(predicted_entropy, expected_entropy))
+                else:
+                    torch.testing.assert_close(predicted_entropy, expected_entropy, rtol=1e-5, atol=1e-5)
