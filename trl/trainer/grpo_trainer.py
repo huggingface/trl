@@ -871,6 +871,7 @@ class GRPOTrainer(Trainer):
                     attention_mask=attention_mask_batch,
                     position_ids=position_ids_batch,
                 ).logits
+
                 # Divide logits by sampling temperature.
                 packed_logits = packed_logits / self.temperature
                 packed_logps = selective_log_softmax(packed_logits[:, :-1, :], input_ids_batch[:, 1:])
@@ -1055,9 +1056,9 @@ class GRPOTrainer(Trainer):
                 unpadded_completions_for_group.extend(completion_ids_in_group)
                 unpadded_completion_position_ids_for_group.extend(unpadded_completion_position_ids)
 
-            packed_inputs.append(torch.cat([prompt_ids_of_packed_group, torch.Tensor(unpadded_completions_for_group)]))
+            packed_inputs.append(torch.cat([prompt_ids_of_packed_group, torch.stack(unpadded_completions_for_group)]))
             packed_position_ids.append(
-                torch.cat([prompt_position_ids, torch.Tensor(unpadded_completion_position_ids_for_group)])
+                torch.cat([prompt_position_ids, torch.stack(unpadded_completion_position_ids_for_group)])
             )
 
         # Pad the packed inputs and position ids to the maximum length in the group

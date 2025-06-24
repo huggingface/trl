@@ -1248,16 +1248,16 @@ class PackingTester(unittest.TestCase):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
 
-    def create_trainer(self, num_generations=2, batch_size=8, do_pack_completions=False, beta=0.0, max_steps=None, tmp_dir=None):
+    def create_trainer(self, num_generations=2, batch_size=8, do_pack_completions=False, beta=0.0, max_steps=None, tmp_dir=None, **kwargs):
         args_kwargs = dict(
             output_dir=tmp_dir,
             learning_rate=0.1,
             per_device_train_batch_size=batch_size,
             num_generations=num_generations,
             report_to="none",
-            bf16=False,
             do_pack_completions=do_pack_completions,
             beta=beta,
+            **kwargs,
         )
         if max_steps is not None:
             args_kwargs["max_steps"] = max_steps
@@ -1376,8 +1376,8 @@ class PackingTester(unittest.TestCase):
                 num_generations=num_generations,
                 do_pack_completions=True,
                 beta=0.1,
-                max_steps=4,
                 tmp_dir=tmp_dir,
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
             )
             trainer.train()
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1396,6 +1396,8 @@ class PackingTester(unittest.TestCase):
                 beta=0.1,
                 max_steps=1,
                 tmp_dir=tmp_dir,
+                max_completion_length=16,
+                model_init_kwargs={"attn_implementation": "flex_attention"},
             )
             trainer_packed.train()
             train_loss_packed = trainer_packed.state.log_history[-1]["train_loss"]
@@ -1408,6 +1410,8 @@ class PackingTester(unittest.TestCase):
                 beta=0.1,
                 max_steps=1,
                 tmp_dir=tmp_dir2,
+                max_completion_length=16,
+                model_init_kwargs={"attn_implementation": "flex_attention"},
             )
             trainer_no_packing.train()
             train_loss_no_packing = trainer_no_packing.state.log_history[-1]["train_loss"]
