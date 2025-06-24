@@ -250,6 +250,7 @@ class TestDataCollatorForChatML(unittest.TestCase):
             tokenizer=self.tokenizer,
             max_length=self.max_length,
             ignore_index=self.ignore_index,
+            apply_chat_template_args={},
         )
 
     def test_data_collator_for_chatml(self):
