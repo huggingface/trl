@@ -174,7 +174,8 @@ class ScriptArguments:
         dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined
             based on the model configuration. Find the supported values in the vLLM documentation.
-        max_model_len (`int` or `None`, *optional*, defaults to `None`):
+        speculative_config (`dict`, *optional*, defaults to `None`):
+            Speculative decoding configuration for vLLM. If set, the spec model will be used for generation.
             If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
@@ -231,6 +232,12 @@ class ScriptArguments:
         metadata={
             "help": "Data type to use for vLLM generation. If set to 'auto', the data type will be automatically "
             "determined based on the model configuration. Find the supported values in the vLLM documentation."
+        },
+    )
+    speculative_config: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Speculative decoding configuration for vLLM. If set, the spec model will be used for generation."
         },
     )
     max_model_len: Optional[int] = field(
@@ -294,6 +301,7 @@ def llm_worker(
         gpu_memory_utilization=script_args.gpu_memory_utilization,
         enforce_eager=script_args.enforce_eager,
         dtype=script_args.dtype,
+        speculative_config=script_args.speculative_config,
         # Automatic Prefix Caching caches the KV cache of existing queries, so that a new query can
         # directly reuse the KV cache if it shares the same prefix with one of the existing queries.
         # This is particularly useful here because we generate completions from the same prompts.
