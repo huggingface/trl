@@ -331,7 +331,8 @@ class RewardTrainer(Trainer):
     def evaluate(self, *args, **kwargs):
         num_print_samples = kwargs.pop("num_print_samples", self.args.num_print_samples)
 
-        self.visualize_samples(num_print_samples=num_print_samples)
+        if self.args.num_print_samples != 0:
+            self.visualize_samples(num_print_samples=num_print_samples)
 
         return super().evaluate(*args, **kwargs)
 
