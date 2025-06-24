@@ -1257,6 +1257,7 @@ class PackingTester(unittest.TestCase):
             report_to="none",
             do_pack_completions=do_pack_completions,
             beta=beta,
+            bf16=False,
             **kwargs,
         )
         if max_steps is not None:
@@ -1377,7 +1378,7 @@ class PackingTester(unittest.TestCase):
                 do_pack_completions=True,
                 beta=0.1,
                 tmp_dir=tmp_dir,
-                model_init_kwargs={"attn_implementation": "flash_attention_2"},
+                model_init_kwargs={"attn_implementation": "flex_attention"},
             )
             trainer.train()
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}

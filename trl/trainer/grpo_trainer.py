@@ -1036,7 +1036,7 @@ class GRPOTrainer(Trainer):
 
         for group_ind in range(num_unique_prompts):
             # Get the prompt ids for each group
-            prompt_end_index = int(prompt_lengths[group_ind * self.num_generations].item())
+            prompt_end_index = prompt_lengths[group_ind * self.num_generations]
             prompt_ids_of_packed_group = prompt_ids[group_ind * self.num_generations][:prompt_end_index]
             prompt_position_ids = torch.arange(
                 prompt_ids_of_packed_group.size(0), device=prompt_ids_of_packed_group.device
