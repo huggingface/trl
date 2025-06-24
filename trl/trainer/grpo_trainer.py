@@ -881,7 +881,7 @@ class GRPOTrainer(Trainer):
             visited = set()
 
         # Only perform the sync at the root FSDP module.
-        if isinstance(module, FSDP) and getattr(module, '_is_root', True):
+        if isinstance(module, FSDP) and getattr(module, "_is_root", True):
             with FSDP.summon_full_params(module, recurse=True, writeback=False):
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
@@ -889,7 +889,7 @@ class GRPOTrainer(Trainer):
                         full_name = full_name.replace(extra, "")
 
                     if full_name in visited:
-                        continue
+                        continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
 
                     if self.vllm_mode == "server" and self.accelerator.is_main_process:
@@ -900,9 +900,7 @@ class GRPOTrainer(Trainer):
         else:
             for child_name, child_module in module.named_children():
                 child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-                self._sync_fsdp_params_to_vllm(
-                    child_module, prefix=child_prefix, visited=visited
-                )
+                self._sync_fsdp_params_to_vllm(child_module, prefix=child_prefix, visited=visited)
 
     @profiling_decorator
     def _move_model_to_vllm(self):
