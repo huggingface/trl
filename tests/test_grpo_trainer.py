@@ -1212,14 +1212,15 @@ class GRPOTrainerTester(unittest.TestCase):
 
 class PackingTester(unittest.TestCase):
     def test_pack_responses_in_a_group(self):
+        
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        num_generations = 4
+        num_generations = 2
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=8,  # reduce the batch size to reduce memory usage
-                num_generations=4,
+                num_generations=2,
                 report_to="none",
                 bf16=False
             )
@@ -1230,25 +1231,36 @@ class PackingTester(unittest.TestCase):
                 train_dataset=dataset,
             )
 
-        prompt_shape = (8, 8)
-        completion_shape = (8, 12)
 
-        # pick two random indices to start padding from
-        prompt_pad_start_idx = torch.randint(1, prompt_shape[1]-1, (2, ))
-        completion_pad_start_idx = torch.randint(1, completion_shape[1]-1, (8, ))
+        prompt_ids = torch.Tensor([
+            [100, 101, 102, 103],
+            [100, 101, 102, 103],
+            [200, 201, 202, 203],
+            [200, 201, 202, 203],
+        ]).long()
+        prompt_shape = prompt_ids.shape
+        # First prompt has 4 tokens and second prompt has 2 tokens
+        prompt_mask = torch.Tensor([
+            [True, True, True, True],
+            [True, True, True, True],
+            [True, True, False, False],
+            [True, True, False, False],
+        ])
 
-        prompt_ids = torch.arange(prompt_shape[0] * prompt_shape[1]).reshape(prompt_shape)
-        completion_ids = torch.arange(completion_shape[0] * completion_shape[1]).reshape(completion_shape)
-        prompt_mask = torch.ones(prompt_shape, dtype=torch.bool)
-        completion_mask = torch.ones(completion_shape, dtype=torch.bool)
+        completion_ids = torch.Tensor([
+            [1000, 1001, 1002, 1003, 1004, 1005],
+            [1010, 1011, 1012, 1013, 1014, 1015],
+            [2000, 2001, 2002, 2003, 2004, 2005],
+            [2010, 2011, 2012, 2013, 2014, 2015],
+        ]).long()
+
+        completion_mask = torch.Tensor([
+            [True, True, True, True, False, False],
+            [True, True, True, True, True, False],
+            [True, True, True, True, True, True],
+            [True, True, False, False, False, False],
+        ])
         
-        for ind, _ in enumerate(range(0, prompt_shape[0], num_generations)):
-            start_idx = ind * num_generations
-            end_idx = (ind + 1) * num_generations
-            prompt_ids[start_idx: end_idx, prompt_pad_start_idx[ind] + 1 :] = trainer.processing_class.pad_token_id
-            completion_ids[start_idx: end_idx, completion_pad_start_idx[ind] + 1 :] = trainer.processing_class.pad_token_id
-            prompt_mask[start_idx: end_idx, prompt_pad_start_idx[ind] + 1 :] = 0
-            completion_mask[start_idx: end_idx, completion_pad_start_idx[ind] + 1 :] = 0
 
         packed_sequence = trainer._pack_responses_in_a_group(
             prompt_ids, completion_ids, prompt_mask, completion_mask
@@ -1262,3 +1274,26 @@ class PackingTester(unittest.TestCase):
         assert len(packed_input_ids) == num_unique_prompts
         assert len(packed_position_ids) == num_unique_prompts
         assert len(packed_attention_mask) == num_unique_prompts
+
+        pad_token_id = trainer.processing_class.pad_token_id
+        expected_input_ids = torch.Tensor(
+            [
+                [100, 101, 102, 103, 1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013, 1014],
+                [200, 201, 2000, 2001, 2002, 2003, 2004, 2005, 2010, 2011, pad_token_id, pad_token_id, pad_token_id],
+            ]
+        ).long()
+        assert torch.equal(packed_input_ids, expected_input_ids)
+        expected_position_ids = torch.Tensor(
+            [
+                [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
+                [0, 1, 2, 3, 4, 5, 6, 7, 2, 3, 0, 0, 0],
+            ]
+        ).long()
+        assert torch.equal(packed_position_ids, expected_position_ids)
+        expected_attention_mask = torch.Tensor(
+            [
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+            ]
+        ).long()
+        assert torch.equal(packed_attention_mask, expected_attention_mask)

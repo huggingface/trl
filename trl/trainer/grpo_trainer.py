@@ -997,11 +997,11 @@ class GRPOTrainer(Trainer):
         packed_inputs = []
         packed_position_ids = []
         num_unique_prompts = len(prompt_ids) // self.num_generations
-        prompt_lengths = prompt_mask.sum(dim=-1)
-        completion_lengths = completion_mask.sum(dim=-1)
+        prompt_lengths = prompt_mask.sum(dim=-1).long()
+        completion_lengths = completion_mask.sum(dim=-1).long()
         
         for group_ind in range(num_unique_prompts):
-            prompt_end_index = prompt_lengths[group_ind * self.num_generations]
+            prompt_end_index = int(prompt_lengths[group_ind * self.num_generations].item())
             prompt_ids_of_packed_group = prompt_ids[group_ind * self.num_generations][: prompt_end_index]
             prompt_position_ids = torch.arange(
                 prompt_ids_of_packed_group.size(0), device=prompt_ids_of_packed_group.device
@@ -1027,9 +1027,9 @@ class GRPOTrainer(Trainer):
         packed_attention_mask = packed_inputs != self.processing_class.pad_token_id
         
         return {
-            "input_ids": packed_inputs,
-            "attention_mask": packed_attention_mask,
-            "position_ids": packed_position_ids,
+            "input_ids": packed_inputs.long(),
+            "attention_mask": packed_attention_mask.long(),
+            "position_ids": packed_position_ids.long(),
         }
 
 
