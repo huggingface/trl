@@ -20,7 +20,7 @@ import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from importlib.metadata import version
-from typing import Any, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 import datasets
 import numpy as np
@@ -258,6 +258,7 @@ class DataCollatorForChatML:
     max_length: int = None
     prompt_key: str = "prompt"
     messages_key: str = "messages"
+    apply_chat_template_args: Dict = {}
 
     def __post_init__(self):
         if self.tokenizer.pad_token_id is None:
@@ -278,13 +279,13 @@ class DataCollatorForChatML:
             if formatted_prompt is None:
                 prompt = example[self.messages_key][:-1]
                 formatted_prompt = self.tokenizer.apply_chat_template(
-                    prompt, tokenize=False, add_generation_prompt=True
+                    prompt, tokenize=False, add_generation_prompt=True, **self.apply_chat_template_args
                 )
 
             if "input_ids" not in example:
                 message = example[self.messages_key]
                 formatted_message = self.tokenizer.apply_chat_template(
-                    message, tokenize=False, add_generation_prompt=False
+                    message, tokenize=False, add_generation_prompt=False, **self.apply_chat_template_args
                 )
                 tokenized_message = self.tokenizer(
                     formatted_message,
