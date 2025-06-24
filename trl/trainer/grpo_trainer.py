@@ -1124,7 +1124,8 @@ class GRPOTrainer(Trainer):
                     "max_tokens": self.max_completion_length,
                     "guided_decoding": guided_decoding,
                 }
-                generation_kwargs.update(self.args.generation_kwargs)
+                if self.args.generation_kwargs is not None:
+                    generation_kwargs.update(self.args.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
 
                 if self.vllm_tensor_parallel_size > 1:
