@@ -223,7 +223,16 @@ training_args = GRPOConfig(
     vllm_mode="colocate",
 )
 ```
+Note that in this mode, if you want to run with an accelerate config file of your choice (e.g. [accelerate-configs](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs)), you need to set some environment variable before launching the training script:
 
+```bash
+#required environment variables for vLLM colocate mode on a single node single GPU
+os.environ["RANK"] = "0"
+os.environ["LOCAL_RANK"] = "0"
+os.environ["WORLD_SIZE"] = "1"
+os.environ["MASTER_ADDR"] = "localhost"
+os.environ["MASTER_PORT"] = "12355"
+```
 <Tip>
 
 Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
