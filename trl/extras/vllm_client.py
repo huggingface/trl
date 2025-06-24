@@ -76,12 +76,14 @@ class VLLMClient:
 
         ```python
         >>> from trl.extras.vllm_client import VLLMClient
+
         >>> client = VLLMClient()
         >>> client.generate(["Hello, AI!", "Tell me a joke"])
         [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025],
          [911, 7988, 1251, 382, 3838, 653, 498, 1618, 4325, 879, 2581, 20027, 264, 21428, 30, 362]]
 
         >>> from transformers import AutoModelForCausalLM
+
         >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map="cuda")
         >>> client.init_communicator()
         >>> client.update_model_params(model)
@@ -172,6 +174,7 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
+        generation_kwargs: Optional[dict] = None,
     ) -> list[list[int]]:
         """
         Generates model completions for the provided prompts.
@@ -195,6 +198,10 @@ class VLLMClient:
                 Maximum number of tokens to generate for each prompt.
             guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
                 Regular expression to guide the decoding process.
+            generation_kwargs (`dict` or `None`, *optional*, defaults to `None`):
+                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
+                `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
+                will override them.
 
         Returns:
             `list[list[int]]`:
@@ -213,6 +220,7 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
+                "generation_kwargs": generation_kwargs or {},
             },
         )
         if response.status_code == 200:

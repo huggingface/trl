@@ -162,13 +162,12 @@ def _tokenize(
 def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **kwargs) -> dict:
     """Process tokens of a BCO specific dataset.
 
-    At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-    in case the prompt + completion responses is/are too long. First
-    we truncate the prompt; if we're still too long, we truncate the completion.
+    At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation in case the prompt +
+    completion responses is/are too long. First we truncate the prompt; if we're still too long, we truncate the
+    completion.
 
-    We also create the labels for the completion responses, which are of length equal to
-    the sum of the length of the prompt and the completion response, with
-    label_pad_token_id  for the prompt tokens.
+    We also create the labels for the completion responses, which are of length equal to the sum of the length of the
+    prompt and the completion response, with label_pad_token_id for the prompt tokens.
     """
     prompt = example["prompt"]
     completion = example["completion"]
@@ -290,8 +289,9 @@ class BCOTrainer(Trainer):
         model (`transformers.PreTrainedModel`):
             The model to train, preferably an `AutoModelForSequenceClassification`.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
         args (`BCOConfig`):
             The arguments to use for training.
         train_dataset (`datasets.Dataset`):
@@ -303,10 +303,12 @@ class BCOTrainer(Trainer):
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
         data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
+            The model initializer to use for training. If None is specified, the default model initializer will be
+            used.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -314,10 +316,11 @@ class BCOTrainer(Trainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
+            a PEFT model.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         model_adapter_name (`str`, defaults to `None`):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
         ref_adapter_name (`str`, defaults to `None`):
@@ -741,8 +744,8 @@ class BCOTrainer(Trainer):
 
     def _get_chosen_prob(self, prompt_embeddings: torch.FloatTensor) -> torch.FloatTensor:
         """
-        Calculates the probability if the given prompt embedding is from desirable dataset.
-        This function calculates the probability in the process and ensemble across processes.
+        Calculates the probability if the given prompt embedding is from desirable dataset. This function calculates
+        the probability in the process and ensemble across processes.
         """
         dtype = prompt_embeddings.dtype
         device = prompt_embeddings.device
@@ -770,8 +773,7 @@ class BCOTrainer(Trainer):
 
     def _vectorize_prompt(self, input_ids: torch.LongTensor, attention_mask: torch.LongTensor) -> torch.FloatTensor:
         """
-        Replaces processing_class.pad_token_id to embedding_tokenizer.pad_token_id
-        and applies self.embedding_func
+        Replaces processing_class.pad_token_id to embedding_tokenizer.pad_token_id and applies self.embedding_func
         """
         input_ids = torch.where(
             input_ids == self.processing_class.pad_token_id,
@@ -810,8 +812,7 @@ class BCOTrainer(Trainer):
 
     def _get_sample_prompt_embeddings(self, dataset: Dataset, sample_size: int = 512) -> torch.FloatTensor:
         """
-        Sample instances from dataset and get prompt embeddings.
-        Used for density ratio classifier training.
+        Sample instances from dataset and get prompt embeddings. Used for density ratio classifier training.
         """
         n_samples = min(len(dataset), sample_size)
         rand_indices = np.random.choice(len(dataset), size=(n_samples,))
@@ -1018,11 +1019,16 @@ class BCOTrainer(Trainer):
 
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
-            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+            labels:
+                Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are
+                ignored. Shape: (batch_size, sequence_length)
+            average_log_prob:
+                If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
+                log probabilities of the (non-masked) tokens.
 
         Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
+            given logits.
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
@@ -1117,18 +1123,23 @@ class BCOTrainer(Trainer):
         """Compute the BCO loss for a batch of policy and reference model log probabilities.
 
         Args:
-            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
-            reference_chosen_logps: Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
-            reference_rejected_logps: Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in batch_size,)
+            policy_chosen_logps:
+                Log probabilities of the policy model for the chosen responses. Shape: (num(chosen) in batch_size,)
+            policy_rejected_logps:
+                Log probabilities of the policy model for the rejected responses. Shape: (num(rejected) in batch_size,)
+            reference_chosen_logps:
+                Log probabilities of the reference model for the chosen responses. Shape: (num(chosen) in batch_size,)
+            reference_rejected_logps:
+                Log probabilities of the reference model for the rejected responses. Shape: (num(rejected) in
+                batch_size,)
             chosen_embeddings: embeddings of desirable prompts
             rejected_embeddings: embeddings of undesirable prompts
 
         Returns:
-            A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, delta).
-            The losses tensor contains the BCO loss for each example in the batch.
-            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
-            The delta value contains the moving average of all implicit rewards.
+            A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, delta). The losses tensor contains the
+            BCO loss for each example in the batch. The chosen_rewards and rejected_rewards tensors contain the rewards
+            for the chosen and rejected responses, respectively. The delta value contains the moving average of all
+            implicit rewards.
         """
 
         chosen_logratios = policy_chosen_logps - reference_chosen_logps
@@ -1377,8 +1388,8 @@ class BCOTrainer(Trainer):
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
-        Overriding built-in evaluation loop to store metrics for each batch.
-        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
+        Overriding built-in evaluation loop to store metrics for each batch. Prediction/evaluation loop, shared by
+        `Trainer.evaluate()` and `Trainer.predict()`.
 
         Works both with or without labels.
         """
