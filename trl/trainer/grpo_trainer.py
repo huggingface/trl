@@ -56,11 +56,11 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     disable_dropout_in_model,
+    entropy_from_logits,
     generate_model_card,
     get_comet_experiment_url,
     pad,
     print_prompt_completions_sample,
-    rowise_entropy,
     selective_log_softmax,
 )
 
@@ -882,7 +882,7 @@ class GRPOTrainer(Trainer):
             completion_ids = input_ids[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs for the input tokens
             if do_compute_entropy:
-                entropies = rowise_entropy(logits)
+                entropies = entropy_from_logits(logits)
                 all_entropies.append(entropies)
 
             all_logps.append(logps)
@@ -1385,11 +1385,11 @@ class GRPOTrainer(Trainer):
 
         # Compute the entropy at each position in the completion
         if self.token_entropy_percentile_threshold > 0.0:
-            logs_and_entropies = self._get_per_token_logps_and_entropies(
+            logps_and_entropies = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep, do_compute_entropy=True
             )
-            per_token_logps = logs_and_entropies["logps"]
-            entropies = logs_and_entropies["entropies"]
+            per_token_logps = logps_and_entropies["logps"]
+            entropies = logps_and_entropies["entropies"]
             # compute the entropy threshold across all tokens in the batch
 
             entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)

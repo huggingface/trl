@@ -31,13 +31,13 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
     decode_and_strip_padding,
+    entropy_from_logits,
     flush_left,
     flush_right,
     generate_model_card,
     get_peft_config,
     pad,
     print_prompt_completions_sample,
-    rowise_entropy,
     selective_log_softmax,
 )
 
@@ -619,7 +619,7 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         self.assertIn(output, possible_outputs)
 
 
-class TestRowiseEntropy(unittest.TestCase):
+class TestEntropyFromLogits(unittest.TestCase):
     @parameterized.expand(
         [
             (dtype, chunk_size)
@@ -627,12 +627,12 @@ class TestRowiseEntropy(unittest.TestCase):
             for chunk_size in (1, 16)
         ]
     )
-    def test_rowise_entropy(self, dtype, chunk_size):
+    def test_entropy_from_logits(self, dtype, chunk_size):
         batch_size, seq_len, vocab_size = 64, 384, 768
         logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
         log_probs = torch.log_softmax(logits, dim=-1)
         expected_entropy = -(torch.exp(log_probs) * log_probs).sum(-1)
-        predicted_entropy = rowise_entropy(logits, chunk_size=chunk_size)
+        predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
         if dtype in [torch.float16, torch.bfloat16]:
             self.assertTrue(torch.equal(predicted_entropy, expected_entropy))
         else:
