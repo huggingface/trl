@@ -1220,7 +1220,7 @@ class PackingTester(unittest.TestCase):
                 output_dir=tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=8,  # reduce the batch size to reduce memory usage
-                num_generations=2,
+                num_generations=num_generations,
                 report_to="none",
                 bf16=False
             )
@@ -1297,3 +1297,56 @@ class PackingTester(unittest.TestCase):
             ]
         ).long()
         assert torch.equal(packed_attention_mask, expected_attention_mask)
+    
+    def test_unpack_logps(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        num_generations = 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=8,  # reduce the batch size to reduce memory usage
+                num_generations=num_generations,
+                report_to="none",
+                bf16=False
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+            pad_token_id = trainer.processing_class.pad_token_id
+            position_ids = torch.Tensor(
+                [
+                    [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
+                    [0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id, pad_token_id, pad_token_id],
+                ]
+            ).long()
+
+            prompt_mask = torch.Tensor([
+                [True, True, True, True],
+                [True, True, True, True],
+                [True, True, False, False],
+                [True, True, False, False],
+            ])
+
+            all_logps = torch.Tensor(
+                [
+                    [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
+                    [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, float("-inf"), float("-inf"), float("-inf")],
+                ]
+            )
+
+            unpacked_logps = trainer._unpack_logps(position_ids, all_logps, prompt_mask)
+
+            expected_unpacked_logps = torch.Tensor(
+                [
+                    [0.5, 0.6, 0.7, 0.8, float("-inf"), float("-inf")],
+                    [0.9, 1.0, 1.1, 1.2, 1.3, float("-inf")],
+                    [0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+                    [1.0, 1.1, float("-inf"), float("-inf"), float("-inf"), float("-inf")],
+                ]
+            )
+
+            assert torch.allclose(unpacked_logps, expected_unpacked_logps)
