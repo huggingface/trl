@@ -1028,38 +1028,43 @@ class GRPOTrainer(Trainer):
     ) -> dict[str, Union[torch.Tensor, Any]]:
         # Packs all the responses in a given group.
         # This prevents the compuation of tensors related to the prompt multiple times.
-        packed_inputs = []
-        packed_position_ids = []
         num_unique_prompts = len(prompt_ids) // self.num_generations
         prompt_lengths = prompt_mask.sum(dim=-1).long()
         completion_lengths = completion_mask.sum(dim=-1).long()
+        groupwise_completion_lengths = completion_lengths.view(num_unique_prompts, self.num_generations).sum(dim=-1).long()
+
+        packed_inputs = torch.empty(
+            (num_unique_prompts, prompt_lengths.max() + groupwise_completion_lengths.max()),
+            dtype=torch.long,
+            device=prompt_ids.device,
+        )
+        packed_position_ids = torch.empty(
+            (num_unique_prompts, prompt_lengths.max() + groupwise_completion_lengths.max()),
+            dtype=torch.long,
+            device=prompt_ids.device
+        )
 
         for group_ind in range(num_unique_prompts):
             # Get the prompt ids for each group
             prompt_end_index = prompt_lengths[group_ind * self.num_generations]
             prompt_ids_of_packed_group = prompt_ids[group_ind * self.num_generations][:prompt_end_index]
-            prompt_position_ids = torch.arange(
-                prompt_ids_of_packed_group.size(0), device=prompt_ids_of_packed_group.device
-            )
-            unpadded_completions_for_group = []
-            unpadded_completion_position_ids_for_group = []
+            packed_inputs[group_ind, :prompt_end_index] = prompt_ids_of_packed_group
+            packed_position_ids[group_ind, :prompt_end_index] = prompt_mask[group_ind * self.num_generations][:prompt_end_index].cumsum(dim=-1)
+            next_completion_start_index = prompt_end_index
             for comp_ind in range(self.num_generations):
                 # Get the completion ids for each response in a group
                 completion_end_index = completion_lengths[group_ind * self.num_generations + comp_ind]
                 completion_ids_in_group = completion_ids[group_ind * self.num_generations + comp_ind][
                     :completion_end_index
                 ]
+                packed_inputs[group_ind, next_completion_start_index:next_completion_start_index + completion_end_index] = completion_ids_in_group
                 # Position ids for the completion always have the offset of the prompt length
-                unpadded_completion_position_ids = torch.arange(
-                    prompt_end_index, prompt_end_index + completion_end_index, device=completion_ids.device
+                packed_position_ids[group_ind, next_completion_start_index:next_completion_start_index + completion_end_index] = (
+                    prompt_end_index + torch.arange(
+                        completion_end_index, device=completion_ids.device
+                    )
                 )
-                unpadded_completions_for_group.extend(completion_ids_in_group)
-                unpadded_completion_position_ids_for_group.extend(unpadded_completion_position_ids)
-
-            packed_inputs.append(torch.cat([prompt_ids_of_packed_group, torch.stack(unpadded_completions_for_group)]))
-            packed_position_ids.append(
-                torch.cat([prompt_position_ids, torch.stack(unpadded_completion_position_ids_for_group)])
-            )
+                next_completion_start_index += completion_end_index
 
         # Pad the packed inputs and position ids to the maximum length in the group
         packed_inputs = pad(packed_inputs, padding_value=self.processing_class.pad_token_id)
