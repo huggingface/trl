@@ -1072,12 +1072,13 @@ class RLOOTrainer_NEW(Trainer):
                     prompt_completion_ids = unwrapped_model.generate(
                         prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                     )
-
+            #hardcode prompt_completion_ids
+            #prompt_completion_ids = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.long, device=device)
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
-
+    
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
@@ -1167,42 +1168,9 @@ class RLOOTrainer_NEW(Trainer):
                 f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
                 "Please ensure that at least one reward function returns a valid reward."
             )
-        # Gather the reward per function: this part is crucial for RLOO leave-one-out calculation
-        # as the rewards need to be gathered across all processes for proper baseline computation
-        rewards_per_func = gather(rewards_per_func)
-
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
         
-        if self.normalize_rewards:
-            rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
-            rewards = torch.clamp(rewards, -self.reward_clip_range, self.reward_clip_range)
-
-        # all other rewards within the batch
-        grouped_rewards = rewards.view(-1, self.num_generations) #(num_prompts, num_generations)
-        
-        # Compute leave-one-out baseline for each reward
-        # baseline_i = (sum_of_all_rewards - r_i) / (num_generations - 1)
-        sum_all_rewards = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
-        # RLOO baseline is the mean of all other rewards in the batch 
-        baseline = (sum_all_rewards - grouped_rewards) / (self.num_generations - 1) #(num_prompts, num_generations)
-        
-        
-        # Compute advantages as r_i - baseline_i
-        advantages = grouped_rewards - baseline  # (num_prompts, num_generations)
-        advantages = advantages.flatten()  #(num_prompts * num_generations)
-        
-        if self.normalize_advantages:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        
-        # Slice to keep only the local part of the data
-        process_slice = slice(
-            self.accelerator.process_index * len(prompts),
-            (self.accelerator.process_index + 1) * len(prompts),
-        )
-        all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
-        advantages = advantages[process_slice]
-
         # Log the metrics
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
@@ -1231,8 +1199,8 @@ class RLOOTrainer_NEW(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
-        self._metrics[mode]["reward"].append(grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(grouped_rewards.std().item())
+        # self._metrics[mode]["reward"].append(grouped_rewards.mean().item())
+        # self._metrics[mode]["reward_std"].append(grouped_rewards.std().item())
         #self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
@@ -1240,14 +1208,14 @@ class RLOOTrainer_NEW(Trainer):
         self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
-        self._textual_logs["advantages"].extend(all_process_advantages.tolist())
+        #self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
         return {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
-            "advantages": advantages,
+            "rewards": rewards,
             "old_per_token_logps": old_per_token_logps,
         }
 
@@ -1269,6 +1237,24 @@ class RLOOTrainer_NEW(Trainer):
 
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
+        # Sum logprobs across sequence length to get sequence-level logprobs
+        sequence_logps = (per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+
+        # Get rewards from inputs
+        rewards = inputs["rewards"]  # Shape: (num_prompts, num_generations)
+
+        all_rewards = rewards.clone()
+        rewards = gather(rewards) 
+        
+        if self.normalize_rewards:
+            rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+            rewards = torch.clamp(rewards, -self.reward_clip_range, self.reward_clip_range)
+        
+        process_slice = slice(
+            self.accelerator.process_index * all_rewards.shape[0], 
+            (self.accelerator.process_index + 1) * all_rewards.shape[0],
+        )
+        
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             with torch.no_grad():
@@ -1281,44 +1267,72 @@ class RLOOTrainer_NEW(Trainer):
                         ref_per_token_logps = self._get_per_token_logps(
                             self.model, input_ids, attention_mask, logits_to_keep
                         )
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
+                # Sum reference logprobs across sequence length
+                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+                # Compute sequence-level KL divergence
+                sequence_kl = ref_sequence_logps - sequence_logps
+                
+                # Add KL penalty to rewards (similar to old RLOO implementation)
+                kl_penalty = -self.beta * sequence_kl
+                rewards_with_kl = rewards + kl_penalty
+        else:
+            rewards_with_kl = rewards
 
-        # Compute the loss
-        advantages = inputs["advantages"]
+        # Reshape rewards back to (num_prompts, num_generations) for RLOO baseline calculation
+        rewards_with_kl = rewards_with_kl.view(-1, self.num_generations)
+        
+        # Compute RLOO baseline with KL-adjusted rewards
+        sum_all_rewards = rewards_with_kl.sum(dim=1, keepdim=True)
+        baseline = (sum_all_rewards - rewards_with_kl) / (self.num_generations - 1)
+        
+        # Compute advantages as r_i - baseline_i
+        advantages = rewards_with_kl - baseline
+        advantages = advantages.flatten()
+        all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
+        advantages = advantages[process_slice]
+        
+
+        # Normalize advantages if requested
+        if self.normalize_advantages:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
         # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
         # old_per_token_logps == per_token_logps, so we can skip it's computation
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = (
             per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
         )
-        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+        old_sequence_logps = (old_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+        
+        coef_1 = torch.exp(sequence_logps - old_sequence_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
 
-        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-        if self.beta != 0.0:
-            per_token_loss = per_token_loss + self.beta * per_token_kl
+        # Apply advantages at sequence level
+        sequence_loss1 = coef_1 * advantages
+        sequence_loss2 = coef_2 * advantages
+        sequence_loss = -torch.min(sequence_loss1, sequence_loss2)
+        
+        # if self.beta != 0.0:
+        #     sequence_loss = sequence_loss + self.beta * sequence_kl
 
-        loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        # Final loss is the mean across sequences
+        loss = sequence_loss.mean() 
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
+            mean_kl = sequence_kl.mean()
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         # Compute the clipped probability ratios
-        is_low_clipped = (coef_1 < 1 - self.epsilon) & (advantages.unsqueeze(1) < 0)
-        is_high_clipped = (coef_1 > 1 + self.epsilon) & (advantages.unsqueeze(1) > 0)
+        is_low_clipped = (coef_1 < 1 - self.epsilon) & (advantages < 0)
+        is_high_clipped = (coef_1 > 1 + self.epsilon) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
 
-        low_clip = (is_low_clipped * completion_mask).sum() / completion_mask.sum()
-        high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
-        clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
+        low_clip = is_low_clipped.float().mean()
+        high_clip = is_high_clipped.float().mean()
+        clip_ratio = is_region_clipped.float().mean()
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
@@ -1411,7 +1425,6 @@ class RLOOTrainer_NEW(Trainer):
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.append("unsloth")
-        #TODO: Fix citation
         citation = textwrap.dedent(
             """\
             @inproceedings{ahmadian2024back,
