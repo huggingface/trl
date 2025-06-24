@@ -1210,143 +1210,175 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+
 class PackingTester(unittest.TestCase):
-    def test_pack_responses_in_a_group(self):
-        
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        num_generations = 2
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=8,  # reduce the batch size to reduce memory usage
-                num_generations=num_generations,
-                report_to="none",
-                bf16=False
-            )
-            trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
+    def setUp(self):
+        self.dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
 
-
-        prompt_ids = torch.Tensor([
-            [100, 101, 102, 103],
-            [100, 101, 102, 103],
-            [200, 201, 202, 203],
-            [200, 201, 202, 203],
-        ]).long()
-        prompt_shape = prompt_ids.shape
-        # First prompt has 4 tokens and second prompt has 2 tokens
-        prompt_mask = torch.Tensor([
-            [True, True, True, True],
-            [True, True, True, True],
-            [True, True, False, False],
-            [True, True, False, False],
-        ])
-
-        completion_ids = torch.Tensor([
-            [1000, 1001, 1002, 1003, 1004, 1005],
-            [1010, 1011, 1012, 1013, 1014, 1015],
-            [2000, 2001, 2002, 2003, 2004, 2005],
-            [2010, 2011, 2012, 2013, 2014, 2015],
-        ]).long()
-
-        completion_mask = torch.Tensor([
-            [True, True, True, True, False, False],
-            [True, True, True, True, True, False],
-            [True, True, True, True, True, True],
-            [True, True, False, False, False, False],
-        ])
-        
-
-        packed_sequence = trainer._pack_responses_in_a_group(
-            prompt_ids, completion_ids, prompt_mask, completion_mask
+    def create_trainer(self, num_generations=2, batch_size=8, do_pack_completions=False, beta=0.0, max_steps=None, tmp_dir=None):
+        args_kwargs = dict(
+            output_dir=tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=batch_size,
+            num_generations=num_generations,
+            report_to="none",
+            bf16=False,
+            do_pack_completions=do_pack_completions,
+            beta=beta,
+        )
+        if max_steps is not None:
+            args_kwargs["max_steps"] = max_steps
+        training_args = GRPOConfig(**args_kwargs)
+        return GRPOTrainer(
+            model=self.model_id,
+            reward_funcs=self.reward_model_id,
+            args=training_args,
+            train_dataset=self.dataset,
         )
 
-        packed_input_ids = packed_sequence["input_ids"]
-        packed_position_ids = packed_sequence["position_ids"]
-        packed_attention_mask = packed_sequence["attention_mask"]
-
-        num_unique_prompts = len(prompt_ids) // num_generations
-        assert len(packed_input_ids) == num_unique_prompts
-        assert len(packed_position_ids) == num_unique_prompts
-        assert len(packed_attention_mask) == num_unique_prompts
-
-        pad_token_id = trainer.processing_class.pad_token_id
-        expected_input_ids = torch.Tensor(
-            [
-                [100, 101, 102, 103, 1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013, 1014],
-                [200, 201, 2000, 2001, 2002, 2003, 2004, 2005, 2010, 2011, pad_token_id, pad_token_id, pad_token_id],
-            ]
-        ).long()
-        assert torch.equal(packed_input_ids, expected_input_ids)
-        expected_position_ids = torch.Tensor(
-            [
-                [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
-                [0, 1, 2, 3, 4, 5, 6, 7, 2, 3, 0, 0, 0],
-            ]
-        ).long()
-        assert torch.equal(packed_position_ids, expected_position_ids)
-        expected_attention_mask = torch.Tensor(
-            [
-                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
-            ]
-        ).long()
-        assert torch.equal(packed_attention_mask, expected_attention_mask)
-    
-    def test_unpack_logps(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+    def test_pack_responses_in_a_group(self):
         num_generations = 2
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=8,  # reduce the batch size to reduce memory usage
-                num_generations=num_generations,
-                report_to="none",
-                bf16=False
+            trainer = self.create_trainer(num_generations=num_generations, tmp_dir=tmp_dir, do_pack_completions=True)
+
+            prompt_ids = torch.tensor(
+                [
+                    [100, 101, 102, 103],
+                    [100, 101, 102, 103],
+                    [200, 201, 202, 203],
+                    [200, 201, 202, 203],
+                ]
             )
-            trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
+            prompt_mask = torch.tensor(
+                [
+                    [True, True, True, True],
+                    [True, True, True, True],
+                    [True, True, False, False],
+                    [True, True, False, False],
+                ]
             )
+            completion_ids = torch.tensor(
+                [
+                    [1000, 1001, 1002, 1003, 1004, 1005],
+                    [1010, 1011, 1012, 1013, 1014, 1015],
+                    [2000, 2001, 2002, 2003, 2004, 2005],
+                    [2010, 2011, 2012, 2013, 2014, 2015],
+                ]
+            )
+            completion_mask = torch.tensor(
+                [
+                    [True, True, True, True, False, False],
+                    [True, True, True, True, True, False],
+                    [True, True, True, True, True, True],
+                    [True, True, False, False, False, False],
+                ]
+            )
+
+            packed_sequence = trainer._pack_responses_in_a_group(prompt_ids, completion_ids, prompt_mask, completion_mask)
+            packed_input_ids = packed_sequence["input_ids"]
+            packed_position_ids = packed_sequence["position_ids"]
+            packed_attention_mask = packed_sequence["attention_mask"]
+
+            num_unique_prompts = len(prompt_ids) // num_generations
+            self.assertEqual(len(packed_input_ids), num_unique_prompts)
+            self.assertEqual(len(packed_position_ids), num_unique_prompts)
+            self.assertEqual(len(packed_attention_mask), num_unique_prompts)
+
             pad_token_id = trainer.processing_class.pad_token_id
-            position_ids = torch.Tensor(
+            expected_input_ids = torch.tensor(
+                [
+                    [100, 101, 102, 103, 1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013, 1014],
+                    [200, 201, 2000, 2001, 2002, 2003, 2004, 2005, 2010, 2011, pad_token_id, pad_token_id, pad_token_id],
+                ]
+            )
+            self.assertTrue(torch.equal(packed_input_ids, expected_input_ids))
+            expected_position_ids = torch.tensor(
                 [
                     [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
                     [0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id, pad_token_id, pad_token_id],
                 ]
-            ).long()
+            )
+            self.assertTrue(torch.equal(packed_position_ids, expected_position_ids))
+            expected_attention_mask = torch.tensor(
+                [
+                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+                ]
+            )
+            self.assertTrue(torch.equal(packed_attention_mask, expected_attention_mask))
 
-            prompt_mask = torch.Tensor([
-                [True, True, True, True],
-                [True, True, True, True],
-                [True, True, False, False],
-                [True, True, False, False],
-            ])
-
-            all_logps = torch.Tensor(
+    def test_unpack_tensor(self):
+        num_generations = 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(num_generations=num_generations, tmp_dir=tmp_dir, do_pack_completions=True)
+            pad_token_id = trainer.processing_class.pad_token_id
+            position_ids = torch.tensor(
+                [
+                    [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
+                    [0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id, pad_token_id, pad_token_id],
+                ]
+            )
+            prompt_length = torch.tensor([4, 2])
+            all_logps = torch.tensor(
                 [
                     [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
-                    [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, float("-inf"), float("-inf"), float("-inf")],
+                    [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 0.0, 0.0, 0.0],
                 ]
             )
-
-            unpacked_logps = trainer._unpack_logps(position_ids, all_logps, prompt_mask)
-
-            expected_unpacked_logps = torch.Tensor(
+            unpacked_logps = trainer._unpack_tensor(position_ids, all_logps, prompt_length)
+            expected_unpacked_logps = torch.tensor(
                 [
-                    [0.5, 0.6, 0.7, 0.8, float("-inf"), float("-inf")],
-                    [0.9, 1.0, 1.1, 1.2, 1.3, float("-inf")],
+                    [0.5, 0.6, 0.7, 0.8, 0.0, 0.0],
+                    [0.9, 1.0, 1.1, 1.2, 1.3, 0.0],
                     [0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
-                    [1.0, 1.1, float("-inf"), float("-inf"), float("-inf"), float("-inf")],
+                    [1.0, 1.1, 0.0, 0.0, 0.0, 0.0],
                 ]
             )
+            self.assertTrue(torch.allclose(unpacked_logps, expected_unpacked_logps))
 
-            assert torch.allclose(unpacked_logps, expected_unpacked_logps)
+    def test_training_with_packing(self):
+        num_generations = 4
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(
+                num_generations=num_generations,
+                do_pack_completions=True,
+                beta=0.1,
+                max_steps=4,
+                tmp_dir=tmp_dir,
+            )
+            trainer.train()
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_train_loss_same_with_and_without_packing(self):
+        num_generations = 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer_packed = self.create_trainer(
+                num_generations=num_generations,
+                batch_size=4,
+                do_pack_completions=True,
+                beta=0.1,
+                max_steps=1,
+                tmp_dir=tmp_dir,
+            )
+            trainer_packed.train()
+            train_loss_packed = trainer_packed.state.log_history[-1]["train_loss"]
+
+        with tempfile.TemporaryDirectory() as tmp_dir2:
+            trainer_no_packing = self.create_trainer(
+                num_generations=num_generations,
+                batch_size=4,
+                do_pack_completions=False,
+                beta=0.1,
+                max_steps=1,
+                tmp_dir=tmp_dir2,
+            )
+            trainer_no_packing.train()
+            train_loss_no_packing = trainer_no_packing.state.log_history[-1]["train_loss"]
+
+        self.assertAlmostEqual(train_loss_packed, train_loss_no_packing, places=5)
