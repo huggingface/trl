@@ -1240,3 +1240,112 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+class TruncatePromptTester(unittest.TestCase):
+    def setUp(self):
+        self.dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+
+    def create_trainer(self, num_generations=2, batch_size=8, do_pack_completions=False, beta=0.0, max_steps=None, tmp_dir=None, **kwargs):
+        args_kwargs = dict(
+            output_dir=tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=batch_size,
+            num_generations=num_generations,
+            report_to="none",
+            do_pack_completions=do_pack_completions,
+            beta=beta,
+            bf16=False,
+            **kwargs,
+        )
+        if max_steps is not None:
+            args_kwargs["max_steps"] = max_steps
+        training_args = GRPOConfig(**args_kwargs)
+        return GRPOTrainer(
+            model=self.model_id,
+            reward_funcs=self.reward_model_id,
+            args=training_args,
+            train_dataset=self.dataset,
+        )
+
+    def test_truncate_prompt_standard(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(tmp_dir=tmp_dir, max_prompt_length=4)
+            # Simulate non-conversational: prompt_ids shape (2, 6)
+            prompt_text = ["a b c d e f", "g h i j k l"]
+            prompts = trainer.processing_class(prompt_text)
+            prompt_ids = prompts["input_ids"]
+            prompt_mask = prompts["attention_mask"]
+            # is_dataset_conversational returns False
+            truncated_ids, truncated_mask, truncated_text = trainer._truncate_prompt(
+                is_dataset_conversational=False,
+                prompt_ids=prompt_ids,
+                prompt_mask=prompt_mask,
+                prompt_text=prompt_text,
+            )
+            self.assertEqual(truncated_ids.shape, (2, 4))
+            self.assertEqual(truncated_mask.shape, (2, 4))
+            # Should keep only last 4 tokens
+            self.assertTrue(torch.equal(truncated_ids, torch.tensor([[3,4,5,6],[9,10,11,12]])))
+            # Decoded text should match the truncated ids
+            self.assertEqual(truncated_text, ["c d e f", "i j k l"])
+
+    def test_truncate_prompt_no_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(tmp_dir=tmp_dir, max_prompt_length=10)
+            prompt_text = ["a b c", "d e f"]
+            prompts = trainer.processing_class(prompt_text)
+            prompt_ids = prompts["input_ids"]
+            prompt_mask = prompts["attention_mask"]
+            truncated_ids, truncated_mask, truncated_text = trainer._truncate_prompt(
+                is_dataset_conversational=False,
+                prompt_ids=prompt_ids,
+                prompt_mask=prompt_mask,
+                prompt_text=prompt_text,
+            )
+            # Should be unchanged
+            self.assertTrue(torch.equal(truncated_ids, prompt_ids))
+            self.assertTrue(torch.equal(truncated_mask, prompt_mask))
+            self.assertEqual(truncated_text, prompt_text)
+
+    def test_truncate_prompt_conversational(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(tmp_dir=tmp_dir, max_prompt_length=10)
+            # Simulate conversational: prompt_ids shape (1, 8)
+            prompt_messages = [
+                [
+                    {"role": "system", "content": "You are an helpful assistant. Who is very funny."}, 
+                    {"role": "user", "content": "How can I peel a banana?"},
+                    {"role": "assistant", "content": "You can peel a banana by holding it in one hand and using your other hand to gently pull down the peel from the top."},
+                    {"role": "user", "content": "What if I want to use cutlery?"}
+                ],
+                [
+                    {"role": "system", "content": "You are a helpful assistant. Who is an expert in geography."},
+                    {"role": "user", "content": "What is the capital of France?"},
+                    {"role": "assistant", "content": "The capital of France is Paris."}
+                ]
+            ]
+            prompt_text = trainer.processing_class.apply_chat_template(prompt_messages,tokenize=False, add_generation_prompt=True)
+            prompts = trainer.processing_class(
+                prompt_text,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+            )
+            prompt_ids = prompts["input_ids"]
+            prompt_mask = prompts["attention_mask"]
+            # is_dataset_conversational returns True
+            truncated_ids, truncated_mask, truncated_text = trainer._truncate_prompt(
+                is_dataset_conversational=True,
+                prompt_ids=prompt_ids,
+                prompt_mask=prompt_mask,
+                prompt_text=prompt_text,
+            )
+            # Should return tensors of shape (1,4)
+            self.assertEqual(truncated_ids.shape, (1,4))
+            self.assertEqual(truncated_mask.shape, (1,4))
+            # Decoded text should be a string
+            self.assertIsInstance(truncated_text[0], str)
+            # Should not raise error

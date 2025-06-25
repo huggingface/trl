@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -1046,6 +1047,62 @@ class GRPOTrainer(Trainer):
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
+    
+    def _truncate_prompt(
+        self,
+        is_dataset_conversational: bool,
+        prompt_ids: list[list[int]],
+        prompt_mask: list[list[int]],
+        prompt_text: list[str]
+    ) -> tuple:
+        # Checks if the prompt is conversational or not and truncates the input prompt
+        # if it is conversational the truncation guarantees that we still adhere to the chat template.
+
+        prompt_lengths = prompt_mask.sum(dim=1)
+        if max(prompt_lengths) <= self.max_prompt_length:
+            # If all prompts are shorter than max_prompt_length, no truncation is needed
+            return prompt_ids, prompt_mask, prompt_text
+        
+        im_start_system = "<|im_start|>system"
+        im_start_assistant = "<|im_start|>assistant"
+        
+        role_token_lengths = {
+            im_start_system: len(self.processing_class.tokenizer(im_start_system)["input_ids"]),
+            im_start_assistant: len(self.processing_class.tokenizer(im_start_assistant)["input_ids"]),
+        }
+
+        # Truncates the input prompt to a set number of tokens.
+        if not is_dataset_conversational(prompt_ids[0]):
+            truncated_prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+            truncated_prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+            truncated_prompt_text = self.processing_class.batch_decode(
+                prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+            )
+        else:
+            text_to_truncate = self.processing_class.batch_decode(
+                prompt_ids[:, : -self.max_prompt_length], skip_special_tokens=False, clean_up_tokenization_spaces=False
+            )
+            # Use a regex to find the last special token in the text to truncate
+            role_of_last_truncated_turn = [list(re.finditer("<|im_start|>(system|assistant)", text)) for text in text_to_truncate]
+            role_of_last_truncated_turn = [match[-1] if match else None for match in role_of_last_truncated_turn]  # Get the last match for each text
+            truncated_prompt_text = []
+            for i in range(len(role_of_last_truncated_turn)):
+                if role_of_last_truncated_turn[i] is None or prompt_text[i][len(text_to_truncate[i]):].startswith("<|im_start|>"):
+                    truncated_prompt_text.append(prompt_text[i][len(text_to_truncate[i]):])
+                else:
+                    truncated_prompt_text.append(
+                        role_of_last_truncated_turn[i].group(0) + prompt_text[i][len(text_to_truncate[i]) + role_token_lengths[role_of_last_truncated_turn[i].group(0)]:]
+                    )
+            truncated_prompts = self.processing_class(
+                text=truncated_prompt_text,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+            )
+            truncated_prompt_ids = truncated_prompts["input_ids"]
+            truncated_prompt_mask = truncated_prompts["attention_mask"]
+        return truncated_prompt_ids, truncated_prompt_mask, truncated_prompt_text
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1054,6 +1111,7 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
+        is_dataset_conversational = is_conversational(prompts[0])
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
         prompt_inputs = self.processing_class(
             text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
@@ -1062,10 +1120,9 @@ class GRPOTrainer(Trainer):
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
         if self.max_prompt_length is not None:
-            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
-            prompts_text = self.processing_class.batch_decode(
-                prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+            # Truncate the prompt to the max_prompt_length
+            prompt_ids, prompt_mask, prompts_text = self._truncate_prompt(
+                is_dataset_conversational, prompt_ids, prompt_mask, prompts_text
             )
 
         # Generate completions using either vLLM or regular generation
