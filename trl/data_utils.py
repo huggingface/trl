@@ -527,12 +527,6 @@ class _SegmentTree:
 
 def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
-    # Add position_ids to the examples
-    input_ids = examples["input_ids"]
-    position_ids_python = [list(range(len(sequence))) for sequence in input_ids.to_pylist()]
-    position_ids_array = pa.array(position_ids_python, type=examples["input_ids"].type)
-    examples = examples.append_column("position_ids", position_ids_array)
-
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
@@ -545,7 +539,9 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
 
     ids = np.arange(len(examples))
     assert list_column_idx is not None
-    lengths = pc.make_struct(pc.list_value_length(examples[list_column_idx]).combine_chunks(), ids)
+    lengths = pc.list_value_length(examples[list_column_idx]).combine_chunks()
+    examples = examples.append_column("seq_lengths", lengths)  # Allows us to later construct `position_ids`
+    lengths = pc.make_struct(lengths, ids)
     lengths = lengths.sort("descending", by=0)
 
     segment_tree = _SegmentTree(seq_length)
@@ -577,15 +573,22 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     offsets = np.array([0] + [bin["length"] for bin in bins])
     offsets = np.cumsum(offsets)
 
+    assert all(
+        column.num_chunks == 1 for column in examples.columns
+    )  # `pc.take` returns a ChunkedArray with a single chunk
+
+    lengths = examples["seq_lengths"].chunks[0]
+    examples = examples.drop_columns("seq_lengths")
+    lengths = pa.ListArray.from_arrays(np.cumsum([0] + [len(bin["ids"]) for bin in bins], dtype=np.int32), lengths)
+
     columns = []
     for column in examples.columns:
-        assert len(column.chunks) == 1  # `pc.take` returns a ChunkedArray with a single chunk
         column = column.chunks[0]
         if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
             dtype = column.offsets.type.to_pandas_dtype()
             column = type(column).from_arrays(offsets.astype(dtype), column.values)
         columns.append(column)
-    return pa.Table.from_arrays(columns, names=examples.column_names)
+    return pa.Table.from_arrays(columns + [lengths], names=examples.column_names + ["seq_lengths"])
 
 
 def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
