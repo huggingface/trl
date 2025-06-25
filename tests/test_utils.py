@@ -630,10 +630,11 @@ class TestEntropyFromLogits(unittest.TestCase):
     def test_entropy_from_logits(self, dtype, chunk_size):
         batch_size, seq_len, vocab_size = 64, 384, 768
         logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
-        log_probs = torch.log_softmax(logits, dim=-1)
-        expected_entropy = -(torch.exp(log_probs) * log_probs).sum(-1)
-        predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
-        if dtype in [torch.float16, torch.bfloat16]:
-            self.assertTrue(torch.equal(predicted_entropy, expected_entropy))
+        if dtype in (torch.float64, torch.float32):
+            p = logits.softmax(-1)
+            entropy = -torch.sum(p * p.log(), dim=-1)
         else:
-            torch.testing.assert_close(predicted_entropy, expected_entropy, rtol=1e-5, atol=1e-5)
+            logps = logits.log_softmax(dim=-1)
+            entropy = -(torch.exp(logps) * logps).sum(-1)
+        predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
+        torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
