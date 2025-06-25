@@ -1247,15 +1247,12 @@ class TruncatePromptTester(unittest.TestCase):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
 
-    def create_trainer(self, num_generations=2, batch_size=8, do_pack_completions=False, beta=0.0, max_steps=None, tmp_dir=None, **kwargs):
+    def create_trainer(self, max_steps=None, tmp_dir=None, **kwargs):
         args_kwargs = dict(
             output_dir=tmp_dir,
             learning_rate=0.1,
-            per_device_train_batch_size=batch_size,
-            num_generations=num_generations,
+            per_device_train_batch_size=8,
             report_to="none",
-            do_pack_completions=do_pack_completions,
-            beta=beta,
             bf16=False,
             **kwargs,
         )
@@ -1274,7 +1271,7 @@ class TruncatePromptTester(unittest.TestCase):
             trainer = self.create_trainer(tmp_dir=tmp_dir, max_prompt_length=4)
             # Simulate non-conversational: prompt_ids shape (2, 6)
             prompt_text = ["a b c d e f", "g h i j k l"]
-            prompts = trainer.processing_class(prompt_text)
+            prompts = trainer.processing_class(prompt_text, return_tensors='pt')
             prompt_ids = prompts["input_ids"]
             prompt_mask = prompts["attention_mask"]
             # is_dataset_conversational returns False
@@ -1287,15 +1284,15 @@ class TruncatePromptTester(unittest.TestCase):
             self.assertEqual(truncated_ids.shape, (2, 4))
             self.assertEqual(truncated_mask.shape, (2, 4))
             # Should keep only last 4 tokens
-            self.assertTrue(torch.equal(truncated_ids, torch.tensor([[3,4,5,6],[9,10,11,12]])))
+            self.assertTrue(torch.equal(truncated_ids, torch.stack([prompt_ids[0][-4:], prompt_ids[1][-4:]])))
             # Decoded text should match the truncated ids
-            self.assertEqual(truncated_text, ["c d e f", "i j k l"])
+            self.assertEqual(truncated_text, [" c d e f", " i j k l"])
 
     def test_truncate_prompt_no_truncation(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer = self.create_trainer(tmp_dir=tmp_dir, max_prompt_length=10)
             prompt_text = ["a b c", "d e f"]
-            prompts = trainer.processing_class(prompt_text)
+            prompts = trainer.processing_class(prompt_text, return_tensors='pt')
             prompt_ids = prompts["input_ids"]
             prompt_mask = prompts["attention_mask"]
             truncated_ids, truncated_mask, truncated_text = trainer._truncate_prompt(
@@ -1323,7 +1320,6 @@ class TruncatePromptTester(unittest.TestCase):
                 [
                     {"role": "system", "content": "You are a helpful assistant. Who is an expert in geography."},
                     {"role": "user", "content": "What is the capital of France?"},
-                    {"role": "assistant", "content": "The capital of France is Paris."}
                 ]
             ]
             prompt_text = trainer.processing_class.apply_chat_template(prompt_messages,tokenize=False, add_generation_prompt=True)

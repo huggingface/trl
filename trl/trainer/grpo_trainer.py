@@ -57,6 +57,7 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     disable_dropout_in_model,
+    find_last_occurrence,
     generate_model_card,
     get_comet_experiment_url,
     pad,
@@ -1063,45 +1064,57 @@ class GRPOTrainer(Trainer):
             # If all prompts are shorter than max_prompt_length, no truncation is needed
             return prompt_ids, prompt_mask, prompt_text
         
-        im_start_system = "<|im_start|>system"
-        im_start_assistant = "<|im_start|>assistant"
-        
-        role_token_lengths = {
-            im_start_system: len(self.processing_class.tokenizer(im_start_system)["input_ids"]),
-            im_start_assistant: len(self.processing_class.tokenizer(im_start_assistant)["input_ids"]),
-        }
+        im_start_token = self.processing_class.convert_tokens_to_ids(["<|im_start|>"])[0]
+        im_end_token = self.processing_class.convert_tokens_to_ids(["<|im_end|>"])[0]
 
         # Truncates the input prompt to a set number of tokens.
-        if not is_dataset_conversational(prompt_ids[0]):
+        if not is_dataset_conversational:
             truncated_prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             truncated_prompt_mask = prompt_mask[:, -self.max_prompt_length :]
             truncated_prompt_text = self.processing_class.batch_decode(
-                prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+                truncated_prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
         else:
-            text_to_truncate = self.processing_class.batch_decode(
-                prompt_ids[:, : -self.max_prompt_length], skip_special_tokens=False, clean_up_tokenization_spaces=False
+            tokens_to_truncate = prompt_ids[:, :-self.max_prompt_length]
+            truncation_length = prompt_ids.shape[1] - self.max_prompt_length
+            im_start_indices = find_last_occurrence(tokens_to_truncate, im_start_token)
+            role_indices = im_start_indices + 1
+            truncated_prompt_ids = torch.full(
+                (prompt_ids.shape[0], self.max_prompt_length), self.processing_class.pad_token_id, device=prompt_ids.device
             )
-            # Use a regex to find the last special token in the text to truncate
-            role_of_last_truncated_turn = [list(re.finditer("<|im_start|>(system|assistant)", text)) for text in text_to_truncate]
-            role_of_last_truncated_turn = [match[-1] if match else None for match in role_of_last_truncated_turn]  # Get the last match for each text
-            truncated_prompt_text = []
-            for i in range(len(role_of_last_truncated_turn)):
-                if role_of_last_truncated_turn[i] is None or prompt_text[i][len(text_to_truncate[i]):].startswith("<|im_start|>"):
-                    truncated_prompt_text.append(prompt_text[i][len(text_to_truncate[i]):])
+            im_end_indices = find_last_occurrence(
+                prompt_ids[:, -self.max_prompt_length:-self.max_prompt_length+2], im_end_token
+            )
+            for i in range(tokens_to_truncate.shape[0]):
+                # If the prompt is starting with an im_end, we'll just truncate it and start from a new turn
+                # this avoids a scenrio where the prompt would otherwise start with <|im_start|>role<|im_end|>
+                if im_end_indices[i] >= 0:
+                    truncated_prompt_ids[i][:-im_end_indices[i]] = prompt_ids[:, -(self.max_prompt_length-im_end_indices[i])]
+                # Truncated string includes <|im_start|>role
+                elif role_indices[i] > 0 and role_indices[i] < truncation_length:
+                    start_and_role = tokens_to_truncate[i, role_indices[i]-1:role_indices[i]+1]
+                    truncated_prompt_ids[i][:2] = start_and_role
+                    # We need to truncate the first two tokens in the naively truncated prompt to
+                    # account for the added start and role tokens
+                    truncated_prompt_ids[i][2:] = prompt_ids[i, -(self.max_prompt_length-2) :]
+                # Truncated string does not include <|im_start|>
+                elif role_indices == 0:
+                    # Role is truncated
+                    if prompt_mask[i][-self.max_prompt_length-1] == im_start_token:
+                        role = prompt_mask[i][-self.max_prompt_length]
+                        truncated_prompt_ids[i][0] = 0
+                        # Shift truncations by one position to account for the added role
+                        truncated_prompt_ids[i][1:] = prompt_ids[i, -(self.max_prompt_length-1) :]
+                    else:
+                        truncated_prompt_ids[i] = prompt_ids[i, -self.max_prompt_length :]
                 else:
-                    truncated_prompt_text.append(
-                        role_of_last_truncated_turn[i].group(0) + prompt_text[i][len(text_to_truncate[i]) + role_token_lengths[role_of_last_truncated_turn[i].group(0)]:]
-                    )
-            truncated_prompts = self.processing_class(
-                text=truncated_prompt_text,
-                return_tensors="pt",
-                padding=True,
-                padding_side="left",
-                add_special_tokens=False,
+                    truncated_prompt_ids[i] = prompt_ids[i, -self.max_prompt_length :]
+            
+            truncated_prompt_text = self.processing_class.batch_decode(
+                truncated_prompt_ids,
+                skip_special_tokens=False,
             )
-            truncated_prompt_ids = truncated_prompts["input_ids"]
-            truncated_prompt_mask = truncated_prompts["attention_mask"]
+            truncated_prompt_mask = truncated_prompt_ids == self.processing_class.pad_token_id
         return truncated_prompt_ids, truncated_prompt_mask, truncated_prompt_text
 
     def _generate_and_score_completions(

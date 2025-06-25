@@ -1866,3 +1866,28 @@ def print_prompt_completions_sample(
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
+
+def find_last_occurrence(tensor, target_value):
+    """
+    Find last occurrence of target_value in each row of 2D tensor.
+    
+    Returns:
+        torch.Tensor: Shape [B] with last position indices (-1 if not found)
+    """
+    B, S = tensor.shape
+    
+    # Create mask and position indices
+    mask = (tensor == target_value)
+    positions = torch.arange(S, device=tensor.device).unsqueeze(0).expand(B, S)
+    
+    # Set positions to -1 where element doesn't match
+    masked_positions = torch.where(mask, positions, torch.tensor(-1, device=tensor.device))
+    
+    # Find max position (last occurrence) for each row
+    last_positions, _ = masked_positions.max(dim=1)
+    
+    # Handle case where element is not found in a row
+    not_found = ~mask.any(dim=1)
+    last_positions = torch.where(not_found, torch.tensor(-1, device=tensor.device), last_positions)
+    
+    return last_positions
