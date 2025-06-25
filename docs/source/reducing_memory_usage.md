@@ -16,7 +16,7 @@ Sequence lengths in the dataset can vary widely. When data is batched, sequences
 
 To reduce memory usage, it's important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
-<hfoptions id="dpo">
+<hfoptions id="truncation">
 <hfoption id="DPO">
 
 DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
@@ -77,10 +77,16 @@ This technique applies only to SFT.
 Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
 
 <div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing.png" alt="Packing" width="600"/>
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png" alt="Packing" width="600"/>
 </div>
 
-Packing eliminates padding, preserves all sequence information, and allows for flexible sequence lengths, making it a more efficient alternative to truncation. To enable packing, use `packing=True` in the [`SFTConfig`]:
+Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` and in the [`SFTConfig`].
+
+<Tip>
+
+In TRL 0.18 and earlier, packing used a more aggressive method that reduced padding to almost nothing, but had the downside of breaking sequence continuity for a large fraction of the dataset. To revert to this strategy, use `packing_strategy="wrapped"` in `SFTConfig`.
+
+</Tip>
 
 ```python
 from trl import SFTConfig
@@ -93,6 +99,48 @@ training_args = SFTConfig(..., packing=True, max_length=512)
 Packing may cause batch contamination, where adjacent sequences influence one another. This can be problematic for some applications. For more details, see [#1230](https://github.com/huggingface/trl/issues/1230).
 
 </Tip>
+
+## Liger for reducing peak memory usage
+
+> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduces memory usage by 60%.
+
+For more information, see [Liger Kernel Integration](liger_kernel_integration)
+
+<hfoptions id="liger">
+<hfoption id="DPO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+  
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+  
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+  
+```python
+from trl import KTOConfig
+
+training_args = KTOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+</hfoptions>
 
 ## Padding-free
 
@@ -135,7 +183,7 @@ Activation offloading is a memory efficiency technique that reduces GPU VRAM usa
 
 To enable activation offloading in your SFT training configuration:
 
-</hfoption>
+<hfoptions>
 <hfoption id="SFT">
 
 ```python

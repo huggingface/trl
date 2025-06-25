@@ -14,6 +14,7 @@
 
 import os
 import warnings
+from pathlib import Path
 from typing import Callable, Optional, Union
 
 import torch
@@ -58,11 +59,11 @@ class IterativeSFTTrainer(Trainer):
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
 
-            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
-              a path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
-              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
-              in `args.model_init_kwargs`.
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         args ([`IterativeSFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
@@ -81,13 +82,14 @@ class IterativeSFTTrainer(Trainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         max_length (`int`, *optional*, deprecated):
             Maximum length of the tokenized sequence. Use `args.max_length` instead.
         truncation_mode (`str`, *optional*, deprecated):
             The truncation mode to use. Use `args.truncation_mode` instead.
         optimize_device_cache (`bool`, *optional*, deprecated):
-            Whether to optimize CUDA cache. Use `args.optimize_device_cache` instead.
+            Whether to optimize accelerator cache. Use `args.optimize_device_cache` instead.
     """
 
     _tag_names = ["trl", "iterative-sft"]
@@ -320,7 +322,9 @@ class IterativeSFTTrainer(Trainer):
         texts_labels: Optional[list[str]] = None,
     ):
         """
-        Run an optimisation step given a list of input_ids, attention_mask, and labels or a list of text and text_labels.
+        Run an optimisation step given a list of input_ids, attention_mask, and labels or a list of text and
+        text_labels.
+
         Args:
             input_ids (list[`torch.LongTensor`]):
                 List of tensors containing the input_ids (if not provided, text will be used)
@@ -355,6 +359,13 @@ class IterativeSFTTrainer(Trainer):
             raise ValueError(
                 "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
             )
+
+        # Convert Column to list if not already
+        input_ids = input_ids[:] if input_ids is not None else None
+        attention_mask = attention_mask[:] if attention_mask is not None else None
+        labels = labels[:] if labels is not None else None
+        texts = texts[:] if texts is not None else None
+        texts_labels = texts_labels[:] if texts_labels is not None else None
 
         input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(
             input_ids, attention_mask, labels, texts, texts_labels
@@ -452,6 +463,15 @@ class IterativeSFTTrainer(Trainer):
 
                 self.log(logs)
 
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -477,12 +497,18 @@ class IterativeSFTTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         model_card = generate_model_card(
             base_model=base_model,

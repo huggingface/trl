@@ -36,7 +36,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 judge = PairRMJudge()
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = NashMDConfig(output_dir="Qwen2-0.5B-NashMD", logging_steps=10)
+training_args = NashMDConfig(output_dir="Qwen2-0.5B-NashMD")
 trainer = NashMDTrainer(
     model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
@@ -53,7 +53,7 @@ Distributed across 8 GPUs, the training takes approximately 3 hours.
 
 To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-NashMD) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-NashMD
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-NashMD
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
@@ -125,7 +125,6 @@ python examples/scripts/nash_md.py \
     --judge pair_rm \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --logging_steps 25 \
     --output_dir Qwen2.5-0.5B-NashMD-PairRM \
     --warmup_ratio 0.1 \
     --push_to_hub

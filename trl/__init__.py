@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.18.0.dev0"
+__version__ = "0.20.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -41,6 +41,7 @@ _import_structure = {
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
         "PreTrainedModelWrapper",
+        "clone_chat_template",
         "create_reference_model",
         "setup_chat_format",
     ],
@@ -136,6 +137,7 @@ if TYPE_CHECKING:
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
         PreTrainedModelWrapper,
+        clone_chat_template,
         create_reference_model,
         setup_chat_format,
     )

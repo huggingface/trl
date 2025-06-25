@@ -23,7 +23,7 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.testing_utils import require_peft, require_torch_accelerator, torch_device
+from transformers.testing_utils import backend_empty_cache, require_peft, require_torch_accelerator, torch_device
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
@@ -53,10 +53,7 @@ class DPOTrainerSlowTester(unittest.TestCase):
 
     def tearDown(self):
         gc.collect()
-        if torch_device == "cpu":
-            torch.cuda.empty_cache()
-        elif torch_device == "xpu":
-            torch.xpu.empty_cache()
+        backend_empty_cache(torch_device)
         gc.collect()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS)))
@@ -117,7 +114,8 @@ class DPOTrainerSlowTester(unittest.TestCase):
     @require_peft
     def test_dpo_peft_model(self, model_id, loss_type, pre_compute_logits, gradient_checkpointing_kwargs):
         """
-        A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios of gradient checkpointing.
+        A test that tests the simple usage of `DPOTrainer` using a peft model in full precision + different scenarios
+        of gradient checkpointing.
         """
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)

@@ -24,8 +24,9 @@ class SFTConfig(TrainingArguments):
     r"""
     Configuration class for the [`SFTTrainer`].
 
-    Only the parameters specific to SFT training are listed here. For details on other parameters, refer to the
-    [`~transformers.TrainingArguments`] documentation.
+    This class includes only the parameters that are specific to SFT training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -37,6 +38,11 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
+        chat_template_path (`str` or `None`, *optional*, defaults to `None`):
+            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
+            or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
+            ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
+            embedding layer is resized accordingly.
 
         > Parameters that control the data preprocessing
 
@@ -48,7 +54,8 @@ class SFTConfig(TrainingArguments):
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         eos_token (`str` or `None`, *optional*, defaults to `None`):
-            Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`.
+            Token used to indicate the end of a turn or sequence. If `None`, it defaults to
+            `processing_class.eos_token`.
         pad_token (`int` or `None`, *optional*, defaults to `None`):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
@@ -56,12 +63,16 @@ class SFTConfig(TrainingArguments):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
         packing (`bool`, *optional*, defaults to `False`):
-            Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define sequence length.
+            Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
+            padding. Uses `max_length` to define sequence length.
+        packing_strategy (`str`, *optional*, defaults to `"ffd"`):
+            Strategy for packing sequences. Can be either `"ffd"` (first-fit decreasing, default), or `"wrapped"`.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
             supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
-            batch structure.
+            batch structure. When packing is enabled with strategy `"ffd"`, padding-free is enabled, regardless of the
+            value of this parameter.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
@@ -69,19 +80,49 @@ class SFTConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        learning_rate (`float`, *optional*, defaults to `2e-5`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
         completion_only_loss (`bool` or `None`, *optional*, defaults to `None`):
             Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
             only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
             `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
-            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on
-            the full sequence for [language modeling](#language-modeling) datasets.
+            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
+            sequence for [language modeling](#language-modeling) datasets.
+        assistant_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed
+            only on the assistant responses, which is supported only for [conversational](#conversational) datasets. If `False`,
+            loss is computed on the entire sequence.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
-
     """
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
+    learning_rate: float = field(
+        default=2e-5,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
+        },
+    )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
+        },
+    )
+    average_tokens_across_devices: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
+            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
+        },
+    )
 
     # Parameters that control the model
     model_init_kwargs: Optional[dict[str, Any]] = field(
@@ -89,6 +130,15 @@ class SFTConfig(TrainingArguments):
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `SFTTrainer` is provided as a string."
+        },
+    )
+    chat_template_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
+            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
+            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
+            "that the model's embedding layer is resized accordingly."
         },
     )
 
@@ -132,8 +182,15 @@ class SFTConfig(TrainingArguments):
     packing: bool = field(
         default=False,
         metadata={
-            "help": "Whether to pack multiple sequences into a fixed-length format. Uses `max_length` to define "
-            "sequence length."
+            "help": "Whether to group multiple sequences into fixed-length blocks to improve computational efficiency "
+            "and reduce padding. Uses `max_length` to define sequence length."
+        },
+    )
+    packing_strategy: str = field(
+        default="ffd",
+        metadata={
+            "help": "Strategy for packing sequences. Can be either `'ffd'` (first-fit decreasing, default), or "
+            "`'wrapped'`."
         },
     )
     padding_free: bool = field(
@@ -142,7 +199,8 @@ class SFTConfig(TrainingArguments):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
             "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
-            "handle the flattened batch structure."
+            "handle the flattened batch structure. When packing is enabled with strategy `'ffd'`, padding-free is "
+            "enabled, regardless of the value of this parameter."
         },
     )
     pad_to_multiple_of: Optional[int] = field(
@@ -155,13 +213,6 @@ class SFTConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    learning_rate: float = field(
-        default=2.0e-5,
-        metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "`TrainingArguments`."
-        },
-    )
     completion_only_loss: Optional[bool] = field(
         default=None,
         metadata={
@@ -171,6 +222,16 @@ class SFTConfig(TrainingArguments):
                 "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
                 "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
                 "language modeling datasets."
+            )
+        },
+    )
+    assistant_only_loss: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
+                "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
+                "loss is computed on the entire sequence."
             )
         },
     )
@@ -188,6 +249,8 @@ class SFTConfig(TrainingArguments):
     )
 
     def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
         super().__post_init__()
 
         if self.max_seq_length is not None:

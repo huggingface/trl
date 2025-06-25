@@ -23,8 +23,9 @@ class IterativeSFTConfig(TrainingArguments):
     r"""
     Configuration class for the [`IterativeSFTTrainer`].
 
-    Only the parameters specific to iterative SFT training are listed here. For details on other parameters, refer to the
-    [`~transformers.TrainingArguments`] documentation.
+    This class includes only the parameters that are specific to Iterative SFT training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -44,8 +45,27 @@ class IterativeSFTConfig(TrainingArguments):
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             The truncation mode to use, either `"keep_end"` or `"keep_start"`.
         optimize_device_cache (`bool`, *optional*, defaults to `False`):
-            Whether to optimize CUDA cache for slightly more memory-efficient training.
+            Whether to optimize accelerator cache for slightly more memory-efficient training.
     """
+
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
+        },
+    )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
+        },
+    )
 
     # Parameters that control the model
     model_init_kwargs: Optional[dict[str, Any]] = field(
@@ -69,10 +89,12 @@ class IterativeSFTConfig(TrainingArguments):
     )
     optimize_device_cache: bool = field(
         default=False,
-        metadata={"help": "Whether to optimize CUDA cache for slightly more memory-efficient training."},
+        metadata={"help": "Whether to optimize accelerator cache for slightly more memory-efficient training."},
     )
 
     def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
         super().__post_init__()
 
         if self.truncation_mode not in ["keep_end", "keep_start"]:

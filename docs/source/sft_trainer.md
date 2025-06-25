@@ -54,6 +54,13 @@ The above snippets will use the default training arguments from the [`SFTConfig`
 
 ## Advanced usage
 
+### Train on assistant messages only
+
+To train on assistant messages only, use a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset and set `assistant_only_loss=True` in the [`SFTConfig`]. This setting ensures that loss is computed **only** on the assistant responses, ignoring user and system and user messages.
+
+> [!WARNING]
+> This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% generation %}` keyword. For an example of such an template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
+
 ### Train on completions only
 
 To train on completions only, simply use a [prompt-completion](dataset_formats#prompt-completion) dataset. In this mode, loss is computed solely on the completion part.
@@ -63,26 +70,26 @@ If you’d like to compute loss on both the prompt **and** the completion while 
 ### Add Special Tokens for Chat Format
 
 Adding special tokens to a language model is crucial for training chat models. These tokens are added between the different roles in a conversation, such as the user, assistant, and system, and help the model recognize the structure and flow of a conversation. This setup is essential for enabling the model to generate coherent and contextually appropriate responses in a chat environment. 
-The [`setup_chat_format`] function in `trl` easily sets up a model and tokenizer for conversational AI tasks. This function:
+The [`clone_chat_template`] function is a useful utility to prepare a model and tokenizer for conversational AI tasks. This function:
 - Adds special tokens to the tokenizer, e.g., `<|im_start|>` and `<|im_end|>`, to indicate the start and end of a conversation.
 - Resizes the model’s embedding layer to accommodate the new tokens.
-- Sets the `chat_template` of the tokenizer, which is used to format the input data into a chat-like format. The default is `chatml` from OpenAI.
+- Sets the `chat_template` of the tokenizer, which is used to format the input data into a chat-like format.
 - _optionally_ you can pass `resize_to_multiple_of` to resize the embedding layer to a multiple of the `resize_to_multiple_of` argument, e.g., `64`. If you want to see more formats being supported in the future, please open a GitHub issue on [trl](https://github.com/huggingface/trl)
 
 ```python
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import setup_chat_format
+from trl import clone_chat_template
 
 # Load model and tokenizer
 model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
 tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
 
-# Set up the chat format with the default 'chatml' format
-model, tokenizer = setup_chat_format(model, tokenizer)
+# Set up the chat format
+model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
 ```
 
 > [!WARNING]
-> Some base models, like those from Qwen, have a predefined chat template in the model's tokenizer. In these cases, it is not necessary to apply `setup_chat_format()`, as the tokenizer already handles the formatting. However, it is necessary to align the EOS token with the chat template to ensure the model's responses terminate correctly. In these cases, specify `eos_token` in `SFTConfig`; for example, for `Qwen/Qwen2.5-1.5B`, one should set `eos_token="<|im_end|>"`.
+> Some base models, like those from Qwen, have a predefined chat template in the model's tokenizer. In these cases, it is not necessary to apply [`clone_chat_template()`], as the tokenizer already handles the formatting. However, it is necessary to align the EOS token with the chat template to ensure the model's responses terminate correctly. In these cases, specify `eos_token` in [`SFTConfig`]; for example, for `Qwen/Qwen2.5-1.5B`, one should set `eos_token="<|im_end|>"`.
 
 With our model and tokenizer set up, we can now fine-tune our model on a conversational dataset. Below is an example of how a dataset can be formatted for fine-tuning. 
 
@@ -159,6 +166,15 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 To properly format your input, make sure to process all the examples by looping over them and returning a list of processed text. Check out a full example of how to use SFTTrainer on the alpaca dataset [here](https://github.com/huggingface/trl/pull/444#issue-1760952763)
+
+## Tool Calling with SFT
+
+The SFT trainer fully supports fine-tuning models with *tool calling* capabilities. In this case, each dataset example should include:
+
+* The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+* The list of available tools in the `tools` column, typically provided as JSON schemas
+
+For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
 ### Packing dataset
 
