@@ -857,40 +857,40 @@ class GRPOTrainer(Trainer):
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
-    # Get the per-token log probabilities and optionally the per token position entropies
-    # for the completions for the model and the reference model
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
-        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, do_compute_entropy=False
+        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
     ) -> dict[str, Optional[torch.Tensor]]:
+        """Compute log‐probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
-        for i in range(0, input_ids.size(0), batch_size):
-            input_ids_batch = input_ids[i : i + batch_size]
-            attention_mask_batch = attention_mask[i : i + batch_size]
+        for start in range(0, input_ids.size(0), batch_size):
+            input_ids_batch = input_ids[start : start + batch_size]
+            attention_mask_batch = attention_mask[start : start + batch_size]
 
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             logits = model(
-                input_ids=input_ids_batch, attention_mask=attention_mask_batch, logits_to_keep=logits_to_keep + 1
+                input_ids=input_ids_batch,
+                attention_mask=attention_mask_batch,
+                logits_to_keep=logits_to_keep + 1,
             ).logits
             logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-            input_ids_batch = input_ids_batch[:, -logits_to_keep:]
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-            completion_ids = input_ids[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs for the input tokens
-            if do_compute_entropy:
+
+            completion_ids = input_ids_batch[:, -logits_to_keep:]
+            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+            all_logps.append(logps)
+
+            if compute_entropy:
                 entropies = entropy_from_logits(logits)
                 all_entropies.append(entropies)
 
-            all_logps.append(logps)
-
-        all_logps = torch.cat(all_logps, dim=0)
-        if do_compute_entropy:
-            all_entropies = torch.cat(all_entropies, dim=0)
-        return {"logps": all_logps, "entropies": all_entropies}
+        logps = torch.cat(all_logps, dim=0)
+        entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
+        return {"logps": logps, "entropies": entropies}
 
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
@@ -1386,7 +1386,7 @@ class GRPOTrainer(Trainer):
         # Compute the entropy at each position in the completion
         if self.token_entropy_percentile_threshold > 0.0:
             logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, do_compute_entropy=True
+                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
