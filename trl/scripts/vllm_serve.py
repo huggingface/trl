@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import argparse
+import json
 import logging
 import os
 from collections.abc import Sequence
@@ -65,6 +66,14 @@ logger = logging.getLogger(__name__)
 # error: RuntimeError: Cannot re-initialize CUDA in forked subprocess. To use CUDA with multiprocessing, you must use
 # the 'spawn' start method
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
+
+def json_dict_type(arg_string):
+    """Parse a JSON string into a dictionary."""
+    try:
+        return json.loads(arg_string)
+    except json.JSONDecodeError as e:
+        raise argparse.ArgumentTypeError(f"Invalid JSON: {e}")
 
 
 class WeightSyncWorkerExtension:
@@ -174,11 +183,8 @@ class ScriptArguments:
         dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined
             based on the model configuration. Find the supported values in the vLLM documentation.
-        speculative_config (`dict`, *optional*, defaults to `None`):
-            Speculative decoding configuration for vLLM. If set, the spec model will be used for generation.
-            If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced
-            `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
-            context size, which might be much larger than the KV cache, leading to inefficiencies.
+        speculative_config (`str`, *optional*, defaults to `None`):
+            Speculative decoding configuration for vLLM as JSON string. If set, the spec model will be used for generation. Example: '{"model": "Qwen/Qwen3-0.6B"}'
         enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
@@ -234,10 +240,10 @@ class ScriptArguments:
             "determined based on the model configuration. Find the supported values in the vLLM documentation."
         },
     )
-    speculative_config: Optional[dict] = field(
+    speculative_config: Optional[str] = field(
         default=None,
         metadata={
-            "help": "Speculative decoding configuration for vLLM. If set, the spec model will be used for generation."
+            "help": "Speculative decoding configuration for vLLM as JSON string. If set, the spec model will be used for generation. Example: '{\"model\": \"Qwen/Qwen3-0.6B\"}'"
         },
     )
     max_model_len: Optional[int] = field(
@@ -284,6 +290,14 @@ class ScriptArguments:
         },
     )
 
+    def __post_init__(self):
+        """Parse JSON strings into appropriate types."""
+        if self.speculative_config is not None:
+            try:
+                self.speculative_config = json.loads(self.speculative_config)
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid JSON in speculative_config: {e}")
+
 
 def llm_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
@@ -308,7 +322,7 @@ def llm_worker(
         enable_prefix_caching=script_args.enable_prefix_caching,
         kv_cache_dtype=script_args.kv_cache_dtype,
         max_model_len=script_args.max_model_len,
-        worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
+        #worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
     )
 
