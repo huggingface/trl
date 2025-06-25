@@ -31,6 +31,7 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
     decode_and_strip_padding,
+    entropy_from_logits,
     flush_left,
     flush_right,
     generate_model_card,
@@ -616,3 +617,24 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
                 """),
         ]
         self.assertIn(output, possible_outputs)
+
+
+class TestEntropyFromLogits(unittest.TestCase):
+    @parameterized.expand(
+        [
+            (dtype, chunk_size)
+            for dtype in (torch.float64, torch.float32, torch.float16, torch.bfloat16)
+            for chunk_size in (1, 16)
+        ]
+    )
+    def test_entropy_from_logits(self, dtype, chunk_size):
+        batch_size, seq_len, vocab_size = 64, 384, 768
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+        if dtype in (torch.float64, torch.float32):
+            p = logits.softmax(-1)
+            entropy = -torch.sum(p * p.log(), dim=-1)
+        else:
+            logps = logits.log_softmax(dim=-1)
+            entropy = -(torch.exp(logps) * logps).sum(-1)
+        predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
+        torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
