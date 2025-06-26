@@ -1049,82 +1049,62 @@ class GRPOTrainer(Trainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
     
-    def _truncate_prompt(
+    def _get_prompt_inputs(
         self,
-        is_dataset_conversational: bool,
-        prompt_ids: list[list[int]],
-        prompt_mask: list[list[int]],
-        prompt_text: list[str]
+        prompts: Union[list[str], list[list[dict[str, str]]]]
     ) -> tuple:
         # Checks if the prompt is conversational or not and truncates the input prompt.
         # If it is conversational the truncation preserves the chat template.
-
-        prompt_lengths = prompt_mask.sum(dim=1)
-        if max(prompt_lengths) <= self.max_prompt_length:
-            # If all prompts are shorter than max_prompt_length, no truncation is needed
-            return prompt_ids, prompt_mask, prompt_text
-
-        # Truncates the input prompt to a set number of tokens.
-        if not is_dataset_conversational:
-            truncated_prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-            truncated_prompt_mask = prompt_mask[:, -self.max_prompt_length :]
-            truncated_prompt_text = self.processing_class.batch_decode(
-                truncated_prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+        if not is_conversational(prompts[0]):
+            prompt_text = [x["prompt"] for x in prompts]
+            prompt_inputs = self.processing_class(
+                text=prompt_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
             )
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+            
+            if self.max_prompt_length != None and prompt_mask.sum(-1).max() > self.max_prompt_length:
+                prompt_ids = prompt_ids[:, -self.max_prompt_length: ]
+                prompt_mask = prompt_mask[:, -self.max_prompt_length: ]
+                prompt_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=False)
         else:
-            im_start_token = self.processing_class.convert_tokens_to_ids(["<|im_start|>"])[0]
-            im_end_token = self.processing_class.convert_tokens_to_ids(["<|im_end|>"])[0]
-
-            tokens_to_truncate = prompt_ids[:, :-self.max_prompt_length]
-            truncation_length = prompt_ids.shape[1] - self.max_prompt_length
-            im_start_indices = find_first_or_last_occurrence(tokens_to_truncate, im_start_token, mode='last')
-            # The role token always comes immediately after the <|im_start|> token.
-            truncated_role_indices = im_start_indices + 1
-            truncated_prompt_ids = torch.full(
-                (prompt_ids.shape[0], self.max_prompt_length), self.processing_class.pad_token_id, device=prompt_ids.device
-            )
-            # In order to preserve the chat template we may need to replace the
-            # first two tokens of the truncated prompt with <|im_start|> and role tokens.
-            # But if the naively truncated prompt has an <|im_end|> in the first two positions
-            # we'll again end up with a broken template. So, we need to check if <|im_end|> is
-            # in the first two positions.
-            im_end_indices = find_first_or_last_occurrence(
-                prompt_ids[:, -self.max_prompt_length : -self.max_prompt_length+2], im_end_token, mode='first'
-            )
-
-            for i in range(tokens_to_truncate.shape[0]):
-                # If the prompt is starting with an im_end, we'll just truncate it and start from a new turn
-                # this avoids a scenrio where the prompt would otherwise start with <|im_start|>role<|im_end|>
-                if im_end_indices[i] >= 0:
-                    truncated_prompt_ids[i, :-im_end_indices[i]] = prompt_ids[:, -(self.max_prompt_length-im_end_indices[i]):]
-                # Truncated string includes <|im_start|>role, which needs to be re-injected to preserve the template
-                elif truncated_role_indices[i] > 0 and truncated_role_indices[i] < truncation_length:
-                    start_and_role = tokens_to_truncate[i, truncated_role_indices[i]-1:truncated_role_indices[i]+1]
-                    truncated_prompt_ids[i][:2] = start_and_role
-                    # We need to truncate the first two tokens in the naively truncated prompt to
-                    # account for the added start and role tokens
-                    truncated_prompt_ids[i][2:] = prompt_ids[i, -(self.max_prompt_length-2) :]
-                # Truncated string does not include <|im_start|>
-                elif truncated_role_indices == 0:
-                    # If the prompt after truncation string starts with the role token
-                    # we just need to inject <|im_start|>
-                    if prompt_mask[i][-(self.max_prompt_length+1)] == im_start_token:
-                        truncated_role = prompt_mask[i][-self.max_prompt_length]
-                        truncated_prompt_ids[i][0] = im_start_token
-                        truncated_prompt_ids[i][1] = truncated_role
-                        # We get rid of the first token after the role to account for the newly added <|im_start|> token
-                        truncated_prompt_ids[i][2:] = prompt_ids[i, -(self.max_prompt_length-2) :]
-                    else:
-                        truncated_prompt_ids[i] = prompt_ids[i, -self.max_prompt_length :]
+            # Get the token counts of the content of each message
+            messages_token_counts = [
+                [self.processing_class(msg["content"], add_special_tokens=False, return_tensors='pt')["attention_mask"].sum().item() for msg in prompts[i]["prompt"]] 
+                for i in range(len(prompts))
+            ]
+            # Compute the number of tokens that the contents of all the messages in a prompt consume
+            prompts_token_count = [sum(prompt_token_count) for prompt_token_count in messages_token_counts]
+            truncated_messages = []
+            for i in range(len(prompts)):
+                if prompts_token_count[i] <= self.max_prompt_length:
+                    truncated_messages.append(prompts[i])
                 else:
-                    truncated_prompt_ids[i] = prompt_ids[i, -self.max_prompt_length :]
+                    num_tokens_to_truncate = prompts_token_count[i] - self.max_prompt_length
+                    truncated_messages.append([])
+                    for ind, msg in enumerate(prompts[i]["prompt"]):
+                        if num_tokens_to_truncate == 0:
+                            truncated_messages[-1].append(msg)
+                        else:
+                            if messages_token_counts[i][ind] <= num_tokens_to_truncate:
+                                num_tokens_to_truncate -= messages_token_counts[i][ind]
+                            else:
+                                tokens = self.processing_class(msg["content"], add_special_tokens=False)
+                                tokens = tokens[num_tokens_to_truncate:]
+                                truncated_message = tokenizer.decode(tokens)
+                                msg["content"] = truncated_message
+                                num_tokens_to_truncate = 0
+                                truncated_messages[-1].append(msg)
 
-            truncated_prompt_text = self.processing_class.batch_decode(
-                truncated_prompt_ids,
-                skip_special_tokens=False,
-            )
-            truncated_prompt_mask = truncated_prompt_ids == self.processing_class.pad_token_id
-        return truncated_prompt_ids, truncated_prompt_mask, truncated_prompt_text
+                prompt_inputs = self.processing_class.apply_chat_template(
+                    truncated_messages, return_dict=True, add_generation_prompt=True
+                )
+                prompt_inputs = super()._prepare_inputs(prompt_inputs)
+                prompt_ids = prompt_inputs["input_ids"]
+                prompt_mask = prompt_inputs["attention_mask"]
+                prompt_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=False)
+
+        return prompt_ids, prompt_mask, prompt_text
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1133,20 +1113,7 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
-        is_dataset_conversational = is_conversational(prompts[0])
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-        prompt_inputs = self.processing_class(
-            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
-        prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-        if self.max_prompt_length is not None:
-            # Truncate the prompt to the max_prompt_length
-            prompt_ids, prompt_mask, prompts_text = self._truncate_prompt(
-                is_dataset_conversational, prompt_ids, prompt_mask, prompts_text
-            )
-
+        prompt_ids, prompt_mask, prompt_text = self._get_prompt_inputs(prompts)
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             # First, update the vLLM weights if needed
