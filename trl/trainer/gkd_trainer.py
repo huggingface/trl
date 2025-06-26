@@ -35,7 +35,7 @@ from transformers import (
     ProcessorMixin,
     is_wandb_available,
 )
-from transformers.trainer_callback import TrainerCallback
+from transformers.trainer_callback import TrainerCallback, TrainerControl, TrainerState
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
@@ -63,6 +63,29 @@ if is_wandb_available():
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
+
+
+class GKDStudentVLLMSyncCallback(TrainerCallback):
+    """
+    Callback to sync student model weights to vLLM after training steps.
+    This ensures weight syncing happens when DeepSpeed is in a stable state.
+    """
+
+    def __init__(self, trainer):
+        self.trainer = trainer
+
+    def on_step_end(self, args, state: TrainerState, control: TrainerControl, **kwargs):
+        """Sync weights after training step when DeepSpeed is stable."""
+        if (
+            self.trainer.student_use_vllm
+            and state.global_step != self.trainer._last_student_sync_step
+            and state.global_step % self.trainer.student_vllm_sync_frequency == 0
+        ):
+            # Check if this is a step where gradients are synchronized
+            # This happens at the end of gradient accumulation cycles
+            if hasattr(self.trainer.accelerator, "sync_gradients") and self.trainer.accelerator.sync_gradients:
+                self.trainer._move_student_model_to_vllm()
+                self.trainer._last_student_sync_step = state.global_step
 
 
 class GKDTrainer(SFTTrainer):
@@ -222,6 +245,10 @@ class GKDTrainer(SFTTrainer):
             self.student_vllm_sync_frequency = args.student_vllm_sync_frequency
             self._last_student_sync_step = -1
 
+            # Add callback to sync student model weights to vLLM after training steps
+            # This ensures weight syncing happens when DeepSpeed is in a stable state
+            self.add_callback(GKDStudentVLLMSyncCallback(self))
+
     @staticmethod
     def generalized_jsd_loss(
         student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
@@ -354,16 +381,6 @@ class GKDTrainer(SFTTrainer):
     def _generate_on_policy_outputs_student_vllm(self, inputs, generation_config, pad_token_id=None):
         device = self.accelerator.device
 
-        # Update the vLLM weights if needed (based on sync frequency)
-        if (
-            self.state.global_step % self.student_vllm_sync_frequency == 0
-            and self.state.global_step != self._last_student_sync_step
-        ):
-            self._move_student_model_to_vllm()
-            self._last_student_sync_step = self.state.global_step
-
-        # Decode the tokenized prompts from inputs["prompts"]
-        # Ensure to skip special tokens and padding tokens during decoding
         prompts_text = self.processing_class.batch_decode(
             inputs["prompts"],
             skip_special_tokens=True,
