@@ -63,6 +63,8 @@ _import_structure = {
     "ppo_trainer": ["PPOTrainer"],
     "prm_config": ["PRMConfig"],
     "prm_trainer": ["PRMTrainer"],
+    "repo_config": ["RePOConfig"],
+    "repo_trainer": ["RePOTrainer"],
     "reward_config": ["RewardConfig"],
     "reward_trainer": ["RewardTrainer"],
     "rloo_config": ["RLOOConfig"],
@@ -73,6 +75,7 @@ _import_structure = {
         "ConstantLengthDataset",
         "DataCollatorForCompletionOnlyLM",
         "RunningMoments",
+        "ReplayBuffer",
         "compute_accuracy",
         "disable_dropout_in_model",
         "empty_cache",
@@ -134,6 +137,8 @@ if TYPE_CHECKING:
     from .ppo_trainer import PPOTrainer
     from .prm_config import PRMConfig
     from .prm_trainer import PRMTrainer
+    from .repo_config import RePOConfig
+    from .repo_trainer import RePOTrainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
@@ -143,6 +148,7 @@ if TYPE_CHECKING:
     from .utils import (
         ConstantLengthDataset,
         DataCollatorForCompletionOnlyLM,
+        ReplayBuffer, # Already correctly added in the previous step, this is just for context
         RunningMoments,
         compute_accuracy,
         disable_dropout_in_model,
