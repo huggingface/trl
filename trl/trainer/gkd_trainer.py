@@ -555,30 +555,22 @@ class GKDTrainer(SFTTrainer):
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
                     self._sync_fsdp_params_to_student_vllm(self.model)
                 else:
-                    # DeepSpeed ZeRO-3 with PEFT - gather all parameters at once to avoid conflicts
-                    all_params = list(self.model.named_parameters())
-                    param_list = [param for _, param in all_params]
-                    # Build the list of processed parameters to avoid multiple gather calls
-                    processed_params = []
-                    for name, param in all_params:
+                    # DeepSpeed ZeRO-3 with PEFT
+                    for name, param in self.model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name and discard some parameters
-                        processed_name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        if hasattr(self.model, "prefix") and self.model.prefix in processed_name:
+                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
-                        if "original_module" in processed_name:
+                        if "original_module" in name:
                             continue
-                        processed_name = processed_name.replace("modules_to_save.default.", "")
-                        processed_params.append((processed_name, param))
+                        name = name.replace("modules_to_save.default.", "")
 
-                    # Now gather all parameters once and update vLLM
-                    with gather_if_zero3(param_list):
-                        for processed_name, param in processed_params:
-                            if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
-                                self.student_vllm_client.update_named_param(processed_name, param.data)
-                            elif self.student_vllm_mode == "colocate":
-                                llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
-                                llm_model.load_weights([(processed_name, param.data)])
+                        if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.student_vllm_client.update_named_param(name, param.data)
+                        elif self.student_vllm_mode == "colocate":
+                            llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights([(name, param.data)])
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -588,11 +580,9 @@ class GKDTrainer(SFTTrainer):
                 # use memory-efficient post-order traversal for FSDP
                 self._sync_fsdp_params_to_student_vllm(self.model)
             else:
-                # For DeepSpeed ZeRO-3, gather all parameters at once to avoid conflicts
-                all_params = list(self.model.named_parameters())
-                param_list = [param for _, param in all_params]
-                with gather_if_zero3(param_list):
-                    for name, param in all_params:
+                # For DeepSpeed ZeRO-3, gather each parameter individually like GRPO trainer
+                for name, param in self.model.named_parameters():
+                    with gather_if_zero3([param]):
                         if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
                             self.student_vllm_client.update_named_param(name, param.data)
                         elif self.student_vllm_mode == "colocate":
