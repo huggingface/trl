@@ -222,21 +222,6 @@ class GKDTrainer(SFTTrainer):
             self.student_vllm_sync_frequency = args.student_vllm_sync_frequency
             self._last_student_sync_step = -1
 
-    # def _prepare_dataset(self, dataset, *args):
-    #     # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
-    #     # need to keep the messages column as it is. We use the following workaround to keep the messages column.
-    #     # Only do this if a "prompt" column doesn't already exist from user script preprocessing
-    #     if "prompt" not in dataset.column_names:
-    #         if "messages" in dataset.column_names:  # Check if "messages" column exists before trying to access it
-    #             dataset = dataset.add_column("_messages", dataset["messages"])
-    #             dataset = super()._prepare_dataset(dataset, *args)
-    #             # dataset = dataset.rename_column("_messages", "messages")
-    #         else:  # If "messages" is not there (e.g. user provided text/completion), just call super
-    #             dataset = super()._prepare_dataset(dataset, *args)
-    #     else:  # If "prompt" column exists, assume user has preprocessed, just call super
-    #         dataset = super()._prepare_dataset(dataset, *args)
-    #     return dataset
-
     @staticmethod
     def generalized_jsd_loss(
         student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
