@@ -1867,27 +1867,40 @@ def print_prompt_completions_sample(
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
 
-def find_last_occurrence(tensor, target_value):
+def find_first_or_last_occurrence(tensor, target_value, mode='last') -> torch.Tensor:
     """
-    Find last occurrence of target_value in each row of 2D tensor.
-    
+    Find first or last occurrence of target_value in each row of 2D tensor.
+
+    Args:
+        tensor (torch.Tensor): 2D tensor of shape [B, S]
+        target_value: Value to search for
+        mode (str): Either 'first' or 'last' to specify which occurrence to find
+
     Returns:
-        torch.Tensor: Shape [B] with last position indices (-1 if not found)
+        torch.Tensor: Shape [B] with position indices (-1 if not found)
     """
+    if mode not in ['first', 'last']:
+        raise ValueError("mode must be either 'first' or 'last'")
+
     B, S = tensor.shape
-    
+
     # Create mask and position indices
     mask = (tensor == target_value)
     positions = torch.arange(S, device=tensor.device).unsqueeze(0).expand(B, S)
-    
-    # Set positions to -1 where element doesn't match
-    masked_positions = torch.where(mask, positions, torch.tensor(-1, device=tensor.device))
-    
-    # Find max position (last occurrence) for each row
-    last_positions, _ = masked_positions.max(dim=1)
-    
+
+    if mode == 'last':
+        # Set positions to -1 where element doesn't match
+        masked_positions = torch.where(mask, positions, torch.tensor(-1, device=tensor.device))
+        # Find max position (last occurrence) for each row
+        result_positions, _ = masked_positions.max(dim=1)
+    else:  # mode == 'first'
+        # Set positions to large value where element doesn't match
+        masked_positions = torch.where(mask, positions, torch.tensor(S, device=tensor.device))
+        # Find min position (first occurrence) for each row
+        result_positions, _ = masked_positions.min(dim=1)
+
     # Handle case where element is not found in a row
     not_found = ~mask.any(dim=1)
-    last_positions = torch.where(not_found, torch.tensor(-1, device=tensor.device), last_positions)
-    
-    return last_positions
+    result_positions = torch.where(not_found, torch.tensor(-1, device=tensor.device), result_positions)
+
+    return result_positions
