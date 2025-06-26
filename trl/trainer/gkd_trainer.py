@@ -222,21 +222,20 @@ class GKDTrainer(SFTTrainer):
             self.student_vllm_sync_frequency = args.student_vllm_sync_frequency
             self._last_student_sync_step = -1
 
-    def _prepare_dataset(self, dataset, *args):
-        # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
-        # need to keep the messages column as it is. We use the following workaround to keep the messages column.
-        # Only do this if a "prompt" column doesn't already exist from user script preprocessing
-        if "prompt" not in dataset.column_names:
-            if "messages" in dataset.column_names:  # Check if "messages" column exists before trying to access it
-                dataset = dataset.add_column("_messages", dataset["messages"])
-                dataset = super()._prepare_dataset(dataset, *args)
-                dataset = dataset.rename_column("_messages", "messages")
-            else:  # If "messages" is not there (e.g. user provided text/completion), just call super
-                dataset = super()._prepare_dataset(dataset, *args)
-        else:  # If "prompt" column exists, assume user has preprocessed, just call super
-            dataset = super()._prepare_dataset(dataset, *args)
-        return dataset
-
+    # def _prepare_dataset(self, dataset, *args):
+    #     # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
+    #     # need to keep the messages column as it is. We use the following workaround to keep the messages column.
+    #     # Only do this if a "prompt" column doesn't already exist from user script preprocessing
+    #     if "prompt" not in dataset.column_names:
+    #         if "messages" in dataset.column_names:  # Check if "messages" column exists before trying to access it
+    #             dataset = dataset.add_column("_messages", dataset["messages"])
+    #             dataset = super()._prepare_dataset(dataset, *args)
+    #             # dataset = dataset.rename_column("_messages", "messages")
+    #         else:  # If "messages" is not there (e.g. user provided text/completion), just call super
+    #             dataset = super()._prepare_dataset(dataset, *args)
+    #     else:  # If "prompt" column exists, assume user has preprocessed, just call super
+    #         dataset = super()._prepare_dataset(dataset, *args)
+    #     return dataset
 
     @staticmethod
     def generalized_jsd_loss(
@@ -463,12 +462,14 @@ class GKDTrainer(SFTTrainer):
         # We need to combine prompt and completion for new_input_ids
         # Tokenize prompts again to get prompt_ids on the correct device and format
         # Ensure add_special_tokens=False as vLLM typically handles prompts as raw text
+        # Calculate max_length for prompts, ensuring it's positive
+        prompt_max_length = max(1, self.args.max_length - max_new_tokens) if self.args.max_length else None
         prompt_tokenized = self.processing_class(
             prompts_text,
             return_tensors="pt",
             padding="longest",
-            truncation=True,
-            max_length=self.args.max_length - max_new_tokens,
+            truncation=True if prompt_max_length else False,
+            max_length=prompt_max_length,
             add_special_tokens=False,
         ).to(device)
         prompt_ids = prompt_tokenized.input_ids
@@ -569,22 +570,30 @@ class GKDTrainer(SFTTrainer):
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
                     self._sync_fsdp_params_to_student_vllm(self.model)
                 else:
-                    # DeepSpeed ZeRO-3 with PEFT
-                    for name, param in self.model.named_parameters():
+                    # DeepSpeed ZeRO-3 with PEFT - gather all parameters at once to avoid conflicts
+                    all_params = list(self.model.named_parameters())
+                    param_list = [param for _, param in all_params]
+                    # Build the list of processed parameters to avoid multiple gather calls
+                    processed_params = []
+                    for name, param in all_params:
                         # When using PEFT, we need to recover the original parameter name and discard some parameters
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        if hasattr(self.model, "prefix") and self.model.prefix in name:
+                        processed_name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        if hasattr(self.model, "prefix") and self.model.prefix in processed_name:
                             continue
                         # When module to save, remove its prefix and discard the original module
-                        if "original_module" in name:
+                        if "original_module" in processed_name:
                             continue
-                        name = name.replace("modules_to_save.default.", "")
+                        processed_name = processed_name.replace("modules_to_save.default.", "")
+                        processed_params.append((processed_name, param))
 
-                        if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.student_vllm_client.update_named_param(name, param.data)
-                        elif self.student_vllm_mode == "colocate":
-                            llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights([(name, param.data)])
+                    # Now gather all parameters once and update vLLM
+                    with gather_if_zero3(param_list):
+                        for processed_name, param in processed_params:
+                            if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
+                                self.student_vllm_client.update_named_param(processed_name, param.data)
+                            elif self.student_vllm_mode == "colocate":
+                                llm_model = self.student_llm.llm_engine.model_executor.driver_worker.model_runner.model
+                                llm_model.load_weights([(processed_name, param.data)])
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -594,8 +603,11 @@ class GKDTrainer(SFTTrainer):
                 # use memory-efficient post-order traversal for FSDP
                 self._sync_fsdp_params_to_student_vllm(self.model)
             else:
-                for name, param in self.model.named_parameters():
-                    with gather_if_zero3([param]):
+                # For DeepSpeed ZeRO-3, gather all parameters at once to avoid conflicts
+                all_params = list(self.model.named_parameters())
+                param_list = [param for _, param in all_params]
+                with gather_if_zero3(param_list):
+                    for name, param in all_params:
                         if self.student_vllm_mode == "server" and self.accelerator.is_main_process:
                             self.student_vllm_client.update_named_param(name, param.data)
                         elif self.student_vllm_mode == "colocate":

@@ -178,3 +178,10 @@ class GKDConfig(SFTConfig):
             raise ValueError("lmbda must be in the range [0.0, 1.0].")
         if self.beta < 0.0 or self.beta > 1.0:
             raise ValueError("beta must be in the range [0.0, 1.0].")
+
+        # Validate that max_length is sufficient for max_new_tokens
+        if self.max_length is not None and self.max_new_tokens >= self.max_length:
+            raise ValueError(
+                f"max_new_tokens ({self.max_new_tokens}) must be smaller than max_length ({self.max_length}) "
+                f"to leave room for the prompt. Consider increasing max_length or reducing max_new_tokens."
+            )
