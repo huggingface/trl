@@ -32,13 +32,11 @@ from trl.import_utils import (
     is_vllm_available,
 )
 
-
 # Import DNA processing components with proper error handling
 DNA_LLM_AVAILABLE = False
-
-CHAT_TEMPLATE = "{%- set dna_count = namespace(value=0) %}{%- if tools %}\n    {{- '<|im_start|>system\\n' }}\n    {%- if messages[0].role == 'system' %}\n        {{- messages[0].content + '\\n\\n' }}\n    {%- endif %}\n    {{- \"# Tools\\n\\nYou may call one or more functions to assist with the user query.\\n\\nYou are provided with function signatures within <tools></tools> XML tags:\\n<tools>\" }}\n    {%- for tool in tools %}\n        {{- \"\\n\" }}\n        {{- tool | tojson }}\n    {%- endfor %}\n    {{- \"\\n</tools>\\n\\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\\n<tool_call>\\n{\\\"name\\\": <function-name>, \\\"arguments\\\": <args-json-object>}\\n</tool_call><|im_end|>\\n\" }}\n{%- else %}\n    {%- if messages[0].role == 'system' %}\n        {{- '<|im_start|>system\\n' + messages[0].content + '<|im_end|>\\n' }}\n    {%- endif %}\n{%- endif %}\n{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}\n{%- for message in messages[::-1] %}\n    {%- set index = (messages|length - 1) - loop.index0 %}\n    {%- if ns.multi_step_tool and message.role == \"user\" and not(message.content is string and message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}\n        {%- set ns.multi_step_tool = false %}\n        {%- set ns.last_query_index = index %}\n    {%- endif %}\n{%- endfor %}\n{%- for message in messages %}\n    {%- if (message.role == \"user\") or (message.role == \"system\" and not loop.first) %}\n        {{- '<|im_start|>' + message.role + '\\n' }} {%- if message.content is string %}{{- message.content + '<|im_end|>' + '\\n' }}{%- else %}{%- for content in message.content %}{%- if content.type == 'dna' or 'dna' in content %}{%- set dna_count.value = dna_count.value + 1 %}{%- if add_dna_id %}DNA Sequence {{- dna_count.value }}: {%- endif %}<|dna_start|><|dna_pad|><|dna_end|>{%- elif 'text' in content %}{{- content.text }}{%- endif %}{%- endfor %}{{- '<|im_end|>' + '\\n' }}{%- endif %}{%- elif message.role == \"assistant\" %}\n        {%- set content = message.content[0].text %}\n        {%- set reasoning_content = '' %}\n        {%- if message.reasoning_content is defined and message.reasoning_content is not none %}\n            {%- set reasoning_content = message.reasoning_content %}\n        {%- else %}\n            {%- if '</think>' in message.content %}\n                {%- set content = message.content[0].text.split('</think>')[-1].lstrip('\\n') %}\n                {%- set reasoning_content = message.content[0].text.split('</think>')[0].rstrip('\\n').split('<think>')[-1].lstrip('\\n') %}\n            {%- endif %}\n        {%- endif %}\n        {%- if loop.index0 > ns.last_query_index %}\n            {%- if loop.last or (not loop.last and reasoning_content) %}\n                {{- '<|im_start|>' + message.role + '\\n<think>\\n' + reasoning_content.strip('\\n') + '\\n</think>\\n\\n' + content.lstrip('\\n') }}\n            {%- else %}\n                {{- '<|im_start|>' + message.role + '\\n' + content }}\n            {%- endif %}\n        {%- else %}\n            {{- '<|im_start|>' + message.role + '\\n' + content }}\n        {%- endif %}\n        {%- if message.tool_calls %}\n            {%- for tool_call in message.tool_calls %}\n                {%- if (loop.first and content) or (not loop.first) %}\n                    {{- '\\n' }}\n                {%- endif %}\n                {%- if tool_call.function %}\n                    {%- set tool_call = tool_call.function %}\n                {%- endif %}\n                {{- '<tool_call>\\n{\"name\": \"' }}\n                {{- tool_call.name }}\n                {{- '\", \"arguments\": ' }}\n                {%- if tool_call.arguments is string %}\n                    {{- tool_call.arguments }}\n                {%- else %}\n                    {{- tool_call.arguments | tojson }}\n                {%- endif %}\n                {{- '}\\n</tool_call>' }}\n            {%- endfor %}\n        {%- endif %}\n        {{- '<|im_end|>\\n' }}\n    {%- elif message.role == \"tool\" %}\n        {%- if loop.first or (messages[loop.index0 - 1].role != \"tool\") %}\n            {{- '<|im_start|>user' }}\n        {%- endif %}\n        {{- '\\n<tool_response>\\n' }}\n        {{- message.content }}\n        {{- '\\n</tool_response>' }}\n        {%- if loop.last or (messages[loop.index0 + 1].role != \"tool\") %}\n            {{- '<|im_end|>\\n' }}\n        {%- endif %}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\\n' }}\n    {%- if enable_thinking is defined and enable_thinking is false %}\n        {{- '<think>\\n\\n</think>\\n\\n' }}\n    {%- endif %}\n{%- endif %}"
-
-EVO2_AVAILABLE = False
+DLProcessor = None
+DNAInput = None
+CHAT_TEMPLATE = None
 
 try:
     import torch
@@ -50,14 +48,9 @@ try:
         AutoConfig,
     )
     
-    from bioreason.utils.dna_utils import DNAInput as RealDNAInput
-    from bioreason.models.dl.processing_dl import DLProcessor as RealDLProcessor
-    from bioreason.models.dl.chat_template_dl import CHAT_TEMPLATE as RealCHAT_TEMPLATE
-    
-    # Only override if real components are available
-    DNAInput = RealDNAInput
-    DLProcessor = RealDLProcessor
-    CHAT_TEMPLATE = RealCHAT_TEMPLATE
+    from bioreason.utils.dna_utils import DNAInput
+    from bioreason.models.dl.processing_dl import DLProcessor
+    from bioreason.models.dl.chat_template_dl import CHAT_TEMPLATE
     
     # Try to import Evo2 components
     try:
@@ -73,7 +66,21 @@ try:
     
 except ImportError as e:
     print(f"Warning: DNA-LLM components not available: {e}")
-    print("DNA functionality will be disabled - using fallback classes")
+    print("DNA functionality will be disabled.")
+    
+    # Create minimal fallback classes
+    class DNAInput:
+        def __init__(self, sequence: str):
+            self.sequence = sequence
+    
+    class DLProcessor:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __call__(self, *args, **kwargs):
+            raise RuntimeError("DNA functionality not available - bioreason package not installed")
+    
+    CHAT_TEMPLATE = ""
+    EVO2_AVAILABLE = False
 
 
 if is_fastapi_available():
@@ -191,9 +198,6 @@ class ScriptArguments:
     dna_embedding_layer: Optional[str] = field(default=None, metadata={"help": "Name of the layer to use for the Evo2 model."})
     max_length_dna: int = field(default=2048, metadata={"help": "Maximum length of DNA sequences."})
     use_dna_llm: bool = field(default=False, metadata={"help": "Whether to enable DNA processing for multimodal DNA+text generation."})
-    
-    # Environment validation
-    skip_env_check: bool = field(default=False, metadata={"help": "Skip the fuckvllm environment validation check."})
 
 
 def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection) -> None:
@@ -325,9 +329,8 @@ class DNAEmbeddingProcessor:
         self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name, trust_remote_code=True)
         self.text_config = AutoConfig.from_pretrained(text_model_name, trust_remote_code=True)
 
-        # Use the same chat template as DNALLMModel (EXACT match)
-        if CHAT_TEMPLATE:
-            self.text_tokenizer.chat_template = CHAT_TEMPLATE
+        # Use the same chat template as DNALLMModel
+        self.text_tokenizer.chat_template = CHAT_TEMPLATE
         self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
 
         # Add DNA tokens exactly like DNALLMModel
@@ -354,19 +357,6 @@ class DNAEmbeddingProcessor:
         # STEP 6: Create minimal embedding layer for text embeddings
         self._embedding_layer = None
         self._text_model_name = text_model_name
-        
-        # Initialize the embedding layer immediately to catch any issues early
-        print("🧬 Pre-initializing embedding layer...")
-        try:
-            # Create a dummy input to trigger embedding layer creation
-            dummy_input = torch.tensor([[0]], dtype=torch.long)
-            if torch.cuda.is_available():
-                dummy_input = dummy_input.cuda()
-            _ = self.get_text_embeddings(dummy_input)
-            print("✅ Embedding layer pre-initialization successful")
-        except Exception as e:
-            print(f"⚠️ Warning: Embedding layer pre-initialization failed: {e}")
-            print("   Will retry when needed")
 
         print("✅ DNAEmbeddingProcessor initialized successfully")
     
@@ -412,40 +402,19 @@ class DNAEmbeddingProcessor:
                 print("  Using original DNA model")
     
     def get_text_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
-        """Get text embeddings using a minimal embedding layer (vLLM mode only)."""
-        # For vLLM mode, we need to create a minimal embedding layer without loading the full model
-        if not hasattr(self, '_embedding_layer') or self._embedding_layer is None:
-            print("⚠️ vLLM mode: Creating minimal embedding layer for DNA integration...")
-            
-            # Load only the embedding layer from the model config
+        """Get text embeddings (exactly like DNALLMModel)."""
+        if self._embedding_layer is None:
+            print("⚠️ Creating minimal embedding layer for DNA integration...")
+            # Create embedding layer exactly like DNALLMModel
             embed_dim = self.text_config.hidden_size
             vocab_size = self.text_config.vocab_size
+            self._embedding_layer = nn.Embedding(vocab_size, embed_dim)
             
-            print(f"🧬 Creating embedding layer: vocab_size={vocab_size}, embed_dim={embed_dim}")
-            
-            # Ensure we're working with valid dimensions
-            if embed_dim <= 0 or vocab_size <= 0:
-                raise ValueError(f"Invalid embedding dimensions: vocab_size={vocab_size}, embed_dim={embed_dim}")
-            
-            # Create the embedding layer
-            try:
-                self._embedding_layer = nn.Embedding(vocab_size, embed_dim)
-                print(f"🧬 Successfully created embedding layer: {self._embedding_layer}")
-            except Exception as e:
-                print(f"❌ Failed to create embedding layer: {e}")
-                raise RuntimeError(f"Failed to create nn.Embedding: {e}")
-            
-            # Verify the embedding layer was created
-            if self._embedding_layer is None:
-                raise RuntimeError("Embedding layer creation returned None")
-            
-            # Try to load embedding weights from the saved model if available
+            # Try to load embedding weights exactly like DNALLMModel
             try:
                 import os
-                model_path = self._text_model_name  # Use the text model name path
-                print(f"🧬 Looking for embedding weights in: {model_path}")
-                
-                if model_path and os.path.exists(model_path):
+                model_path = self._text_model_name
+                if os.path.exists(model_path):
                     # Load just the embedding weights from safetensors
                     try:
                         import safetensors
@@ -454,7 +423,6 @@ class DNAEmbeddingProcessor:
                         # Try safetensors first
                         safetensors_path = os.path.join(model_path, "model.safetensors")
                         if os.path.exists(safetensors_path):
-                            print(f"🧬 Loading from single safetensors file...")
                             with safe_open(safetensors_path, framework="pt", device="cpu") as f:
                                 embed_weights = f.get_tensor("model.embed_tokens.weight")
                                 self._embedding_layer.weight.data = embed_weights
@@ -463,7 +431,6 @@ class DNAEmbeddingProcessor:
                             # Try multiple safetensors files (for sharded models)
                             import glob
                             shard_files = glob.glob(os.path.join(model_path, "model-*.safetensors"))
-                            print(f"🧬 Found {len(shard_files)} shard files")
                             if shard_files:
                                 for shard_file in shard_files:
                                     try:
@@ -473,84 +440,33 @@ class DNAEmbeddingProcessor:
                                                 self._embedding_layer.weight.data = embed_weights
                                                 print("✅ Loaded embedding weights from sharded safetensors")
                                                 break
-                                    except Exception as e:
-                                        print(f"⚠️ Error loading from {shard_file}: {e}")
+                                    except:
                                         continue
                     except Exception as e:
                         print(f"⚠️ Could not load from safetensors: {e}")
                         print("   Using randomly initialized embeddings")
-                else:
-                    print(f"⚠️ Model path does not exist: {model_path}")
-                    print("   Using randomly initialized embeddings")
             except Exception as e:
                 print(f"⚠️ Could not load embedding weights: {e}")
                 print("   Using randomly initialized embeddings")
             
-            # Move to same device as input - be careful not to lose the reference
-            print(f"🧬 Moving embedding layer to device: {input_ids.device}")
-            try:
-                if input_ids.device.type != 'cpu':
-                    self._embedding_layer = self._embedding_layer.to(input_ids.device)
-                print(f"🧬 Embedding layer ready: {self._embedding_layer}")
-                print(f"🧬 Embedding layer type: {type(self._embedding_layer)}")
-                print(f"🧬 Embedding layer device: {next(self._embedding_layer.parameters()).device}")
-            except Exception as e:
-                print(f"❌ Error moving embedding layer to device: {e}")
-                raise RuntimeError(f"Failed to move embedding layer to device: {e}")
+            self._embedding_layer.to(input_ids.device)
         
-        # Final verification before use
-        if self._embedding_layer is None:
-            raise RuntimeError("CRITICAL: _embedding_layer is None after initialization")
-            
-        if not callable(self._embedding_layer):
-            raise RuntimeError(f"CRITICAL: Embedding layer is not callable - type: {type(self._embedding_layer)}")
-        
-        if not hasattr(self._embedding_layer, 'weight'):
-            raise RuntimeError(f"CRITICAL: Embedding layer has no weight attribute - type: {type(self._embedding_layer)}")
-            
-        # Ensure input is on the same device as the embedding layer
-        embedding_device = next(self._embedding_layer.parameters()).device
-        print(f"🧬 Input device: {input_ids.device}, Embedding device: {embedding_device}")
-        
-        # Move input to the correct device if needed
-        if input_ids.device != embedding_device:
-            print(f"🧬 Moving input from {input_ids.device} to {embedding_device}")
-            input_ids = input_ids.to(embedding_device)
-        
-        print(f"🧬 Calling embedding layer with input shape: {input_ids.shape}")
-        
-        try:
-            result = self._embedding_layer(input_ids)
-            print(f"🧬 Embedding layer output shape: {result.shape}")
-            return result
-        except Exception as e:
-            print(f"❌ Error calling embedding layer: {e}")
-            print(f"❌ Embedding layer: {self._embedding_layer}")
-            print(f"❌ Input shape: {input_ids.shape}")
-            print(f"❌ Input dtype: {input_ids.dtype}")
-            raise RuntimeError(f"Failed to call embedding layer: {e}")
-
+        return self._embedding_layer(input_ids)
+    
     def process_dna_embeddings(
         self,
         dna_tokenized: Dict[str, torch.Tensor],
         batch_idx_map: List[int],
         batch_size: int,
     ) -> List[torch.Tensor]:
-        """
-        Process DNA sequences to obtain embeddings.
-
-        Args:
-            dna_tokenized: Tokenized DNA sequences
-            batch_idx_map: Mapping of each sequence to its batch item
-            batch_size: Number of items in the batch
-
-        Returns:
-            List of tensor embeddings for each batch item
-        """
+        """Process DNA sequences to obtain embeddings (exactly like DNALLMModel)."""
+        print(f"🧬 Processing DNA embeddings for {len(dna_tokenized['input_ids'])} sequences")
+        
         # Process all sequences to get DNA representations
         with torch.no_grad():
-            # Handle different model types based on dna_is_evo2 attribute
+            # Handle different model types based on dna_is_evo2 attribute (same as DNALLMModel)
             if self.dna_is_evo2 and self.dna_embedding_layer is not None:  # Evo2 model
+                print(f"🧬 Using Evo2 model with embedding layer: {self.dna_embedding_layer}")
                 # Get embeddings from the specific layer in Evo2
                 hidden_states_list = []
                 
@@ -575,7 +491,8 @@ class DNAEmbeddingProcessor:
                 else:
                     return [torch.zeros((0, self.text_hidden_size)) for _ in range(batch_size)]
                     
-            else:  # Standard HuggingFace model
+            else:  # Standard HuggingFace model (same as DNALLMModel)
+                print(f"🧬 Using standard HuggingFace DNA model")
                 # Use existing code path for HF models
                 outputs = self.dna_model(
                     input_ids=dna_tokenized["input_ids"],
@@ -585,11 +502,15 @@ class DNAEmbeddingProcessor:
                 # Get the last hidden state
                 hidden_states = outputs.hidden_states[-1]  # shape: [n_seqs, seq_len, hidden_dim]
 
-        # Project all embeddings at once
+        print(f"🧬 Raw DNA hidden states shape: {hidden_states.shape}")
+        
+        # Project all embeddings at once (same as DNALLMModel)
         hidden_states = hidden_states.to(device=self.dna_projection.weight.device, dtype=self.dna_projection.weight.dtype)
         projected_states = self.dna_projection(hidden_states)
+        
+        print(f"🧬 Projected DNA states shape: {projected_states.shape}")
 
-        # Group embeddings by batch item - use proper typing
+        # Group embeddings by batch item (same as DNALLMModel)
         result: List[torch.Tensor] = []
 
         # For each batch item, collect its embeddings
@@ -604,15 +525,19 @@ class DNAEmbeddingProcessor:
 
             # Concatenate embeddings for this batch item
             if batch_embeddings:
-                result.append(torch.cat(batch_embeddings, dim=0))
+                batch_result = torch.cat(batch_embeddings, dim=0)
+                result.append(batch_result)
+                print(f"🧬 Batch {batch_idx} DNA embeddings shape: {batch_result.shape}")
             else:
-                result.append(torch.zeros((0, self.text_hidden_size)))
+                empty_result = torch.zeros((0, self.text_hidden_size))
+                result.append(empty_result)
+                print(f"🧬 Batch {batch_idx} has no DNA embeddings")
 
         return result
 
 
 def generate_with_dna_embeddings(llm, dna_processor, kwargs):
-    """Generate using standard vLLM with DNA embeddings - EXACTLY matches test_kegg_checkpoint.py logic."""
+    """Generate using standard vLLM with DNA embeddings (exactly like DNALLMModel.generate)."""
     print(f"🧬 generate_with_dna_embeddings called with kwargs keys: {kwargs.keys()}")
     
     if "inputs" in kwargs:
@@ -620,69 +545,31 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs):
         inputs = kwargs["inputs"]
         print(f"🧬 Processing {len(inputs)} input samples")
         
-        # STEP 1: Extract text and DNA sequences from inputs (EXACTLY like test_kegg_checkpoint.py)
-        batch_text = []
-        batch_dna_sequences = []
-        
-        for inp in inputs:
-            text = inp["text"]
-            dna_sequences = inp.get("dna_sequences", [])
-            
-            batch_text.append(text)
-            batch_dna_sequences.append(dna_sequences)
-        
-        print(f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_dna_sequences)} DNA sequence lists")
-        for i, dna_seqs in enumerate(batch_dna_sequences):
-            print(f"🧬 Sample {i}: has {len(dna_seqs)} DNA sequences")
-        
-        # STEP 2: Process using DLProcessor (EXACTLY like test_kegg_checkpoint.py and DNALLMModel)
-        # This is the key - the processor expects text as first arg, batch_dna_sequences as kwarg
-        print(f"🧬 Calling DLProcessor with text and batch_dna_sequences...")
-        print(f"🧬 Text sample: {batch_text[0][:200]}..." if batch_text[0] else "🧬 Empty text")
-        
-        processed = dna_processor.processor(
-            text=batch_text,
-            batch_dna_sequences=batch_dna_sequences,
-            max_length_text=2048,  # Match test_kegg_checkpoint.py
-            max_length_dna=2048,
-            return_tensors="pt"
-        )
+        # Use processor to prepare inputs (exactly like DNALLMModel)
+        processed = dna_processor.processor(inputs)
         
         # Get input_ids and attention_mask
         input_ids = processed["input_ids"]
         attention_mask = processed["attention_mask"]
         
         print(f"🧬 Input IDs shape: {input_ids.shape}")
-        print(f"🧬 Attention mask shape: {attention_mask.shape}")
         
         # Check if we have DNA data
-        dna_tokenized = processed.get("dna_tokenized")
-        batch_idx_map = processed.get("batch_idx_map")
-        
-        if dna_tokenized is not None and len(dna_tokenized.input_ids) > 0:
+        if "dna_tokenized" in processed and processed["dna_tokenized"]:
             print(f"🧬 ✅ DNA data provided - processing DNA embeddings...")
-            print(f"🧬 DNA tokenized input_ids shape: {dna_tokenized.input_ids.shape}")
-            print(f"🧬 Batch idx map: {batch_idx_map}")
             
             batch_size = input_ids.shape[0]
-            
-            # STEP 3: Process DNA embeddings using EXACT same logic as DNALLMModel.generate
             dna_embeddings = dna_processor.process_dna_embeddings(
-                {
-                    "input_ids": dna_tokenized.input_ids,
-                    "attention_mask": dna_tokenized.attention_mask
-                },
-                batch_idx_map,
+                processed["dna_tokenized"],
+                processed["batch_idx_map"],
                 batch_size
             )
             
-            # STEP 4: Get text embeddings (EXACT same as DNALLMModel.generate)
-            print(f"🧬 About to call get_text_embeddings with input_ids shape: {input_ids.shape}")
-            print(f"🧬 Embedding layer status: {hasattr(dna_processor, '_embedding_layer')} / {getattr(dna_processor, '_embedding_layer', None)}")
+            # Get text embeddings (exactly like DNALLMModel)
             text_embeddings = dna_processor.get_text_embeddings(input_ids)
             print(f"🧬 Text embeddings shape: {text_embeddings.shape}")
             
-            # STEP 5: Integrate DNA embeddings (EXACT same logic as DNALLMModel.generate)
+            # Integrate DNA embeddings (exact same logic as DNALLMModel.generate)
             mask = input_ids == dna_processor.dna_token_id
             n_dna_tokens = mask.sum().item()
             dna_embeds_flat = torch.cat(dna_embeddings, dim=0)
@@ -704,7 +591,7 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs):
             print(f"🧬 After DNA replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
             print(f"🧬 DNA successfully integrated into text embeddings!")
             
-            # STEP 6: Generate using prompt embeddings with vLLM (EXACT same as DNALLMModel.generate)
+            # Process each batch item separately for vLLM (exactly like DNALLMModel)
             sampling_params = kwargs.get("sampling_params", SamplingParams())
             all_outputs = []
             
@@ -714,8 +601,8 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs):
             print(f"🧬 Input text_embeddings device: {text_embeddings.device}")
             print(f"🧬 Input batch_size: {batch_size}")
             
-            # EXACT same logic as DNALLMModel.generate - handle 3D vs 2D tensors
             if text_embeddings.dim() == 3:
+                # Process each batch item separately (exactly like DNALLMModel)
                 print(f"🧬 3D tensor detected - processing each batch item separately")
                 
                 for batch_idx in range(text_embeddings.shape[0]):
@@ -741,23 +628,8 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs):
             
             return all_outputs
         else:
-            print(f"🧬 No DNA data provided - using text-only generation")
-            # Text-only generation - convert input_ids to prompts for vLLM
-            prompts = []
-            for batch_idx in range(input_ids.shape[0]):
-                # Find non-padding tokens
-                non_pad = (input_ids[batch_idx] != dna_processor.text_tokenizer.pad_token_id).nonzero(as_tuple=True)[0]
-                if len(non_pad) > 0:
-                    start_idx = non_pad[0].item()
-                    # Decode to get the prompt text
-                    prompt_text = dna_processor.text_tokenizer.decode(
-                        input_ids[batch_idx, start_idx:], 
-                        skip_special_tokens=False
-                    ).strip()
-                    prompts.append(prompt_text)
-                else:
-                    prompts.append("")  # Handle empty case
-            
+            # Text-only generation
+            prompts = [inp["text"] for inp in inputs]
             sampling_params = kwargs.get("sampling_params", SamplingParams())
             print(f"🧬 Text-only generation for {len(prompts)} prompts")
             return llm.generate(prompts, sampling_params)
@@ -771,53 +643,6 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs):
 
 def main(script_args: ScriptArguments):
     """Main function to start the vLLM serve with DNA support."""
-    # Check that we're running in the correct environment
-    import sys
-    
-    def check_environment():
-        """Verify we're running in the fuckvllm environment."""
-        current_env = None
-        
-        # Check conda environment
-        conda_env = os.environ.get('CONDA_DEFAULT_ENV')
-        if conda_env:
-            current_env = conda_env
-            print(f"🌍 Running in conda environment: {conda_env}")
-        
-        # Check virtual environment
-        virtual_env = os.environ.get('VIRTUAL_ENV')
-        if virtual_env:
-            env_name = os.path.basename(virtual_env)
-            current_env = env_name
-            print(f"🌍 Running in virtual environment: {env_name}")
-        
-        # Check if we're in the expected environment
-        if current_env != 'fuckvllm':
-            print(f"⚠️  WARNING: Expected to run in 'fuckvllm' environment, but currently in: {current_env or 'unknown'}")
-            print(f"⚠️  Python executable: {sys.executable}")
-            print(f"⚠️  Consider activating the fuckvllm environment first:")
-            print(f"     conda activate fuckvllm")
-            print(f"     # or")
-            print(f"     source fuckvllm/bin/activate")
-            
-            # Give user a chance to abort
-            try:
-                response = input("Continue anyway? (y/N): ").strip().lower()
-                if response not in ['y', 'yes']:
-                    print("❌ Aborting. Please activate the fuckvllm environment first.")
-                    sys.exit(1)
-            except (KeyboardInterrupt, EOFError):
-                print("\n❌ Aborting. Please activate the fuckvllm environment first.")
-                sys.exit(1)
-        else:
-            print(f"✅ Running in correct environment: {current_env}")
-    
-    # Validate environment (unless skipped)
-    if not script_args.skip_env_check:
-        check_environment()
-    else:
-        print("⚠️  Environment check skipped via --skip_env_check flag")
-    
     # Check required dependencies
     if not is_fastapi_available():
         raise ImportError("FastAPI is required. Install with: pip install fastapi")
@@ -865,14 +690,7 @@ def main(script_args: ScriptArguments):
     @app.get("/health/")
     async def health():
         """Health check endpoint to verify that the server is running."""
-        return {
-            "status": "ok",
-            "dna_llm_available": DNA_LLM_AVAILABLE,
-            "dna_processing_enabled": script_args.use_dna_llm and DNA_LLM_AVAILABLE and script_args.dna_model_name,
-            "dna_model": script_args.dna_model_name if script_args.dna_model_name else None,
-            "text_model": script_args.model,
-            "evo2_available": EVO2_AVAILABLE
-        }
+        return {"status": "ok"}
 
     @app.get("/get_world_size/")
     async def get_world_size():
@@ -880,8 +698,8 @@ def main(script_args: ScriptArguments):
         return {"world_size": script_args.tensor_parallel_size * script_args.data_parallel_size}
 
     class GenerateRequest(BaseModel):
-        prompts: List[str]  # Text prompts (will be formatted as chat messages if needed)
-        dna_sequences: Optional[List[List[str]]] = None  # List of DNA sequences per prompt (outer list length must match prompts)
+        prompts: List[str]
+        dna_sequences: Optional[List[List[str]]] = None  # List of DNA sequences per prompt
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -891,195 +709,81 @@ def main(script_args: ScriptArguments):
         max_tokens: int = 16
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: Dict = field(default_factory=dict)
-        
-        def model_post_init(self, __context) -> None:
-            """Validate that dna_sequences length matches prompts length if provided."""
-            if self.dna_sequences is not None:
-                if len(self.dna_sequences) != len(self.prompts):
-                    raise ValueError(
-                        f"Length of dna_sequences ({len(self.dna_sequences)}) must match "
-                        f"length of prompts ({len(self.prompts)})"
-                    )
-                # Validate that each dna_sequences item is a list
-                for i, dna_seqs in enumerate(self.dna_sequences):
-                    if not isinstance(dna_seqs, list):
-                        raise ValueError(
-                            f"dna_sequences[{i}] must be a list of strings, got {type(dna_seqs)}"
-                        )
 
     class GenerateResponse(BaseModel):
         completion_ids: List[List[int]]
-        completions: List[str]
-        # Speed metrics
-        generation_time: float  # Total generation time in seconds
-        tokens_per_second: float  # Average tokens per second
-        total_tokens: int  # Total tokens generated
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
         """Generate completions for the provided prompts, with optional DNA sequences."""
-        import time
-        start_time = time.time()
-        
-        print(f"🧬 API received request:")
-        print(f"🧬   - {len(request.prompts)} prompts")
-        print(f"🧬   - DNA sequences: {'Yes' if request.dna_sequences else 'No'}")
-        if request.dna_sequences:
-            total_seqs = sum(len(seqs) for seqs in request.dna_sequences)
-            print(f"🧬   - Total DNA sequences: {total_seqs}")
-        print(f"🧬   - Temperature: {request.temperature}")
-        print(f"🧬   - Max tokens: {request.max_tokens}")
-        
         # Check if we're using DNA processing
         if script_args.use_dna_llm and DNA_LLM_AVAILABLE and script_args.dna_model_name:
-            print(f"🧬 Using DNA processing mode")
-            result = await generate_with_dna_processing(request)
+            return await generate_with_dna_processing(request)
         else:
-            print(f"🧬 Using standard vLLM mode")
-            result = await generate_with_vllm(request)
-        
-        # Calculate timing metrics
-        end_time = time.time()
-        generation_time = end_time - start_time
-        total_tokens = sum(len(tokens) for tokens in result["completion_ids"])
-        tokens_per_second = total_tokens / generation_time if generation_time > 0 else 0
-        
-        # Log speed metrics
-        print(f"🚀 Generation completed:")
-        print(f"🚀   - Total time: {generation_time:.3f}s")
-        print(f"🚀   - Total tokens: {total_tokens}")
-        print(f"🚀   - Speed: {tokens_per_second:.2f} tokens/sec")
-        
-        # Add metrics to response
-        result["generation_time"] = generation_time
-        result["tokens_per_second"] = tokens_per_second
-        result["total_tokens"] = total_tokens
-        
-        return result
+            return await generate_with_vllm(request)
 
-    # ----------------------------------------------------------------------
-    #  DNA-aware generation  ― no more DNAInput wrappers
-    # ----------------------------------------------------------------------
     async def generate_with_dna_processing(request: GenerateRequest):
-        """
-        Same behaviour as generate_with_vllm, but optionally injects per-prompt
-        DNA sequences that will be turned into embeddings inside DNALLMModel.
-
-        • request.prompts         : List[str]  (length = B)
-        • request.dna_sequences   : List[List[str]] | None
-                                    Outer list is length B, inner is any length.
-        """
-        # Build SamplingParams for vLLM
+        """Generate using standard vLLM with DNA embeddings processed by DNAEmbeddingProcessor."""
+        # Build generation kwargs for vLLM
         generation_kwargs = {
-            "temperature":          request.temperature,
-            "top_p":                request.top_p,
-            "top_k":                request.top_k,
-            "min_p":                request.min_p,
-            "max_tokens":           request.max_tokens,
-            "repetition_penalty":   request.repetition_penalty,
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "max_tokens": request.max_tokens,
+            "repetition_penalty": request.repetition_penalty,
+            "top_k": request.top_k,
+            "min_p": request.min_p,
         }
-        if request.guided_decoding_regex:
-            generation_kwargs["guided_decoding"] = GuidedDecodingParams(
-                backend="outlines",
-                regex=request.guided_decoding_regex,
-            )
+        if request.guided_decoding_regex is not None:
+            generation_kwargs["guided_decoding"] = GuidedDecodingParams(backend="outlines", regex=request.guided_decoding_regex)
+        
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
-        # Split prompts (and DNA) evenly across DP ranks
-        chunked_prompts     = chunk_list(request.prompts,       script_args.data_parallel_size)
-        chunked_dna_seqs    = chunk_list(request.dna_sequences, script_args.data_parallel_size) \
-                                if request.dna_sequences else [[] for _ in range(script_args.data_parallel_size)]
+        # Evenly distribute prompts and DNA sequences across DP ranks
+        chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+        
+        # Handle DNA sequences if provided
+        if request.dna_sequences:
+            chunked_dna = chunk_list(request.dna_sequences, script_args.data_parallel_size)
+        else:
+            chunked_dna = [[] for _ in range(script_args.data_parallel_size)]
 
-        # ------------------------------------------------------------------
-        # Dispatch to workers
-        # ------------------------------------------------------------------
-        for conn, prompts_this_rank, dna_this_rank in zip(connections, chunked_prompts, chunked_dna_seqs):
+        # Send the prompts and DNA sequences to each worker
+        for connection, prompts, dna_seqs in zip(connections, chunked_prompts, chunked_dna):
+            # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
+            if not prompts:
+                prompts = ["<placeholder>"]
+                dna_seqs = []
 
-            # If no real work for this rank, send a placeholder so vLLM won’t error.
-            if not prompts_this_rank:
-                prompts_this_rank, dna_this_rank = ["<placeholder>"], [[]]
-
-            # ---- build the per-example payload -------------------------------------------------------
-            #   DLProcessor expects:
-            #       inputs[i]["text"]          : str (formatted chat message, not None!)
-            #       inputs[i]["dna_sequences"] : List[str] (may be [])
-            # ------------------------------------------------------------------------------------------
+            # Prepare inputs for DNA processing (exactly like DNALLMModel)
             inputs = []
-            for i, prompt in enumerate(prompts_this_rank):
-                # Ensure prompt is not None
-                if prompt is None:
-                    print(f"⚠️ Warning: prompt at index {i} is None, using empty string")
-                    prompt = ""
+            for i, prompt in enumerate(prompts):
+                dna_for_prompt = dna_seqs[i] if i < len(dna_seqs) else []
                 
-                # Get DNA sequences for this prompt (ensure it's a list of strings)
-                dna_seqs = dna_this_rank[i] if i < len(dna_this_rank) else []
-                if not isinstance(dna_seqs, list):
-                    print(f"⚠️ Warning: dna_seqs at index {i} is not a list: {type(dna_seqs)}, converting to []")
-                    dna_seqs = []
-                
-                # Format the prompt properly for the DLProcessor using the chat template
-                # Use the text tokenizer's chat template to format the conversation
-                formatted_text = prompt
-                if not prompt.startswith("<|im_start|>"):
-                    # If not already formatted, format as a chat conversation
-                    messages = [{"role": "user", "content": prompt}]
-                    try:
-                        # Use the processor's text tokenizer apply_chat_template method
-                        formatted_text = dna_processor.text_tokenizer.apply_chat_template(
-                            messages, 
-                            tokenize=False, 
-                            add_generation_prompt=True
-                        )
-                    except Exception as e:
-                        print(f"⚠️ Warning: Failed to apply chat template: {e}")
-                        # Fallback to simple format
-                        formatted_text = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+                # Create DNAInput objects for each DNA sequence
+                dna_inputs = [DNAInput(sequence=seq) for seq in dna_for_prompt] if dna_for_prompt else []
                 
                 inputs.append({
-                    "text": formatted_text,
-                    "dna_sequences": dna_seqs
+                    "text": prompt,
+                    "dna_sequences": dna_inputs
                 })
 
-            
-            print(f"🧬 inputs: {inputs}")
+            kwargs = {
+                "inputs": inputs,
+                "sampling_params": sampling_params
+            }
+            connection.send({"type": "call", "method": "generate", "kwargs": kwargs})
 
-            conn.send(
-                {
-                    "type":   "call",
-                    "method": "generate",
-                    "kwargs": {
-                        "inputs":          inputs,          # << minimalistic now
-                        "sampling_params": sampling_params,
-                    },
-                }
-            )
+        # Receive results
+        all_outputs = [connection.recv() for connection in connections]
 
-        # ------------------------------------------------------------------
-        # Gather & flatten results
-        # ------------------------------------------------------------------
-        raw_outputs   = [conn.recv() for conn in connections]
-        raw_outputs   = [o for o, p in zip(raw_outputs, chunked_prompts) if p]   # drop placeholder ranks
-        raw_outputs   = list(chain.from_iterable(raw_outputs))
+        # Handle empty prompts
+        all_outputs = [output for output, prompts in zip(all_outputs, chunked_prompts) if prompts]
 
-        completion_ids = [
-            list(output.token_ids)
-            for req_out in raw_outputs
-            for output in req_out.outputs
-        ]
-        
-        completions = [
-            output.text
-            for req_out in raw_outputs
-            for output in req_out.outputs
-        ]
-        
-        # Debug logging for completions
-        print(f"🧬 Generated {len(completions)} completions:")
-        for i, completion in enumerate(completions):
-            print(f"   Completion {i+1} (length={len(completion)}): {completion[:100]}{'...' if len(completion) > 100 else ''}")
-
-        return {"completion_ids": completion_ids, "completions": completions}
+        # Process vLLM outputs
+        all_outputs = list(chain.from_iterable(all_outputs))
+        completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
+        return {"completion_ids": completion_ids}
 
     async def generate_with_vllm(request: GenerateRequest):
         """Generate using standard vLLM (original logic)."""
@@ -1121,8 +825,7 @@ def main(script_args: ScriptArguments):
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        completions = [output.text for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids, "completions": completions}
+        return {"completion_ids": completion_ids}
 
     # Additional endpoints (init_communicator, update_named_param, etc.)
     class InitCommunicatorRequest(BaseModel):

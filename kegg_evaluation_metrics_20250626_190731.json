@@ -1,0 +1,19 @@
+{
+  "total_examples": 2,
+  "accuracy": 0.5,
+  "precision": 0.0,
+  "recall": 0.0,
+  "f1_score": 0.0,
+  "avg_generation_time": 2.7997900247573853,
+  "total_generation_time": 5.5995800495147705,
+  "true_positives": 0,
+  "false_positives": 0,
+  "true_negatives": 0,
+  "false_negatives": 0,
+  "confusion_matrix": {
+    "TP": 0,
+    "FP": 0,
+    "TN": 0,
+    "FN": 0
+  }
+}

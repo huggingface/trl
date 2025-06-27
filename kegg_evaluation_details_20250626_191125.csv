@@ -1,0 +1,10 @@
+example_idx,prompt,dna_seq_lengths,ground_truth,generated_tokens,generation_time,contains_ground_truth,prediction_category
+0,"Analyze this DNA: <|dna_start|><|dna_pad|><|dna_end|> and <|dna_start|><|dna_pad|><|dna_end|>
+
+Chromosome Number: 1
+Network Definition of the pathway: TARDBP* -| CxI -> Q
+Genes in the pathway: TARDBP;...","[2048, 2048]",amyotrophic lateral sclerosis,100,2.305086851119995,False,UNKNOWN
+1,"Analyze this DNA: <|dna_start|><|dna_pad|><|dna_end|> and <|dna_start|><|dna_pad|><|dna_end|>
+
+Chromosome Number: 3
+Network Definition of the pathway: (VHL*+RBX1+ELOC+ELOB+CUL2) // HIF1A == ARNT => (S...","[2048, 2048]",clear cell renal cell carcinoma,100,2.0790481567382812,False,UNKNOWN

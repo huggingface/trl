@@ -1,0 +1,20 @@
+{
+  "config": {
+    "host": "localhost",
+    "port": 8000,
+    "test_dna": false,
+    "test_text": true,
+    "num_examples": 2
+  },
+  "text_results": {
+    "success": false,
+    "error": "('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+  },
+  "dna_results": {
+    "total_examples": 0,
+    "successful_examples": 0,
+    "failed_examples": 0,
+    "total_time": 0,
+    "avg_time_per_example": 0
+  }
+}
