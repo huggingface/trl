@@ -1840,7 +1840,7 @@ class DPOTrainer(Trainer):
                 )
 
             if "mlflow" in self.args.report_to:
-                mlflow.log_table(data=table, artifact_file="game_log.csv")
+                mlflow.log_table(data=table, artifact_file="game_log.json")
 
         # Base evaluation
         initial_output = super().evaluation_loop(
