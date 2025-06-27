@@ -1839,7 +1839,7 @@ class DPOTrainer(Trainer):
                     table=table,
                 )
 
-            if "mlflow" in self.args.report_to:
+            if "mlflow" in self.args.report_to and self.accelerator.is_main_process:
                 mlflow.log_table(data=table, artifact_file="game_log.json")
 
         # Base evaluation
