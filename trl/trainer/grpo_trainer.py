@@ -1443,13 +1443,15 @@ class GRPOTrainer(Trainer):
             entropy_loss = 0.0
             per_token_entropy = logps_and_entropies["entropies"]
             if self.loss_type == "grpo":
-                entropy_loss = ((per_token_entropy * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(
-                    min=1.0)).mean()
+                entropy_loss = (
+                    (per_token_entropy * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+                ).mean()
             elif self.loss_type == "bnpo":
                 entropy_loss = (per_token_entropy * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
             elif self.loss_type == "dr_grpo":
                 entropy_loss = (per_token_entropy * completion_mask).sum() / (
-                            per_token_entropy.size(0) * self.max_completion_length)
+                    per_token_entropy.size(0) * self.max_completion_length
+                )
             loss = loss - self.entropy_coef * entropy_loss
 
         # Log the metrics
