@@ -516,6 +516,11 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.token_entropy_percentile_threshold = args.token_entropy_percentile_threshold
+        if self.use_liger_loss and self.token_entropy_percentile_threshold > 0.0:
+            raise NotImplementedError(
+                "Liger Kernels don't currently support masking token positions based on entropy."
+            )
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -855,30 +860,40 @@ class GRPOTrainer(Trainer):
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
-    # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
-    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
+    def _get_per_token_logps_and_entropies(
+        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
+    ) -> dict[str, Optional[torch.Tensor]]:
+        """Compute log‐probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
-        all_entropy = []
-        for i in range(0, input_ids.size(0), batch_size):
-            input_ids_batch = input_ids[i : i + batch_size]
-            attention_mask_batch = attention_mask[i : i + batch_size]
+        all_entropies = []
+        for start in range(0, input_ids.size(0), batch_size):
+            input_ids_batch = input_ids[start : start + batch_size]
+            attention_mask_batch = attention_mask[start : start + batch_size]
 
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             logits = model(
-                input_ids=input_ids_batch, attention_mask=attention_mask_batch, logits_to_keep=logits_to_keep + 1
+                input_ids=input_ids_batch,
+                attention_mask=attention_mask_batch,
+                logits_to_keep=logits_to_keep + 1,
             ).logits
             logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-            input_ids_batch = input_ids_batch[:, -logits_to_keep:]
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-            logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
+
+            completion_ids = input_ids_batch[:, -logits_to_keep:]
+            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
-            entropy = entropy_from_logits(logits)
-            all_entropy.append(entropy)
-        return torch.cat(all_logps, dim=0), torch.cat(all_entropy, dim=0)
+
+            if compute_entropy:
+                entropies = entropy_from_logits(logits)
+                all_entropies.append(entropies)
+
+        logps = torch.cat(all_logps, dim=0)
+        entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
+        return {"logps": logps, "entropies": entropies}
 
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
@@ -1131,7 +1146,8 @@ class GRPOTrainer(Trainer):
                     "max_tokens": self.max_completion_length,
                     "guided_decoding": guided_decoding,
                 }
-                generation_kwargs.update(self.args.generation_kwargs)
+                if self.args.generation_kwargs is not None:
+                    generation_kwargs.update(self.args.generation_kwargs)
                 sampling_params = SamplingParams(**generation_kwargs)
 
                 if self.vllm_tensor_parallel_size > 1:
@@ -1211,23 +1227,23 @@ class GRPOTrainer(Trainer):
             # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
             # per_token_logps.detach() instead.
             if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
-                old_per_token_logps, _ = self._get_per_token_logps(
+                old_per_token_logps = self._get_per_token_logps_and_entropies(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                )
+                )["logps"]
             else:
                 old_per_token_logps = None
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps, _ = self._get_per_token_logps(
+                    ref_per_token_logps = self._get_per_token_logps_and_entropies(
                         self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
-                    )
+                    )["logps"]
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps, _ = self._get_per_token_logps(
+                        ref_per_token_logps = self._get_per_token_logps_and_entropies(
                             self.model, prompt_completion_ids, attention_mask, logits_to_keep
-                        )
+                        )["logps"]
             else:
                 ref_per_token_logps = None
 
@@ -1370,11 +1386,19 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps, entropys = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
-
-        entropy_loss = (entropys * completion_mask).sum() / completion_mask.sum().clamp(
-            min=1.0
-        )  # average entropy over the completion tokens
+        # Compute the entropy at each position in the completion
+        compute_entropy = self.token_entropy_percentile_threshold > 0.0 or self.entropy_coef > 0.0
+        logps_and_entropies = self._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=compute_entropy
+        )
+        per_token_logps = logps_and_entropies["logps"]
+        if self.token_entropy_percentile_threshold > 0.0:
+            entropies = logps_and_entropies["entropies"]
+            # compute the entropy threshold across all tokens in the batch
+            entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
+            entropy_mask = entropies >= entropy_threshold
+        else:
+            entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
@@ -1401,6 +1425,8 @@ class GRPOTrainer(Trainer):
         per_token_loss1 = coef_1 * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        if entropy_mask is not None:
+            per_token_loss = per_token_loss * entropy_mask
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
@@ -1413,7 +1439,18 @@ class GRPOTrainer(Trainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
-        loss = loss + entropy_loss * self.entropy_coef
+        if self.entropy_coef > 0.0:
+            entropy_loss = 0.0
+            per_token_entropy = logps_and_entropies["entropies"]
+            if self.loss_type == "grpo":
+                entropy_loss = ((per_token_entropy * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(
+                    min=1.0)).mean()
+            elif self.loss_type == "bnpo":
+                entropy_loss = (per_token_entropy * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            elif self.loss_type == "dr_grpo":
+                entropy_loss = (per_token_entropy * completion_mask).sum() / (
+                            per_token_entropy.size(0) * self.max_completion_length)
+            loss = loss - self.entropy_coef * entropy_loss
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
