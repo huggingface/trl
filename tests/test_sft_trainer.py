@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+import dataclasses
 import pathlib
 import tempfile
 import unittest
@@ -197,6 +198,14 @@ class SFTTrainerTester(unittest.TestCase):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+
+        # Base CPU-compatible training configuration
+        self.base_training_args = SFTConfig(
+            fp16=False,
+            bf16=False,
+            report_to="none",
+        )
+
         self.dummy_dataset = Dataset.from_dict(
             {
                 "question": [
@@ -320,6 +329,10 @@ class SFTTrainerTester(unittest.TestCase):
             formatting_func=formatting_func_for_pretokenized,
         )
 
+    def get_training_args(self, tmp_dir, **kwargs):
+        """Create SFTConfig with CPU-compatible defaults and custom overrides."""
+        return dataclasses.replace(self.base_training_args, output_dir=tmp_dir, **kwargs)
+
     def test_constant_length_dataset_with_pretokenized_data(self):
         constant_len_dataset = ConstantLengthDataset(
             self.tokenizer,
@@ -388,11 +401,7 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_with_pretokenized_data_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                packing=True,
-                report_to="none",
-            )
+            training_args = self.get_training_args(tmp_dir, packing=True)
 
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -407,12 +416,11 @@ class SFTTrainerTester(unittest.TestCase):
     def test_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Shoud work as SFTTrainer natively supports conversational lm dataset
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 max_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
-                report_to="none",
             )
             _ = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -421,12 +429,7 @@ class SFTTrainerTester(unittest.TestCase):
             )
 
             # Same, but without packing
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                packing=False,
-                report_to="none",
-            )
+            training_args = self.get_training_args(tmp_dir, per_device_train_batch_size=2, packing=False)
             _ = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -434,12 +437,11 @@ class SFTTrainerTester(unittest.TestCase):
             )
 
             # Same, but with packing with `max_length`
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 max_length=16,  # make sure there is at least 1 packed sequence
                 packing=True,
-                report_to="none",
             )
             _ = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -448,11 +450,10 @@ class SFTTrainerTester(unittest.TestCase):
             )
 
             # Same but with prompt completion dataset
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 packing=False,
-                report_to="none",
             )
             _ = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -461,12 +462,11 @@ class SFTTrainerTester(unittest.TestCase):
             )
 
             # Should work as dummy dataset are supported with a formatting function
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 max_length=32,  # make sure there is at least 1 packed sequence
                 packing=True,
-                report_to="none",
             )
             _ = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -477,12 +477,11 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_sft_trainer_with_model_num_train_epochs(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 num_train_epochs=2,
                 per_device_train_batch_size=2,
                 packing=True,
-                report_to="none",
             )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -495,13 +494,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                num_train_epochs=2,
-                max_length=16,
-                packing=True,
-                report_to="none",
-            )
+            training_args = self.get_training_args(tmp_dir, num_train_epochs=2, max_length=16, packing=True)
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -513,13 +506,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                num_train_epochs=2,
-                per_device_train_batch_size=2,
-                max_length=16,
-                report_to="none",
-            )
+            training_args = self.get_training_args(tmp_dir, num_train_epochs=2, max_length=16)
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 args=training_args,
@@ -532,12 +519,11 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_with_model_(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 max_length=16,
                 packing=True,
-                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model,
@@ -551,12 +537,11 @@ class SFTTrainerTester(unittest.TestCase):
 
         # with formatting_func + packed
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 max_length=16,
                 packing=True,
-                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model,
@@ -570,12 +555,7 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=16,
-                report_to="none",
-            )
+            training_args = self.get_training_args(tmp_dir, per_device_train_batch_size=2, max_length=16)
             trainer = SFTTrainer(
                 model=self.model,
                 args=training_args,
@@ -588,12 +568,8 @@ class SFTTrainerTester(unittest.TestCase):
 
     def test_with_multiple_eval_datasets(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                eval_strategy="steps",
-                eval_steps=3,
-                report_to="none",
+            training_args = self.get_training_args(
+                tmp_dir, per_device_train_batch_size=2, eval_strategy="steps", eval_steps=3
             )
 
             trainer = SFTTrainer(
@@ -708,12 +684,11 @@ too.### Assistant: I should not be masked too."""
 
     def test_with_model_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 neftune_noise_alpha=5,
                 packing=True,
-                report_to="none",
             )
             trainer = SFTTrainer(
                 model=self.model,
@@ -753,11 +728,7 @@ too.### Assistant: I should not be masked too."""
                 task_type="CAUSAL_LM",
             )
 
-            training_args = SFTConfig(
-                packing=True,
-                output_dir=tmp_dir,
-                report_to="none",
-            )
+            training_args = self.get_training_args(tmp_dir, packing=True)
 
             _ = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -769,12 +740,7 @@ too.### Assistant: I should not be masked too."""
     @require_peft
     def test_peft_sft_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                packing=True,
-                report_to="none",
-            )
+            training_args = self.get_training_args(tmp_dir, per_device_train_batch_size=2, packing=True)
 
             peft_config = LoraConfig(
                 r=16,
@@ -799,11 +765,7 @@ too.### Assistant: I should not be masked too."""
     @require_peft
     def test_peft_and_gradient_checkpointing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                gradient_checkpointing=True,
-                report_to="none",
-            )
+            training_args = self.get_training_args(tmp_dir, gradient_checkpointing=True)
 
             peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
 
@@ -823,12 +785,11 @@ too.### Assistant: I should not be masked too."""
     @require_peft
     def test_peft_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 neftune_noise_alpha=5,
                 packing=True,
-                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -874,12 +835,11 @@ too.### Assistant: I should not be masked too."""
     @require_peft
     def test_peft_tag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
-                report_to="none",
             )
 
             peft_config = LoraConfig(
@@ -902,12 +862,11 @@ too.### Assistant: I should not be masked too."""
     @require_peft
     def test_tag(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
-                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -921,14 +880,13 @@ too.### Assistant: I should not be masked too."""
 
     def test_only_train_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 gradient_checkpointing=True,
                 packing=True,
-                max_length=128,  # make sure there is at least 1 packed sequence
+                max_length=128,
                 eval_packing=False,
-                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -943,12 +901,11 @@ too.### Assistant: I should not be masked too."""
 
     def test_eval_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
-                max_length=128,  # make sure there is at least 1 packed sequence
+                max_length=128,
                 packing=True,
-                report_to="none",
             )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -962,12 +919,11 @@ too.### Assistant: I should not be masked too."""
 
     def test_no_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
-                max_length=128,  # make sure there is at least 1 packed sequence
+                max_length=128,
                 packing=False,
-                report_to="none",
             )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -982,12 +938,11 @@ too.### Assistant: I should not be masked too."""
     @require_vision
     def test_skip_prepare_dataset(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 remove_unused_columns=False,
                 dataset_kwargs={"skip_prepare_dataset": True},
-                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -999,13 +954,12 @@ too.### Assistant: I should not be masked too."""
 
     def test_skip_prepare_dataset_with_no_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 remove_unused_columns=False,
                 packing=False,
                 dataset_kwargs={"skip_prepare_dataset": True},
-                report_to="none",
             )
 
             trainer = SFTTrainer(
@@ -1018,11 +972,10 @@ too.### Assistant: I should not be masked too."""
     @require_vision
     def test_llava(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 remove_unused_columns=False,
                 dataset_kwargs={"skip_prepare_dataset": True},
-                report_to="none",
             )
             tiny_llava = LlavaForConditionalGeneration.from_pretrained(
                 "trl-internal-testing/tiny-LlavaForConditionalGeneration"
@@ -1065,10 +1018,12 @@ add_generation_prompt %}ASSISTANT: {% endif %}"""
     def test_torch_dtype(self):
         # See https://github.com/huggingface/trl/issues/1751
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 per_device_train_batch_size=2,
                 model_init_kwargs={"torch_dtype": torch.float16},
+                fp16=False,
+                bf16=False,
                 report_to="none",
             )
             trainer = SFTTrainer(
@@ -1082,13 +1037,21 @@ add_generation_prompt %}ASSISTANT: {% endif %}"""
 
 # This new tester aims to replace the first one at some point
 class SFTTrainerTester2(unittest.TestCase):
+    def setUp(self):
+        # Base CPU-compatible training configuration
+        self.base_training_args = SFTConfig(output_dir="/tmp/placeholder", fp16=False, bf16=False, report_to="none")
+
+    def get_training_args(self, tmp_dir, **kwargs):
+        """Create SFTConfig with CPU-compatible defaults and custom overrides."""
+        return dataclasses.replace(self.base_training_args, output_dir=tmp_dir, **kwargs)
+
     def test_train(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = self.get_training_args(tmp_dir)
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
@@ -1116,7 +1079,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = self.get_training_args(tmp_dir)
             trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
             # Save the initial parameters to compare them later
@@ -1139,9 +1102,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir, model_init_kwargs={"torch_dtype": torch.float16}, report_to="none"
-            )
+            training_args = self.get_training_args(tmp_dir, model_init_kwargs={"torch_dtype": torch.float16})
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
@@ -1180,7 +1141,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = self.get_training_args(tmp_dir)
             trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
             # Save the initial parameters to compare them later
@@ -1214,7 +1175,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = self.get_training_args(tmp_dir)
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
@@ -1247,7 +1208,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = self.get_training_args(tmp_dir)
             trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=tokenized_dataset)
 
             # Save the initial parameters to compare them later
@@ -1270,7 +1231,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            training_args = self.get_training_args(tmp_dir, max_steps=3)
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
@@ -1300,7 +1261,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = self.get_training_args(tmp_dir)
             trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset, data_collator=collator)
 
             # Save the initial parameters to compare them later
@@ -1324,11 +1285,11 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
+            training_args = self.get_training_args(
+                tmp_dir,
                 padding_free=True,
                 model_init_kwargs={"attn_implementation": "flash_attention_2"},
-                bf16=True,  # flash_attention_2 only supports bf16 and fp16
+                bf16=True,
                 report_to="none",
             )
             trainer = SFTTrainer(
@@ -1356,8 +1317,11 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
+            training_args = self.get_training_args(
+                tmp_dir,
+                packing=True,
+                packing_strategy=packing_strategy,
+                max_length=10,
             )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -1383,7 +1347,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = self.get_training_args(tmp_dir)
 
             tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
             # The following template is a simplified version of the Qwen chat template, where an additional argument
@@ -1416,7 +1380,11 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, assistant_only_loss=True, report_to="none")
+            training_args = self.get_training_args(
+                tmp_dir,
+                output_dir=tmp_dir,
+                assistant_only_loss=True,
+            )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
             )
@@ -1441,7 +1409,11 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, chat_template_path="Qwen/Qwen3-4B", report_to="none")
+            training_args = self.get_training_args(
+                tmp_dir,
+                output_dir=tmp_dir,
+                chat_template_path="Qwen/Qwen3-4B",
+            )
             # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-GPTNeoXForCausalLM", args=training_args, train_dataset=dataset
@@ -1467,10 +1439,10 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(
+            training_args = self.get_training_args(
+                tmp_dir,
                 output_dir=tmp_dir,
                 chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
-                report_to="none",
             )
             # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
             trainer = SFTTrainer(
@@ -1512,7 +1484,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            training_args = self.get_training_args(tmp_dir)
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
