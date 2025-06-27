@@ -31,7 +31,6 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
     decode_and_strip_padding,
-    find_first_or_last_occurrence,
     flush_left,
     flush_right,
     generate_model_card,
@@ -617,58 +616,3 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
                 """),
         ]
         self.assertIn(output, possible_outputs)
-
-
-class TestFindFirstOrLastOccurrence(unittest.TestCase):
-    def test_first_occurrence_basic(self):
-        tensor = torch.tensor([[1, 2, 3, 2], [4, 5, 6, 5]])
-        result = find_first_or_last_occurrence(tensor, 2, mode='first')
-        expected = torch.tensor([1, -1])
-        self.assertTrue(torch.equal(result, expected))
-
-    def test_last_occurrence_basic(self):
-        tensor = torch.tensor([[1, 2, 3, 2], [4, 5, 6, 5]])
-        result = find_first_or_last_occurrence(tensor, 2, mode='last')
-        expected = torch.tensor([3, -1])
-        self.assertTrue(torch.equal(result, expected))
-
-    def test_first_occurrence_not_found(self):
-        tensor = torch.tensor([[1, 2, 3], [4, 5, 6]])
-        result = find_first_or_last_occurrence(tensor, 9, mode='first')
-        expected = torch.tensor([-1, -1])
-        self.assertTrue(torch.equal(result, expected))
-
-    def test_last_occurrence_not_found(self):
-        tensor = torch.tensor([[1, 2, 3], [4, 5, 6]])
-        result = find_first_or_last_occurrence(tensor, 9, mode='last')
-        expected = torch.tensor([-1, -1])
-        self.assertTrue(torch.equal(result, expected))
-
-    def test_first_occurrence_multiple(self):
-        tensor = torch.tensor([[7, 7, 7], [8, 9, 8]])
-        result = find_first_or_last_occurrence(tensor, 7, mode='first')
-        expected = torch.tensor([0, -1])
-        self.assertTrue(torch.equal(result, expected))
-
-    def test_last_occurrence_multiple(self):
-        tensor = torch.tensor([[7, 7, 7], [8, 9, 8]])
-        result = find_first_or_last_occurrence(tensor, 7, mode='last')
-        expected = torch.tensor([2, -1])
-        self.assertTrue(torch.equal(result, expected))
-
-    def test_first_occurrence_all_rows(self):
-        tensor = torch.tensor([[1, 2, 3], [2, 2, 2]])
-        result = find_first_or_last_occurrence(tensor, 2, mode='first')
-        expected = torch.tensor([1, 0])
-        self.assertTrue(torch.equal(result, expected))
-
-    def test_last_occurrence_all_rows(self):
-        tensor = torch.tensor([[1, 2, 3], [2, 2, 2]])
-        result = find_first_or_last_occurrence(tensor, 2, mode='last')
-        expected = torch.tensor([1, 2])
-        self.assertTrue(torch.equal(result, expected))
-
-    def test_invalid_mode(self):
-        tensor = torch.tensor([[1, 2, 3]])
-        with self.assertRaises(ValueError):
-            find_first_or_last_occurrence(tensor, 2, mode='middle')

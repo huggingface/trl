@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -47,7 +46,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
@@ -57,7 +56,6 @@ from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     disable_dropout_in_model,
-    find_first_or_last_occurrence,
     generate_model_card,
     get_comet_experiment_url,
     pad,
@@ -1048,11 +1046,8 @@ class GRPOTrainer(Trainer):
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
-    
-    def _get_prompt_inputs(
-        self,
-        prompts: Union[list[str], list[list[dict[str, str]]]]
-    ) -> tuple:
+
+    def _get_prompt_inputs(self, prompts: Union[list[str], list[list[dict[str, str]]]]) -> tuple:
         # Checks if the prompt is conversational or not and truncates the input prompt.
         # If it is conversational the truncation preserves the chat template.
         if not is_conversational(prompts[0]):
@@ -1062,15 +1057,22 @@ class GRPOTrainer(Trainer):
             )
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
             prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-            
-            if self.max_prompt_length != None and prompt_mask.sum(-1).max() > self.max_prompt_length:
-                prompt_ids = prompt_ids[:, -self.max_prompt_length: ]
-                prompt_mask = prompt_mask[:, -self.max_prompt_length: ]
+
+            if self.max_prompt_length is not None and prompt_mask.sum(-1).max() > self.max_prompt_length:
+                prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+                prompt_mask = prompt_mask[:, -self.max_prompt_length :]
                 prompt_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=False)
         else:
             # Get the token counts of the content of each message
             messages_token_counts = [
-                [self.processing_class(msg["content"], add_special_tokens=False, return_tensors='pt')["attention_mask"].sum().item() for msg in prompts[i]["prompt"]] 
+                [
+                    self.processing_class(msg["content"], add_special_tokens=False, return_tensors="pt")[
+                        "attention_mask"
+                    ]
+                    .sum()
+                    .item()
+                    for msg in prompts[i]["prompt"]
+                ]
                 for i in range(len(prompts))
             ]
             # Compute the number of tokens that the contents of all the messages in a prompt consume
@@ -1089,9 +1091,9 @@ class GRPOTrainer(Trainer):
                             if messages_token_counts[i][ind] <= num_tokens_to_truncate:
                                 num_tokens_to_truncate -= messages_token_counts[i][ind]
                             else:
-                                tokens = self.processing_class(msg["content"], add_special_tokens=False)
+                                tokens = self.processing_class(msg["content"], add_special_tokens=False)["input_ids"]
                                 tokens = tokens[num_tokens_to_truncate:]
-                                truncated_message = tokenizer.decode(tokens)
+                                truncated_message = self.processing_class.decode(tokens)
                                 msg["content"] = truncated_message
                                 num_tokens_to_truncate = 0
                                 truncated_messages[-1].append(msg)
@@ -1113,7 +1115,7 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
-        prompt_ids, prompt_mask, prompt_text = self._get_prompt_inputs(prompts)
+        prompt_ids, prompt_mask, prompts_text = self._get_prompt_inputs(inputs)
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             # First, update the vLLM weights if needed
