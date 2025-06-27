@@ -345,7 +345,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     use_transformers_paged: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
             "`transformers` paged implementation will be used for generation instead of the default padded "

@@ -500,7 +500,7 @@ class GRPOTrainer(Trainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
-        self.use_transformers_paged = args.use_transformers_paged or True
+        self.use_transformers_paged = args.use_transformers_paged or False
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
@@ -1181,14 +1181,12 @@ class GRPOTrainer(Trainer):
             self.generation_config.max_batch_tokens = 512
             self.generation_config.num_blocks = 1024
             self.generation_config.block_size = 128
-            self.generation_config.do_sample = False  # logit processing issue for now
-            self.generation_config.max_new_tokens = self.max_completion_length
             previous_attn = self.model_wrapped.config._attn_implementation
+
             if torch.cuda.is_available():
                 self.model_wrapped.config._attn_implementation = "paged_attention"
             else:
                 self.model_wrapped.config._attn_implementation = "sdpa_paged"
-            self.model_wrapped.eval()
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1197,18 +1195,23 @@ class GRPOTrainer(Trainer):
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
-                unwrapped_model.to(torch.bfloat16)
-                all_outputs = unwrapped_model.generate_batch(
-                    prompt_inputs.input_ids, generation_config=self.generation_config
-                )
+                # Cast to the appropriate dtype based on training configuration
+                if self.args.bf16:
+                    unwrapped_model.to(torch.bfloat16)
+                elif self.args.fp16:
+                    unwrapped_model.to(torch.float16)
+                with torch.inference_mode():
+                    all_outputs = unwrapped_model.generate_batch(
+                        prompt_inputs.input_ids, generation_config=self.generation_config
+                    )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_inputs.input_ids]
             prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            # Restore the original attention implementation, training mode
             self.model_wrapped.config._attn_implementation = previous_attn
-            self.model_wrapped.train()
         else:
             # Regular generation path
             with unwrap_model_for_generation(
