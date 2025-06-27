@@ -16,7 +16,7 @@ Sequence lengths in the dataset can vary widely. When data is batched, sequences
 
 To reduce memory usage, it's important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
-<hfoptions id="dpo">
+<hfoptions id="truncation">
 <hfoption id="DPO">
 
 DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
@@ -100,6 +100,48 @@ Packing may cause batch contamination, where adjacent sequences influence one an
 
 </Tip>
 
+## Liger for reducing peak memory usage
+
+> [Liger Kernel](https://github.com/linkedin/Liger-Kernel) is a collection of Triton kernels designed specifically for LLM training. It can effectively increase multi-GPU training throughput by 20% and reduces memory usage by 60%.
+
+For more information, see [Liger Kernel Integration](liger_kernel_integration)
+
+<hfoptions id="liger">
+<hfoption id="DPO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+  
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+<hfoption id="GRPO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+  
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+<hfoption id="KTO">
+
+To use Liger for reducing peak memory usage, use the following code snippet:
+  
+```python
+from trl import KTOConfig
+
+training_args = KTOConfig(..., use_liger_loss=True)
+```
+
+</hfoption>
+</hfoptions>
+
 ## Padding-free
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
@@ -141,7 +183,7 @@ Activation offloading is a memory efficiency technique that reduces GPU VRAM usa
 
 To enable activation offloading in your SFT training configuration:
 
-</hfoption>
+<hfoptions>
 <hfoption id="SFT">
 
 ```python

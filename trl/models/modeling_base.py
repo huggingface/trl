@@ -58,9 +58,8 @@ LAYER_PATTERNS = [
 
 class PreTrainedModelWrapper(nn.Module):
     r"""
-    A wrapper class around a (`transformers.PreTrainedModel`) to be compatible with the
-    (`~transformers.PreTrained`) class in order to keep some attributes and methods of the
-    (`~transformers.PreTrainedModel`) class.
+    A wrapper class around a (`transformers.PreTrainedModel`) to be compatible with the (`~transformers.PreTrained`)
+    class in order to keep some attributes and methods of the (`~transformers.PreTrainedModel`) class.
 
     Attributes:
         pretrained_model (`transformers.PreTrainedModel`):
@@ -111,25 +110,20 @@ class PreTrainedModelWrapper(nn.Module):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         r"""
-        Instantiates a new model from a pretrained model from `transformers`. The
-        pretrained model is loaded using the `from_pretrained` method of the
-        `transformers.PreTrainedModel` class. The arguments that are specific to the
-        `transformers.PreTrainedModel` class are passed along this method and filtered
-        out from the `kwargs` argument.
+        Instantiates a new model from a pretrained model from `transformers`. The pretrained model is loaded using the
+        `from_pretrained` method of the `transformers.PreTrainedModel` class. The arguments that are specific to the
+        `transformers.PreTrainedModel` class are passed along this method and filtered out from the `kwargs` argument.
 
         Args:
             pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
                 The path to the pretrained model or its name.
             *model_args (`list`, *optional*)):
-                Additional positional arguments passed along to the underlying model's
-                `from_pretrained` method.
+                Additional positional arguments passed along to the underlying model's `from_pretrained` method.
             **kwargs (`dict`, *optional*):
-                Additional keyword arguments passed along to the underlying model's
-                `from_pretrained` method. We also pre-process the kwargs to extract
-                the arguments that are specific to the `transformers.PreTrainedModel`
-                class and the arguments that are specific to trl models. The kwargs
-                also support `prepare_model_for_kbit_training` arguments from
-                `peft` library.
+                Additional keyword arguments passed along to the underlying model's `from_pretrained` method. We also
+                pre-process the kwargs to extract the arguments that are specific to the `transformers.PreTrainedModel`
+                class and the arguments that are specific to trl models. The kwargs also support
+                `prepare_model_for_kbit_training` arguments from `peft` library.
         """
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
@@ -394,7 +388,7 @@ class PreTrainedModelWrapper(nn.Module):
     @classmethod
     def _get_current_device(cls):
         r"""
-        Get the current device. For GPU, we return the local process index using the `accelerate.PartialState`
+        Get the current device. For GPU & XPU, we return the local process index using the `accelerate.PartialState`
         object to handle corner cases when running scripts in distributed environments.
 
         Returns:
@@ -402,18 +396,17 @@ class PreTrainedModelWrapper(nn.Module):
                 The current device.
         """
         state = PartialState()
-        if is_torch_xpu_available():
-            return f"xpu:{state.local_process_index}"
+        if torch.cuda.is_available() or is_torch_xpu_available():
+            return state.local_process_index
         elif is_torch_npu_available():
             return f"npu:{state.local_process_index}"
         else:
-            return state.local_process_index if torch.cuda.is_available() else "cpu"
+            return "cpu"
 
     @classmethod
     def _split_kwargs(cls, kwargs):
         """
-        Separate the kwargs from the arguments that we support inside
-        `supported_args` and the ones that we don't.
+        Separate the kwargs from the arguments that we support inside `supported_args` and the ones that we don't.
         """
         check_peft_kwargs = False
 
@@ -445,10 +438,9 @@ class PreTrainedModelWrapper(nn.Module):
         cls, pretrained_model, adapter_model_id, adapter_name="reward_model_adapter", token=None
     ):
         r"""
-        Add and load a reward modeling adapter. This method can only be used if the
-        model is a `PeftModel` and if you have initialized the model with the `reward_modeling_adapter_id`
-        argument, pointing to the id of the reward modeling adapter. The latest needs also to contain the
-        score head in order to produce the reward.
+        Add and load a reward modeling adapter. This method can only be used if the model is a `PeftModel` and if you
+        have initialized the model with the `reward_modeling_adapter_id` argument, pointing to the id of the reward
+        modeling adapter. The latest needs also to contain the score head in order to produce the reward.
         """
         pretrained_model.load_adapter(adapter_model_id, adapter_name, is_trainable=False)
         pretrained_model.train()
@@ -515,32 +507,28 @@ class PreTrainedModelWrapper(nn.Module):
     def push_to_hub(self, *args, **kwargs):
         r"""
         Push the pretrained model to the hub. This method is a wrapper around
-        `transformers.PreTrainedModel.push_to_hub`. Please refer to the documentation
-        of `transformers.PreTrainedModel.push_to_hub` for more information.
+        `transformers.PreTrainedModel.push_to_hub`. Please refer to the documentation of
+        `transformers.PreTrainedModel.push_to_hub` for more information.
 
         Args:
             *args (`list`, *optional*):
-                Positional arguments passed along to the underlying model's
-                `push_to_hub` method.
+                Positional arguments passed along to the underlying model's `push_to_hub` method.
             **kwargs (`dict`, *optional*):
-                Keyword arguments passed along to the underlying model's
-                `push_to_hub` method.
+                Keyword arguments passed along to the underlying model's `push_to_hub` method.
         """
         raise NotImplementedError
 
     def save_pretrained(self, *args, **kwargs):
         r"""
         Save the pretrained model to a directory. This method is a wrapper around
-        `transformers.PreTrainedModel.save_pretrained`. Please refer to the documentation
-        of `transformers.PreTrainedModel.save_pretrained` for more information.
+        `transformers.PreTrainedModel.save_pretrained`. Please refer to the documentation of
+        `transformers.PreTrainedModel.save_pretrained` for more information.
 
         Args:
             *args (`list`, *optional*):
-                Positional arguments passed along to the underlying model's
-                `save_pretrained` method.
+                Positional arguments passed along to the underlying model's `save_pretrained` method.
             **kwargs (`dict`, *optional*):
-                Keyword arguments passed along to the underlying model's
-                `save_pretrained` method.
+                Keyword arguments passed along to the underlying model's `save_pretrained` method.
         """
         state_dict = kwargs.get("state_dict")
         if state_dict is None:
@@ -565,17 +553,16 @@ class PreTrainedModelWrapper(nn.Module):
 
     def post_init(self, *args, **kwargs):
         r"""
-        Post initialization method. This method is called after the model is
-        instantiated and loaded from a checkpoint. It can be used to perform
-        additional operations such as loading the state_dict.
+        Post initialization method. This method is called after the model is instantiated and loaded from a checkpoint.
+        It can be used to perform additional operations such as loading the state_dict.
         """
         raise NotImplementedError
 
     def compute_reward_score(self, input_ids, attention_mask=None, **kwargs):
         r"""
-        Computes the reward score for a given input. The method has first to enable the adapter
-        and then compute the reward score. After that the model disables the reward modeling
-        adapter and enables the default ppo adapter again.
+        Computes the reward score for a given input. The method has first to enable the adapter and then compute the
+        reward score. After that the model disables the reward modeling adapter and enables the default ppo adapter
+        again.
         """
         if not self.supports_rm_adapter:
             raise ValueError("This model does not support reward modeling adapter.")
@@ -610,7 +597,8 @@ def create_reference_model(
 
     Args:
         model (`PreTrainedModelWrapper`): The model to be copied.
-        num_shared_layers (`int`, *optional*): The number of initial layers that are shared between both models and kept frozen.
+        num_shared_layers (`int`, *optional*):
+            The number of initial layers that are shared between both models and kept frozen.
         pattern (`str`, *optional*): The shared layers are selected with a string pattern
             (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
 

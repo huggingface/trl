@@ -35,8 +35,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
     Args:
         example (`dict[str, Any]`):
-            A single data entry of a dataset. The example can have different keys depending on the
-            dataset type.
+            A single data entry of a dataset. The example can have different keys depending on the dataset type.
 
     Returns:
         `bool`:
@@ -48,7 +47,8 @@ def is_conversational(example: dict[str, Any]) -> bool:
     >>> example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
     >>> is_conversational(example)
     True
-    >>> example = {"prompt": "The sky is"})
+
+    >>> example = {"prompt": "The sky is"}
     >>> is_conversational(example)
     False
     ```
@@ -60,7 +60,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
     if example_keys:
         key = example_keys.pop()  # take the first supported key
         maybe_messages = example[key]
-        # It must be a list of messages,
+        # It must be a list of messages
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
             # Each message must a list of dictionaries with keys "role" and "content"
@@ -191,8 +191,8 @@ def maybe_apply_chat_template(
         tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer to apply the chat template with.
         tools (`list[Union[dict, Callable]]` or `None`, *optional*, defaults to `None`):
-            A list of tools (callable functions) that will be accessible to the model.
-            If the template does not support function calling, this argument will have no effect
+            A list of tools (callable functions) that will be accessible to the model. If the template does not support
+            function calling, this argument will have no effect
 
     Returns:
         `dict[str, str]`:
@@ -209,10 +209,11 @@ def maybe_apply_chat_template(
 
     ```python
     >>> from transformers import AutoTokenizer
+
     >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
     >>> example = {
     ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
-    ...     "completion": [{"role": "assistant", "content": "It is blue."}]
+    ...     "completion": [{"role": "assistant", "content": "It is blue."}],
     ... }
     >>> apply_chat_template(example, tokenizer)
     {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
@@ -257,10 +258,11 @@ def unpair_preference_dataset(
 
     ```python
     >>> from datasets import Dataset
+
     >>> dataset_dict = {
-    ...     "prompt": ["The sky is", "The sun is"]
+    ...     "prompt": ["The sky is", "The sun is"],
     ...     "chosen": [" blue.", "in the sky."],
-    ...     "rejected": [" green.", " in the sea."]
+    ...     "rejected": [" green.", " in the sea."],
     ... }
     >>> dataset = Dataset.from_dict(dataset_dict)
     >>> dataset = unpair_preference_dataset(dataset)
@@ -269,6 +271,7 @@ def unpair_preference_dataset(
         features: ['prompt', 'completion', 'label'],
         num_rows: 4
     })
+
     >>> dataset[0]
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
@@ -298,10 +301,11 @@ def maybe_unpair_preference_dataset(
 
     ```python
     >>> from datasets import Dataset
+
     >>> dataset_dict = {
-    ...     "prompt": ["The sky is", "The sun is"]
+    ...     "prompt": ["The sky is", "The sun is"],
     ...     "chosen": [" blue.", "in the sky."],
-    ...     "rejected": [" green.", " in the sea."]
+    ...     "rejected": [" green.", " in the sea."],
     ... }
     >>> dataset = Dataset.from_dict(dataset_dict)
     >>> dataset = unpair_preference_dataset(dataset)
@@ -310,6 +314,7 @@ def maybe_unpair_preference_dataset(
         features: ['prompt', 'completion', 'label'],
         num_rows: 4
     })
+
     >>> dataset[0]
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
@@ -326,8 +331,8 @@ def maybe_unpair_preference_dataset(
 
 def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
     r"""
-    Extracts the shared prompt from a preference data example, where the prompt is implicit within both
-    the chosen and rejected completions.
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
+    rejected completions.
 
     For more details, see [`maybe_extract_prompt`].
     """
@@ -345,8 +350,8 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
 
 def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     r"""
-    Extracts the shared prompt from a preference data example, where the prompt is implicit within both
-    the chosen and rejected completions.
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
+    rejected completions.
 
     If the example already contains a `"prompt"` key, the function returns the example as is. Else, the function
     identifies the longest common sequence (prefix) of conversation turns between the "chosen" and "rejected"
@@ -370,12 +375,12 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     >>> example = {
     ...     "chosen": [
     ...         {"role": "user", "content": "What color is the sky?"},
-    ...         {"role": "assistant", "content": "It is blue."}
+    ...         {"role": "assistant", "content": "It is blue."},
     ...     ],
     ...     "rejected": [
     ...         {"role": "user", "content": "What color is the sky?"},
-    ...         {"role": "assistant", "content": "It is green."}
-    ...     ]
+    ...         {"role": "assistant", "content": "It is green."},
+    ...     ],
     ... }
     >>> extract_prompt(example)
     {'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
@@ -388,6 +393,7 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     ```python
     >>> from trl import extract_prompt
     >>> from datasets import Dataset
+
     >>> dataset_dict = {
     ...     "chosen": [
     ...         [
@@ -452,12 +458,14 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
 
     ```python
     >>> from trl import pack_examples
+
     >>> examples = {
     ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
     ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
     ... }
     >>> pack_examples(examples, seq_length=5)
     {'input_ids': [[1, 2, 3, 4, 5], [6, 7, 8]], 'attention_mask': [[0, 1, 1, 0, 0], [1, 1, 1]]}
+
     >>> pack_examples(examples, seq_length=2)
     {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
     ```
@@ -476,8 +484,8 @@ def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str,
 
 class _SegmentTree:
     """
-    A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger value
-    for a given input within the range [1, maxval].
+    A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger
+    value for a given input within the range [1, maxval].
 
     See [Fewer Truncations Improve Language Modeling](https://arxiv.org/abs/2404.10830) for more details.
     """
@@ -620,16 +628,17 @@ def pack_dataset(
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The dataset with packed sequences. The number of examples may
-        decrease as sequences are combined.
+        `Dataset` or `DatasetDict`: The dataset with packed sequences. The number of examples may decrease as sequences
+        are combined.
 
     Example:
     ```python
     >>> from datasets import Dataset
     >>> from trl import pack_dataset
+
     >>> examples = {
     ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8], [9]],
-    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]]
+    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="ffd")
@@ -672,6 +681,7 @@ def truncate_dataset(
     Example:
     ```python
     >>> from datasets import Dataset
+
     >>> examples = {
     ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
     ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -716,6 +726,44 @@ def truncate_dataset(
     return dataset
 
 
+def is_conversational_from_value(example: dict[str, Any]) -> bool:
+    r"""
+    Check if the example is in a conversational format (from/value). Note that this format isn't recommended. Prefer
+    the ChatML format (role/content)
+
+    Args:
+        example (`dict[str, Any]`):
+            A single data entry of a dataset. The example can have different keys depending on the dataset type.
+
+    Returns:
+        `bool`:
+            `True` if the data is in a conversational Chatformat, `False` otherwise.
+
+    Examples:
+
+    ```python
+    >>> example = {"conversations": [{"from": "user", "value": "What color is the sky?"}]}
+    >>> is_conversational_from_value(example)
+    True
+    >>> example = {"conversations": [{"role": "user", "content": "What color is the sky?"}]}
+    >>> is_conversational_from_value(example)
+    False
+    >>> example = {"conversations": "The sky is"})
+    >>> is_conversational_from_value(example)
+    False
+    ```
+    """
+    maybe_messages = example.get("conversations")
+    # It must be a list of messages
+    if isinstance(maybe_messages, list):
+        maybe_message = maybe_messages[0]
+        # Each message must a list of dictionaries with keys "from" and "value"
+        if isinstance(maybe_message, dict) and "from" in maybe_message and "value" in maybe_message:
+            return True
+
+    return False
+
+
 def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
     """
     Convert a conversational dataset with fields `from` and `value` to ChatML format.
@@ -736,10 +784,11 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
     Example:
     ```python
     >>> from trl import maybe_convert_to_chatml
+
     >>> example = {
     ...     "conversations": [
     ...         {"from": "user", "value": "What color is the sky?"},
-    ...         {"from": "assistant", "value": "It is blue."}
+    ...         {"from": "assistant", "value": "It is blue."},
     ...     ]
     ... }
     >>> maybe_convert_to_chatml(example)

@@ -53,8 +53,8 @@ class BCOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet during
-            evaluation.
+            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
+            during evaluation.
         is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
@@ -83,10 +83,16 @@ class BCOConfig(TrainingArguments):
     logging_steps: float = field(
         default=10,
         metadata={
-            "help": (
-                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
-                "If smaller than 1, will be interpreted as ratio of total training steps."
-            )
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
+        },
+    )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
         },
     )
 
@@ -193,3 +199,8 @@ class BCOConfig(TrainingArguments):
         default=10.0,
         metadata={"help": "Maximum value of the density ratio. The estimated density ratio is clamped to this value."},
     )
+
+    def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        super().__post_init__()

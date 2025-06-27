@@ -153,9 +153,9 @@ class KTOTrainerTester(unittest.TestCase):
                 batched=True,
                 batch_size=2,
             )
-            self.assertListEqual(tokenized_dataset["prompt"], train_dataset["prompt"])
-            self.assertListEqual(tokenized_dataset["completion"], train_dataset["completion"])
-            self.assertListEqual(tokenized_dataset["label"], train_dataset["label"])
+            self.assertListEqual(tokenized_dataset["prompt"][:], train_dataset["prompt"][:])
+            self.assertListEqual(tokenized_dataset["completion"][:], train_dataset["completion"][:])
+            self.assertListEqual(tokenized_dataset["label"][:], train_dataset["label"][:])
             self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
             self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
             self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [27261, 13])
@@ -193,9 +193,9 @@ class KTOTrainerTester(unittest.TestCase):
                 "max_prompt_length": trainer.max_prompt_length,
             }
             processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs, num_proc=2)
-            self.assertListEqual(processed_dataset["prompt"], train_dataset["prompt"])
-            self.assertListEqual(processed_dataset["completion"], train_dataset["completion"])
-            self.assertListEqual(processed_dataset["label"], train_dataset["label"])
+            self.assertListEqual(processed_dataset["prompt"][:], train_dataset["prompt"][:])
+            self.assertListEqual(processed_dataset["completion"][:], train_dataset["completion"][:])
+            self.assertListEqual(processed_dataset["label"][:], train_dataset["label"][:])
             self.assertListEqual(processed_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
             self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
             self.assertListEqual(
