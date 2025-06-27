@@ -1257,7 +1257,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_prompt_length=128,  # reduce the prompt length to test truncation
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
-                bf16=False,  # Disable bf16 to avoid issues with small models
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
