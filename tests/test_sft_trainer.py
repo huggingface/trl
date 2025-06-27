@@ -1382,7 +1382,6 @@ class SFTTrainerTester2(unittest.TestCase):
             # Initialize the trainer
             training_args = self.get_training_args(
                 tmp_dir,
-                output_dir=tmp_dir,
                 assistant_only_loss=True,
             )
             trainer = SFTTrainer(
@@ -1411,7 +1410,6 @@ class SFTTrainerTester2(unittest.TestCase):
             # Initialize the trainer
             training_args = self.get_training_args(
                 tmp_dir,
-                output_dir=tmp_dir,
                 chat_template_path="Qwen/Qwen3-4B",
             )
             # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
@@ -1441,7 +1439,6 @@ class SFTTrainerTester2(unittest.TestCase):
             # Initialize the trainer
             training_args = self.get_training_args(
                 tmp_dir,
-                output_dir=tmp_dir,
                 chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
             )
             # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
