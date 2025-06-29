@@ -349,28 +349,30 @@ class DataCollatorForChatML:
 @dataclass
 class RewardDataCollatorWithPadding:
     r"""
-    Reward DataCollator class that pads the inputs to the maximum length of the batch.
+        Reward DataCollator class that pads the inputs to the maximum length of the batch.
 
-    Args:
-        tokenizer (`PreTrainedTokenizerBase`):
-            The tokenizer used for encoding the data.
-        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
-            padding_strategy to pass to the tokenizer.
-        pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
-            If set will pad the sequence to a multiple of the provided value.
-        return_tensors (`str`, `optional`, defaults to `"pt"`):
-            The tensor type to use.
+        Assumes the input is pre-tokenized, but still represented as lists of ints.
+
+        Requires the columns 'input_ids_chosen', 'input_ids_rejected', 'attention_mask_chosen', 'attention_mask_rejected' to be present in the batch.
+
+        Args:
+            tokenizer (`PreTrainedTokenizerBase`):
+                The tokenizer used for encoding the data.
+            pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
+                If set will pad the sequence to a multiple of the provided value.
+            return_tensors (`str`, `optional`, defaults to `"pt"`):
+                The tensor type to use.
     """
 
     tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str] = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
+    def __call__(self, features: list[dict[str, list[int]]]) -> dict[str, torch.tensor]:
         features_chosen = []
         features_rejected = []
         margin = []
+
         # check if we have a margin. If we do, we need to batch it as well
         has_margin = "margin" in features[0]
         for feature in features:
@@ -391,26 +393,31 @@ class RewardDataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_chosen"],
                 }
             )
+
             features_rejected.append(
                 {
                     "input_ids": feature["input_ids_rejected"],
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
+
             if has_margin:
                 margin.append(feature["margin"])
+
         batch_chosen = self.tokenizer.pad(
             features_chosen,
-            padding=self.padding,
+            padding=True,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
+
         batch_rejected = self.tokenizer.pad(
             features_rejected,
-            padding=self.padding,
+            padding=True,
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
+
         batch = {
             "input_ids_chosen": batch_chosen["input_ids"],
             "attention_mask_chosen": batch_chosen["attention_mask"],
@@ -418,9 +425,11 @@ class RewardDataCollatorWithPadding:
             "attention_mask_rejected": batch_rejected["attention_mask"],
             "return_loss": True,
         }
+
         if has_margin:
             margin = torch.tensor(margin, dtype=torch.float)
             batch["margin"] = margin
+
         return batch
 
 
