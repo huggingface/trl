@@ -1439,6 +1439,9 @@ class GRPOTrainer(Trainer):
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
+        # Log the metrics
+        mode = "train" if self.model.training else "eval"
+
         if self.entropy_coef != 0:
             per_token_entropy = logps_and_entropies["entropies"]
             if self.loss_type == "grpo":
@@ -1453,9 +1456,6 @@ class GRPOTrainer(Trainer):
                 )
             loss = loss - self.entropy_coef * entropy_loss
             self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
-
-        # Log the metrics
-        mode = "train" if self.model.training else "eval"
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
