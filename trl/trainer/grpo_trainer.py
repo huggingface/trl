@@ -555,6 +555,9 @@ class GRPOTrainer(Trainer):
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
 
+        # Entropy loss coef
+        self.entropy_coef = args.entropy_coef
+
         super().__init__(
             model=model,
             args=args,
@@ -1384,20 +1387,17 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         # Compute the entropy at each position in the completion
+        compute_entropy = self.token_entropy_percentile_threshold > 0.0 or self.entropy_coef != 0
+        logps_and_entropies = self._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=compute_entropy
+        )
+        per_token_logps = logps_and_entropies["logps"]
         if self.token_entropy_percentile_threshold > 0.0:
-            logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
-            )
-            per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
             # compute the entropy threshold across all tokens in the batch
-
             entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
             entropy_mask = entropies >= entropy_threshold
         else:
-            per_token_logps = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep
-            )["logps"]
             entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
@@ -1441,6 +1441,21 @@ class GRPOTrainer(Trainer):
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
+
+        if self.entropy_coef != 0:
+            per_token_entropy = logps_and_entropies["entropies"]
+            if self.loss_type == "grpo":
+                entropy_loss = (
+                    (per_token_entropy * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+                ).mean()
+            elif self.loss_type == "bnpo":
+                entropy_loss = (per_token_entropy * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            elif self.loss_type == "dr_grpo":
+                entropy_loss = (per_token_entropy * completion_mask).sum() / (
+                    per_token_entropy.size(0) * self.max_completion_length
+                )
+            loss = loss - self.entropy_coef * entropy_loss
+            self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
