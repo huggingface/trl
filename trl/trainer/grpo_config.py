@@ -566,7 +566,7 @@ class GRPOConfig(TrainingArguments):
         if self.generation_batch_size is None:
             self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
 
-        if self.generation_batch_size % self.per_device_train_batch_size * num_processes != 0:
+        if self.generation_batch_size % (self.per_device_train_batch_size * num_processes) != 0:
             raise ValueError(
                 f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
                 f"({self.per_device_train_batch_size * num_processes})."
