@@ -141,7 +141,7 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
     def test_custom_position_ids(self):
         """Test handling of custom position IDs in examples."""
         self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
-        examples = [{"input_ids": [1, 2, 3], "position_ids": [0, 0, 1]}, {"input_ids": [4, 5], "position_ids": [0, 1]}]
+        examples = [{"input_ids": [1, 2, 3], "seq_lengths": [1, 2]}, {"input_ids": [4, 5], "seq_lengths": [2]}]
 
         result = self.collator(examples)
 
