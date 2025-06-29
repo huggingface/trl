@@ -1440,7 +1440,6 @@ class GRPOTrainer(Trainer):
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         if self.entropy_coef != 0:
-            entropy_loss = 0.0
             per_token_entropy = logps_and_entropies["entropies"]
             if self.loss_type == "grpo":
                 entropy_loss = (
@@ -1453,6 +1452,7 @@ class GRPOTrainer(Trainer):
                     per_token_entropy.size(0) * self.max_completion_length
                 )
             loss = loss - self.entropy_coef * entropy_loss
+            self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
@@ -1478,7 +1478,6 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
         gathered_clip_ratio = self.accelerator.gather(clip_ratio)
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
-        self._metrics[mode]["entropy_loss"].append(entropy_loss.item())
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
