@@ -955,10 +955,7 @@ class GRPOTrainer(Trainer):
                             state._exec_order_data.param_to_fqn[flat_param], flat_param._param_infos
                         ):
                             param = getattr(param_info.module, param_info.param_name)
-                            # Handle DTensor parameters: extract local tensor for memory efficiency
                             if _DTENSOR_AVAILABLE and isinstance(param.data, DTensor):
-                                # Use to_local() for memory efficiency instead of full_tensor()
-                                # which avoids gathering the full tensor across all devices
                                 local_tensor = param.data.to_local()
                             else:
                                 local_tensor = param.data
