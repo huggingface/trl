@@ -1364,7 +1364,7 @@ class GRPOTrainer(Trainer):
                             logits_to_keep,
                             position_ids=packed_position_ids,
                             prompt_mask=prompt_mask,
-                        )
+                        )["logps"]
                     else:
                         ref_per_token_logps = self._get_per_token_logps_and_entropies(
                             self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
@@ -1379,7 +1379,7 @@ class GRPOTrainer(Trainer):
                                 logits_to_keep,
                                 position_ids=packed_position_ids,
                                 prompt_mask=prompt_mask,
-                            )
+                            )["logps"]
                         else:
                             ref_per_token_logps = self._get_per_token_logps_and_entropies(
                                 self.model, prompt_completion_ids, attention_mask, logits_to_keep
