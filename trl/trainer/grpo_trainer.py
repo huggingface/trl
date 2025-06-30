@@ -1337,7 +1337,7 @@ class GRPOTrainer(Trainer):
             if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
                 if self.do_pack_completions:
                     # Compute the per-token log probabilities for the model
-                    old_per_token_logps = self._get_per_token_logps(
+                    old_per_token_logps = self._get_per_token_logps_and_entropies(
                         self.model,
                         packed_prompt_completion_ids,
                         packed_attention_mask,
@@ -1357,7 +1357,7 @@ class GRPOTrainer(Trainer):
             if self.beta != 0.0:
                 if self.ref_model is not None:
                     if self.do_pack_completions:
-                        ref_per_token_logps = self._get_per_token_logps(
+                        ref_per_token_logps = self._get_per_token_logps_and_entropies(
                             self.ref_model,
                             packed_prompt_completion_ids,
                             packed_attention_mask,
@@ -1372,7 +1372,7 @@ class GRPOTrainer(Trainer):
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
                         if self.do_pack_completions:
-                            ref_per_token_logps = self._get_per_token_logps(
+                            ref_per_token_logps = self._get_per_token_logps_and_entropies(
                                 self.model,
                                 packed_prompt_completion_ids,
                                 packed_attention_mask,
@@ -1465,6 +1465,9 @@ class GRPOTrainer(Trainer):
         self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
         return {
+            "packed_prompt_completion_ids": packed_prompt_completion_ids if self.do_pack_completions else None,
+            "packed_attention_mask": packed_attention_mask if self.do_pack_completions else None,
+            "packed_position_ids": packed_position_ids if self.do_pack_completions else None,
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
@@ -1530,10 +1533,9 @@ class GRPOTrainer(Trainer):
 
         if self.do_pack_completions:
             # Pack the responses in a group to avoid recomputing the prompt tokens multiple times
-            packed_inputs = self._pack_responses_in_a_group(prompt_ids, completion_ids, prompt_mask, completion_mask)
-            packed_input_ids = packed_inputs["input_ids"]
-            packed_attention_mask = packed_inputs["attention_mask"]
-            packed_position_ids = packed_inputs["position_ids"]
+            packed_input_ids = inputs["packed_prompt_completion_ids"]
+            packed_attention_mask = inputs["packed_attention_mask"]
+            packed_position_ids = inputs["packed_position_ids"]
             per_token_logps_fn_args = {
                 "model": model,
                 "input_ids": packed_input_ids,
@@ -1568,7 +1570,7 @@ class GRPOTrainer(Trainer):
             entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
             entropy_mask = entropies >= entropy_threshold
         else:
-            per_token_logps = self._get_per_token_logps(
+                per_token_logps = self._get_per_token_logps_and_entropies(
                 per_token_logps_fn_args["model"],
                 per_token_logps_fn_args["input_ids"],
                 per_token_logps_fn_args["attention_mask"],
