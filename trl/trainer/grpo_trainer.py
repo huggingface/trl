@@ -1392,7 +1392,7 @@ class GRPOTrainer(Trainer):
             entropies = logps_and_entropies["entropies"]
             # compute the entropy threshold across all tokens in the batch
 
-            entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
+            entropy_threshold = torch.quantile(entropies.flatten().float(), self.token_entropy_percentile_threshold)
             entropy_mask = entropies >= entropy_threshold
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
