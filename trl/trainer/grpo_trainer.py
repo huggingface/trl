@@ -962,10 +962,12 @@ class GRPOTrainer(Trainer):
                             state_dict[key] = local_tensor
                         # Sync with vLLM
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                            self.vllm_client.update_named_param_dict(state_dict)
+                            for key, value in state_dict.items():
+                                self.vllm_client.update_named_param(key, value)
                         elif self.vllm_mode == "colocate":
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-                            llm_model.load_weights(state_dict.items())
+                            for key, value in state_dict.items():
+                                llm_model.load_weights([(key, value)])
                         del state_dict
                 return
             # If not root, do nothing (children handled by root call)
