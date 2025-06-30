@@ -82,6 +82,15 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+# Add DTensor import for FSDP2/DTensor support
+try:
+    from torch.distributed.tensor import DTensor
+except ImportError:
+    try:
+        from torch.distributed._tensor import DTensor
+    except ImportError:
+        DTensor = None
+
 
 class RepeatSampler(Sampler):
     """
@@ -919,6 +928,51 @@ class GRPOTrainer(Trainer):
                     elif self.vllm_mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
+        elif isinstance(module, torch.distributed.fsdp.FSDPModule):
+            # FSDP2: Efficiently unshard and sync parameters module-by-module using internal APIs
+
+            # Only run this logic at the root call (prefix is empty)
+            if prefix == "":
+                # Import required FSDP2 internals
+                import torch.distributed.fsdp._traversal_utils as traversal_utils
+                from torch.distributed.fsdp._unshard_param_utils import _unshard_params_for_summon
+
+                # Cache the traversal for efficiency
+                if not hasattr(self, "_fsdp_modules"):
+                    self._fsdp_modules = traversal_utils._get_fsdp_states_with_modules(module)
+                # Traverse all FSDP modules and unshard/sync their parameters
+                for state, fsdp_mod in zip(*self._fsdp_modules):
+                    with _unshard_params_for_summon(
+                        module=fsdp_mod,
+                        state=state,
+                        writeback=False,
+                        rank0_only=False,
+                        offload_to_cpu=False,
+                        with_grads=False,
+                    ):
+                        flat_param = state._flat_param
+                        # Build a state dict for this FSDP module only
+                        state_dict = {}
+                        for key, param_info in zip(
+                            state._exec_order_data.param_to_fqn[flat_param], flat_param._param_infos
+                        ):
+                            param = getattr(param_info.module, param_info.param_name)
+                            # If param is a DTensor, get the local tensor
+                            if isinstance(param.data, DTensor):
+                                local_tensor = param.data.to_local()
+                            else:
+                                local_tensor = param.data
+                            state_dict[key] = local_tensor
+                        # Sync with vLLM
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param_dict(state_dict)
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights(state_dict.items())
+                        del state_dict
+                return
+            # If not root, do nothing (children handled by root call)
+            return
 
     @profiling_decorator
     def _move_model_to_vllm(self):
