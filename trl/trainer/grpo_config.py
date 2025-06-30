@@ -190,6 +190,12 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
+        token_entropy_percentile_threshold (`float`, *optional*, defaults to `0.0`):
+            τ parameter from the [Beyond the 80/20 Rule](https://huggingface/papers/2506.01939) paper, which finds that
+            masking out the bottom τ percentile of tokens based on the entropy of the probability distribution at a
+            given sequence position, in the policy loss term yields better results. The range of the parameter is
+            [0.0-1.0] a value of 0.0 means that none the tokens are filtered out and 1.0 means that all the tokens are
+            masked. Recommended value is `0.8`.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
 
@@ -511,6 +517,14 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+    token_entropy_percentile_threshold: float = field(
+        default=0.0,
+        metadata={
+            "help": "Percentile threshold for filtering out tokens in the policy loss based on entropy."
+            "Positions in the completion with entropy below this percentile are masked out."
+            "0.8 is the recommended value if you'd like to enable entropy based masking."
         },
     )
     use_liger_loss: bool = field(
