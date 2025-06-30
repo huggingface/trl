@@ -64,6 +64,13 @@ from .utils import (
     selective_log_softmax,
 )
 
+try:
+    from torch.distributed.tensor import DTensor
+
+    _DTENSOR_AVAILABLE = True
+except ImportError:
+    DTensor = None
+    _DTENSOR_AVAILABLE = False
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -948,8 +955,10 @@ class GRPOTrainer(Trainer):
                             state._exec_order_data.param_to_fqn[flat_param], flat_param._param_infos
                         ):
                             param = getattr(param_info.module, param_info.param_name)
-                            # If param is a DTensor, get the local tensor
-                            if isinstance(param.data, torch.distributed.tensor.DTensor):
+                            # Handle DTensor parameters: extract local tensor for memory efficiency
+                            if _DTENSOR_AVAILABLE and isinstance(param.data, DTensor):
+                                # Use to_local() for memory efficiency instead of full_tensor()
+                                # which avoids gathering the full tensor across all devices
                                 local_tensor = param.data.to_local()
                             else:
                                 local_tensor = param.data
