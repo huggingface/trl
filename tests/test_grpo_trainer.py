@@ -1273,13 +1273,12 @@ class GRPOTrainerTester(unittest.TestCase):
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_with_reward_func_accessing_trainer_state(self):
-        # Test if trainer can handle reward function that accesses the trainer state
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
-            # Assert that trainer_state is passed and has the expected attributes
             trainer_state = kwargs.get("trainer_state")
             assert trainer_state is not None
+            # transformers.TrainerState instance should have a `global_step` property.
             assert hasattr(trainer_state, "global_step")
             return [float(len(set(completion))) for completion in completions]
 
