@@ -82,15 +82,6 @@ if is_wandb_available():
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-# Add DTensor import for FSDP2/DTensor support
-try:
-    from torch.distributed.tensor import DTensor
-except ImportError:
-    try:
-        from torch.distributed._tensor import DTensor
-    except ImportError:
-        DTensor = None
-
 
 class RepeatSampler(Sampler):
     """
