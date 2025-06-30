@@ -15,6 +15,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import torch
 from transformers import TrainingArguments
 
 
@@ -187,6 +188,9 @@ class CPOConfig(TrainingArguments):
     )
 
     def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+        if not torch.cuda.is_available():
+            self.bf16 = False
+        else:
+            self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
