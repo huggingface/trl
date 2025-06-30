@@ -949,7 +949,7 @@ class GRPOTrainer(Trainer):
                         ):
                             param = getattr(param_info.module, param_info.param_name)
                             # If param is a DTensor, get the local tensor
-                            if isinstance(param.data, DTensor):
+                            if isinstance(param.data, torch.distributed.tensor.DTensor):
                                 local_tensor = param.data.to_local()
                             else:
                                 local_tensor = param.data
