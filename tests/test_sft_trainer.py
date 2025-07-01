@@ -126,6 +126,53 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, 4, 5]]))
 
+    def test_packing_drops_attention_mask_for_flash_attention(self):
+        """Test that when using packing with position_ids, attention_mask is dropped with fa2."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, return_position_ids=True)
+
+        # Simulate packed sequences with position_ids that restart (typical of FFD packing)
+        examples = [
+            {
+                "input_ids": [1, 2, 3, 4, 5, 6, 7, 8],  # Packed: [1,2,3] + [4,5] + [6,7,8]
+                "position_ids": [0, 1, 2, 0, 1, 0, 1, 2],  # Position IDs restart for each sequence
+            }
+        ]
+
+        result = collator(examples)
+
+        # Verify that attention_mask is NOT present - this allows flash attention to use position_ids
+        self.assertNotIn("attention_mask", result, "attention_mask should be dropped for packing with position_ids")
+
+        # Verify essential keys are present
+        self.assertIn("input_ids", result)
+        self.assertIn("position_ids", result)
+        self.assertIn("labels", result)
+
+        # Verify the data is correctly processed
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 0, 1, 2]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]))
+
+    def test_padding_free_without_position_ids_keeps_attention_mask(self):
+        """
+        Test that padding_free mode without explicit position_ids still creates attention_mask.
+        """
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, return_position_ids=True)
+
+        # Examples without position_ids (not packed)
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}]
+
+        result = collator(examples)
+
+        # Should still have attention_mask since no packed position_ids
+        self.assertIn("attention_mask", result, "attention_mask should be present when no packed position_ids")
+        self.assertIn("position_ids", result)
+        self.assertIn("input_ids", result)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 3, 4]]))
+
     def test_pad_to_multiple_of(self):
         """Test padding to multiple of specified value."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, pad_to_multiple_of=4)
