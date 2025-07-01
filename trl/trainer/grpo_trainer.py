@@ -927,6 +927,10 @@ class GRPOTrainer(Trainer):
 
             if compute_entropy:
                 entropies = entropy_from_logits(logits)
+                if self.do_pack_completions:
+                    entropies = self._unpack_tensor(
+                        position_ids_batch[:, 1:], entropies, prompt_length
+                    )
                 all_entropies.append(entropies)
 
         logps = torch.cat(all_logps, dim=0)
@@ -1133,7 +1137,7 @@ class GRPOTrainer(Trainer):
                 elif position_ids[group_ind][i] < position_ids[group_ind][i - 1]:
                     unpacked_completion_logps.append([tensor_to_unpack[group_ind][i]])
                 # We only need the logps of the completions so we check if we're past the prompt token ids
-                elif position_ids[group_ind][i] >= prompt_length[group_ind].item():
+                elif position_ids[group_ind][i] >= prompt_length[group_ind]:
                     unpacked_completion_logps[-1].append(tensor_to_unpack[group_ind][i])
 
         unpacked_completion_logps = [
