@@ -19,6 +19,7 @@ from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
 from typing import Any, Callable, Optional, Union
+from datetime import timedelta
 
 import torch
 import torch.utils.data
@@ -580,7 +581,7 @@ class GRPOTrainer(Trainer):
 
         # create the intra-node commmunicator
         self.intra_node_group, _ = torch.distributed.new_subgroups(self.num_local_processes,
-                                                                   timeout=3600000)
+                                                                   timeout=timedelta(seconds=3600))
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
