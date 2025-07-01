@@ -14,6 +14,7 @@
 
 """
 # Full training
+```
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
@@ -23,13 +24,15 @@ python trl/scripts/sft.py \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
-    --logging_steps 25 \
+    --eos_token '<|im_end|>' \
     --eval_strategy steps \
     --eval_steps 100 \
     --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
+```
 
 # LoRA
+```
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
@@ -39,7 +42,7 @@ python trl/scripts/sft.py \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
-    --logging_steps 25 \
+    --eos_token '<|im_end|>' \
     --eval_strategy steps \
     --eval_steps 100 \
     --use_peft \
@@ -47,6 +50,7 @@ python trl/scripts/sft.py \
     --lora_alpha 16 \
     --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
+```
 """
 
 import argparse
@@ -61,6 +65,7 @@ from trl import (
     SFTConfig,
     SFTTrainer,
     TrlParser,
+    clone_chat_template,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
@@ -99,6 +104,11 @@ def main(script_args, training_args, model_args):
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )
 
+    # Set default chat template if needed
+    if tokenizer.chat_template is None:
+        # TODO: source should be passed as an argument
+        model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+
     ################
     # Dataset
     ################
@@ -135,5 +145,8 @@ def make_parser(subparsers: argparse._SubParsersAction = None):
 
 if __name__ == "__main__":
     parser = make_parser()
-    script_args, training_args, model_args = parser.parse_args_and_config()
+    # When using the trl cli, this script may be run with additional arguments, corresponding accelerate arguments.
+    # To ensure that their parsing does not interfere with the script arguments, parse the arguments with
+    # `return_remaining_strings=True`, then ignore the remaining strings.
+    script_args, training_args, model_args, _ = parser.parse_args_and_config(return_remaining_strings=True)
     main(script_args, training_args, model_args)

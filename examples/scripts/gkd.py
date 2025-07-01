@@ -22,7 +22,6 @@ python examples/scripts/gkd.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
-    --logging_steps 10 \
     --num_train_epochs 1 \
     --push_to_hub \
     --gradient_checkpointing
@@ -36,7 +35,6 @@ python examples/scripts/gkd.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
-    --logging_steps 10 \
     --num_train_epochs 1 \
     --push_to_hub \
     --gradient_checkpointing \
@@ -45,7 +43,6 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -105,14 +102,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            lambda x: {
-                "prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)
-            },
-            num_proc=training_args.dataset_num_proc,
-        )
 
     ################
     # Training

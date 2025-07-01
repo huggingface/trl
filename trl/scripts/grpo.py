@@ -13,6 +13,9 @@
 # limitations under the License.
 
 import argparse
+import importlib
+import os
+import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -20,6 +23,12 @@ from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
 from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
+from trl.rewards import think_format_reward
+
+
+reward_funcs_registry = {
+    "think_format_reward": think_format_reward,
+}
 
 
 @dataclass
@@ -28,9 +37,12 @@ class GRPOScriptArguments(ScriptArguments):
     Script arguments for the GRPO training script.
 
     Args:
-        reward_model_name_or_path (`str` or `None`):
+        reward_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
             Reward model id of a pretrained model hosted inside a model repo on huggingface.co or local path to a
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
+        reward_funcs (`list[str]` or `None`, *optional*, defaults to `None`):
+            Reward functions to use. It can be either one of `"think_format_reward"`; or a dotted import path " (e.g.,
+            `'my_lib.rewards.custom_reward'`).
     """
 
     reward_model_name_or_path: Optional[str] = field(
@@ -38,6 +50,13 @@ class GRPOScriptArguments(ScriptArguments):
         metadata={
             "help": "Reward model id of a pretrained model hosted inside a model repo on huggingface.co or "
             "local path to a directory containing model weights saved using `PreTrainedModel.save_pretrained`."
+        },
+    )
+    reward_funcs: Optional[list[str]] = field(
+        default=None,
+        metadata={
+            "help": "Reward functions to use. It can be either one of  'think_format_reward'; or a dotted "
+            "import path. (e.g., 'my_lib.rewards.custom_reward')."
         },
     )
 
@@ -50,9 +69,30 @@ def main(script_args, training_args, model_args):
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        script_args.reward_model_name_or_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
-    )
+
+    # Get the reward models and functions
+    reward_funcs = []
+    if script_args.reward_model_name_or_path:
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            script_args.reward_model_name_or_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
+        )
+        reward_funcs.append(reward_model)
+
+    if script_args.reward_funcs:
+        for func_name in script_args.reward_funcs:
+            if func_name in reward_funcs_registry:
+                reward_funcs.append(reward_funcs_registry[func_name])
+            elif "." in func_name:
+                module_path, func_name = func_name.rsplit(".", 1)
+                sys.path.insert(0, os.getcwd())
+                module = importlib.import_module(module_path)
+                reward_func = getattr(module, func_name)
+                reward_funcs.append(reward_func)
+            else:
+                raise ValueError(
+                    f"Could not load reward function '{func_name}'. Expected one of "
+                    f"{list(reward_funcs_registry.keys())} or a valid import path."
+                )
 
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
@@ -60,7 +100,7 @@ def main(script_args, training_args, model_args):
     # Initialize the GRPO trainer
     trainer = GRPOTrainer(
         model=model,
-        reward_funcs=reward_model,
+        reward_funcs=reward_funcs,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

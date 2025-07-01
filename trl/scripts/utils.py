@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import argparse
 import importlib
 import inspect
 import logging
@@ -25,6 +26,7 @@ from typing import Optional, Union
 import yaml
 from transformers import HfArgumentParser
 from transformers.hf_argparser import DataClass, DataClassType
+from transformers.utils import is_rich_available
 
 
 logger = logging.getLogger(__name__)
@@ -44,14 +46,17 @@ class ScriptArguments:
             Dataset split to use for training.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
             Dataset split to use for evaluation.
+        dataset_streaming (`bool`, *optional*, defaults to `False`):
+            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
             Debug argument for distributed training. Fix for DDP issues with LM bias/mask buffers - invalid scalar
-            type, inplace operation. See https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
+            type, inplace operation. See
+            https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
-    dataset_name: str = field(metadata={"help": "Dataset name."})
+    dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
     dataset_config: Optional[str] = field(
         default=None,
         metadata={
@@ -61,6 +66,10 @@ class ScriptArguments:
     )
     dataset_train_split: str = field(default="train", metadata={"help": "Dataset split to use for training."})
     dataset_test_split: str = field(default="test", metadata={"help": "Dataset split to use for evaluation."})
+    dataset_streaming: bool = field(
+        default=False,
+        metadata={"help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode."},
+    )
     gradient_checkpointing_use_reentrant: bool = field(
         default=False,
         metadata={"help": "Whether to apply `use_reentrant` for gradient checkpointing."},
@@ -77,15 +86,22 @@ class ScriptArguments:
 
 def init_zero_verbose():
     """
-    Perform zero verbose init - use this method on top of the CLI modules to make
+    Perform zero verbose init - use this method on top of the CLI modules to make logging and warning output cleaner.
+    Uses Rich if available, falls back otherwise.
     """
     import logging
     import warnings
 
-    from rich.logging import RichHandler
-
     FORMAT = "%(message)s"
-    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[RichHandler()], level=logging.ERROR)
+
+    if is_rich_available():
+        from rich.logging import RichHandler
+
+        handler = RichHandler()
+    else:
+        handler = logging.StreamHandler()
+
+    logging.basicConfig(format=FORMAT, datefmt="[%X]", handlers=[handler], level=logging.ERROR)
 
     # Custom warning handler to redirect warnings to the logging system
     def warning_handler(message, category, filename, lineno, file=None, line=None):
@@ -121,10 +137,12 @@ class TrlParser(HfArgumentParser):
     from dataclasses import dataclass
     from trl import TrlParser
 
+
     @dataclass
     class MyArguments:
         arg1: int
         arg2: str = "alpha"
+
 
     parser = TrlParser(dataclass_types=[MyArguments])
     training_args = parser.parse_args_and_config()
@@ -163,7 +181,10 @@ class TrlParser(HfArgumentParser):
         super().__init__(dataclass_types=dataclass_types, **kwargs)
 
     def parse_args_and_config(
-        self, args: Optional[Iterable[str]] = None, return_remaining_strings: bool = False
+        self,
+        args: Optional[Iterable[str]] = None,
+        return_remaining_strings: bool = False,
+        fail_with_unknown_args: bool = True,
     ) -> tuple[DataClass, ...]:
         """
         Parse command-line args and config file into instances of the specified dataclass types.
@@ -202,25 +223,42 @@ class TrlParser(HfArgumentParser):
         if return_remaining_strings:
             args_remaining_strings = output[-1]
             return output[:-1] + (config_remaining_strings + args_remaining_strings,)
+        elif fail_with_unknown_args and config_remaining_strings:
+            raise ValueError(
+                f"Unknown arguments from config file: {config_remaining_strings}. Please remove them, add them to the "
+                "dataclass, or set `fail_with_unknown_args=False`."
+            )
         else:
             return output
 
     def set_defaults_with_config(self, **kwargs) -> list[str]:
         """
-        Overrides the parser's default values with those provided via keyword arguments.
+        Overrides the parser's default values with those provided via keyword arguments, including for subparsers.
 
-        Any argument with an updated default will also be marked as not required
-        if it was previously required.
+        Any argument with an updated default will also be marked as not required if it was previously required.
 
         Returns a list of strings that were not consumed by the parser.
         """
-        # If an argument is in the kwargs, update its default and set it as not required
-        for action in self._actions:
-            if action.dest in kwargs:
-                action.default = kwargs.pop(action.dest)
-                action.required = False
-        remaining_strings = [item for key, value in kwargs.items() for item in [f"--{key}", str(value)]]
-        return remaining_strings
+
+        def apply_defaults(parser, kw):
+            used_keys = set()
+            for action in parser._actions:
+                # Handle subparsers recursively
+                if isinstance(action, argparse._SubParsersAction):
+                    for subparser in action.choices.values():
+                        used_keys.update(apply_defaults(subparser, kw))
+                elif action.dest in kw:
+                    action.default = kw[action.dest]
+                    action.required = False
+                    used_keys.add(action.dest)
+            return used_keys
+
+        used_keys = apply_defaults(self, kwargs)
+        # Remaining args not consumed by the parser
+        remaining = [
+            item for key, value in kwargs.items() if key not in used_keys for item in (f"--{key}", str(value))
+        ]
+        return remaining
 
 
 def get_git_commit_hash(package_name):

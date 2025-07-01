@@ -32,7 +32,7 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_apex_available
+from transformers.utils import is_apex_available, is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
@@ -59,6 +59,10 @@ if is_wandb_available():
     import wandb
 
 
+if is_peft_available():
+    from peft import PeftModel
+
+
 class NashMDTrainer(OnlineDPOTrainer):
     r"""
     Initialize NashMDTrainer as a subclass of [`OnlineDPOConfig`].
@@ -67,8 +71,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         model (`transformers.PreTrainedModel`):
             The model to train, preferably an `AutoModelForCausalLM`.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
         reward_model (`transformers.PreTrainedModel`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
@@ -76,8 +81,9 @@ class NashMDTrainer(OnlineDPOTrainer):
         args (`NashMDConfig`):
             The NashMD config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
@@ -89,8 +95,8 @@ class NashMDTrainer(OnlineDPOTrainer):
         peft_config (`dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -170,28 +176,50 @@ class NashMDTrainer(OnlineDPOTrainer):
             return self._mixture_coef
 
     def _generate_completions(self, model, prompts):
-        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_model:
-            model_output = unwrapped_model.generate(
+        # Generate completions from the policy model.
+        with unwrap_model_for_generation(model, self.accelerator) as unwrapped_policy_for_gen_ctx:
+            model_output = unwrapped_policy_for_gen_ctx.generate(
                 input_ids=prompts["input_ids"],
                 attention_mask=prompts["attention_mask"],
                 generation_config=self.generation_config,
             )
 
-            ref_model = model if self.ref_model is None else self.ref_model
-            with torch.no_grad(), unwrap_model_for_generation(ref_model, self.accelerator) as unwrapped_ref_model:
-                mixture_model = GeometricMixtureWrapper(
-                    model=unwrapped_model,
-                    ref_model=unwrapped_ref_model,
-                    generation_config=self.generation_config,
-                    mixture_coef=self.mixture_coef,
-                    device=self.accelerator.device,
-                )
+        # Get the DDP/FSDP unwrapped version of the main model.
+        # This will be the policy model for GeometricMixtureWrapper (PEFT adapters active if PEFT is used).
+        policy_model_for_gmw = self.accelerator.unwrap_model(model)
 
-                mixture_output = mixture_model.generate(
-                    input_ids=prompts["input_ids"],
-                    attention_mask=prompts["attention_mask"],
-                    generation_config=self.generation_config,
-                )
+        # Determine the correct reference model for GeometricMixtureWrapper.
+        # This also needs to be DDP/FSDP unwrapped.
+        ref_model_for_gmw: torch.nn.Module
+        if self.ref_model is None:
+            # No explicit ref_model is provided.
+            # Use the base of the main `model` if it's a PEFT model.
+            # policy_model_for_gmw is already DDP-unwrapped.
+            if is_peft_available() and isinstance(policy_model_for_gmw, PeftModel):
+                ref_model_for_gmw = policy_model_for_gmw.get_base_model()
+            else:
+                # Not a PEFT model (or PEFT not available), or already a base model.
+                # Use the DDP-unwrapped policy model itself as the reference.
+                ref_model_for_gmw = policy_model_for_gmw
+        else:
+            # An explicit ref_model is provided. Unwrap it for DDP/FSDP.
+            ref_model_for_gmw = self.accelerator.unwrap_model(self.ref_model)
+
+        # Both models given to GeometricMixtureWrapper (policy_model_for_gmw and ref_model_for_gmw) are DDP-unwrapped.
+        with torch.no_grad():  # Ensure no_grad context for mixture model generation
+            mixture_model = GeometricMixtureWrapper(
+                model=policy_model_for_gmw,
+                ref_model=ref_model_for_gmw,
+                generation_config=self.generation_config,
+                mixture_coef=self.mixture_coef,
+                device=self.accelerator.device,
+            )
+
+            mixture_output = mixture_model.generate(
+                input_ids=prompts["input_ids"],
+                attention_mask=prompts["attention_mask"],
+                generation_config=self.generation_config,
+            )
 
         return model_output, mixture_output
 
@@ -483,12 +511,18 @@ class NashMDTrainer(OnlineDPOTrainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         citation = textwrap.dedent("""\
         @inproceedings{munos2024nash,

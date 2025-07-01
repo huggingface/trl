@@ -17,6 +17,7 @@ import os
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import pandas as pd
@@ -38,7 +39,7 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
 from .reward_config import RewardConfig
@@ -112,20 +113,23 @@ class RewardTrainer(Trainer):
             args (`RewardConfig`):
                 The arguments to use for training.
             data_collator (`transformers.DataCollator`):
-                The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
-                which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+                The data collator to use for training. If None is specified, the default data collator
+                (`RewardDataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of
+                the sequences in the batch, given a dataset of paired sequences.
             train_dataset (`datasets.Dataset`):
                 The dataset to use for training.
             eval_dataset (`datasets.Dataset`):
                 The dataset to use for evaluation.
             processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
-                Processing class used to process the data. If provided, will be used to automatically process the inputs
-                for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-                reuse the fine-tuned model.
+                Processing class used to process the data. If provided, will be used to automatically process the
+                inputs for the model, and it will be saved along the model to make it easier to rerun an interrupted
+                training or reuse the fine-tuned model.
             model_init (`Callable[[], transformers.PreTrainedModel]`):
-                The model initializer to use for training. If None is specified, the default model initializer will be used.
+                The model initializer to use for training. If None is specified, the default model initializer will be
+                used.
             compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to `compute_accuracy`):
-                The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
+                The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`)
+                will be used.
             callbacks (`list[transformers.TrainerCallback]`):
                 The callbacks to use for training.
             optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -133,7 +137,8 @@ class RewardTrainer(Trainer):
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
             peft_config (`dict`, defaults to `None`):
-                The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+                The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped
+                in a PEFT model.
         """
         if not is_peft_available() and peft_config is not None:
             raise ValueError(
@@ -350,7 +355,8 @@ class RewardTrainer(Trainer):
                 break
         df = pd.DataFrame(table)
         if self.accelerator.process_index == 0:
-            print_rich_table(df[:num_print_samples])
+            if is_rich_available():
+                print_rich_table(df[:num_print_samples])
             if "wandb" in self.args.report_to:
                 import wandb
 
@@ -362,6 +368,15 @@ class RewardTrainer(Trainer):
                     name="completions.csv",
                     table=df,
                 )
+
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
 
     def create_model_card(
         self,
@@ -388,12 +403,18 @@ class RewardTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         model_card = generate_model_card(
             base_model=base_model,
