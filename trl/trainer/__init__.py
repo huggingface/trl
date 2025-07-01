@@ -138,10 +138,10 @@ if TYPE_CHECKING:
     from .prm_trainer import PRMTrainer
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
-    from .rloo_new_config import RLOOConfig_NEW
-    from .rloo_new import RLOOTrainer_NEW
-    from .rloo_trainer import RLOOTrainer
     from .rloo_config import RLOOConfig
+    from .rloo_new import RLOOTrainer_NEW
+    from .rloo_new_config import RLOOConfig_NEW
+    from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .utils import (
