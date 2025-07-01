@@ -1502,6 +1502,7 @@ class PackingTester(unittest.TestCase):
                 position_ids=packed_position_ids,
                 logits_to_keep=None,
                 prompt_mask=prompt_attention_mask[::trainer.num_generations],
+                batch_size=1,
             )["logps"]
             
             logps_with_packing = logps_with_packing * completion_attention_mask            

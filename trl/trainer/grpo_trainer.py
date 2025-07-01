@@ -933,7 +933,10 @@ class GRPOTrainer(Trainer):
                     )
                 all_entropies.append(entropies)
 
-        logps = torch.cat(all_logps, dim=0)
+        if self.do_pack_completions:
+            logps = pad(all_logps, 1.0)  # pad to max length
+        else:
+            logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         return {"logps": logps, "entropies": entropies}
 
