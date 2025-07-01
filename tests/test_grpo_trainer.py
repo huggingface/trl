@@ -1271,7 +1271,32 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-                
+    
+    def test_training_with_reward_func_accessing_trainer_state(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            trainer_state = kwargs.get("trainer_state")
+            assert trainer_state is not None
+            # transformers.TrainerState instance should have a `global_step` property.
+            assert hasattr(trainer_state, "global_step")
+            return [float(len(set(completion))) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+            trainer.train()
                 
 class PackingTester(unittest.TestCase):
     def setUp(self):
@@ -1309,6 +1334,7 @@ class PackingTester(unittest.TestCase):
                 [
                     [100, 101, 102, 103],
                     [100, 101, 102, 103],
+                    # Prompt tokens 202, 203
                     [200, 201, 202, 203],
                     [200, 201, 202, 203],
                 ]
@@ -1317,8 +1343,8 @@ class PackingTester(unittest.TestCase):
                 [
                     [True, True, True, True],
                     [True, True, True, True],
-                    [True, True, False, False],
-                    [True, True, False, False],
+                    [False, False, True, True],
+                    [False, False, True, True],
                 ]
             )
             completion_ids = torch.tensor(
@@ -1349,24 +1375,25 @@ class PackingTester(unittest.TestCase):
             self.assertEqual(len(packed_attention_mask), num_unique_prompts)
 
             pad_token_id = trainer.processing_class.pad_token_id
+            # Prompts should be left padded and completions right padded.
             expected_input_ids = torch.tensor(
                 [
                     [100, 101, 102, 103, 1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013, 1014],
-                    [ pad_token_id, pad_token_id, pad_token_id, 200, 201, 2000, 2001, 2002, 2003, 2004, 2005, 2010, 2011],
+                    [ pad_token_id, pad_token_id, 202, 203, 2000, 2001, 2002, 2003, 2004, 2005, 2010, 2011, pad_token_id],
                 ]
             )
             self.assertTrue(torch.equal(packed_input_ids, expected_input_ids))
             expected_position_ids = torch.tensor(
                 [
                     [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
-                    [ pad_token_id, pad_token_id, pad_token_id, 0, 1, 2, 3, 4, 5, 6, 7, 2, 3],
+                    [ pad_token_id, pad_token_id, 0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id],
                 ]
             )
             self.assertTrue(torch.equal(packed_position_ids, expected_position_ids))
             expected_attention_mask = torch.tensor(
                 [
                     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0],
+                    [0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
                 ]
             )
             self.assertTrue(torch.equal(packed_attention_mask, expected_attention_mask))
@@ -1379,23 +1406,23 @@ class PackingTester(unittest.TestCase):
             position_ids = torch.tensor(
                 [
                     [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
-                    [0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id, pad_token_id, pad_token_id],
+                    [pad_token_id, pad_token_id, 0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id],
                 ]
             )
             prompt_length = torch.tensor([4, 2])
             all_logps = torch.tensor(
                 [
                     [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
-                    [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 0.0, 0.0, 0.0],
+                    [0.0, 0.0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 0.0],
                 ]
             )
-            unpacked_logps = trainer._unpack_tensor(position_ids, all_logps, prompt_length)
+            unpacked_logps = trainer._unpack_tensor(position_ids, all_logps, prompt_length, padding_value=-100.0)
             expected_unpacked_logps = torch.tensor(
                 [
-                    [0.5, 0.6, 0.7, 0.8, 0.0, 0.0],
-                    [0.9, 1.0, 1.1, 1.2, 1.3, 0.0],
+                    [0.5, 0.6, 0.7, 0.8, -100.0, -100.0],
+                    [0.9, 1.0, 1.1, 1.2, 1.3, -100.0],
                     [0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
-                    [1.0, 1.1, 0.0, 0.0, 0.0, 0.0],
+                    [1.0, 1.1, -100.0, -100.0, -100.0, -100.0],
                 ]
             )
             self.assertTrue(torch.allclose(unpacked_logps, expected_unpacked_logps))
@@ -1446,29 +1473,3 @@ class PackingTester(unittest.TestCase):
             train_loss_no_packing = trainer_no_packing.state.log_history[-1]["train_loss"]
 
         self.assertAlmostEqual(train_loss_packed, train_loss_no_packing, places=5)
-
-    def test_training_with_reward_func_accessing_trainer_state(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        def reward_func(completions, **kwargs):
-            trainer_state = kwargs.get("trainer_state")
-            assert trainer_state is not None
-            # transformers.TrainerState instance should have a `global_step` property.
-            assert hasattr(trainer_state, "global_step")
-            return [float(len(set(completion))) for completion in completions]
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                num_generations=2,
-                max_completion_length=8,
-                report_to="none",
-            )
-            trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=reward_func,
-                args=training_args,
-                train_dataset=dataset,
-            )
-            trainer.train()

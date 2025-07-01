@@ -1088,13 +1088,21 @@ class GRPOTrainer(Trainer):
             device=prompt_ids.device
         )
 
+        # Prompts are padded to the left so will always have the same end index.
+        prompt_end_index = prompt_mask.shape[1]
         for group_ind in range(num_unique_prompts):
+            prompt_length = prompt_lengths[group_ind * self.num_generations]
+            # We need to pad to the left, so we calculate the start and end indices for the prompt
+            # If the prompt is shorter than the maximum prompt length, 
+            # the difference in length is filled with pad tokens
+            prompt_start_index = prompt_mask.shape[1] - prompt_length
             # Get the prompt ids for each group
-            prompt_end_index = prompt_lengths[group_ind * self.num_generations]
-            prompt_ids_of_packed_group = prompt_ids[group_ind * self.num_generations][:prompt_end_index]
-            packed_inputs[group_ind, :prompt_end_index] = prompt_ids_of_packed_group
-            packed_position_ids[group_ind, :prompt_end_index] = torch.arange(0, prompt_end_index, device=prompt_ids.device)
-            next_completion_start_index = prompt_end_index.clone()
+            prompt_ids_of_packed_group = prompt_ids[group_ind * self.num_generations][prompt_start_index:prompt_end_index]
+            packed_inputs[group_ind, prompt_start_index:prompt_end_index] = prompt_ids_of_packed_group
+            # Fill in the position ids
+            packed_position_ids[group_ind, prompt_start_index:prompt_end_index] = torch.arange(0, prompt_length, device=prompt_ids.device)
+            # Completions should start from the end of the prompt
+            next_completion_start_index = prompt_end_index
             for comp_ind in range(self.num_generations):
                 # Get the completion ids for each response in a group
                 completion_end_index = completion_lengths[group_ind * self.num_generations + comp_ind]
@@ -1104,11 +1112,9 @@ class GRPOTrainer(Trainer):
                 packed_inputs[group_ind, next_completion_start_index:next_completion_start_index + completion_end_index] = completion_ids_in_group
                 # Position ids for the completion always have the offset of the prompt length
                 packed_position_ids[group_ind, next_completion_start_index:next_completion_start_index + completion_end_index] = \
-                    torch.arange(prompt_end_index, prompt_end_index + completion_end_index, device=completion_ids.device)
+                    torch.arange(prompt_length, prompt_length + completion_end_index, device=completion_ids.device)
                 next_completion_start_index += completion_end_index
-        # Pad the packed inputs and position ids to the maximum length in the group
-        packed_inputs = pad(packed_inputs, padding_value=self.processing_class.pad_token_id, padding_side="left")
-        packed_position_ids = pad(packed_position_ids, self.processing_class.pad_token_id, padding_side="left")
+        
         packed_attention_mask = packed_inputs != self.processing_class.pad_token_id
 
         return {
@@ -1118,25 +1124,28 @@ class GRPOTrainer(Trainer):
         }
 
     def _unpack_tensor(
-        self, position_ids: torch.Tensor, tensor_to_unpack: torch.Tensor, prompt_length: torch.Tensor
+        self, 
+        position_ids: torch.Tensor, 
+        tensor_to_unpack: torch.Tensor, 
+        prompt_length: torch.Tensor,
+        padding_value: float = 1.0
     ) -> torch.Tensor:
         # Unpacks the completions from the packed responses.
         # The unpacked completions are used to compute the loss and rewards.
         unpacked_completion_logps = []
         for group_ind in range(position_ids.shape[0]):
+            prompt_end_position_id = prompt_length[group_ind]
+            past_prompt_tokens = False
+            unpacked_completion_logps.append([])    
             for i in range(0, position_ids.shape[1]):
-                # If we reach the end of the group, break
-                if position_ids[group_ind][i] == self.processing_class.pad_token_id:
-                    break
-                
-                # Check if we're at the start of a new prompt
-                if i == 0:
-                    unpacked_completion_logps.append([])
-                # Check if we're at the start of a new completion
-                elif position_ids[group_ind][i] < position_ids[group_ind][i - 1]:
-                    unpacked_completion_logps.append([tensor_to_unpack[group_ind][i]])
-                # We only need the logps of the completions so we check if we're past the prompt token ids
-                elif position_ids[group_ind][i] >= prompt_length[group_ind]:
+                if prompt_end_position_id == position_ids[group_ind][i]:
+                    past_prompt_tokens = True
+                if past_prompt_tokens:
+                    if position_ids[group_ind][i] == self.processing_class.pad_token_id:
+                        break  # End of completions
+                    # Start of a new completion if position id decreases
+                    if position_ids[group_ind][i] < position_ids[group_ind][i - 1]:
+                        unpacked_completion_logps.append([])
                     unpacked_completion_logps[-1].append(tensor_to_unpack[group_ind][i])
 
         unpacked_completion_logps = [
@@ -1146,7 +1155,7 @@ class GRPOTrainer(Trainer):
             )
             for logps in unpacked_completion_logps
         ]
-        unpacked_completion_logps = pad(unpacked_completion_logps, padding_value=1.0)
+        unpacked_completion_logps = pad(unpacked_completion_logps, padding_value=padding_value)
         return unpacked_completion_logps
 
     @profiling_decorator
