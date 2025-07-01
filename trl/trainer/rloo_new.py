@@ -50,7 +50,6 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
-
 from .callbacks import SyncRefModelCallback
 from .rloo_new_config import RLOOConfig_NEW
 from .utils import (
@@ -355,7 +354,7 @@ class RLOOTrainer_NEW(Trainer):
             If set to `None`, or if an element of the list corresponding to a [`~transformers.PreTrainedModel`] is
             `None`, the tokenizer for the model is automatically loaded using [`~transformers.AutoTokenizer.from_pretrained`].
             For elements in `reward_funcs` that are custom reward functions (not [`~transformers.PreTrainedModel`]),
-            the corresponding entries in `reward_processing_classes` are ignored.  
+            the corresponding entries in `reward_processing_classes` are ignored.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks
             detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -487,7 +486,7 @@ class RLOOTrainer_NEW(Trainer):
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
-        self.max_completion_length = args.max_completion_length  
+        self.max_completion_length = args.max_completion_length
         self.num_generations = args.num_generations
         self.temperature = args.temperature
         self.top_p = args.top_p
@@ -567,8 +566,6 @@ class RLOOTrainer_NEW(Trainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
-
-
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -1078,7 +1075,7 @@ class RLOOTrainer_NEW(Trainer):
             prompt_length = prompt_ids.size(1)
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
-    
+
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.processing_class.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
@@ -1170,7 +1167,7 @@ class RLOOTrainer_NEW(Trainer):
             )
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-        
+
         # Log the metrics
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
@@ -1201,14 +1198,13 @@ class RLOOTrainer_NEW(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
         # self._metrics[mode]["reward"].append(grouped_rewards.mean().item())
         # self._metrics[mode]["reward_std"].append(grouped_rewards.std().item())
-        #self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
+        # self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
-        #self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
         return {
             "prompt_ids": prompt_ids,
@@ -1218,8 +1214,6 @@ class RLOOTrainer_NEW(Trainer):
             "rewards": rewards,
             "old_per_token_logps": old_per_token_logps,
         }
-
-
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1240,20 +1234,20 @@ class RLOOTrainer_NEW(Trainer):
 
         # for rloo loss, we need to compute the sequence-level logprobs
         sequence_logps = (per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-        
-        #for calculating the advantages, we need to gather the rewards
+
+        # for calculating the advantages, we need to gather the rewards
         all_rewards = rewards.clone()
-        rewards = gather(rewards) 
-        
+        rewards = gather(rewards)
+
         if self.normalize_rewards:
             rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
             rewards = torch.clamp(rewards, -self.reward_clip_range, self.reward_clip_range)
-        
+
         process_slice = slice(
-            self.accelerator.process_index * all_rewards.shape[0], 
+            self.accelerator.process_index * all_rewards.shape[0],
             (self.accelerator.process_index + 1) * all_rewards.shape[0],
         )
-        
+
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             with torch.no_grad():
@@ -1267,11 +1261,13 @@ class RLOOTrainer_NEW(Trainer):
                             self.model, input_ids, attention_mask, logits_to_keep
                         )
                 # if we have a ref model, we need to compute the sequence-level logprobs for the ref model
-                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-                
+                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(
+                    min=1.0
+                )
+
                 # Compute sequence-level KL divergence between the model and the ref model
                 sequence_kl = ref_sequence_logps - sequence_logps
-                
+
                 # In RLOO, we include the KL penalty in the rewards
                 kl_penalty = -self.beta * sequence_kl
                 rewards_with_kl = rewards + kl_penalty
@@ -1280,17 +1276,17 @@ class RLOOTrainer_NEW(Trainer):
 
         # Reshape rewards back to (num_prompts, num_generations) for RLOO baseline calculation
         rewards_with_kl = rewards_with_kl.view(-1, self.num_generations)
-        
+
         # Compute RLOO baseline with KL-adjusted rewards
         sum_all_rewards = rewards_with_kl.sum(dim=1, keepdim=True)
         baseline = (sum_all_rewards - rewards_with_kl) / (self.num_generations - 1)
-        
+
         # Compute advantages as r_i - baseline_i
         advantages = rewards_with_kl - baseline
         advantages = advantages.flatten()
-        all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
+        all_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
-        
+
         # Normalize advantages if arg is set
         if self.normalize_advantages:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -1302,7 +1298,7 @@ class RLOOTrainer_NEW(Trainer):
             per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
         )
         old_sequence_logps = (old_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-        
+
         coef_1 = torch.exp(sequence_logps - old_sequence_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
 
@@ -1312,7 +1308,7 @@ class RLOOTrainer_NEW(Trainer):
         sequence_loss = -torch.min(sequence_loss1, sequence_loss2)
 
         # Final loss is the mean across sequences
-        loss = sequence_loss.mean() 
+        loss = sequence_loss.mean()
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
@@ -1338,6 +1334,7 @@ class RLOOTrainer_NEW(Trainer):
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
         gathered_clip_ratio = self.accelerator.gather(clip_ratio)
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
+        self._textual_logs["advantages"].extend(all_advantages.tolist())
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
