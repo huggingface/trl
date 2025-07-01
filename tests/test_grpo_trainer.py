@@ -1352,14 +1352,14 @@ class PackingTester(unittest.TestCase):
             expected_input_ids = torch.tensor(
                 [
                     [100, 101, 102, 103, 1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013, 1014],
-                    [200, 201, 2000, 2001, 2002, 2003, 2004, 2005, 2010, 2011, pad_token_id, pad_token_id, pad_token_id],
+                    [ pad_token_id, pad_token_id, pad_token_id, 200, 201, 2000, 2001, 2002, 2003, 2004, 2005, 2010, 2011],
                 ]
             )
             self.assertTrue(torch.equal(packed_input_ids, expected_input_ids))
             expected_position_ids = torch.tensor(
                 [
                     [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
-                    [0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id, pad_token_id, pad_token_id],
+                    [ pad_token_id, pad_token_id, pad_token_id, 0, 1, 2, 3, 4, 5, 6, 7, 2, 3],
                 ]
             )
             self.assertTrue(torch.equal(packed_position_ids, expected_position_ids))

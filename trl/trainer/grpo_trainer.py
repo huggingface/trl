@@ -1105,11 +1105,10 @@ class GRPOTrainer(Trainer):
                 # Position ids for the completion always have the offset of the prompt length
                 packed_position_ids[group_ind, next_completion_start_index:next_completion_start_index + completion_end_index] = \
                     torch.arange(prompt_end_index, prompt_end_index + completion_end_index, device=completion_ids.device)
-                
                 next_completion_start_index += completion_end_index
         # Pad the packed inputs and position ids to the maximum length in the group
-        packed_inputs = pad(packed_inputs, padding_value=self.processing_class.pad_token_id)
-        packed_position_ids = pad(packed_position_ids, self.processing_class.pad_token_id)
+        packed_inputs = pad(packed_inputs, padding_value=self.processing_class.pad_token_id, padding_side="left")
+        packed_position_ids = pad(packed_position_ids, self.processing_class.pad_token_id, padding_side="left")
         packed_attention_mask = packed_inputs != self.processing_class.pad_token_id
 
         return {
