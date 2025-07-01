@@ -348,6 +348,14 @@ class GRPOConfig(TrainingArguments):
             "to repeat tokens."
         },
     )
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
+            "`transformers` paged implementation will be used for generation instead of the default padded "
+            "implementation."
+        },
+    )
     cache_implementation: Optional[str] = field(
         default=None,
         metadata={"help": "Implementation of the cache method for faster generation when use_vllm is set to False."},
@@ -570,7 +578,7 @@ class GRPOConfig(TrainingArguments):
         if self.generation_batch_size is None:
             self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
 
-        if self.generation_batch_size % self.per_device_train_batch_size * num_processes != 0:
+        if self.generation_batch_size % (self.per_device_train_batch_size * num_processes) != 0:
             raise ValueError(
                 f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
                 f"({self.per_device_train_batch_size * num_processes})."
