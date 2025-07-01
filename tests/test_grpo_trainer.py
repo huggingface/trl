@@ -1429,7 +1429,7 @@ class PackingTester(unittest.TestCase):
                 max_steps=1,
                 tmp_dir=tmp_dir,
                 max_completion_length=16,
-                model_init_kwargs={"attn_implementation": "flex_attention"},
+                #model_init_kwargs={"attn_implementation": "flex_attention"},
             )
             trainer_packed.train()
             train_loss_packed = trainer_packed.state.log_history[-1]["train_loss"]
@@ -1443,7 +1443,7 @@ class PackingTester(unittest.TestCase):
                 max_steps=1,
                 tmp_dir=tmp_dir2,
                 max_completion_length=16,
-                model_init_kwargs={"attn_implementation": "flex_attention"},
+                #model_init_kwargs={"attn_implementation": "flex_attention"},
             )
             trainer_no_packing.train()
             train_loss_no_packing = trainer_no_packing.state.log_history[-1]["train_loss"]

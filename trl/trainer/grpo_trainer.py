@@ -873,6 +873,8 @@ class GRPOTrainer(Trainer):
             attention_mask_batch = attention_mask[start : start + batch_size]
             if position_ids is not None:
                 position_ids_batch = position_ids[start : start + batch_size]
+                prompt_mask_batch = prompt_mask[start : start + batch_size]
+
                 # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
                 packed_logits = model(
                     input_ids=input_ids_batch,
@@ -883,7 +885,7 @@ class GRPOTrainer(Trainer):
                 # Divide logits by sampling temperature.
                 packed_logits = packed_logits / self.temperature
                 packed_logps = selective_log_softmax(packed_logits[:, :-1, :], input_ids_batch[:, 1:])
-                prompt_length = prompt_mask[:: self.num_generations].sum(dim=-1)
+                prompt_length = prompt_mask_batch.sum(dim=-1)
                 logps = self._unpack_tensor(position_ids_batch[:, 1:], packed_logps, prompt_length)
             else:
                 logits = model(
@@ -1465,9 +1467,6 @@ class GRPOTrainer(Trainer):
         self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
         return {
-            "packed_prompt_completion_ids": packed_prompt_completion_ids if self.do_pack_completions else None,
-            "packed_attention_mask": packed_attention_mask if self.do_pack_completions else None,
-            "packed_position_ids": packed_position_ids if self.do_pack_completions else None,
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
@@ -1475,6 +1474,7 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
+            "shuffle_ordering": torch.arange(prompt_ids.shape[0], device=device) if self.do_pack_completions else None
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1533,9 +1533,10 @@ class GRPOTrainer(Trainer):
 
         if self.do_pack_completions:
             # Pack the responses in a group to avoid recomputing the prompt tokens multiple times
-            packed_input_ids = inputs["packed_prompt_completion_ids"]
-            packed_attention_mask = inputs["packed_attention_mask"]
-            packed_position_ids = inputs["packed_position_ids"]
+            packed_inputs = self._pack_responses_in_a_group(prompt_ids, completion_ids, prompt_mask, completion_mask)
+            packed_input_ids = packed_inputs["input_ids"]
+            packed_attention_mask = packed_inputs["attention_mask"]
+            packed_position_ids = packed_inputs["position_ids"]
             per_token_logps_fn_args = {
                 "model": model,
                 "input_ids": packed_input_ids,
@@ -1579,6 +1580,13 @@ class GRPOTrainer(Trainer):
                 position_ids=per_token_logps_fn_args["position_ids"],
                 prompt_mask=per_token_logps_fn_args["prompt_mask"],
             )["logps"]
+        
+        if self.do_pack_completions:
+            # Ref and old logps are shuffled in the _prepare_inputs method we need to make sure
+            # that the per_token_logps and entropy_mask are in the same order as the inputs 
+            shuffle_order = inputs["shuffle_ordering"]
+            per_token_logps = per_token_logps[shuffle_order]
+            entropy_mask = entropy_mask[shuffle_order] if entropy_mask is not None else None
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
