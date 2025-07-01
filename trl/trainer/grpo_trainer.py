@@ -414,8 +414,17 @@ class GRPOTrainer(Trainer):
         if isinstance(model, str):
             model_id = model
             torch_dtype = model_init_kwargs.get("torch_dtype")
-            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-                pass  # torch_dtype is already a torch.dtype or "auto" or None
+            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto":
+                pass  # torch_dtype is already a torch.dtype or "auto"
+            elif torch_dtype is None:
+                # Set default torch_dtype for Flash Attention 2 compatibility
+                attn_implementation = model_init_kwargs.get("attn_implementation")
+                if attn_implementation == "flash_attention_2":
+                    # Use bfloat16 if available (better for modern GPUs), otherwise float16
+                    if torch.cuda.is_bf16_supported():
+                        model_init_kwargs["torch_dtype"] = torch.bfloat16
+                    else:
+                        model_init_kwargs["torch_dtype"] = torch.float16
             elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
                 torch_dtype = getattr(torch, torch_dtype)
                 model_init_kwargs["torch_dtype"] = torch_dtype
@@ -521,7 +530,6 @@ class GRPOTrainer(Trainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
-        self.do_pack_completions = args.do_pack_completions
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -566,6 +574,17 @@ class GRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+        
+        self.do_pack_completions = args.do_pack_completions
+        if self.do_pack_completions and model.config._attn_implementation != "flash_attention_2":
+            warnings.warn(
+                "Padding-free training is enabled, but the attention implementation is not set to "
+                "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
+                "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
+                "other implementations may lead to unexpected behavior. To ensure compatibility, set "
+                "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
+                "attention mechanism can handle flattened sequences."
+            )
 
         # Reference model
         self.beta = args.beta
@@ -877,7 +896,6 @@ class GRPOTrainer(Trainer):
                 packed_logits = model(
                     input_ids=input_ids_batch,
                     position_ids=position_ids_batch,
-                    logits_to_keep=0,
                 ).logits
 
                 # Divide logits by sampling temperature.
@@ -1119,7 +1137,7 @@ class GRPOTrainer(Trainer):
             )
             for logps in unpacked_completion_logps
         ]
-        unpacked_completion_logps = pad(unpacked_completion_logps, padding_value=0.0)
+        unpacked_completion_logps = pad(unpacked_completion_logps, padding_value=1.0)
         return unpacked_completion_logps
 
     @profiling_decorator

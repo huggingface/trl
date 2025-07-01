@@ -1422,10 +1422,9 @@ class PackingTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer_packed = self.create_trainer(
                 num_generations=num_generations,
-                batch_size=2,
+                batch_size=4,
                 do_pack_completions=True,
                 beta=0.1,
-                max_steps=2,
                 tmp_dir=tmp_dir,
                 max_completion_length=16,
                 model_init_kwargs={"attn_implementation": "flash_attention_2"},
@@ -1436,10 +1435,9 @@ class PackingTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir2:
             trainer_no_packing = self.create_trainer(
                 num_generations=num_generations,
-                batch_size=2,
+                batch_size=4,
                 do_pack_completions=False,
                 beta=0.1,
-                max_steps=2,
                 tmp_dir=tmp_dir2,
                 max_completion_length=16,
                 model_init_kwargs={"attn_implementation": "flash_attention_2"},
