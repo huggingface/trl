@@ -792,7 +792,7 @@ class SFTTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
-                dataset = dataset.select_columns({"input_ids", "position_ids"}.intersection(dataset.column_names))
+                dataset = dataset.select_columns({"input_ids", "position_ids", "completion_mask"}.intersection(dataset.column_names))
 
         return dataset
 
