@@ -263,9 +263,8 @@ class GRPOConfig(TrainingArguments):
         default=512,
         metadata={
             "help": "Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left. If the "
-            "prompt is conversational, we only truncate the message tokens starting from the top of the conversation
-            "and do not account for any tokens introduced
-            "by the chat template."
+            "prompt is conversational, we only truncate the message tokens starting from the top of the conversation "
+            "and do not account for any tokens introduced by the chat template."
         },
     )
     num_generations: Optional[int] = field(
