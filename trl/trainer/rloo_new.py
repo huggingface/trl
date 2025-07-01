@@ -502,6 +502,7 @@ class RLOOTrainer_NEW(Trainer):
         self.normalize_advantages = args.normalize_advantages
         self.normalize_rewards = args.normalize_rewards
         self.reward_clip_range = args.reward_clip_range
+        self.token_level_kl = args.token_level_kl
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1072,8 +1073,7 @@ class RLOOTrainer_NEW(Trainer):
                     prompt_completion_ids = unwrapped_model.generate(
                         prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                     )
-            #hardcode prompt_completion_ids
-            #prompt_completion_ids = torch.tensor([[1, 2, 3], [4, 5, 6]], dtype=torch.long, device=device)
+
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
             prompt_ids = prompt_completion_ids[:, :prompt_length]
@@ -1231,18 +1231,17 @@ class RLOOTrainer_NEW(Trainer):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        rewards = inputs["rewards"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
-        # Sum logprobs across sequence length to get sequence-level logprobs
+        # for rloo loss, we need to compute the sequence-level logprobs
         sequence_logps = (per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-
-        # Get rewards from inputs
-        rewards = inputs["rewards"]  # Shape: (num_prompts, num_generations)
-
+        
+        #for calculating the advantages, we need to gather the rewards
         all_rewards = rewards.clone()
         rewards = gather(rewards) 
         
@@ -1267,12 +1266,13 @@ class RLOOTrainer_NEW(Trainer):
                         ref_per_token_logps = self._get_per_token_logps(
                             self.model, input_ids, attention_mask, logits_to_keep
                         )
-                # Sum reference logprobs across sequence length
+                # if we have a ref model, we need to compute the sequence-level logprobs for the ref model
                 ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-                # Compute sequence-level KL divergence
+                
+                # Compute sequence-level KL divergence between the model and the ref model
                 sequence_kl = ref_sequence_logps - sequence_logps
                 
-                # Add KL penalty to rewards (similar to old RLOO implementation)
+                # In RLOO, we include the KL penalty in the rewards
                 kl_penalty = -self.beta * sequence_kl
                 rewards_with_kl = rewards + kl_penalty
         else:
@@ -1291,8 +1291,7 @@ class RLOOTrainer_NEW(Trainer):
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
         
-
-        # Normalize advantages if requested
+        # Normalize advantages if arg is set
         if self.normalize_advantages:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
@@ -1311,9 +1310,6 @@ class RLOOTrainer_NEW(Trainer):
         sequence_loss1 = coef_1 * advantages
         sequence_loss2 = coef_2 * advantages
         sequence_loss = -torch.min(sequence_loss1, sequence_loss2)
-        
-        # if self.beta != 0.0:
-        #     sequence_loss = sequence_loss + self.beta * sequence_kl
 
         # Final loss is the mean across sequences
         loss = sequence_loss.mean() 
@@ -1325,7 +1321,7 @@ class RLOOTrainer_NEW(Trainer):
             mean_kl = sequence_kl.mean()
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
-        # Compute the clipped probability ratios
+        # Compute the clipped probability ratios (sequence-level, same as original RLOO)
         is_low_clipped = (coef_1 < 1 - self.epsilon) & (advantages < 0)
         is_high_clipped = (coef_1 > 1 + self.epsilon) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
