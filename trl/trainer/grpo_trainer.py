@@ -1118,13 +1118,13 @@ class GRPOTrainer(Trainer):
                                 num_tokens_to_truncate = 0
                                 truncated_messages[-1].append(msg)
 
-                prompt_inputs = self.processing_class.apply_chat_template(
-                    truncated_messages, return_dict=True, add_generation_prompt=True
-                )
-                prompt_inputs = super()._prepare_inputs(prompt_inputs)
-                prompt_ids = prompt_inputs["input_ids"]
-                prompt_mask = prompt_inputs["attention_mask"]
-                prompt_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=False)
+            prompt_inputs = self.processing_class.apply_chat_template(
+                truncated_messages, return_dict=True, add_generation_prompt=True
+            )
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            prompt_ids = prompt_inputs["input_ids"]
+            prompt_mask = prompt_inputs["attention_mask"]
+            prompt_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=False)
 
         return prompt_ids, prompt_mask, prompt_text
 
