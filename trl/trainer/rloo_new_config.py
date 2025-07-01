@@ -162,6 +162,8 @@ class RLOOConfig_NEW(TrainingArguments):
             Whether to normalize advantages.
         reward_clip_range (`float`, *optional*, defaults to `10.0`):
             Clip range for rewards.
+        token_level_kl (`bool`, *optional*, defaults to `False`):
+            Whether to use token-level KL penalty or sequence-level KL penalty.
 
         > Parameters that control the logging
 
@@ -435,6 +437,10 @@ class RLOOConfig_NEW(TrainingArguments):
     reward_clip_range: float = field(
         default=10.0,
         metadata={"help": "Clip range for rewards."},
+    )
+    token_level_kl: bool = field(
+        default=False,
+        metadata={"help": "Whether to use token-level KL penalty or sequence-level KL penalty."},
     )
 
     # Parameters that control the logging
