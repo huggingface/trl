@@ -874,12 +874,10 @@ class GRPOTrainer(Trainer):
             if position_ids is not None:
                 position_ids_batch = position_ids[start : start + batch_size]
                 prompt_mask_batch = prompt_mask[start : start + batch_size]
-
-                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
                 packed_logits = model(
                     input_ids=input_ids_batch,
-                    attention_mask=attention_mask_batch,
                     position_ids=position_ids_batch,
+                    logits_to_keep=0,
                 ).logits
 
                 # Divide logits by sampling temperature.
@@ -888,6 +886,7 @@ class GRPOTrainer(Trainer):
                 prompt_length = prompt_mask_batch.sum(dim=-1)
                 logps = self._unpack_tensor(position_ids_batch[:, 1:], packed_logps, prompt_length)
             else:
+                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
                 logits = model(
                     input_ids=input_ids_batch,
                     attention_mask=attention_mask_batch,
@@ -1097,19 +1096,20 @@ class GRPOTrainer(Trainer):
         # Unpacks the completions from the packed responses.
         # The unpacked completions are used to compute the loss and rewards.
         unpacked_completion_logps = []
-        for group_ind in range(position_ids.size(0)):
-            for i in range(1, len(position_ids[group_ind])):
+        for group_ind in range(position_ids.shape[0]):
+            for i in range(0, position_ids.shape[1]):
                 # If we reach the end of the group, break
                 if position_ids[group_ind][i] == self.processing_class.pad_token_id:
                     break
+                
                 # Check if we're at the start of a new prompt
-                if i - 1 == 0:
+                if i == 0:
                     unpacked_completion_logps.append([])
                 # Check if we're at the start of a new completion
                 elif position_ids[group_ind][i] < position_ids[group_ind][i - 1]:
                     unpacked_completion_logps.append([tensor_to_unpack[group_ind][i]])
                 # We only need the logps of the completions so we check if we're past the prompt token ids
-                elif i >= prompt_length[group_ind].item():
+                elif position_ids[group_ind][i] >= prompt_length[group_ind].item():
                     unpacked_completion_logps[-1].append(tensor_to_unpack[group_ind][i])
 
         unpacked_completion_logps = [
@@ -1346,7 +1346,7 @@ class GRPOTrainer(Trainer):
                         logits_to_keep,
                         batch_size,
                         packed_position_ids,
-                        prompt_mask=prompt_mask,
+                        prompt_mask=prompt_mask[::self.num_generations],  # prompt_mask is repeated for each generation
                     )
                 else:
                     old_per_token_logps = self._get_per_token_logps_and_entropies(
@@ -1365,7 +1365,7 @@ class GRPOTrainer(Trainer):
                             packed_attention_mask,
                             logits_to_keep,
                             position_ids=packed_position_ids,
-                            prompt_mask=prompt_mask,
+                            prompt_mask=prompt_mask[::self.num_generations],  # prompt_mask is repeated for each generation
                         )["logps"]
                     else:
                         ref_per_token_logps = self._get_per_token_logps_and_entropies(
@@ -1380,7 +1380,7 @@ class GRPOTrainer(Trainer):
                                 packed_attention_mask,
                                 logits_to_keep,
                                 position_ids=packed_position_ids,
-                                prompt_mask=prompt_mask,
+                                prompt_mask=prompt_mask[::self.num_generations],  # prompt_mask is repeated for each generation
                             )["logps"]
                         else:
                             ref_per_token_logps = self._get_per_token_logps_and_entropies(
@@ -1544,7 +1544,7 @@ class GRPOTrainer(Trainer):
                 "logits_to_keep": logits_to_keep,
                 "batch_size": None,
                 "position_ids": packed_position_ids,
-                "prompt_mask": prompt_mask,
+                "prompt_mask": prompt_mask[::self.num_generations],  # prompt_mask is the same for all generations in a group
             }
         else:
             per_token_logps_fn_args = {
@@ -1571,7 +1571,7 @@ class GRPOTrainer(Trainer):
             entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
             entropy_mask = entropies >= entropy_threshold
         else:
-                per_token_logps = self._get_per_token_logps_and_entropies(
+            per_token_logps = self._get_per_token_logps_and_entropies(
                 per_token_logps_fn_args["model"],
                 per_token_logps_fn_args["input_ids"],
                 per_token_logps_fn_args["attention_mask"],
@@ -1580,13 +1580,6 @@ class GRPOTrainer(Trainer):
                 position_ids=per_token_logps_fn_args["position_ids"],
                 prompt_mask=per_token_logps_fn_args["prompt_mask"],
             )["logps"]
-        
-        if self.do_pack_completions:
-            # Ref and old logps are shuffled in the _prepare_inputs method we need to make sure
-            # that the per_token_logps and entropy_mask are in the same order as the inputs 
-            shuffle_order = inputs["shuffle_ordering"]
-            per_token_logps = per_token_logps[shuffle_order]
-            entropy_mask = entropy_mask[shuffle_order] if entropy_mask is not None else None
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:

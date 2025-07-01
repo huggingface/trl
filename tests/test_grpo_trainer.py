@@ -1288,7 +1288,6 @@ class PackingTester(unittest.TestCase):
             report_to="none",
             do_pack_completions=do_pack_completions,
             beta=beta,
-            bf16=False,
             **kwargs,
         )
         if max_steps is not None:
@@ -1409,7 +1408,7 @@ class PackingTester(unittest.TestCase):
                 do_pack_completions=True,
                 beta=0.1,
                 tmp_dir=tmp_dir,
-                model_init_kwargs={"attn_implementation": "flex_attention"},
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
             )
             trainer.train()
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1423,13 +1422,13 @@ class PackingTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             trainer_packed = self.create_trainer(
                 num_generations=num_generations,
-                batch_size=4,
+                batch_size=2,
                 do_pack_completions=True,
                 beta=0.1,
-                max_steps=1,
+                max_steps=2,
                 tmp_dir=tmp_dir,
                 max_completion_length=16,
-                #model_init_kwargs={"attn_implementation": "flex_attention"},
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
             )
             trainer_packed.train()
             train_loss_packed = trainer_packed.state.log_history[-1]["train_loss"]
@@ -1437,13 +1436,13 @@ class PackingTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir2:
             trainer_no_packing = self.create_trainer(
                 num_generations=num_generations,
-                batch_size=4,
+                batch_size=2,
                 do_pack_completions=False,
                 beta=0.1,
-                max_steps=1,
+                max_steps=2,
                 tmp_dir=tmp_dir2,
                 max_completion_length=16,
-                #model_init_kwargs={"attn_implementation": "flex_attention"},
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
             )
             trainer_no_packing.train()
             train_loss_no_packing = trainer_no_packing.state.log_history[-1]["train_loss"]
