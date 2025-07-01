@@ -899,14 +899,14 @@ class GRPOTrainer(Trainer):
             if position_ids is not None:
                 position_ids_batch = position_ids[start : start + batch_size]
                 prompt_mask_batch = prompt_mask[start : start + batch_size]
-                packed_logits = model(
+                logits = model(
                     input_ids=input_ids_batch,
                     position_ids=position_ids_batch,
                 ).logits
 
                 # Divide logits by sampling temperature.
-                packed_logits = packed_logits / self.temperature
-                packed_logps = selective_log_softmax(packed_logits[:, :-1, :], input_ids_batch[:, 1:])
+                logits = logits / self.temperature
+                packed_logps = selective_log_softmax(logits[:, :-1, :], input_ids_batch[:, 1:])
                 prompt_length = prompt_mask_batch.sum(dim=-1)
                 logps = self._unpack_tensor(position_ids_batch[:, 1:], packed_logps, prompt_length)
             else:

@@ -1426,7 +1426,88 @@ class PackingTester(unittest.TestCase):
                 ]
             )
             self.assertTrue(torch.allclose(unpacked_logps, expected_unpacked_logps))
-
+    
+    def test_forward_pass_with_packing(self):
+        num_generations = 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(
+                num_generations=num_generations,
+                do_pack_completions=False,
+                beta=0.1,
+                tmp_dir=tmp_dir,
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
+            )
+            pad_token_id = trainer.processing_class.pad_token_id
+            prompt_ids = torch.tensor(
+                [
+                    [100, 101, 102, 103],
+                    [100, 101, 102, 103],
+                    [pad_token_id, pad_token_id, 202, 203],
+                    [pad_token_id, pad_token_id, 202, 203],
+                ],
+                device=trainer.model.device,
+            )
+            prompt_attention_mask = torch.tensor(
+                [
+                    [1, 1, 1, 1],
+                    [1, 1, 1, 1],
+                    [0, 0, 1, 1],
+                    [0, 0, 1, 1],
+                ],
+                device=trainer.model.device,
+            )
+            completion_ids = torch.tensor(
+                [
+                    [1000, 1001, 1002, 1003, pad_token_id, pad_token_id],
+                    [1010, 1011, 1012, 1013, 1014, pad_token_id],
+                    [2000, 2001, 2002, 2003, 2004, 2005],
+                    [2010, 2011, 2012, pad_token_id, pad_token_id, pad_token_id],
+                ],
+                device=trainer.model.device,
+            )
+            completion_attention_mask = torch.tensor(
+                [
+                    [1, 1, 1, 1, 0, 0],
+                    [1, 1, 1, 1, 1, 0],
+                    [1, 1, 1, 1, 1, 1],
+                    [1, 1, 1, 0, 0, 0],
+                ],
+                device=trainer.model.device,
+            )
+            
+            input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            attention_mask = torch.cat([prompt_attention_mask, completion_attention_mask], dim=1)
+            
+            logps_without_packing = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                logits_to_keep=completion_attention_mask.shape[1],
+            )["logps"]
+            
+            logps_without_packing = logps_without_packing * completion_attention_mask
+            
+            trainer.do_pack_completions = True
+            packed_inputs = trainer._pack_responses_in_a_group(
+                prompt_ids, completion_ids, prompt_attention_mask, completion_attention_mask
+            )
+            packed_input_ids = packed_inputs["input_ids"]
+            packed_attention_mask = packed_inputs["attention_mask"]
+            packed_position_ids = packed_inputs["position_ids"]
+            
+            logps_with_packing = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                input_ids=packed_input_ids,
+                attention_mask=packed_attention_mask,
+                position_ids=packed_position_ids,
+                logits_to_keep=None,
+                prompt_mask=prompt_attention_mask[::trainer.num_generations],
+            )["logps"]
+            
+            logps_with_packing = logps_with_packing * completion_attention_mask            
+            assert torch.allclose(logps_without_packing, logps_with_packing, atol=1e-5)
+            
+       
     def test_training_with_packing(self):
         num_generations = 4
         with tempfile.TemporaryDirectory() as tmp_dir:
