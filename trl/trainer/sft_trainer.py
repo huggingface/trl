@@ -764,7 +764,7 @@ class SFTTrainer(Trainer):
                                 )
                             processed = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
-                            processed = {"input_ids": processing_class(text=example[dataset_text_field])['input_ids']}
+                            processed = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
                     return processed
 
                 dataset = dataset.map(
