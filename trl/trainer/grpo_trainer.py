@@ -883,7 +883,7 @@ class GRPOTrainer(Trainer):
             ).logits
             # Correctly slice the logits to only include the parts corresponding to the completions.
             # The logits for the completion tokens are at the end of the sequence.
-            logits = logits[:, -logits_to_keep-1:-1, :]
+            logits = logits[:, -logits_to_keep - 1 : -1, :]
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
