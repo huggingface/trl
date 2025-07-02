@@ -881,7 +881,9 @@ class GRPOTrainer(Trainer):
                 attention_mask=attention_mask_batch,
                 logits_to_keep=logits_to_keep + 1,
             ).logits
-            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            # Correctly slice the logits to only include the parts corresponding to the completions.
+            # The logits for the completion tokens are at the end of the sequence.
+            logits = logits[:, -logits_to_keep-1:-1, :]
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
