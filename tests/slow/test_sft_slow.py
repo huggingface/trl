@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import gc
+import importlib
 import itertools
 import tempfile
 import unittest
@@ -418,6 +419,11 @@ class SFTTrainerSlowTester(unittest.TestCase):
             )
 
             trainer.train()
+
+        # Remove liger related monkey_patch
+        module_path = trainer.model.__module__
+        reload_module = importlib.import_module(module_path)
+        importlib.reload(reload_module)
 
         release_memory(trainer.model, trainer)
 
