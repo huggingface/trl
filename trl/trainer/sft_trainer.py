@@ -728,10 +728,10 @@ class SFTTrainer(Trainer):
                                 **example.get("chat_template_kwargs", {}),
                             )
                         else:
-                            prompt_ids = processing_class(text=example["prompt"])['input_ids']
+                            prompt_ids = processing_class(text=example["prompt"])["input_ids"]
                             prompt_completion_ids = processing_class(
                                 text=example["prompt"] + example["completion"]
-                            )['input_ids']
+                            )["input_ids"]
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
