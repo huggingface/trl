@@ -1271,3 +1271,29 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_reward_func_accessing_trainer_state(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            trainer_state = kwargs.get("trainer_state")
+            assert trainer_state is not None
+            # transformers.TrainerState instance should have a `global_step` property.
+            assert hasattr(trainer_state, "global_step")
+            return [float(len(set(completion))) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+            trainer.train()
