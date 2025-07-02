@@ -432,8 +432,8 @@ class DPOConfig(TrainingArguments):
     generate_during_eval: bool = field(
         default=False,
         metadata={
-            "help": "Whether to generate and log completions from both the model and the reference model to W&B or "
-            "Comet during evaluation."
+            "help": "Whether to generate and log completions from both the model and the reference model to W&B, MLFLow "
+            "or Comet during evaluation."
         },
     )
 
