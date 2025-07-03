@@ -1240,7 +1240,7 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
+    
     def test_training_with_generation_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1271,7 +1271,7 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
+    
     def test_training_with_reward_func_accessing_trainer_state(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1297,3 +1297,261 @@ class GRPOTrainerTester(unittest.TestCase):
                 train_dataset=dataset,
             )
             trainer.train()
+                
+class PackingTester(unittest.TestCase):
+    def setUp(self):
+        self.dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        self.reward_model_id = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+
+    def create_trainer(self, num_generations=2, batch_size=8, do_pack_completions=False, beta=0.0, max_steps=None, tmp_dir=None, **kwargs):
+        args_kwargs = dict(
+            output_dir=tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=batch_size,
+            num_generations=num_generations,
+            report_to="none",
+            do_pack_completions=do_pack_completions,
+            beta=beta,
+            **kwargs,
+        )
+        if max_steps is not None:
+            args_kwargs["max_steps"] = max_steps
+        training_args = GRPOConfig(**args_kwargs)
+        return GRPOTrainer(
+            model=self.model_id,
+            reward_funcs=self.reward_model_id,
+            args=training_args,
+            train_dataset=self.dataset,
+        )
+
+    def test_pack_responses_in_a_group(self):
+        num_generations = 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(num_generations=num_generations, tmp_dir=tmp_dir, do_pack_completions=True)
+
+            prompt_ids = torch.tensor(
+                [
+                    [100, 101, 102, 103],
+                    [100, 101, 102, 103],
+                    # Prompt tokens 202, 203
+                    [200, 201, 202, 203],
+                    [200, 201, 202, 203],
+                ]
+            )
+            prompt_mask = torch.tensor(
+                [
+                    [True, True, True, True],
+                    [True, True, True, True],
+                    [False, False, True, True],
+                    [False, False, True, True],
+                ]
+            )
+            completion_ids = torch.tensor(
+                [
+                    [1000, 1001, 1002, 1003, 1004, 1005],
+                    [1010, 1011, 1012, 1013, 1014, 1015],
+                    [2000, 2001, 2002, 2003, 2004, 2005],
+                    [2010, 2011, 2012, 2013, 2014, 2015],
+                ]
+            )
+            completion_mask = torch.tensor(
+                [
+                    [True, True, True, True, False, False],
+                    [True, True, True, True, True, False],
+                    [True, True, True, True, True, True],
+                    [True, True, False, False, False, False],
+                ]
+            )
+
+            packed_sequence = trainer._pack_responses_in_a_group(prompt_ids, completion_ids, prompt_mask, completion_mask)
+            packed_input_ids = packed_sequence["input_ids"]
+            packed_position_ids = packed_sequence["position_ids"]
+            packed_attention_mask = packed_sequence["attention_mask"]
+
+            num_unique_prompts = len(prompt_ids) // num_generations
+            self.assertEqual(len(packed_input_ids), num_unique_prompts)
+            self.assertEqual(len(packed_position_ids), num_unique_prompts)
+            self.assertEqual(len(packed_attention_mask), num_unique_prompts)
+
+            pad_token_id = trainer.processing_class.pad_token_id
+            # Prompts should be left padded and completions right padded.
+            expected_input_ids = torch.tensor(
+                [
+                    [100, 101, 102, 103, 1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013, 1014],
+                    [ pad_token_id, pad_token_id, 202, 203, 2000, 2001, 2002, 2003, 2004, 2005, 2010, 2011, pad_token_id],
+                ]
+            )
+            self.assertTrue(torch.equal(packed_input_ids, expected_input_ids))
+            expected_position_ids = torch.tensor(
+                [
+                    [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
+                    [ pad_token_id, pad_token_id, 0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id],
+                ]
+            )
+            self.assertTrue(torch.equal(packed_position_ids, expected_position_ids))
+            expected_attention_mask = torch.tensor(
+                [
+                    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                    [0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+                ]
+            )
+            self.assertTrue(torch.equal(packed_attention_mask, expected_attention_mask))
+
+    def test_unpack_tensor(self):
+        num_generations = 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(num_generations=num_generations, tmp_dir=tmp_dir, do_pack_completions=True)
+            pad_token_id = trainer.processing_class.pad_token_id
+            position_ids = torch.tensor(
+                [
+                    [0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8],
+                    [pad_token_id, pad_token_id, 0, 1, 2, 3, 4, 5, 6, 7, 2, 3, pad_token_id],
+                ]
+            )
+            prompt_length = torch.tensor([4, 2])
+            all_logps = torch.tensor(
+                [
+                    [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3],
+                    [0.0, 0.0, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 0.0],
+                ]
+            )
+            unpacked_logps = trainer._unpack_tensor(position_ids, all_logps, prompt_length, padding_value=-100.0)
+            expected_unpacked_logps = torch.tensor(
+                [
+                    [0.5, 0.6, 0.7, 0.8, -100.0, -100.0],
+                    [0.9, 1.0, 1.1, 1.2, 1.3, -100.0],
+                    [0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+                    [1.0, 1.1, -100.0, -100.0, -100.0, -100.0],
+                ]
+            )
+            self.assertTrue(torch.allclose(unpacked_logps, expected_unpacked_logps))
+    
+    def test_forward_pass_with_packing(self):
+        num_generations = 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(
+                num_generations=num_generations,
+                do_pack_completions=False,
+                beta=0.1,
+                tmp_dir=tmp_dir,
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
+            )
+            pad_token_id = trainer.processing_class.pad_token_id
+            prompt_ids = torch.tensor(
+                [
+                    [100, 101, 102, 103],
+                    [100, 101, 102, 103],
+                    [pad_token_id, pad_token_id, 202, 203],
+                    [pad_token_id, pad_token_id, 202, 203],
+                ],
+                device=trainer.model.device,
+            )
+            prompt_attention_mask = torch.tensor(
+                [
+                    [1, 1, 1, 1],
+                    [1, 1, 1, 1],
+                    [0, 0, 1, 1],
+                    [0, 0, 1, 1],
+                ],
+                device=trainer.model.device,
+            )
+            completion_ids = torch.tensor(
+                [
+                    [1000, 1001, 1002, 1003, pad_token_id, pad_token_id],
+                    [1010, 1011, 1012, 1013, 1014, pad_token_id],
+                    [2000, 2001, 2002, 2003, 2004, 2005],
+                    [2010, 2011, 2012, pad_token_id, pad_token_id, pad_token_id],
+                ],
+                device=trainer.model.device,
+            )
+            completion_attention_mask = torch.tensor(
+                [
+                    [1, 1, 1, 1, 0, 0],
+                    [1, 1, 1, 1, 1, 0],
+                    [1, 1, 1, 1, 1, 1],
+                    [1, 1, 1, 0, 0, 0],
+                ],
+                device=trainer.model.device,
+            )
+            
+            input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            attention_mask = torch.cat([prompt_attention_mask, completion_attention_mask], dim=1)
+            
+            logps_without_packing = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                logits_to_keep=completion_attention_mask.shape[1],
+            )["logps"]
+            
+            logps_without_packing = logps_without_packing * completion_attention_mask
+            
+            trainer.do_pack_completions = True
+            packed_inputs = trainer._pack_responses_in_a_group(
+                prompt_ids, completion_ids, prompt_attention_mask, completion_attention_mask
+            )
+            packed_input_ids = packed_inputs["input_ids"]
+            packed_attention_mask = packed_inputs["attention_mask"]
+            packed_position_ids = packed_inputs["position_ids"]
+            
+            logps_with_packing = trainer._get_per_token_logps_and_entropies(
+                trainer.model,
+                input_ids=packed_input_ids,
+                attention_mask=packed_attention_mask,
+                position_ids=packed_position_ids,
+                logits_to_keep=None,
+                prompt_mask=prompt_attention_mask[::trainer.num_generations],
+                batch_size=1,
+            )["logps"]
+            
+            logps_with_packing = logps_with_packing * completion_attention_mask            
+            assert torch.allclose(logps_without_packing, logps_with_packing, atol=1e-5)
+            
+       
+    def test_training_with_packing(self):
+        num_generations = 4
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer = self.create_trainer(
+                num_generations=num_generations,
+                do_pack_completions=True,
+                beta=0.1,
+                tmp_dir=tmp_dir,
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
+            )
+            trainer.train()
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_train_loss_same_with_and_without_packing(self):
+        num_generations = 2
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            trainer_packed = self.create_trainer(
+                num_generations=num_generations,
+                batch_size=4,
+                do_pack_completions=True,
+                beta=0.1,
+                tmp_dir=tmp_dir,
+                max_completion_length=16,
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
+            )
+            trainer_packed.train()
+            train_loss_packed = trainer_packed.state.log_history[-1]["train_loss"]
+
+        with tempfile.TemporaryDirectory() as tmp_dir2:
+            trainer_no_packing = self.create_trainer(
+                num_generations=num_generations,
+                batch_size=4,
+                do_pack_completions=False,
+                beta=0.1,
+                tmp_dir=tmp_dir2,
+                max_completion_length=16,
+                model_init_kwargs={"attn_implementation": "flash_attention_2"},
+            )
+            trainer_no_packing.train()
+            train_loss_no_packing = trainer_no_packing.state.log_history[-1]["train_loss"]
+
+        self.assertAlmostEqual(train_loss_packed, train_loss_no_packing, places=5)

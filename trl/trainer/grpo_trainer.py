@@ -419,8 +419,17 @@ class GRPOTrainer(Trainer):
         if isinstance(model, str):
             model_id = model
             torch_dtype = model_init_kwargs.get("torch_dtype")
-            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-                pass  # torch_dtype is already a torch.dtype or "auto" or None
+            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto":
+                pass  # torch_dtype is already a torch.dtype or "auto"
+            elif torch_dtype is None:
+                # Set default torch_dtype for Flash Attention 2 compatibility
+                attn_implementation = model_init_kwargs.get("attn_implementation")
+                if attn_implementation == "flash_attention_2":
+                    # Use bfloat16 if available (better for modern GPUs), otherwise float16
+                    if torch.cuda.is_bf16_supported():
+                        model_init_kwargs["torch_dtype"] = torch.bfloat16
+                    else:
+                        model_init_kwargs["torch_dtype"] = torch.float16
             elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
                 torch_dtype = getattr(torch, torch_dtype)
                 model_init_kwargs["torch_dtype"] = torch_dtype
@@ -571,6 +580,17 @@ class GRPOTrainer(Trainer):
             callbacks=callbacks,
             optimizers=optimizers,
         )
+        
+        self.do_pack_completions = args.do_pack_completions
+        if self.do_pack_completions and model.config._attn_implementation != "flash_attention_2":
+            warnings.warn(
+                "Padding-free training is enabled, but the attention implementation is not set to "
+                "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
+                "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
+                "other implementations may lead to unexpected behavior. To ensure compatibility, set "
+                "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
+                "attention mechanism can handle flattened sequences."
+            )
 
         # Reference model
         self.beta = args.beta
@@ -865,36 +885,58 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
-        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
+        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, position_ids=None, prompt_mask=None
+    , compute_entropy=False
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log‐probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
+        position_ids_batch = None
         for start in range(0, input_ids.size(0), batch_size):
             input_ids_batch = input_ids[start : start + batch_size]
             attention_mask_batch = attention_mask[start : start + batch_size]
+            if position_ids is not None:
+                position_ids_batch = position_ids[start : start + batch_size]
+                prompt_mask_batch = prompt_mask[start : start + batch_size]
+                logits = model(
+                    input_ids=input_ids_batch,
+                    position_ids=position_ids_batch,
+                ).logits
 
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            logits = model(
-                input_ids=input_ids_batch,
-                attention_mask=attention_mask_batch,
-                logits_to_keep=logits_to_keep + 1,
-            ).logits
-            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-            # Divide logits by sampling temperature.
-            # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
+                # Divide logits by sampling temperature.
+                logits = logits / self.temperature
+                packed_logps = selective_log_softmax(logits[:, :-1, :], input_ids_batch[:, 1:])
+                prompt_length = prompt_mask_batch.sum(dim=-1)
+                logps = self._unpack_tensor(position_ids_batch[:, 1:], packed_logps, prompt_length)
+            else:
+                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+                logits = model(
+                    input_ids=input_ids_batch,
+                    attention_mask=attention_mask_batch,
+                    logits_to_keep=logits_to_keep + 1
+                ).logits
+                # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+                logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+                # Divide logits by sampling temperature.
+                logits = logits / self.temperature
 
-            completion_ids = input_ids_batch[:, -logits_to_keep:]
-            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+                completion_ids = input_ids_batch[:, -logits_to_keep:]
+                logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
 
             if compute_entropy:
                 entropies = entropy_from_logits(logits)
+                if self.do_pack_completions:
+                    entropies = self._unpack_tensor(
+                        position_ids_batch[:, 1:], entropies, prompt_length
+                    )
                 all_entropies.append(entropies)
 
-        logps = torch.cat(all_logps, dim=0)
+        if self.do_pack_completions:
+            logps = pad(all_logps, 1.0)  # pad to max length
+        else:
+            logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         return {"logps": logps, "entropies": entropies}
 
@@ -1021,6 +1063,103 @@ class GRPOTrainer(Trainer):
             # local generation batch == local eval batch
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
+
+    def _pack_responses_in_a_group(
+        self,
+        prompt_ids: torch.Tensor,
+        completion_ids: torch.Tensor,
+        prompt_mask: torch.Tensor,
+        completion_mask: torch.Tensor,
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        # Packs all the responses in a given group.
+        # This prevents the compuation of tensors related to the prompt multiple times.
+        num_unique_prompts = len(prompt_ids) // self.num_generations
+        prompt_lengths = prompt_mask.sum(dim=-1).long()
+        completion_lengths = completion_mask.sum(dim=-1).long()
+        groupwise_completion_lengths = completion_lengths.view(num_unique_prompts, self.num_generations).sum(dim=-1).long()
+
+        packed_inputs = torch.full(
+            (num_unique_prompts, prompt_lengths.max() + groupwise_completion_lengths.max()),
+            self.processing_class.pad_token_id,
+            dtype=torch.long,
+            device=prompt_ids.device,
+        )
+        packed_position_ids = torch.full(
+            (num_unique_prompts, prompt_lengths.max() + groupwise_completion_lengths.max()),
+            self.processing_class.pad_token_id,
+            dtype=torch.long,
+            device=prompt_ids.device
+        )
+
+        # Prompts are padded to the left so will always have the same end index.
+        prompt_end_index = prompt_mask.shape[1]
+        for group_ind in range(num_unique_prompts):
+            prompt_length = prompt_lengths[group_ind * self.num_generations]
+            # We need to pad to the left, so we calculate the start and end indices for the prompt
+            # If the prompt is shorter than the maximum prompt length, 
+            # the difference in length is filled with pad tokens
+            prompt_start_index = prompt_mask.shape[1] - prompt_length
+            # Get the prompt ids for each group
+            prompt_ids_of_packed_group = prompt_ids[group_ind * self.num_generations][prompt_start_index:prompt_end_index]
+            packed_inputs[group_ind, prompt_start_index:prompt_end_index] = prompt_ids_of_packed_group
+            # Fill in the position ids
+            packed_position_ids[group_ind, prompt_start_index:prompt_end_index] = torch.arange(0, prompt_length, device=prompt_ids.device)
+            # Completions should start from the end of the prompt
+            next_completion_start_index = prompt_end_index
+            for comp_ind in range(self.num_generations):
+                # Get the completion ids for each response in a group
+                completion_end_index = completion_lengths[group_ind * self.num_generations + comp_ind]
+                completion_ids_in_group = completion_ids[group_ind * self.num_generations + comp_ind][
+                    :completion_end_index
+                ]
+                packed_inputs[group_ind, next_completion_start_index:next_completion_start_index + completion_end_index] = completion_ids_in_group
+                # Position ids for the completion always have the offset of the prompt length
+                packed_position_ids[group_ind, next_completion_start_index:next_completion_start_index + completion_end_index] = \
+                    torch.arange(prompt_length, prompt_length + completion_end_index, device=completion_ids.device)
+                next_completion_start_index += completion_end_index
+        
+        packed_attention_mask = packed_inputs != self.processing_class.pad_token_id
+
+        return {
+            "input_ids": packed_inputs.long(),
+            "attention_mask": packed_attention_mask.long(),
+            "position_ids": packed_position_ids.long(),
+        }
+
+    def _unpack_tensor(
+        self, 
+        position_ids: torch.Tensor, 
+        tensor_to_unpack: torch.Tensor, 
+        prompt_length: torch.Tensor,
+        padding_value: float = 1.0
+    ) -> torch.Tensor:
+        # Unpacks the completions from the packed responses.
+        # The unpacked completions are used to compute the loss and rewards.
+        unpacked_completion_logps = []
+        for group_ind in range(position_ids.shape[0]):
+            prompt_end_position_id = prompt_length[group_ind]
+            past_prompt_tokens = False
+            unpacked_completion_logps.append([])    
+            for i in range(0, position_ids.shape[1]):
+                if prompt_end_position_id == position_ids[group_ind][i]:
+                    past_prompt_tokens = True
+                if past_prompt_tokens:
+                    if position_ids[group_ind][i] == self.processing_class.pad_token_id:
+                        break  # End of completions
+                    # Start of a new completion if position id decreases
+                    if position_ids[group_ind][i] < position_ids[group_ind][i - 1]:
+                        unpacked_completion_logps.append([])
+                    unpacked_completion_logps[-1].append(tensor_to_unpack[group_ind][i])
+
+        unpacked_completion_logps = [
+            torch.stack(
+                logps,
+                dim=0,
+            )
+            for logps in unpacked_completion_logps
+        ]
+        unpacked_completion_logps = pad(unpacked_completion_logps, padding_value=padding_value)
+        return unpacked_completion_logps
 
     @profiling_decorator
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
@@ -1266,28 +1405,67 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
+        if self.do_pack_completions:
+            # Pack the responses in a group to avoid recomputing the prompt tokens multiple times
+            packed_inputs = self._pack_responses_in_a_group(prompt_ids, completion_ids, prompt_mask, completion_mask)
+            packed_prompt_completion_ids = packed_inputs["input_ids"]
+            packed_attention_mask = packed_inputs["attention_mask"]
+            packed_position_ids = packed_inputs["position_ids"]
+
         with torch.no_grad():
             # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
             # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
             # per_token_logps.detach() instead.
             if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
-                old_per_token_logps = self._get_per_token_logps_and_entropies(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                )["logps"]
+                if self.do_pack_completions:
+                    # Compute the per-token log probabilities for the model
+                    old_per_token_logps = self._get_per_token_logps_and_entropies(
+                        self.model,
+                        packed_prompt_completion_ids,
+                        packed_attention_mask,
+                        logits_to_keep,
+                        batch_size,
+                        packed_position_ids,
+                        prompt_mask=prompt_mask[::self.num_generations],  # prompt_mask is repeated for each generation
+                    )
+                else:
+                    old_per_token_logps = self._get_per_token_logps_and_entropies(
+                        self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                    )["logps"]
             else:
                 old_per_token_logps = None
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
-                    )["logps"]
+                    if self.do_pack_completions:
+                        ref_per_token_logps = self._get_per_token_logps_and_entropies(
+                            self.ref_model,
+                            packed_prompt_completion_ids,
+                            packed_attention_mask,
+                            logits_to_keep,
+                            position_ids=packed_position_ids,
+                            prompt_mask=prompt_mask[::self.num_generations],  # prompt_mask is repeated for each generation
+                        )["logps"]
+                    else:
+                        ref_per_token_logps = self._get_per_token_logps_and_entropies(
+                            self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                        )["logps"]
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                            self.model, prompt_completion_ids, attention_mask, logits_to_keep
-                        )["logps"]
+                        if self.do_pack_completions:
+                            ref_per_token_logps = self._get_per_token_logps_and_entropies(
+                                self.model,
+                                packed_prompt_completion_ids,
+                                packed_attention_mask,
+                                logits_to_keep,
+                                position_ids=packed_position_ids,
+                                prompt_mask=prompt_mask[::self.num_generations],  # prompt_mask is repeated for each generation
+                            )["logps"]
+                        else:
+                            ref_per_token_logps = self._get_per_token_logps_and_entropies(
+                                self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                            )["logps"]
             else:
                 ref_per_token_logps = None
 
@@ -1376,6 +1554,7 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
+            "shuffle_ordering": torch.arange(prompt_ids.shape[0], device=device) if self.do_pack_completions else None
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1430,22 +1609,57 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        # Compute the entropy at each position in the completion
+        entropy_mask = None
+
+        if self.do_pack_completions:
+            # Pack the responses in a group to avoid recomputing the prompt tokens multiple times
+            packed_inputs = self._pack_responses_in_a_group(prompt_ids, completion_ids, prompt_mask, completion_mask)
+            packed_input_ids = packed_inputs["input_ids"]
+            packed_attention_mask = packed_inputs["attention_mask"]
+            packed_position_ids = packed_inputs["position_ids"]
+            per_token_logps_fn_args = {
+                "model": model,
+                "input_ids": packed_input_ids,
+                "attention_mask": packed_attention_mask,
+                "logits_to_keep": logits_to_keep,
+                "batch_size": None,
+                "position_ids": packed_position_ids,
+                "prompt_mask": prompt_mask[::self.num_generations],  # prompt_mask is the same for all generations in a group
+            }
+        else:
+            per_token_logps_fn_args = {
+                "model": model,
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "logits_to_keep": logits_to_keep,
+                "batch_size": None,
+                "position_ids": None,
+                "prompt_mask": None,
+            }
+
         if self.token_entropy_percentile_threshold > 0.0:
             logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
+                per_token_logps_fn_args["model"],
+                per_token_logps_fn_args["input_ids"],
+                per_token_logps_fn_args["attention_mask"],
+                per_token_logps_fn_args["logits_to_keep"],
+                compute_entropy=True,
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
             # compute the entropy threshold across all tokens in the batch
-
             entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
             entropy_mask = entropies >= entropy_threshold
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep
+                per_token_logps_fn_args["model"],
+                per_token_logps_fn_args["input_ids"],
+                per_token_logps_fn_args["attention_mask"],
+                per_token_logps_fn_args["logits_to_keep"],
+                batch_size=per_token_logps_fn_args["batch_size"],
+                position_ids=per_token_logps_fn_args["position_ids"],
+                prompt_mask=per_token_logps_fn_args["prompt_mask"],
             )["logps"]
-            entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
