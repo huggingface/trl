@@ -1338,7 +1338,6 @@ class DPOTrainer(Trainer):
                 with self.null_ref_context():
                     ref_outputs = ref_base_model(
                         input_ids,
-                        attention_mask=attention_mask,
                         use_cache=False,
                         **model_kwargs,
                     )
