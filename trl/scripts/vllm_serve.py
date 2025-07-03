@@ -125,7 +125,7 @@ class WeightSyncWorkerExtension:
         if self.pynccl_comm is None:
             raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
 
-        dtype = torch.__getattribute__(dtype.split(".")[-1])
+        dtype = getattr(torch, dtype.split(".")[-1])
         # Allocate memory for the incoming weight tensor on the correct device.
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
