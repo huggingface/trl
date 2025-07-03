@@ -63,26 +63,12 @@ class GRPOScriptArguments(ScriptArguments):
 
 def main(script_args, training_args, model_args):
     # Load a pretrained model
-    from accelerate import FullyShardedDataParallelPlugin, Accelerator
-    plugin = FullyShardedDataParallelPlugin(
-        fsdp_version=2,
-        reshard_after_forward=True,
-        state_dict_type="full_state_dict",
-        auto_wrap_policy="transformer_based_wrap",
-        transformer_cls_names_to_wrap=["Qwen2DecoderLayer"],
-    )
-    accelerator = Accelerator(
-        fsdp_plugin=plugin,
-    )
-
-
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
-    model = accelerator.prepare(model)
 
     # Get the reward models and functions
     reward_funcs = []
