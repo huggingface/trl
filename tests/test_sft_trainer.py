@@ -134,7 +134,7 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         examples = [
             {
                 "input_ids": [1, 2, 3, 4, 5, 6, 7, 8],  # Packed: [1,2,3] + [4,5] + [6,7,8]
-                "position_ids": [0, 1, 2, 0, 1, 0, 1, 2],  # Position IDs restart for each sequence
+                "seq_lengths": [3, 2, 3],
             }
         ]
 
@@ -188,7 +188,7 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
     def test_custom_position_ids(self):
         """Test handling of custom position IDs in examples."""
         self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
-        examples = [{"input_ids": [1, 2, 3], "position_ids": [0, 0, 1]}, {"input_ids": [4, 5], "position_ids": [0, 1]}]
+        examples = [{"input_ids": [1, 2, 3], "seq_lengths": [1, 2]}, {"input_ids": [4, 5], "seq_lengths": [2]}]
 
         result = self.collator(examples)
 
