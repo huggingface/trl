@@ -561,7 +561,7 @@ def main(script_args: ScriptArguments):
                 - `shape` (list of `int`): Shape of the weight
 
         """
-        # The function update_named_param is called this way: update_named_param("name", torch.float32, (10, 10))
+        # The function update_named_param is called this way: update_named_param("name", "torch.float32", (10, 10))
         # So with collective_rpc we need to call it this way:
         # llm.collective_rpc("update_named_param", args=("name", torch.float32, (10, 10)))
         kwargs = {"method": "update_named_param", "args": (request.name, request.dtype, tuple(request.shape))}
