@@ -187,8 +187,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
 
-        # Check if we have meaningful position_ids from packing (restarting sequences)
-        has_packed_position_ids = self.return_position_ids and "position_ids" in examples[0] and self.padding_free
+        # Check if we have meaningful seq_lengths from packing (restarting sequences)
+        has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
 
         # For packing with position_ids, we should NOT create attention_mask as it causes
         # flash attention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
