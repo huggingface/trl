@@ -118,7 +118,7 @@ class WeightSyncWorkerExtension:
             name (`str`):
                 Name of the weight tensor being updated.
             dtype (`str`):
-                Data type of the weight tensor (e.g., `"torch.float32"`).
+                Data type of the weight tensor as a string (e.g., `"torch.float32"`).
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
