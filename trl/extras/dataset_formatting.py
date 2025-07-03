@@ -20,11 +20,18 @@ from transformers import AutoTokenizer
 
 from ..trainer.utils import ConstantLengthDataset
 
+try:
+    from datasets import List
 
-FORMAT_MAPPING = {
-    "chatml": [{"content": Value(dtype="string", id=None), "role": Value(dtype="string", id=None)}],
-    "instruction": {"completion": Value(dtype="string", id=None), "prompt": Value(dtype="string", id=None)},
-}
+    FORMAT_MAPPING = {
+        "chatml": List({"content": Value(dtype="string", id=None), "role": Value(dtype="string", id=None)}),
+        "instruction": {"completion": Value(dtype="string", id=None), "prompt": Value(dtype="string", id=None)},
+    }
+except ImportError:  # for datasets<4
+    FORMAT_MAPPING = {
+        "chatml": [{"content": Value(dtype="string", id=None), "role": Value(dtype="string", id=None)}],
+        "instruction": {"completion": Value(dtype="string", id=None), "prompt": Value(dtype="string", id=None)},
+    }
 
 
 def conversations_formatting_function(
