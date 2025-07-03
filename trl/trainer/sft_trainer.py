@@ -186,10 +186,20 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
-        attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+
+        # Check if we have meaningful seq_lengths from packing (restarting sequences)
+        has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
+
+        # For packing with position_ids, we should NOT create attention_mask as it causes
+        # flash attention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
+        if not has_packed_position_ids:
+            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+
         if self.return_position_ids:
-            if "position_ids" in examples[0]:
-                position_ids = [torch.tensor(example["position_ids"]) for example in examples]
+            if "seq_lengths" in examples[0]:
+                position_ids = self._convert_seq_lengths_to_position_ids(
+                    [example["seq_lengths"] for example in examples]
+                )
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
         if "labels" in examples[0]:
@@ -205,7 +215,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output = {}
         if self.padding_free:
             output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
-            output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+            if not has_packed_position_ids:
+                output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
             if self.return_position_ids:
                 output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
             output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
@@ -215,7 +226,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             if "assistant_masks" in examples[0]:
                 assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
                 output["labels"][assistant_masks == 0] = -100
-
         else:
             output["input_ids"] = pad(
                 input_ids,
@@ -244,6 +254,18 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
                 output["labels"][assistant_masks == 0] = -100
         return output
+
+    @staticmethod
+    def _convert_seq_lengths_to_position_ids(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
+        example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
+        batch_seq_lengths = torch.tensor(
+            [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
+        )
+        position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
+        position_ids[0] = 0
+        position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
+        position_ids = position_ids.cumsum(0)
+        return list(position_ids.split(example_lengths))
 
 
 class SFTTrainer(Trainer):
@@ -792,7 +814,9 @@ class SFTTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only input_ids is present
             if args.use_liger_kernel:
-                dataset = dataset.select_columns({"input_ids", "position_ids"}.intersection(dataset.column_names))
+                dataset = dataset.select_columns(
+                    {"input_ids", "position_ids", "completion_mask"}.intersection(dataset.column_names)
+                )
 
         return dataset
 
