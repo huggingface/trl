@@ -186,7 +186,15 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
-        attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+
+        # Check if we have meaningful position_ids from packing (restarting sequences)
+        has_packed_position_ids = self.return_position_ids and "position_ids" in examples[0] and self.padding_free
+
+        # For packing with position_ids, we should NOT create attention_mask as it causes
+        # flash attention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
+        if not has_packed_position_ids:
+            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+
         if self.return_position_ids:
             if "position_ids" in examples[0]:
                 position_ids = [torch.tensor(example["position_ids"]) for example in examples]
@@ -205,7 +213,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output = {}
         if self.padding_free:
             output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
-            output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+            if not has_packed_position_ids:
+                output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
             if self.return_position_ids:
                 output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
             output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
@@ -215,7 +224,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             if "assistant_masks" in examples[0]:
                 assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
                 output["labels"][assistant_masks == 0] = -100
-
         else:
             output["input_ids"] = pad(
                 input_ids,
