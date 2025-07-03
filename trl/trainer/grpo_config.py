@@ -53,6 +53,11 @@ class GRPOConfig(TrainingArguments):
         num_generations (`int` or `None`, *optional*, defaults to `8`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
+        num_generations_chunks (`int` or `None`, *optional*, defaults to `None`):
+            Number of generations that trl will calculate the loss for and apply the backwards pass
+            num_generations must be divisble by this value 
+            Reducing this value will reduce the amount of memory needed while increasing how long it will take 
+            Setting this to None will set num_generations_chunks to the same value as num_generations
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -270,6 +275,18 @@ class GRPOConfig(TrainingArguments):
             "* gradient_accumulation_steps) must be evenly divisible by this value."
         },
     )
+
+
+    num_generations_chunks: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Number of generations that trl will calculate the loss for and apply the backwards pass. "
+                    "num_generations must be divisble by this value. "
+                    "Reducing this value will reduce the amount of memory needed while increasing how long it will take. "
+                    "Setting this to None will set num_generations_chunks to the same value as num_generations",
+        },
+    )
+
     max_completion_length: Optional[int] = field(
         default=256,
         metadata={"help": "Maximum length of the generated completion."},
