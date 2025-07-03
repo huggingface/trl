@@ -523,7 +523,10 @@ class GRPOConfig(TrainingArguments):
     )
     entropy_coef: float = field(
         default=0.0,
-        metadata={"help": "Ceof of entropy regularization loss. If not specified, it defaults to 0.0"},
+        metadata={
+            "help": "Weight of the entropy regularization term in the loss. "
+            "A positive coefficient adds an entropy bonus to encourage exploration."
+        },
     )
 
     # Parameters that control the logging

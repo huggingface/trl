@@ -521,6 +521,8 @@ class GRPOTrainer(Trainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
+        # Entropy loss weight
+        self.entropy_coef = args.entropy_coef
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -554,9 +556,6 @@ class GRPOTrainer(Trainer):
         # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
         # This acts as a flag to indicate that the warning has already been issued.
         model.warnings_issued["estimate_tokens"] = True
-
-        # Entropy loss coef
-        self.entropy_coef = args.entropy_coef
 
         super().__init__(
             model=model,
