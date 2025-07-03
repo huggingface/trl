@@ -187,8 +187,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
 
-        # Check if we have meaningful position_ids from packing (restarting sequences)
-        has_packed_position_ids = self.return_position_ids and "position_ids" in examples[0] and self.padding_free
+        # Check if we have meaningful seq_lengths from packing (restarting sequences)
+        has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
 
         # For packing with position_ids, we should NOT create attention_mask as it causes
         # flash attention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
@@ -196,8 +196,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
 
         if self.return_position_ids:
-            if "position_ids" in examples[0]:
-                position_ids = [torch.tensor(example["position_ids"]) for example in examples]
+            if "seq_lengths" in examples[0]:
+                position_ids = self._convert_seq_lengths_to_position_ids(
+                    [example["seq_lengths"] for example in examples]
+                )
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
         if "labels" in examples[0]:
@@ -252,6 +254,18 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
                 output["labels"][assistant_masks == 0] = -100
         return output
+
+    @staticmethod
+    def _convert_seq_lengths_to_position_ids(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
+        example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
+        batch_seq_lengths = torch.tensor(
+            [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
+        )
+        position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
+        position_ids[0] = 0
+        position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
+        position_ids = position_ids.cumsum(0)
+        return list(position_ids.split(example_lengths))
 
 
 class SFTTrainer(Trainer):
