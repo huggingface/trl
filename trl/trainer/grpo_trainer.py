@@ -552,6 +552,7 @@ class GRPOTrainer(Trainer):
         # Entropy loss weight
         self.entropy_coef = args.entropy_coef
         if args.entropy_coef < 0.0:
+            # Use adaptive entropy controller when args.entropy_coef is negative
             self.ent_ctrl = AdaptiveEntropyController(min_ent_coef=args.min_ent_coef,
                                                       max_ent_coef=args.max_ent_coef,
                                                       delta_ent_coef=args.delta_ent_coef,
@@ -1488,7 +1489,7 @@ class GRPOTrainer(Trainer):
                 entropy_loss = (per_token_entropy * completion_mask).sum() / (
                     per_token_entropy.size(0) * self.max_completion_length
                 )
-            entropy_loss_coef = self.entropy_coef if self.entropy_coef > 0 else self.ent_ctrl(entropy_loss.item())
+            entropy_loss_coef = self.entropy_coef if self.entropy_coef >= 0 else self.ent_ctrl(entropy_loss.item())
             loss = loss - entropy_loss_coef * entropy_loss
             self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
 
