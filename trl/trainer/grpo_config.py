@@ -67,7 +67,7 @@ class GRPOConfig(TrainingArguments):
 
         generation_batch_size: (`int` or `None`, *optional*, defaults to `None`):
             Batch size to use for generation. If `None`, it defaults to the effective training batch size:
-            `per_device_train_batch_size * num_processes * gradient_accumulation_steps`.
+            `per_device_train_batch_size * num_processes * steps_per_generation`.
         steps_per_generations: (`int` or `None`, *optional*, defaults to `None`):
             Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps.
         temperature (`float`, defaults to `1.0`):
@@ -293,7 +293,7 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Batch size to use for generation. If `None`, it defaults to the effective training batch size: "
-            "`per_device_train_batch_size * num_processes * gradient_accumulation_steps`."
+            "`per_device_train_batch_size * num_processes * steps_per_generation`."
         },
     )
     steps_per_generation: Optional[int] = field(
@@ -342,6 +342,14 @@ class GRPOConfig(TrainingArguments):
             "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
             "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
             "to repeat tokens."
+        },
+    )
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
+            "`transformers` paged implementation will be used for generation instead of the default padded "
+            "implementation."
         },
     )
     cache_implementation: Optional[str] = field(
