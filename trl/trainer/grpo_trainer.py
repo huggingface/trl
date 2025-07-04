@@ -46,7 +46,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
@@ -1075,6 +1075,67 @@ class GRPOTrainer(Trainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
+    def _get_prompt_inputs(self, prompts: Union[list[str], list[list[dict[str, str]]]]) -> tuple:
+        # Checks if the prompt is conversational or not and truncates the input prompt.
+        # If it is conversational the truncation preserves the chat template.
+        if not is_conversational(prompts[0]):
+            prompt_text = [x["prompt"] for x in prompts]
+            prompt_inputs = self.processing_class(
+                text=prompt_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+            )
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+            if self.max_prompt_length is not None and prompt_mask.sum(-1).max() > self.max_prompt_length:
+                prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+                prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+                prompt_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=False)
+        else:
+            # Get the token counts of the content of each message
+            messages_token_counts = [
+                [
+                    self.processing_class(msg["content"], add_special_tokens=False, return_tensors="pt")[
+                        "attention_mask"
+                    ]
+                    .sum()
+                    .item()
+                    for msg in prompts[i]["prompt"]
+                ]
+                for i in range(len(prompts))
+            ]
+            # Compute the number of tokens that the contents of all the messages in a prompt consume
+            prompts_token_count = [sum(prompt_token_count) for prompt_token_count in messages_token_counts]
+            truncated_messages = []
+            for i in range(len(prompts)):
+                if prompts_token_count[i] <= self.max_prompt_length:
+                    truncated_messages.append(prompts[i])
+                else:
+                    num_tokens_to_truncate = prompts_token_count[i] - self.max_prompt_length
+                    truncated_messages.append([])
+                    for ind, msg in enumerate(prompts[i]["prompt"]):
+                        if num_tokens_to_truncate == 0:
+                            truncated_messages[-1].append(msg)
+                        else:
+                            if messages_token_counts[i][ind] <= num_tokens_to_truncate:
+                                num_tokens_to_truncate -= messages_token_counts[i][ind]
+                            else:
+                                tokens = self.processing_class(msg["content"], add_special_tokens=False)["input_ids"]
+                                tokens = tokens[num_tokens_to_truncate:]
+                                truncated_message = self.processing_class.decode(tokens)
+                                msg["content"] = truncated_message
+                                num_tokens_to_truncate = 0
+                                truncated_messages[-1].append(msg)
+
+            prompt_inputs = self.processing_class.apply_chat_template(
+                truncated_messages, return_dict=True, add_generation_prompt=True
+            )
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            prompt_ids = prompt_inputs["input_ids"]
+            prompt_mask = prompt_inputs["attention_mask"]
+            prompt_text = self.processing_class.batch_decode(prompt_ids, skip_special_tokens=False)
+
+        return prompt_ids, prompt_mask, prompt_text
+
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
@@ -1082,20 +1143,7 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-
-        prompt_inputs = self.processing_class(
-            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
-        prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-        if self.max_prompt_length is not None:
-            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
-            prompts_text = self.processing_class.batch_decode(
-                prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-            )
+        prompt_ids, prompt_mask, prompt_text = self._get_prompt_inputs(inputs)
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1106,7 +1154,7 @@ class GRPOTrainer(Trainer):
 
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
-                all_prompts_text = gather_object(prompts_text)
+                all_prompts_text = gather_object(prompt_text)
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
@@ -1160,12 +1208,12 @@ class GRPOTrainer(Trainer):
                 if self.vllm_tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group and flatten.
                     # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
-                    orig_size = len(prompts_text)
+                    orig_size = len(prompt_text)
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
-                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
+                    torch.distributed.all_gather_object(gathered_prompts, prompt_text, group=self.tp_group)
                     all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
                 else:
-                    all_prompts_text = prompts_text
+                    all_prompts_text = prompt_text
 
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
@@ -1362,7 +1410,7 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
-        self._textual_logs["prompt"].extend(gather_object(prompts_text))
+        self._textual_logs["prompt"].extend(gather_object(prompt_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
