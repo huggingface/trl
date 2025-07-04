@@ -1892,3 +1892,71 @@ def print_prompt_completions_sample(
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
+
+
+class ReplayBuffer:
+    """
+    A Replay Buffer to store and sample experiences for Replay-Enhanced Policy Optimization.
+
+    Args:
+        capacity (`int`):
+            Maximum number of experiences to store in the buffer.
+    """
+
+    def __init__(self, capacity: int):
+        self.capacity = capacity
+        self.buffer = deque(maxlen=capacity)
+
+    def add(self, experience: dict[str, torch.Tensor]):
+        """
+        Adds an experience to the buffer.
+
+        The experience is expected to be a dictionary of tensors.
+        All tensors will be moved to the CPU before storing to save GPU memory.
+        """
+        cpu_experience = {}
+        for key, tensor in experience.items():
+            if isinstance(tensor, torch.Tensor):
+                cpu_experience[key] = tensor.cpu()
+            else:
+                # Handle cases where some elements might not be tensors (e.g., lists of rewards)
+                cpu_experience[key] = tensor
+        self.buffer.append(cpu_experience)
+
+    def sample(self, batch_size: int, device: Optional[torch.device] = None) -> Optional[list[dict[str, torch.Tensor]]]:
+        """
+        Samples a batch of experiences from the buffer.
+
+        Args:
+            batch_size (`int`):
+                The number of experiences to sample.
+            device (`torch.device`, *optional*):
+                The device to move the sampled tensors to. If None, tensors remain on CPU.
+
+        Returns:
+            `Optional[list[dict[str, torch.Tensor]]]`:
+                A list of experience dictionaries, with tensors moved to the specified device.
+                Returns None if the buffer contains fewer samples than `batch_size`.
+        """
+        if len(self.buffer) < batch_size:
+            return None
+
+        sampled_experiences = random.sample(self.buffer, batch_size)
+
+        if device is None:
+            return sampled_experiences
+
+        device_experiences = []
+        for exp in sampled_experiences:
+            moved_exp = {}
+            for key, tensor in exp.items():
+                if isinstance(tensor, torch.Tensor):
+                    moved_exp[key] = tensor.to(device)
+                else:
+                    # Handle cases where some elements might not be tensors
+                    moved_exp[key] = tensor
+            device_experiences.append(moved_exp)
+        return device_experiences
+
+    def __len__(self) -> int:
+        return len(self.buffer)
