@@ -674,32 +674,52 @@ class GRPOTrainer(Trainer):
                     max_num_batched_tokens=4096,
                 )
 
-            # vLLM specific sampling arguments
-            self.guided_decoding_regex = args.vllm_guided_decoding_regex
+                    # vLLM specific sampling arguments
+        self.guided_decoding_regex = args.vllm_guided_decoding_regex
 
-            self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
+        self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
+        
+        # Check server capabilities for DNA/protein processing
+        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+            try:
+                server_capabilities = self.vllm_client.health_check()
+                self.dna_processing_enabled = server_capabilities.get("dna_processing_enabled", False)
+                self.protein_processing_enabled = server_capabilities.get("protein_processing_enabled", False)
+                
+                if self.dna_processing_enabled:
+                    logger.info(f"🧬 DNA processing enabled with model: {server_capabilities.get('dna_model', 'Unknown')}")
+                if self.protein_processing_enabled:
+                    logger.info(f"🧬 Protein processing enabled with model: {server_capabilities.get('protein_model', 'Unknown')}")
+            except Exception as e:
+                logger.warning(f"Could not check server capabilities: {e}")
+                self.dna_processing_enabled = False
+                self.protein_processing_enabled = False
+        else:
+            # For colocate mode, assume no multimodal processing for now
+            self.dna_processing_enabled = False
+            self.protein_processing_enabled = False
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
-        else:
-            generation_kwargs = {
-                "max_new_tokens": self.max_completion_length,
-                "do_sample": True,
-                "pad_token_id": processing_class.pad_token_id,
-                "bos_token_id": processing_class.bos_token_id,
-                "eos_token_id": processing_class.eos_token_id,
-                "temperature": self.temperature,
-                "top_p": self.top_p,
-                "top_k": self.top_k,
-                "min_p": self.min_p,
-                "repetition_penalty": self.repetition_penalty,
-                "cache_implementation": args.cache_implementation,
-            }
-            if args.generation_kwargs is not None:
-                generation_kwargs.update(args.generation_kwargs)
-            self.generation_config = GenerationConfig(**generation_kwargs)
+        
+        generation_kwargs = {
+            "max_new_tokens": self.max_completion_length,
+            "do_sample": True,
+            "pad_token_id": processing_class.pad_token_id,
+            "bos_token_id": processing_class.bos_token_id,
+            "eos_token_id": processing_class.eos_token_id,
+            "temperature": self.temperature,
+            "top_p": self.top_p,
+            "top_k": self.top_k,
+            "min_p": self.min_p,
+            "repetition_penalty": self.repetition_penalty,
+            "cache_implementation": args.cache_implementation,
+        }
+        if args.generation_kwargs is not None:
+            generation_kwargs.update(args.generation_kwargs)
+        self.generation_config = GenerationConfig(**generation_kwargs)
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -708,6 +728,9 @@ class GRPOTrainer(Trainer):
 
         # Add tags to the model
         self.model.add_model_tags(self._tag_names)
+        
+        # Validate dataset format for multimodal inputs
+        self._validate_multimodal_dataset()
 
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
@@ -736,7 +759,7 @@ class GRPOTrainer(Trainer):
         # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt"]
+            self._signature_columns = ["prompt", "dna_sequences", "protein_sequences"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -1074,6 +1097,10 @@ class GRPOTrainer(Trainer):
 
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+        
+        # Extract DNA and protein sequences if present
+        dna_sequences = [x.get("dna_sequences", []) for x in inputs] if any("dna_sequences" in x for x in inputs) else None
+        protein_sequences = [x.get("protein_sequences", []) for x in inputs] if any("protein_sequences" in x for x in inputs) else None
         prompt_inputs = self.processing_class(
             text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
         )
@@ -1103,18 +1130,37 @@ class GRPOTrainer(Trainer):
                     # prompt individually.
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
                     with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
-                            prompts=ordered_set_of_prompts,
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                            generation_kwargs=self.args.generation_kwargs,
-                        )
+                        # Prepare DNA/protein sequences for vLLM generation
+                        vllm_kwargs = {
+                            "prompts": ordered_set_of_prompts,
+                            "n": self.num_generations,
+                            "repetition_penalty": self.repetition_penalty,
+                            "temperature": self.temperature,
+                            "top_p": self.top_p,
+                            "top_k": -1 if self.top_k is None else self.top_k,
+                            "min_p": 0.0 if self.min_p is None else self.min_p,
+                            "max_tokens": self.max_completion_length,
+                            "guided_decoding_regex": self.guided_decoding_regex,
+                            "generation_kwargs": self.args.generation_kwargs or {},
+                        }
+                        
+                        # Add DNA sequences if present (deduplicate by taking every num_generations)
+                        if dna_sequences is not None:
+                            all_dna_sequences = gather_object(dna_sequences)
+                            if self.accelerator.is_main_process:
+                                ordered_dna_sequences = all_dna_sequences[:: self.num_generations]
+                                vllm_kwargs["dna_sequences"] = ordered_dna_sequences
+                        
+                        # Add protein sequences if present (deduplicate by taking every num_generations)
+                        if protein_sequences is not None:
+                            all_protein_sequences = gather_object(protein_sequences)
+                            if self.accelerator.is_main_process:
+                                ordered_protein_sequences = all_protein_sequences[:: self.num_generations]
+                                vllm_kwargs["protein_sequences"] = ordered_protein_sequences
+                        
+                        # Generate using the enhanced vLLM client
+                        response = self.vllm_client.generate(**vllm_kwargs)
+                        completion_ids = response.completion_ids
                 else:
                     completion_ids = [None] * len(all_prompts_text)
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its

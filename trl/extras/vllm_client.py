@@ -16,7 +16,7 @@ import atexit
 import logging
 import socket
 import time
-from typing import Optional
+from typing import Dict, List, Optional, Union, Any, Tuple
 from urllib.parse import urlparse
 
 import torch
@@ -41,12 +41,29 @@ if is_vllm_available():
 logger = logging.getLogger(__name__)
 
 
+class VLLMGenerationResponse:
+    """Response object for vLLM generation requests with speed metrics."""
+    
+    def __init__(self, completion_ids: List[List[int]], completions: List[str], 
+                 generation_time: float, tokens_per_second: float, total_tokens: int):
+        self.completion_ids = completion_ids
+        self.completions = completions
+        self.generation_time = generation_time
+        self.tokens_per_second = tokens_per_second
+        self.total_tokens = total_tokens
+    
+    def __repr__(self):
+        return (f"VLLMGenerationResponse(completions={len(self.completions)}, "
+                f"total_tokens={self.total_tokens}, speed={self.tokens_per_second:.2f} tok/s)")
+
+
 class VLLMClient:
     """
-    A client class to interact with a vLLM server.
+    A comprehensive client class to interact with a vLLM server with full DNA/protein/embedding support.
 
-    This class provides methods to generate completions, initialize and manage weight update groups, and update model
-    weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
+    This class provides methods to generate completions with multimodal support for DNA sequences,
+    protein sequences, and direct prompt embeddings, initialize and manage weight update groups,
+    and update model weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
 
     Args:
         base_url (`str` or `None`, *optional*, defaults to `None`):
@@ -63,27 +80,51 @@ class VLLMClient:
             timeout, a `ConnectionError` is raised.
 
     Examples:
-        Run the vLLM server with the model `Qwen/Qwen2.5-7B`:
+        Run the vLLM server with DNA processing:
 
-        ```
-        $ trl vllm-serve --model Qwen/Qwen2.5-7B
-        ...
-        INFO:     Application startup complete.
-        INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+        ```bash
+        $ trl vllm-serve --model Qwen/Qwen2.5-7B --use_dna_llm --dna_model_name InstaDeepAI/nucleotide-transformer-v2-500m-multi-species
         ```
 
-        Use the client to generate completions and update model weights:
+        Use the client for multimodal DNA+text generation:
 
         ```python
         >>> from trl.extras.vllm_client import VLLMClient
 
         >>> client = VLLMClient()
-        >>> client.generate(["Hello, AI!", "Tell me a joke"])
-        [[2980, 498, 1492, 752, 448, 264, 13027, 8645, 30, 358, 2776, 4460, 311, 3270, 264, 2025],
-         [911, 7988, 1251, 382, 3838, 653, 498, 1618, 4325, 879, 2581, 20027, 264, 21428, 30, 362]]
-
+        >>> 
+        >>> # Check server capabilities
+        >>> health = client.health_check()
+        >>> print(f"DNA processing: {health['dna_processing_enabled']}")
+        >>> print(f"Protein processing: {health['protein_processing_enabled']}")
+        >>> 
+        >>> # Generate with DNA sequences
+        >>> response = client.generate(
+        ...     prompts=["Analyze this DNA sequence:"],
+        ...     dna_sequences=[["ATCGATCGATCG"]],
+        ...     temperature=0.7,
+        ...     max_tokens=100
+        ... )
+        >>> print(f"Generated {len(response.completions)} completions")
+        >>> print(f"Speed: {response.tokens_per_second:.2f} tokens/sec")
+        >>> 
+        >>> # Generate with protein sequences
+        >>> response = client.generate(
+        ...     prompts=["What does this protein do?"],
+        ...     protein_sequences=[["MKTVRQERLKSIVRILERSKEPVSGAQLAEELSVSRQVIVQDIAYLRSLGYNIVATPRGYVLAGG"]],
+        ...     temperature=0.7,
+        ...     max_tokens=100
+        ... )
+        >>> 
+        >>> # Generate with direct prompt embeddings
+        >>> embeddings = torch.randn(1, 10, 4096).tolist()  # (batch, seq_len, hidden_size)
+        >>> response = client.generate_from_embeddings(
+        ...     prompt_embeds=embeddings,
+        ...     max_tokens=50
+        ... )
+        >>> 
+        >>> # Update model weights
         >>> from transformers import AutoModelForCausalLM
-
         >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map="cuda")
         >>> client.init_communicator()
         >>> client.update_model_params(model)
@@ -117,6 +158,8 @@ class VLLMClient:
         if base_url is not None:
             # Parse the base_url to extract host and port
             parsed_url = urlparse(base_url)
+            if parsed_url.hostname is None:
+                raise ValueError(f"Invalid base_url: {base_url}")
             self.host = socket.gethostbyname(parsed_url.hostname)
             scheme = parsed_url.scheme or "http"
             self.base_url = f"{scheme}://{parsed_url.netloc}{parsed_url.path}"
@@ -126,6 +169,9 @@ class VLLMClient:
             self.base_url = f"http://{self.host}:{self.server_port}"
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
+        
+        # Cache server capabilities
+        self._server_capabilities = None
 
     def check_server(self, total_timeout: float = 0.0, retry_interval: float = 2.0):
         """
@@ -163,9 +209,38 @@ class VLLMClient:
             logger.info(f"Server is not up yet. Retrying in {retry_interval} seconds...")
             time.sleep(retry_interval)
 
+    def health_check(self) -> Dict[str, Any]:
+        """
+        Check server health and get capabilities information.
+        
+        Returns:
+            Dict containing server status and capabilities including DNA/protein processing support.
+        """
+        url = f"{self.base_url}/health/"
+        response = self.session.get(url)
+        if response.status_code == 200:
+            capabilities = response.json()
+            self._server_capabilities = capabilities
+            return capabilities
+        else:
+            raise Exception(f"Health check failed: {response.status_code}, {response.text}")
+
+    def get_server_capabilities(self) -> Dict[str, Any]:
+        """
+        Get cached server capabilities or fetch them if not cached.
+        
+        Returns:
+            Dict containing server capabilities.
+        """
+        if self._server_capabilities is None:
+            return self.health_check()
+        return self._server_capabilities
+
     def generate(
         self,
-        prompts: list[str],
+        prompts: List[str],
+        dna_sequences: Optional[List[List[str]]] = None,
+        protein_sequences: Optional[List[List[str]]] = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -174,14 +249,20 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
-        generation_kwargs: Optional[dict] = None,
-    ) -> list[list[int]]:
+        generation_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> VLLMGenerationResponse:
         """
-        Generates model completions for the provided prompts.
+        Generates model completions for the provided prompts with optional DNA or protein sequences.
 
         Args:
-            prompts (`list[str]`):
+            prompts (`List[str]`):
                 List of text prompts for which the model will generate completions.
+            dna_sequences (`List[List[str]]` or `None`, *optional*, defaults to `None`):
+                List of DNA sequences for each prompt. Each inner list contains DNA sequences for that prompt.
+                Length must match prompts length if provided.
+            protein_sequences (`List[List[str]]` or `None`, *optional*, defaults to `None`):
+                List of protein sequences for each prompt. Each inner list contains protein sequences for that prompt.
+                Length must match prompts length if provided. Cannot be used with dna_sequences.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -189,42 +270,132 @@ class VLLMClient:
             temperature (`float`, *optional*, defaults to `1.0`):
                 Temperature parameter for sampling. Higher values increase diversity.
             top_p (`float`, *optional*, defaults to `1.0`):
-                Top-p sampling parameter.`1.0` means no truncation.
+                Top-p sampling parameter. 1.0 means no truncation.
             top_k (`int`, *optional*, defaults to `-1`):
-                Top-k sampling parameter. `-1` means no truncation.
+                Top-k sampling parameter. -1 means no truncation.
             min_p (`float`, *optional*, defaults to `0.0`):
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
             guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
                 Regular expression to guide the decoding process.
-            generation_kwargs (`dict` or `None`, *optional*, defaults to `None`):
-                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
-                `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
-                will override them.
+            generation_kwargs (`Dict[str, Any]` or `None`, *optional*, defaults to `None`):
+                Additional generation parameters to pass to the vLLM `SamplingParams`.
 
         Returns:
-            `list[list[int]]`:
-                List of lists of token IDs representing the model-generated completions for each prompt.
+            `VLLMGenerationResponse`:
+                Response object containing completion token IDs, completion texts, and speed metrics.
+                
+        Raises:
+            ValueError: If both dna_sequences and protein_sequences are provided, or if sequence lengths don't match prompts.
+            Exception: If the server request fails.
         """
+        # Validate inputs
+        if dna_sequences is not None and protein_sequences is not None:
+            raise ValueError("Cannot provide both dna_sequences and protein_sequences")
+        
+        if dna_sequences is not None and len(dna_sequences) != len(prompts):
+            raise ValueError(f"Length of dna_sequences ({len(dna_sequences)}) must match length of prompts ({len(prompts)})")
+        
+        if protein_sequences is not None and len(protein_sequences) != len(prompts):
+            raise ValueError(f"Length of protein_sequences ({len(protein_sequences)}) must match length of prompts ({len(prompts)})")
+
         url = f"{self.base_url}/generate/"
-        response = self.session.post(
-            url,
-            json={
-                "prompts": prompts,
-                "n": n,
-                "repetition_penalty": repetition_penalty,
-                "temperature": temperature,
-                "top_p": top_p,
-                "top_k": top_k,
-                "min_p": min_p,
-                "max_tokens": max_tokens,
-                "guided_decoding_regex": guided_decoding_regex,
-                "generation_kwargs": generation_kwargs or {},
-            },
-        )
+        
+        # Build request payload
+        payload = {
+            "prompts": prompts,
+            "n": n,
+            "repetition_penalty": repetition_penalty,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "max_tokens": max_tokens,
+            "guided_decoding_regex": guided_decoding_regex,
+            "generation_kwargs": generation_kwargs or {},
+        }
+        
+        # Add biological sequences if provided
+        if dna_sequences is not None:
+            payload["dna_sequences"] = dna_sequences
+        if protein_sequences is not None:
+            payload["protein_sequences"] = protein_sequences
+
+        response = self.session.post(url, json=payload)
+        
         if response.status_code == 200:
-            return response.json()["completion_ids"]
+            data = response.json()
+            return VLLMGenerationResponse(
+                completion_ids=data["completion_ids"],
+                completions=data["completions"],
+                generation_time=data["generation_time"],
+                tokens_per_second=data["tokens_per_second"],
+                total_tokens=data["total_tokens"],
+            )
+        else:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def generate_from_embeddings(
+        self,
+        prompt_embeds: List[List[List[float]]],
+        temperature: float = 1.0,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        max_tokens: int = 16,
+        repetition_penalty: float = 1.0,
+        generation_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> VLLMGenerationResponse:
+        """
+        Generate completions from pre-computed prompt embeddings.
+
+        Args:
+            prompt_embeds (`List[List[List[float]]]`):
+                List of prompt embeddings. Each item is a 2D list of shape (seq_len, hidden_size).
+            temperature (`float`, *optional*, defaults to `1.0`):
+                Temperature parameter for sampling.
+            top_p (`float`, *optional*, defaults to `1.0`):
+                Top-p sampling parameter.
+            top_k (`int`, *optional*, defaults to `-1`):
+                Top-k sampling parameter.
+            min_p (`float`, *optional*, defaults to `0.0`):
+                Minimum probability for sampling.
+            max_tokens (`int`, *optional*, defaults to `16`):
+                Maximum number of tokens to generate.
+            repetition_penalty (`float`, *optional*, defaults to `1.0`):
+                Repetition penalty parameter.
+            generation_kwargs (`Dict[str, Any]` or `None`, *optional*, defaults to `None`):
+                Additional generation parameters.
+
+        Returns:
+            `VLLMGenerationResponse`:
+                Response object containing completion token IDs, completion texts, and speed metrics.
+        """
+        url = f"{self.base_url}/generate_embeds/"
+        
+        payload = {
+            "prompt_embeds": prompt_embeds,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "min_p": min_p,
+            "max_tokens": max_tokens,
+            "repetition_penalty": repetition_penalty,
+            "generation_kwargs": generation_kwargs or {},
+        }
+
+        response = self.session.post(url, json=payload)
+        
+        if response.status_code == 200:
+            data = response.json()
+            return VLLMGenerationResponse(
+                completion_ids=data["completion_ids"],
+                completions=data["completions"],
+                generation_time=data["generation_time"],
+                tokens_per_second=data["tokens_per_second"],
+                total_tokens=data["total_tokens"],
+            )
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -318,20 +489,110 @@ class VLLMClient:
             if response.status_code != 200:
                 raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
+    def get_world_size(self) -> int:
+        """
+        Get the world size of the vLLM server.
+        
+        Returns:
+            int: The world size (number of processes) of the vLLM server.
+        """
+        url = f"{self.base_url}/get_world_size/"
+        response = self.session.get(url)
+        if response.status_code == 200:
+            return response.json()["world_size"]
+        else:
+            raise Exception(f"Request failed: {response.status_code}, {response.text}")
+
+    def is_dna_processing_enabled(self) -> bool:
+        """
+        Check if DNA processing is enabled on the server.
+        
+        Returns:
+            bool: True if DNA processing is enabled, False otherwise.
+        """
+        capabilities = self.get_server_capabilities()
+        return capabilities.get("dna_processing_enabled", False)
+
+    def is_protein_processing_enabled(self) -> bool:
+        """
+        Check if protein processing is enabled on the server.
+        
+        Returns:
+            bool: True if protein processing is enabled, False otherwise.
+        """
+        capabilities = self.get_server_capabilities()
+        return capabilities.get("protein_processing_enabled", False)
+
+    def get_supported_models(self) -> Dict[str, Optional[str]]:
+        """
+        Get information about the models loaded on the server.
+        
+        Returns:
+            Dict containing model information:
+                - text_model: The main text model
+                - dna_model: The DNA model (if DNA processing is enabled)
+                - protein_model: The protein model (if protein processing is enabled)
+        """
+        capabilities = self.get_server_capabilities()
+        return {
+            "text_model": capabilities.get("text_model"),
+            "dna_model": capabilities.get("dna_model"),
+            "protein_model": capabilities.get("protein_model"),
+        }
+
+    def __repr__(self):
+        return f"VLLMClient(base_url='{self.base_url}')"
+
 
 # Example usage
 if __name__ == "__main__":
-    from vllm import SamplingParams
-
+    # Create client
     client = VLLMClient()
-    client.init_communicator()
-
-    # Generate completions
-    responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
-    print("Responses:", responses)  # noqa
-
-    # Update model weights
-    from transformers import AutoModelForCausalLM
-
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
-    client.update_model_params(model)
+    
+    # Check server capabilities
+    print("=== Server Capabilities ===")
+    health = client.health_check()
+    print(f"Server status: {health['status']}")
+    print(f"DNA processing: {health.get('dna_processing_enabled', False)}")
+    print(f"Protein processing: {health.get('protein_processing_enabled', False)}")
+    print(f"Text model: {health.get('text_model', 'Unknown')}")
+    print(f"DNA model: {health.get('dna_model', 'None')}")
+    print(f"Protein model: {health.get('protein_model', 'None')}")
+    
+    # Example 1: Basic text generation
+    print("\n=== Basic Text Generation ===")
+    response = client.generate(
+        prompts=["Hello, AI!", "Tell me a joke"],
+        temperature=0.7,
+        max_tokens=32
+    )
+    print(f"Generated {len(response.completions)} completions")
+    print(f"Speed: {response.tokens_per_second:.2f} tokens/sec")
+    for i, completion in enumerate(response.completions):
+        print(f"  {i+1}: {completion}")
+    
+    # Example 2: DNA sequence generation (if enabled)
+    if client.is_dna_processing_enabled():
+        print("\n=== DNA Sequence Generation ===")
+    
+    # Example 3: Protein sequence generation (if enabled)
+    if client.is_protein_processing_enabled():
+        print("\n=== Protein Sequence Generation ===")
+        
+    
+    # Example 4: Direct embedding generation
+    print("\n=== Direct Embedding Generation ===")
+    try:
+        # Create dummy embeddings (in real usage, these would be computed from your model)
+        import random
+        dummy_embeddings = [[[random.random() for _ in range(4096)] for _ in range(10)]]
+        
+        response = client.generate_from_embeddings(
+            prompt_embeds=dummy_embeddings,
+            temperature=0.7,
+            max_tokens=32
+        )
+        print(f"Embedding-based completion: {response.completions[0]}")
+        print(f"Speed: {response.tokens_per_second:.2f} tokens/sec")
+    except Exception as e:
+        print(f"Embedding generation failed (expected for dummy data): {e}")

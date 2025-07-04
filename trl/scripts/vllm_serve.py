@@ -24,8 +24,6 @@ from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 from typing import Optional, List, Dict, Any, Union, Tuple
 
-from pathlib import Path
-
 from trl import TrlParser
 from trl.import_utils import (
     is_fastapi_available,
@@ -34,9 +32,6 @@ from trl.import_utils import (
     is_vllm_ascend_available,
     is_vllm_available,
 )
-
-import torch.nn as nn
-from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForMaskedLM, AutoConfig
 
 
 # Import DNA processing components with proper error handling
@@ -251,12 +246,6 @@ class ScriptArguments:
     enforce_eager: Optional[bool] = field(default=False, metadata={"help": "Whether to enforce eager execution."})
     kv_cache_dtype: str = field(default="auto", metadata={"help": "Data type to use for KV cache."})
     trust_remote_code: bool = field(default=False, metadata={"help": "Whether to trust remote code when loading models."})
-    # Optional custom tokenizer path or name.  If provided, vLLM will load
-    # this tokenizer instead of the one bundled with the model.  Use this to
-    # point to a folder that contains `tokenizer.json` created with
-    # `AutoTokenizer(..., use_fast=True).save_pretrained(...)` in order to
-    # enable the much faster Rust tokenizer for models that ship without it.
-    tokenizer: Optional[str] = field(default=None, metadata={"help": "Tokenizer name or path to use (defaults to model's tokenizer)."})
     log_level: str = field(default="info", metadata={"help": "Log level for uvicorn."})
     
     # DNA-specific parameters
@@ -282,45 +271,10 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
     os.environ["VLLM_DP_RANK_LOCAL"] = str(data_parallel_rank)
     os.environ["VLLM_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["VLLM_DP_MASTER_PORT"] = str(master_port)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # ------------------------------------------------------------------
-    # Ensure a fast tokenizer is available. If script_args.tokenizer is not
-    # supplied and <model_dir>/tokenizer.json does not exist we auto-create
-    # one on the fly (once) so vLLM will always use the Rust tokenizer.
-    # ------------------------------------------------------------------
-
-    def ensure_fast_tok(model_dir: str) -> str:
-        """Return path that contains tokenizer.json; build it if necessary."""
-        # If user explicitly provided --tokenizer we do nothing.
-        if script_args.tokenizer:
-            return script_args.tokenizer
-
-        model_path = Path(model_dir)
-        if (model_path / "tokenizer.json").exists():
-            return str(model_path)  # already fast
-
-        fast_dir = model_path / "fast_tok"
-        if not (fast_dir / "tokenizer.json").exists():
-            fast_dir.mkdir(exist_ok=True)
-            try:
-                from transformers import AutoTokenizer
-                print(f"🪄 Building fast tokenizer in {fast_dir} …")
-                tok = AutoTokenizer.from_pretrained(model_dir, use_fast=True, trust_remote_code=True)
-                tok.save_pretrained(fast_dir)
-                print("✅ Fast tokenizer created")
-            except Exception as e:
-                print(f"⚠️ Could not create fast tokenizer automatically: {e}")
-                # Fallback to slow tokenizer path
-                return str(model_path)
-        return str(fast_dir)
-
-    tokenizer_path = ensure_fast_tok(script_args.model)
 
     # Always use standard vLLM for hosting
     llm = LLM(
         model=script_args.model,
-        tokenizer=tokenizer_path,
         revision=script_args.revision,
         tensor_parallel_size=script_args.tensor_parallel_size,
         gpu_memory_utilization=script_args.gpu_memory_utilization,
@@ -360,7 +314,6 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
                 dna_is_evo2=script_args.dna_is_evo2,
                 dna_embedding_layer=script_args.dna_embedding_layer,
                 max_length_dna=script_args.max_length_dna,
-                device=device,
             )
             print("✅ DNA processor initialized successfully")
         except Exception as e:
@@ -376,7 +329,6 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
                 protein_model_name=script_args.protein_model_name,
                 text_model_name=script_args.model,
                 max_length_protein=script_args.max_length_protein,
-                device=device,
             )
             print("✅ Protein processor initialized successfully")
         except Exception as e:
@@ -425,10 +377,10 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
                 result = outputs_all
             # -----------------------------------------------------------------------------------
             elif method_name == "generate" and dna_processor is not None:
-                result = generate_with_dna_embeddings(llm, dna_processor, kwargs, device)
+                result = generate_with_dna_embeddings(llm, dna_processor, kwargs)
             # Handle protein-enhanced generation
             elif method_name == "generate" and protein_processor is not None:
-                result = generate_with_protein_embeddings(llm, protein_processor, kwargs, device)
+                result = generate_with_protein_embeddings(llm, protein_processor, kwargs)
             else:
                 # Standard vLLM handling (including pre-processed embeddings)
                 method = getattr(llm, method_name)
@@ -459,13 +411,11 @@ class DNAEmbeddingProcessor:
         dna_is_evo2: bool = False,
         dna_embedding_layer: Optional[str] = None,
         max_length_dna: int = 2048,
-        device: str = "cpu",
     ):
         if not DNA_LLM_AVAILABLE:
             raise RuntimeError("DNA-LLM components not available. Please install bioreason package.")
         
-        self.device = device
-        print(f"🧬 Initializing DNAEmbeddingProcessor on device {self.device}...")
+        print(f"🧬 Initializing DNAEmbeddingProcessor...")
         print(f"  DNA model: {dna_model_name}")
         print(f"  Text model: {text_model_name}")
         print(f"  Evo2: {dna_is_evo2}")
@@ -494,13 +444,11 @@ class DNAEmbeddingProcessor:
             except ImportError:
                 raise ImportError("Evo2 is required when dna_is_evo2=True. Please install the evo2 package.")
         
-        self.dna_model = self.dna_model.to(self.device)
         print("✅ DNA model loaded successfully")
 
         # STEP 2: Load text model config and tokenizer (exactly like DNALLMModel)
         print("📝 Loading text tokenizer...")
-        # Use the fast (Rust) tokenizer for much higher throughput during local preprocessing
-        self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name, trust_remote_code=True, use_fast=True)
+        self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name, trust_remote_code=True)
         self.text_config = AutoConfig.from_pretrained(text_model_name, trust_remote_code=True)
 
         # Use the same chat template as DNALLMModel (EXACT match)
@@ -520,7 +468,6 @@ class DNAEmbeddingProcessor:
         self.text_hidden_size = self.text_config.hidden_size
         self.dna_hidden_size = self.dna_config.hidden_size
         self.dna_projection = nn.Linear(self.dna_hidden_size, self.text_hidden_size)
-        self.dna_projection = self.dna_projection.to(self.device)
         print(f"✅ Projection layer created: {self.dna_hidden_size} -> {self.text_hidden_size}")
 
         # STEP 4: Load custom components (exactly like DNALLMModel)
@@ -757,8 +704,8 @@ class DNAEmbeddingProcessor:
             else:  # Standard HuggingFace model
                 # Use existing code path for HF models
                 outputs = self.dna_model(
-                    input_ids=dna_tokenized["input_ids"].to(self.device),
-                    attention_mask=dna_tokenized["attention_mask"].to(self.device),
+                    input_ids=dna_tokenized["input_ids"],
+                    attention_mask=dna_tokenized["attention_mask"],
                     output_hidden_states=True,
                 )
                 # Get the last hidden state
@@ -801,13 +748,11 @@ class ProteinEmbeddingProcessor:
         protein_model_name: str,
         text_model_name: str,
         max_length_protein: int = 2048,
-        device: str = "cpu",
     ):
         if not PROTEIN_LLM_AVAILABLE:
             raise RuntimeError("Protein-LLM components not available. Please install bioreason2 package.")
         
-        self.device = device
-        print(f"🧬 Initializing ProteinEmbeddingProcessor on device {self.device}...")
+        print(f"🧬 Initializing ProteinEmbeddingProcessor...")
         print(f"  Protein model: {protein_model_name}")
         print(f"  Text model: {text_model_name}")
         
@@ -820,13 +765,11 @@ class ProteinEmbeddingProcessor:
         from esm.utils.constants.models import ESM3_OPEN_SMALL
         
         self.protein_model = ESM3.from_pretrained(protein_model_name)
-        self.protein_model = self.protein_model.to(self.device)
         print("✅ Protein model loaded successfully")
 
         # STEP 2: Load text model config and tokenizer (exactly like ProteinLLMModel)
         print("📝 Loading text tokenizer...")
-        # Use the fast tokenizer – critical for preprocessing speed
-        self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name, trust_remote_code=True, use_fast=True)
+        self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name, trust_remote_code=True)
         self.text_config = AutoConfig.from_pretrained(text_model_name, trust_remote_code=True)
 
         # Use the same chat template as ProteinLLMModel (EXACT match)
@@ -847,7 +790,6 @@ class ProteinEmbeddingProcessor:
         # ESM3 embedding dimension - typically 2560 for ESM3_OPEN_SMALL (same as protein_llm.py)
         self.protein_hidden_size = self.protein_model.encoder.sequence_embed.embedding_dim
         self.protein_projection = nn.Linear(self.protein_hidden_size, self.text_hidden_size)
-        self.protein_projection = self.protein_projection.to(self.device)
         print(f"✅ Projection layer created: {self.protein_hidden_size} -> {self.text_hidden_size}")
 
         # STEP 4: Load custom components (exactly like ProteinLLMModel)
@@ -911,7 +853,6 @@ class ProteinEmbeddingProcessor:
                 # Replace the protein model with the local one
                 from esm.models.esm3 import ESM3
                 self.protein_model = ESM3.from_pretrained(protein_model_path)
-                self.protein_model = self.protein_model.to(self.device)
                 print("✅ Local protein model loaded successfully")
             except Exception as e:
                 print(f"⚠️ Error loading local protein model: {e}")
@@ -1069,7 +1010,6 @@ class ProteinEmbeddingProcessor:
 
             # Encode protein
             protein_tensor = self.protein_model.encode(protein)
-            protein_tensor = protein_tensor.to(self.device)
 
             # Get embeddings - same logic as ProteinLLMModel
             with torch.set_grad_enabled(False):  # protein_model_finetune=False for inference
@@ -1112,7 +1052,7 @@ class ProteinEmbeddingProcessor:
         return result
 
 
-def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
+def generate_with_protein_embeddings(llm, protein_processor, kwargs):
     """Generate using standard vLLM with protein embeddings - EXACTLY matches DNA logic."""
     print(f"🧬 generate_with_protein_embeddings called with kwargs keys: {kwargs.keys()}")
     
@@ -1149,8 +1089,8 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         )
         
         # Get input_ids and attention_mask
-        input_ids = processed["input_ids"].to(device)
-        attention_mask = processed["attention_mask"].to(device)
+        input_ids = processed["input_ids"]
+        attention_mask = processed["attention_mask"]
         
         print(f"🧬 Input IDs shape: {input_ids.shape}")
         print(f"🧬 Attention mask shape: {attention_mask.shape}")
@@ -1265,7 +1205,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         return llm.generate(prompts, sampling_params)
 
 
-def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
+def generate_with_dna_embeddings(llm, dna_processor, kwargs):
     """Generate using standard vLLM with DNA embeddings - EXACTLY matches test_kegg_checkpoint.py logic."""
     print(f"🧬 generate_with_dna_embeddings called with kwargs keys: {kwargs.keys()}")
     
@@ -1303,8 +1243,8 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
         )
         
         # Get input_ids and attention_mask
-        input_ids = processed["input_ids"].to(device)
-        attention_mask = processed["attention_mask"].to(device)
+        input_ids = processed["input_ids"]
+        attention_mask = processed["attention_mask"]
         
         print(f"🧬 Input IDs shape: {input_ids.shape}")
         print(f"🧬 Attention mask shape: {attention_mask.shape}")

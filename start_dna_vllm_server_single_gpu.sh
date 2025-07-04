@@ -1,0 +1,1 @@
+python trl/scripts/vllm_serve.py --model Qwen/Qwen3-1.7B --use_dna_llm --dna_model_name InstaDeepAI/nucleotide-transformer-v2-500m-multi-species --tensor_parallel_size 1 --host 0.0.0.0 --port 8000 --gpu_memory_utilization 0.8
