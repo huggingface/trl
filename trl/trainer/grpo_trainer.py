@@ -19,11 +19,11 @@ from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
 from functools import partial
-import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import datasets
+import numpy as np
 import torch
 import torch.utils.data
 import transformers
@@ -289,6 +289,7 @@ def identity(x):
     """Do we really need docs for this?"""
     return x
 
+
 class AdaptiveEntropyController:
     def __init__(self, min_ent_coef, max_ent_coef, delta_ent_coef, target_ent):
         self.value = min_ent_coef
@@ -553,10 +554,12 @@ class GRPOTrainer(Trainer):
         self.entropy_coef = args.entropy_coef
         if args.entropy_coef < 0.0:
             # Use adaptive entropy controller when args.entropy_coef is negative
-            self.ent_ctrl = AdaptiveEntropyController(min_ent_coef=args.min_ent_coef,
-                                                      max_ent_coef=args.max_ent_coef,
-                                                      delta_ent_coef=args.delta_ent_coef,
-                                                      target_ent=args.target_entropy)
+            self.ent_ctrl = AdaptiveEntropyController(
+                min_ent_coef=args.min_ent_coef,
+                max_ent_coef=args.max_ent_coef,
+                delta_ent_coef=args.delta_ent_coef,
+                target_ent=args.target_entropy,
+            )
         else:
             self.ent_ctrl = None
 
