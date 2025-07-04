@@ -30,7 +30,6 @@ from accelerate.utils import broadcast_object_list, gather, gather_object, is_pe
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForCausalLM,
@@ -900,6 +899,17 @@ class GRPOTrainer(Trainer):
 
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
+        for name, param in module.state_dict().items():
+            if param.is_cpu:
+                param = param.to(torch.device("cuda"))
+            param = param.full_tensor()
+            
+            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                self.vllm_client.update_named_param(name, param)
+            elif self.vllm_mode == "colocate":
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model.load_weights([(name, param)])
+
         if visited is None:
             visited = set()
 
