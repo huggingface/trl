@@ -528,6 +528,34 @@ class GRPOConfig(TrainingArguments):
             "A positive coefficient adds an entropy bonus to encourage exploration."
         },
     )
+    min_ent_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Minimum weight of the entropy regularization term. "
+            "Used to cap minimum entropy term weight in adaptive entropy control."
+        },
+    )
+    max_ent_coef: float = field(
+        default=1.0,
+        metadata={
+            "help": "Maximum weight of the entropy regularization term. "
+            "Used to cap maximum entropy term weight in adaptive entropy control."
+        },
+    )
+    delta_ent_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Per step delta weight of the entropy regularization term. "
+            "Used to adjust entorpy term based on current entropy in adaptive entropy control."
+        },
+    )
+    target_entropy: float = field(
+        default=0.0,
+        metadata={
+            "help": "Target entropy value as the upper bound of entropy loss. "
+            "Target entropy value in adaptive entropy control."
+        },
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(

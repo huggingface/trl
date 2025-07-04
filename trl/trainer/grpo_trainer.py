@@ -19,6 +19,7 @@ from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
 from functools import partial
+import numpy as np
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
@@ -288,6 +289,33 @@ def identity(x):
     """Do we really need docs for this?"""
     return x
 
+class AdaptiveEntropyController:
+    def __init__(self, min_ent_coef, max_ent_coef, delta_ent_coef, target_ent):
+        self.value = min_ent_coef
+        self.min_ent_coef = min_ent_coef
+        self.max_ent_coef = max_ent_coef
+        self.delta_ent_coef = delta_ent_coef
+        self.target_ent = target_ent
+
+    def __call__(self, ent):
+        """
+        Adjusts the entropy coefficient based on the current entropy.
+
+        Args:
+            ent (`float`): Current entropy value.
+
+        Returns:
+            `float`: Adjusted entropy coefficient.
+        """
+        if ent < self.target_ent:
+            self.value += self.delta_ent_coef
+        else:
+            self.value -= self.delta_ent_coef
+
+        self.value = float(np.clip(self.value, self.min_ent_coef, self.max_ent_coef))
+
+        return self.value * (ent < self.target_ent)
+
 
 class GRPOTrainer(Trainer):
     """
@@ -523,6 +551,13 @@ class GRPOTrainer(Trainer):
             )
         # Entropy loss weight
         self.entropy_coef = args.entropy_coef
+        if args.entropy_coef < 0.0:
+            self.ent_ctrl = AdaptiveEntropyController(min_ent_coef=args.min_ent_coef,
+                                                      max_ent_coef=args.max_ent_coef,
+                                                      delta_ent_coef=args.delta_ent_coef,
+                                                      target_ent=args.target_entropy)
+        else:
+            self.ent_ctrl = None
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1453,7 +1488,8 @@ class GRPOTrainer(Trainer):
                 entropy_loss = (per_token_entropy * completion_mask).sum() / (
                     per_token_entropy.size(0) * self.max_completion_length
                 )
-            loss = loss - self.entropy_coef * entropy_loss
+            entropy_loss_coef = self.entropy_coef if self.entropy_coef > 0 else self.ent_ctrl(entropy_loss.item())
+            loss = loss - entropy_loss_coef * entropy_loss
             self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
 
         if self.beta != 0.0:
