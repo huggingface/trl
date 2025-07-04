@@ -508,7 +508,7 @@ class TestPackDatasetFfd(unittest.TestCase):
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
             "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
-            "position_ids": [[0, 1, 2, 3], [0, 1, 2, 0]],
+            "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="ffd")
         self.assertEqual(dataset.to_dict(), expected_output)
@@ -523,7 +523,7 @@ class TestPackDatasetFfd(unittest.TestCase):
         expected_output = {
             "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
             "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
-            "position_ids": [[0, 1, 2, 3], [0, 1, 2, 0]],
+            "seq_lengths": [[4], [3, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="ffd")
         num_examples = len(examples[next(iter(examples))])
@@ -539,7 +539,7 @@ class TestPackDatasetFfd(unittest.TestCase):
         expected_output = {
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
             "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
-            "position_ids": [[0, 1, 2, 3], [0, 1, 2, 3], [0, 1, 0]],
+            "seq_lengths": [[4], [4], [2, 1]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="ffd")
         self.assertEqual(dataset.to_dict(), expected_output)
