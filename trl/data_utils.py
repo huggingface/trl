@@ -525,8 +525,8 @@ class _SegmentTree:
         return self.tree[i]
 
 
-def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
-    """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
+def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
@@ -610,7 +610,7 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
 
 
 def pack_dataset(
-    dataset: DatasetType, seq_length: int, strategy: str = "ffd", map_kwargs: Optional[dict[str, Any]] = None
+    dataset: DatasetType, seq_length: int, strategy: str = "bfd", map_kwargs: Optional[dict[str, Any]] = None
 ) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
@@ -620,10 +620,10 @@ def pack_dataset(
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
-        strategy (`str`, *optional*, defaults to `"ffd"`):
+        strategy (`str`, *optional*, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
-            - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
+            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
                 middle.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
@@ -644,7 +644,7 @@ def pack_dataset(
     ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
-    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="ffd")
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
      'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
@@ -654,12 +654,12 @@ def pack_dataset(
         map_kwargs = {}
     # Fast packing with pyarrow
     dataset = dataset.with_format("arrow")
-    if strategy == "ffd":
-        dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    if strategy == "bfd":
+        dataset = dataset.map(_pack_bfd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'wrapped'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd' or 'wrapped'.")
     dataset = dataset.with_format(None)
     return dataset
 
