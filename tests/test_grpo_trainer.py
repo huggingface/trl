@@ -839,6 +839,37 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    def test_training_with_entropy_filter(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+                token_entropy_percentile_threshold=0.8,
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
     @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
     @require_vllm
@@ -1240,3 +1271,29 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_reward_func_accessing_trainer_state(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            trainer_state = kwargs.get("trainer_state")
+            assert trainer_state is not None
+            # transformers.TrainerState instance should have a `global_step` property.
+            assert hasattr(trainer_state, "global_step")
+            return [float(len(set(completion))) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+            trainer.train()

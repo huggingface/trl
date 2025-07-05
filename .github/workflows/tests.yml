@@ -235,7 +235,7 @@ jobs:
           uv pip install ".[dev]"
           uv pip install accelerate==1.4.0
           uv pip install datasets==3.0.0
-          uv pip install transformers==4.51.0
+          uv pip install transformers==4.53.0
 
       - name: Test with pytest
         run: |
