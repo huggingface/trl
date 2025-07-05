@@ -26,6 +26,7 @@ import datasets
 import torch
 import torch.utils.data
 import transformers
+import re
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -1096,7 +1097,9 @@ class GRPOTrainer(Trainer):
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            prompts_text = [text.lstrip(self.processing_class.pad_token) for text in prompts_text]
+            pad_token = re.escape(self.processing_class.pad_token)  # Escape special regex characters
+            # Remove leading pad tokens from the prompts text
+            prompts_text = [re.sub(f"^({pad_token})+", "", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
