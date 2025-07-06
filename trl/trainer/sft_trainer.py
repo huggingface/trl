@@ -829,7 +829,7 @@ class SFTTrainer(Trainer):
             self._signature_columns = [
                 "input_ids",
                 "labels",
-                "position_ids",
+                "seq_lengths",
                 "completion_mask",
                 "assistant_masks",
             ]
