@@ -26,7 +26,6 @@ import datasets
 import torch
 import torch.utils.data
 import transformers
-import re
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging import version
@@ -1091,15 +1090,27 @@ class GRPOTrainer(Trainer):
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
+        # mask all pad tokens regardless of origin
+        if self.processing_class.pad_token_id is not None:
+            is_pad_token = prompt_ids == self.processing_class.pad_token_id
+            prompt_mask = prompt_mask & (~is_pad_token)
+
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            pad_token = re.escape(self.processing_class.pad_token)  # Escape special regex characters
-            # Remove leading pad tokens from the prompts text
-            prompts_text = [re.sub(f"^({pad_token})+", "", text) for text in prompts_text]
+
+        # For vLLM backends clean the text by removing leading pad tokens
+        if self.use_vllm and self.processing_class.pad_token is not None:
+
+            def remove_leading_pad_tokens(text, pad_token):
+                while text.startswith(pad_token):
+                    text = text[len(pad_token) :]
+                return text
+
+            prompts_text = [remove_leading_pad_tokens(text, self.processing_class.pad_token) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:

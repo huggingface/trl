@@ -969,7 +969,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 min_p=0.01,
                 repetition_penalty=1.1,
             )
-
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
@@ -1297,3 +1296,45 @@ class GRPOTrainerTester(unittest.TestCase):
                 train_dataset=dataset,
             )
             trainer.train()
+
+    def test_generate_and_score_completions_prompt_mask(self):
+        """
+        Test that _generate_and_score_completions correctly masks pad tokens in prompt_mask.
+        """
+
+        def reward_func(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train[:2]")
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_func,
+            args=GRPOConfig(
+                output_dir=tempfile.mkdtemp(),
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_steps=1,
+                max_completion_length=4,
+                report_to="none",
+                logging_strategy="no",
+            ),
+            train_dataset=dataset,
+        )
+
+        # Create input with pad tokens already in the prompt text (duplicated for num_generations)
+        pad_token = trainer.processing_class.pad_token
+        inputs = [{"prompt": f"{pad_token}{pad_token}Hello"}] * trainer.num_generations
+
+        # Call the method directly
+        with torch.no_grad():
+            outputs = trainer._generate_and_score_completions(inputs)
+
+        # Check that all pad token positions in prompt_mask are 0
+        prompt_ids = outputs["prompt_ids"]
+        prompt_mask = outputs["prompt_mask"]
+        pad_positions = prompt_ids == trainer.processing_class.pad_token_id
+
+        self.assertTrue(
+            torch.all(prompt_mask[pad_positions] == 0), "All pad token positions should have prompt_mask=0"
+        )
