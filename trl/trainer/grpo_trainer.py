@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -1090,26 +1091,18 @@ class GRPOTrainer(Trainer):
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
-        # mask all pad tokens regardless of origin
-        is_pad_token = prompt_ids == self.processing_class.pad_token_id
-        prompt_mask = prompt_mask & (not is_pad_token)
-
         if self.max_prompt_length is not None:
+            # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
+            # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
+            # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-
-        # For vLLM backends clean the text by removing leading pad tokens
-        if self.use_vllm:
-
-            def remove_leading_pad_tokens(text, pad_token):
-                while text.startswith(pad_token):
-                    text = text[len(pad_token) :]
-                return text
-
-            prompts_text = [remove_leading_pad_tokens(text, self.processing_class.pad_token) for text in prompts_text]
+            prompts_text = [
+                re.sub(rf"^({re.escape(self.processing_class.pad_token)})+", "", text) for text in prompts_text
+            ]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
