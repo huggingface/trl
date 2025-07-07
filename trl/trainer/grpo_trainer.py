@@ -290,6 +290,19 @@ def identity(x):
     return x
 
 
+def agg_loss(per_token_loss: torch.Tensor, loss_mask: torch.Tensor, loss_type: str, **kwargs) -> torch.Tensor:
+    if loss_type == "grpo":
+        loss = ((per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)).mean()
+    elif loss_type == "bnpo":
+        loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
+    elif loss_type == "dr_grpo":
+        max_completion_length = kwargs.get("max_completion_length", 1)
+        loss = (per_token_loss * loss_mask).sum() / (per_token_loss.size(0) * max_completion_length)
+    else:
+        raise ValueError(f"Unknown loss type: {loss_type}")
+    return loss
+
+
 class AdaptiveEntropyController:
     def __init__(self, min_ent_coef, max_ent_coef, delta_ent_coef, target_ent):
         self.value = min_ent_coef
@@ -1515,30 +1528,18 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-        else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
+        loss = agg_loss(
+            per_token_loss, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
+        )
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
         if self.entropy_coef != 0:
             per_token_entropy = logps_and_entropies["entropies"]
-            if self.loss_type == "grpo":
-                entropy_loss = (
-                    (per_token_entropy * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-                ).mean()
-            elif self.loss_type == "bnpo":
-                entropy_loss = (per_token_entropy * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            elif self.loss_type == "dr_grpo":
-                entropy_loss = (per_token_entropy * completion_mask).sum() / (
-                    per_token_entropy.size(0) * self.max_completion_length
-                )
+            entropy_loss = agg_loss(
+                per_token_entropy, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
+            )
             entropy_loss_coef = self.entropy_coef if self.entropy_coef >= 0 else self.ent_ctrl(entropy_loss.item())
             loss = loss - entropy_loss_coef * entropy_loss
             self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
