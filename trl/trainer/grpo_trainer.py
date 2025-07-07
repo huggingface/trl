@@ -1091,9 +1091,8 @@ class GRPOTrainer(Trainer):
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
         # mask all pad tokens regardless of origin
-        if self.processing_class.pad_token_id is not None:
-            is_pad_token = prompt_ids == self.processing_class.pad_token_id
-            prompt_mask = prompt_mask & (~is_pad_token)
+        is_pad_token = prompt_ids == self.processing_class.pad_token_id
+        prompt_mask = prompt_mask & (not is_pad_token)
 
         if self.max_prompt_length is not None:
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
@@ -1103,7 +1102,7 @@ class GRPOTrainer(Trainer):
             )
 
         # For vLLM backends clean the text by removing leading pad tokens
-        if self.use_vllm and self.processing_class.pad_token is not None:
+        if self.use_vllm:
 
             def remove_leading_pad_tokens(text, pad_token):
                 while text.startswith(pad_token):
