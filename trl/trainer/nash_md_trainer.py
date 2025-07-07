@@ -526,12 +526,12 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         citation = textwrap.dedent("""\
         @inproceedings{munos2024nash,
-            title        = {{Nash Learning from Human Feedback}},
-            author       = {R{\'{e}}mi Munos and Michal Valko and Daniele Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot},
-            year         = 2024,
-            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
+            title = {{Nash Learning from Human Feedback}}, author = {R{\'{e}}mi Munos and Michal Valko and Daniele
+            Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and
+            Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin
+            and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot}, year =
+            2024, booktitle = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria,
+            July 21-27, 2024}, publisher = {OpenReview.net}, url = {https://openreview.net/forum?id=Y5AmNYiyCQ}
         }""")
 
         model_card = generate_model_card(
