@@ -969,6 +969,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 min_p=0.01,
                 repetition_penalty=1.1,
             )
+
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
