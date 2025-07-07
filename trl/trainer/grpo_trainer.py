@@ -637,7 +637,11 @@ class GRPOTrainer(Trainer):
                     base_url = args.vllm_server_base_url
                 else:
                     base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                self.vllm_client = VLLMClient(
+                    base_url=base_url,
+                    group_port=9009, 
+                    connection_timeout=args.vllm_server_timeout,
+                )
                 self.vllm_client.init_communicator()
 
             elif self.vllm_mode == "colocate":

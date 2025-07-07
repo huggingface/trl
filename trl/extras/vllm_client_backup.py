@@ -83,8 +83,7 @@ class VLLMClient:
         Run the vLLM server with DNA processing:
 
         ```bash
-        $ trl vllm-serve --use_dna_llm --dna_model_name InstaDeepAI/nucleotide-transformer-v2-500m-multi-species --model YOUR_PATH_TO_MODEL
-        
+        $ trl vllm-serve --model Qwen/Qwen2.5-7B --use_dna_llm --dna_model_name InstaDeepAI/nucleotide-transformer-v2-500m-multi-species
         ```
 
         Use the client for multimodal DNA+text generation:
@@ -146,7 +145,7 @@ class VLLMClient:
         base_url: Optional[str] = None,
         host: str = "0.0.0.0",
         server_port: int = 8000,
-        group_port: int = 51216,
+        group_port: Optional[int] = None,
         connection_timeout: float = 0.0,
     ):
         if not is_requests_available():
@@ -168,6 +167,16 @@ class VLLMClient:
             self.host = host
             self.server_port = server_port
             self.base_url = f"http://{self.host}:{self.server_port}"
+        # Pick an unused port if none supplied
+        if group_port is None:
+            try:
+                from vllm.utils import get_open_port
+                group_port = get_open_port()
+            except Exception:
+                # fallback: open an ephemeral port ourselves
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.bind(("", 0))
+                    group_port = s.getsockname()[1]
         self.group_port = group_port
         self.check_server(connection_timeout)  # check server and fail after timeout
         
@@ -239,17 +248,15 @@ class VLLMClient:
 
     def generate(
         self,
-        prompts: list[str],
-        dna_sequences: list[list[str]] | None = None,
-        protein_sequences: list[list[str]] | None = None,
-        # batch_idx_map: list[int] = None,
-        
+        prompts: List[str],
+        dna_sequences: Optional[List[List[str]]] = None,
+        protein_sequences: Optional[List[List[str]]] = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
         top_p: float = 1.0,
         top_k: int = -1,
-        min_p: float = 0.1,
+        min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
         generation_kwargs: Optional[Dict[str, Any]] = None,
@@ -293,13 +300,21 @@ class VLLMClient:
             ValueError: If both dna_sequences and protein_sequences are provided, or if sequence lengths don't match prompts.
             Exception: If the server request fails.
         """
+        # Validate inputs
+        if dna_sequences is not None and protein_sequences is not None:
+            raise ValueError("Cannot provide both dna_sequences and protein_sequences")
+        
+        if dna_sequences is not None and len(dna_sequences) != len(prompts):
+            raise ValueError(f"Length of dna_sequences ({len(dna_sequences)}) must match length of prompts ({len(prompts)})")
+        
+        if protein_sequences is not None and len(protein_sequences) != len(prompts):
+            raise ValueError(f"Length of protein_sequences ({len(protein_sequences)}) must match length of prompts ({len(prompts)})")
+
         url = f"{self.base_url}/generate/"
         
         # Build request payload
         payload = {
             "prompts": prompts,
-            "dna_sequences": dna_sequences,
-            "protein_sequences": protein_sequences,
             "n": n,
             "repetition_penalty": repetition_penalty,
             "temperature": temperature,
@@ -310,7 +325,12 @@ class VLLMClient:
             "guided_decoding_regex": guided_decoding_regex,
             "generation_kwargs": generation_kwargs or {},
         }
-
+        
+        # Add biological sequences if provided
+        if dna_sequences is not None:
+            payload["dna_sequences"] = dna_sequences
+        if protein_sequences is not None:
+            payload["protein_sequences"] = protein_sequences
 
         response = self.session.post(url, json=payload)
         
@@ -332,7 +352,7 @@ class VLLMClient:
         temperature: float = 1.0,
         top_p: float = 1.0,
         top_k: int = -1,
-        min_p: float = 0.1,
+        min_p: float = 0.0,
         max_tokens: int = 16,
         repetition_penalty: float = 1.0,
         generation_kwargs: Optional[Dict[str, Any]] = None,
@@ -404,10 +424,12 @@ class VLLMClient:
         world_size = vllm_world_size + 1  # add the client to the world
         self.rank = vllm_world_size  # the client's rank is the last process
 
-        # Initialize weight update group
+        # 1) Tell the server to create its communicators **first**
         url = f"{self.base_url}/init_communicator/"
-        # In the server side, the host is set to 0.0.0.0
-        response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size})
+        response = self.session.post(
+            url,
+            json={"host": self.host, "port": self.group_port, "world_size": world_size},
+        )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -417,8 +439,13 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device=0)
+        pg = StatelessProcessGroup.create(
+            host=self.host, port=self.group_port, rank=self.rank, world_size=world_size
+        )
+        local_device = torch.cuda.current_device()
+        # if local_device == -1:
+        #     local_device = 0                          # force "CPU rank" in NCCL
+        self.pynccl_comm = PyNcclCommunicator(pg, device=local_device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -433,12 +460,6 @@ class VLLMClient:
             weights (`torch.Tensor`):
                 Tensor containing the updated weights.
         """
-
-        if not name.startswith("text_model."):
-            return                  # skip dna_projection, etc.
-        print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
-        name = name[len("text_model."):]
-        print(f"Updated parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
         dtype, shape = str(weights.dtype), tuple(weights.shape)
         url = f"{self.base_url}/update_named_param/"
         response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
