@@ -1431,6 +1431,9 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
+        entropies = None
+        entropy_mask = None
+
         compute_entropy = self.log_entropy or self.token_entropy_percentile_threshold > 0.0
         if compute_entropy:
             logps_and_entropies = self._get_per_token_logps_and_entropies(
@@ -1444,14 +1447,10 @@ class GRPOTrainer(Trainer):
                     entropies.flatten().float(), self.token_entropy_percentile_threshold
                 )
                 entropy_mask = entropies >= entropy_threshold
-            else:
-                entropy_mask = None
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep
             )["logps"]
-            entropies = None
-            entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
