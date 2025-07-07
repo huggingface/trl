@@ -200,6 +200,8 @@ class GRPOConfig(TrainingArguments):
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
             it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
+        log_entropy (`bool`, *optional*, defaults to `False`):
+            Whether to log the mean entropy of generated completions.
         num_completions_to_print (`int` or `None`, *optional*, defaults to `None`):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
@@ -535,6 +537,10 @@ class GRPOConfig(TrainingArguments):
             "help": "Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is "
             "installed, it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`."
         },
+    )
+    log_entropy: bool = field(
+        default=False,
+        metadata={"help": "Whether to log the mean entropy of generated completions."},
     )
     num_completions_to_print: Optional[int] = field(
         default=None,

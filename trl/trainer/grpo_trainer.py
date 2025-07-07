@@ -614,6 +614,7 @@ class GRPOTrainer(Trainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
+        self.log_entropy = args.log_entropy
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
@@ -1430,22 +1431,26 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        # nit
-        # Compute the entropy at each position in the completion
-        if self.token_entropy_percentile_threshold > 0.0:
+        compute_entropy = self.log_entropy or self.token_entropy_percentile_threshold > 0.0
+        if compute_entropy:
             logps_and_entropies = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
-            # compute the entropy threshold across all tokens in the batch
 
-            entropy_threshold = torch.quantile(entropies.flatten().float(), self.token_entropy_percentile_threshold)
-            entropy_mask = entropies >= entropy_threshold
+            if self.token_entropy_percentile_threshold > 0.0:
+                entropy_threshold = torch.quantile(
+                    entropies.flatten().float(), self.token_entropy_percentile_threshold
+                )
+                entropy_mask = entropies >= entropy_threshold
+            else:
+                entropy_mask = None
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep
             )["logps"]
+            entropies = None
             entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
@@ -1493,6 +1498,10 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+
+        if self.log_entropy and entropies is not None:
+            mean_entropy = (entropies * completion_mask).sum() / completion_mask.sum()
+            self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)

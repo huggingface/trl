@@ -80,6 +80,7 @@ Here's a brief explanation for the logged metrics provided in the data for the G
 
 **Policy and Loss Metrics:**
 * `kl`: The mean Kullback-Leibler (KL) divergence between the current policy and the reference policy. This is logged only if `beta` (the KL coefficient in `GRPOConfig`) is non-zero.
+* `entropy`: The mean entropy of generated completions. Enable with `log_entropy=True` in `GRPOConfig`.
 * If Liger GRPOLoss is used (`use_liger_loss: True` in `GRPOConfig`):
     *   `clip_ratio`: The fraction of policy updates where the probability ratio was clipped according to the GRPO loss's epsilon bounds.
 * If standard GRPOLoss is used (`use_liger_loss: False`):
