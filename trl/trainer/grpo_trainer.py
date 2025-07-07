@@ -1493,7 +1493,7 @@ class GRPOTrainer(Trainer):
         if self.token_entropy_percentile_threshold > 0.0:
             entropies = logps_and_entropies["entropies"]
             # compute the entropy threshold across all tokens in the batch
-            entropy_threshold = torch.quantile(entropies.flatten(), self.token_entropy_percentile_threshold)
+            entropy_threshold = torch.quantile(entropies.flatten().float(), self.token_entropy_percentile_threshold)
             entropy_mask = entropies >= entropy_threshold
         else:
             entropy_mask = None
@@ -1543,6 +1543,7 @@ class GRPOTrainer(Trainer):
             entropy_loss_coef = self.entropy_coef if self.entropy_coef >= 0 else self.ent_ctrl(entropy_loss.item())
             loss = loss - entropy_loss_coef * entropy_loss
             self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
+            self._metrics[mode]["entropy_loss_coef"].append(entropy_loss_coef)
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
