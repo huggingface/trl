@@ -497,7 +497,7 @@ class TestPackDatasetWrapped(unittest.TestCase):
         self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
 
 
-class TestPackDatasetFfd(unittest.TestCase):
+class TestPackDatasetBfd(unittest.TestCase):
     def test_simple(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
@@ -510,7 +510,7 @@ class TestPackDatasetFfd(unittest.TestCase):
             "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
             "seq_lengths": [[4], [3, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         self.assertEqual(dataset.to_dict(), expected_output)
 
     def test_with_iterable_dataset(self):
@@ -525,7 +525,7 @@ class TestPackDatasetFfd(unittest.TestCase):
             "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
             "seq_lengths": [[4], [3, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         num_examples = len(examples[next(iter(examples))])
         self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
 
@@ -541,7 +541,7 @@ class TestPackDatasetFfd(unittest.TestCase):
             "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
             "seq_lengths": [[4], [4], [2, 1]],
         }
-        dataset = pack_dataset(dataset, seq_length, strategy="ffd")
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         self.assertEqual(dataset.to_dict(), expected_output)
 
 

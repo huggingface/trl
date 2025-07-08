@@ -15,20 +15,22 @@
 import logging
 from typing import Callable, Literal, Optional, Union
 
+import datasets
 from datasets import Dataset, Value
+from packaging import version
 from transformers import AutoTokenizer
 
 from ..trainer.utils import ConstantLengthDataset
 
 
-try:
+if version.parse(datasets.__version__) >= version.parse("4.0.0"):
     from datasets import List
 
     FORMAT_MAPPING = {
         "chatml": List({"content": Value(dtype="string", id=None), "role": Value(dtype="string", id=None)}),
         "instruction": {"completion": Value(dtype="string", id=None), "prompt": Value(dtype="string", id=None)},
     }
-except ImportError:  # for datasets<4
+else:
     FORMAT_MAPPING = {
         "chatml": [{"content": Value(dtype="string", id=None), "role": Value(dtype="string", id=None)}],
         "instruction": {"completion": Value(dtype="string", id=None), "prompt": Value(dtype="string", id=None)},
