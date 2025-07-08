@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import pathlib
 import tempfile
 import unittest
@@ -35,7 +34,6 @@ from transformers.testing_utils import require_flash_attn, require_peft, require
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer import ConstantLengthDataset, DataCollatorForCompletionOnlyLM
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 
@@ -335,78 +333,6 @@ class SFTTrainerTester(unittest.TestCase):
                 "images", Sequence(Image())
             )
 
-        self.train_dataset = ConstantLengthDataset(
-            self.tokenizer,
-            self.dummy_dataset,
-            formatting_func=formatting_prompts_func,
-            seq_length=16,
-            num_of_sequences=16,
-        )
-
-        self.eval_dataset = ConstantLengthDataset(
-            self.tokenizer,
-            self.dummy_dataset,
-            formatting_func=formatting_prompts_func,
-            seq_length=16,
-            num_of_sequences=16,
-        )
-
-        self.train_dataset_from_pretokenized = ConstantLengthDataset(
-            self.tokenizer,
-            self.dummy_tokenized_dataset,
-            seq_length=16,
-            num_of_sequences=16,
-            formatting_func=formatting_func_for_pretokenized,
-        )
-
-        self.eval_dataset_from_pretokenized = ConstantLengthDataset(
-            self.tokenizer,
-            self.dummy_tokenized_dataset,
-            seq_length=16,
-            num_of_sequences=16,
-            formatting_func=formatting_func_for_pretokenized,
-        )
-
-    def test_constant_length_dataset_with_pretokenized_data(self):
-        constant_len_dataset = ConstantLengthDataset(
-            self.tokenizer,
-            self.dummy_tokenized_dataset,
-            formatting_func=formatting_func_for_pretokenized,
-        )
-
-        assert len(constant_len_dataset) == len(self.dummy_tokenized_dataset)
-        assert len(constant_len_dataset) > 0
-
-        for example in constant_len_dataset:
-            assert "input_ids" in example
-            assert "labels" in example
-
-            assert len(example["input_ids"]) == constant_len_dataset.seq_length
-            assert len(example["labels"]) == constant_len_dataset.seq_length
-
-            decoded_text = self.tokenizer.decode(example["input_ids"])
-            assert ("TRL" in decoded_text) and ("(DPO)" in decoded_text)
-
-    def test_constant_length_dataset(self):
-        formatted_dataset = ConstantLengthDataset(
-            self.tokenizer,
-            self.dummy_dataset,
-            formatting_func=formatting_prompts_func,
-        )
-
-        self.assertEqual(len(formatted_dataset), len(self.dummy_dataset))
-        self.assertGreater(len(formatted_dataset), 0)
-
-        for example in formatted_dataset:
-            self.assertIn("input_ids", example)
-            self.assertIn("labels", example)
-
-            self.assertEqual(len(example["input_ids"]), formatted_dataset.seq_length)
-            self.assertEqual(len(example["labels"]), formatted_dataset.seq_length)
-
-            decoded_text = self.tokenizer.decode(example["input_ids"])
-            self.assertTrue(("Question" in decoded_text) and ("Answer" in decoded_text))
-
     def test_backward_compatibility(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
@@ -658,100 +584,6 @@ class SFTTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
             self.assertIsNotNone(trainer.state.log_history[0]["eval_data1_loss"])
             self.assertIsNotNone(trainer.state.log_history[1]["eval_data2_loss"])
-
-    def test_data_collator_completion_lm(self):
-        response_template = "### Response:\n"
-        data_collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=self.tokenizer, mlm=False)
-
-        text = """\n\n### Instructions:\nHello all this should be masked\n\n### Response:\nI have not been masked correctly."""
-        encoded_text = self.tokenizer(text)
-
-        examples = [encoded_text]
-
-        batch = data_collator(examples)
-        labels = batch["labels"]
-        last_pad_idx = np.where(labels == -100)[1][-1]
-        result_text = self.tokenizer.decode(batch["input_ids"][0, last_pad_idx + 1 :])
-        self.assertEqual(result_text, "I have not been masked correctly.")
-
-    def test_data_collator_completion_lm_with_multiple_text(self):
-        tokenizer = copy.deepcopy(self.tokenizer)
-        tokenizer.padding_side = "left"
-
-        response_template = "### Response:\n"
-        data_collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, mlm=False)
-
-        text1 = """\n\n### Instructions:\nHello all this should be masked\n\n### Response:\nI have not been masked correctly."""
-        text2 = """\n\n### Instructions:\nThis is another longer text that should also be masked. This text is significantly longer than
-the previous one.\n\n### Response:\nI have not been masked correctly."""
-
-        encoded_text1 = tokenizer(text1)
-        encoded_text2 = tokenizer(text2)
-
-        examples = [encoded_text1, encoded_text2]
-
-        batch = data_collator(examples)
-
-        for i in range(2):
-            labels = batch["labels"][i]
-            last_pad_idx = np.where(labels == -100)[0][-1]
-            result_text = tokenizer.decode(batch["input_ids"][i, last_pad_idx + 1 :])
-            self.assertEqual(result_text, "I have not been masked correctly.")
-
-    def test_data_collator_chat_completion_lm(self):
-        instruction_template = "### Human:"
-        assistant_template = "### Assistant:"
-        data_collator = DataCollatorForCompletionOnlyLM(
-            response_template=assistant_template,
-            instruction_template=instruction_template,
-            tokenizer=self.tokenizer,
-            mlm=False,
-        )
-
-        text = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked
-too.### Assistant: I should not be masked too."""
-        encoded_text = self.tokenizer(text)
-
-        examples = [encoded_text]
-
-        batch = data_collator(examples)
-        labels = batch["labels"]
-        non_masked_tokens = batch["input_ids"][labels != -100]
-        result_text = self.tokenizer.decode(non_masked_tokens)
-        self.assertEqual(result_text, " I should not be masked. I should not be masked too.")
-
-    def test_data_collator_chat_completion_lm_with_multiple_text(self):
-        tokenizer = copy.deepcopy(self.tokenizer)
-        tokenizer.padding_side = "left"
-
-        instruction_template = "### Human:"
-        assistant_template = "### Assistant:"
-        data_collator = DataCollatorForCompletionOnlyLM(
-            response_template=assistant_template,
-            instruction_template=instruction_template,
-            tokenizer=tokenizer,
-            mlm=False,
-        )
-
-        text1 = """### Human: Hello all this should be masked.### Assistant: I should not be masked."""
-        text2 = """### Human: Hello all this should be masked.### Assistant: I should not be masked.### Human: All this should be masked
-too.### Assistant: I should not be masked too."""
-        encoded_text1 = tokenizer(text1)
-        encoded_text2 = tokenizer(text2)
-
-        examples = [encoded_text1, encoded_text2]
-
-        batch = data_collator(examples)
-        labels = batch["labels"]
-        input_ids = batch["input_ids"]
-
-        non_masked_tokens1 = input_ids[0][labels[0] != -100]
-        result_text1 = tokenizer.decode(non_masked_tokens1)
-        self.assertEqual(result_text1, " I should not be masked.")
-
-        non_masked_tokens2 = input_ids[1][labels[1] != -100]
-        result_text2 = tokenizer.decode(non_masked_tokens2)
-        self.assertEqual(result_text2, " I should not be masked. I should not be masked too.")
 
     def test_with_model_neftune(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1321,34 +1153,6 @@ class SFTTrainerTester2(unittest.TestCase):
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
-
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            # Train the model
-            trainer.train()
-
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
-
-    def test_train_with_data_collator_for_completion_only_and_padding_free(self):
-        # Get the dataset
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
-
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        response_template = "<|im_start|>assistant\n"
-        collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer, padding_free=True)
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset, data_collator=collator)
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
