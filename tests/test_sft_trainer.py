@@ -130,7 +130,7 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         """Test that when using packing with position_ids, attention_mask is dropped with fa2."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, return_position_ids=True)
 
-        # Simulate packed sequences with position_ids that restart (typical of FFD packing)
+        # Simulate packed sequences with position_ids that restart (typical of BFD packing)
         examples = [
             {
                 "input_ids": [1, 2, 3, 4, 5, 6, 7, 8],  # Packed: [1,2,3] + [4,5] + [6,7,8]
@@ -1396,7 +1396,7 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-    @parameterized.expand([("ffd",), ("wrapped",)])
+    @parameterized.expand([("bfd",), ("wrapped",)])
     def test_train_packing(self, packing_strategy):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
