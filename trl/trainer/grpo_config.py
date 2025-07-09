@@ -247,14 +247,6 @@ class GRPOConfig(TrainingArguments):
         },
     )
 
-    liger_backbone_name: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Which submodule (language backbone) to apply liger kernel to e.g. `model.text_model` in case of SmolVlm. "
-            "If None, the main model is used.",
-        },
-    )
-
     # Parameters that control the data preprocessing
     # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
     # additional columns to compute the reward
@@ -611,5 +603,6 @@ class GRPOConfig(TrainingArguments):
                     "current global eval batch size, the valid values for the number of generations are: "
                     f"{possible_values}."
                 )
-        if self.delta is not None and self.use_liger_loss:
-            raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
+
+
+# Liger loss validation removed
