@@ -602,8 +602,6 @@ class GRPOTrainer(Trainer):
             )
             self.use_vllm = False
 
-        data_collator = identity  # No data collation is needed in GRPO
-
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
         # "input_ids" key. Instead, the available keys is "prompt". As a result, the trainer issues the warning:
@@ -615,7 +613,7 @@ class GRPOTrainer(Trainer):
         super().__init__(
             model=model,
             args=args,
-            data_collator=data_collator,
+            data_collator=identity,  # No data collation is needed in GRPO
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
