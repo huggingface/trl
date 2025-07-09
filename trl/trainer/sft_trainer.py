@@ -411,9 +411,9 @@ class SFTTrainer(Trainer):
             model = self._prepare_peft_model(model, peft_config, args)
 
         # Data collator
-        # FFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
+        # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "ffd")
+        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -466,7 +466,7 @@ class SFTTrainer(Trainer):
 
         if (
             args.packing
-            and args.packing_strategy == "ffd"
+            and args.packing_strategy == "bfd"
             and model.config._attn_implementation != "flash_attention_2"
         ):
             warnings.warn(
@@ -806,16 +806,16 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
-                # Packing adds new column "position_ids" needed for document aware flash attention
+                # Packing adds new column "seq_lengths" needed for document aware flash attention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
-            # For Liger kernel, ensure only input_ids is present
+            # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 dataset = dataset.select_columns(
-                    {"input_ids", "position_ids", "completion_mask"}.intersection(dataset.column_names)
+                    {"input_ids", "seq_lengths", "completion_mask"}.intersection(dataset.column_names)
                 )
 
         return dataset
@@ -829,7 +829,7 @@ class SFTTrainer(Trainer):
             self._signature_columns = [
                 "input_ids",
                 "labels",
-                "position_ids",
+                "seq_lengths",
                 "completion_mask",
                 "assistant_masks",
             ]
