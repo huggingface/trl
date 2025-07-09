@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -45,7 +46,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
+from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
@@ -1145,11 +1146,17 @@ class GRPOTrainer(Trainer):
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
         if self.max_prompt_length is not None:
+            # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
+            # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
+            # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
+            prompts_text = [
+                re.sub(rf"^({re.escape(self.processing_class.pad_token)})+", "", text) for text in prompts_text
+            ]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1245,7 +1252,7 @@ class GRPOTrainer(Trainer):
             self.generation_config.block_size = 128
             previous_attn = self.model_wrapped.config._attn_implementation
 
-            if torch.cuda.is_available():
+            if is_flash_attn_2_available():
                 self.model_wrapped.config._attn_implementation = "paged_attention"
             else:
                 self.model_wrapped.config._attn_implementation = "sdpa_paged"
