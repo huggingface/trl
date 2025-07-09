@@ -51,7 +51,7 @@ from transformers.utils import is_datasets_available, is_flash_attn_2_available,
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_vllm_available
+from ..import_utils import is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
@@ -70,7 +70,8 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
 
-# Liger kernel support removed for now
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
