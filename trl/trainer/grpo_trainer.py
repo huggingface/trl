@@ -37,10 +37,12 @@ from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
+    AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     is_wandb_available,
@@ -419,7 +421,7 @@ class GRPOTrainer(Trainer):
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[Union[PreTrainedTokenizerBase, AutoProcessor, ProcessorMixin]] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
@@ -590,6 +592,18 @@ class GRPOTrainer(Trainer):
         # `_get_train_sampler` and `_prepare_inputs`.
         self._buffered_inputs = None
 
+        # Check for VLM processor and disable vLLM if necessary (like PR #3460)
+        is_vlm_processor = hasattr(processing_class, "tokenizer") and hasattr(processing_class, "image_processor")
+        if is_vlm_processor and self.use_vllm:
+            warnings.warn(
+                "VLM processors detected with vLLM enabled. Automatically disabling vLLM for compatibility. "
+                "VLM models are not yet fully supported with vLLM generation.",
+                UserWarning,
+            )
+            self.use_vllm = False
+
+        data_collator = identity  # No data collation is needed in GRPO
+
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
         # "input_ids" key. Instead, the available keys is "prompt". As a result, the trainer issues the warning:
@@ -601,7 +615,7 @@ class GRPOTrainer(Trainer):
         super().__init__(
             model=model,
             args=args,
-            data_collator=identity,  # No data collation is needed in GRPO
+            data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
@@ -779,7 +793,30 @@ class GRPOTrainer(Trainer):
         # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image"]
+            # Base signature columns
+            signature_columns = ["prompt"]
+
+            # Add VLM-specific columns (inspired by DPO's DataCollatorForPreference)
+            vlm_columns = ["image", "pixel_values", "pixel_attention_mask", "image_sizes"]
+            signature_columns.extend(vlm_columns)
+
+            # Additional columns needed based on the reward functions
+            for func in self.reward_funcs:
+                if not isinstance(func, (str, PreTrainedModel)):
+                    try:
+                        # Custom reward function - inspect its signature to see what columns it expects
+                        func_sig = inspect.signature(func)
+                        params = func_sig.parameters
+                        # Add any parameter that's not one of the expected defaults
+                        for param_name in params:
+                            if param_name not in ["prompts", "completions", "kwargs", "trainer_state"]:
+                                if param_name not in signature_columns:
+                                    signature_columns.append(param_name)
+                    except (ValueError, TypeError):
+                        # If we can't inspect the function, just skip it
+                        pass
+
+            self._signature_columns = signature_columns
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -1205,9 +1242,7 @@ class GRPOTrainer(Trainer):
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
             pad_token = self._get_from_processor_or_tokenizer(self.processing_class, "pad_token")
-            prompts_text = [
-                re.sub(rf"^({re.escape(pad_token)})+", "", text) for text in prompts_text
-            ]
+            prompts_text = [re.sub(rf"^({re.escape(pad_token)})+", "", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
