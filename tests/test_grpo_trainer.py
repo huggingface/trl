@@ -1316,10 +1316,13 @@ class GRPOTrainerTester(unittest.TestCase):
     @require_bitsandbytes
     @require_peft
     @require_torch_accelerator
-    def test_vlm_training(self):
-        # model_name = "HuggingFaceTB/SmolVLM-Instruct"
-        model_name = "Qwen/Qwen2-VL-2B-Instruct"
-
+    @parameterized.expand(
+        [
+            ("Qwen/Qwen2-VL-2B-Instruct",),
+            ("HuggingFaceTB/SmolVLM-Instruct",),
+        ]
+    )
+    def test_vlm_training(self, model_name):
         def data_gen(num_samples):
             processor = AutoProcessor.from_pretrained(model_name)
             conversation = [
@@ -1344,8 +1347,6 @@ class GRPOTrainerTester(unittest.TestCase):
             data_gen, gen_kwargs={"num_samples": 16}, features=Features(image=Image(), prompt=Value(dtype="string"))
         )
         # reduce memory requirements as much as possible
-        # TODO: 4-bit quant config breaks the test 😒
-        # `Base parameter base_model.model.model.vision_model.encoder.layers.0.self_attn.k_proj.weight has changed.`
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype="bfloat16",
@@ -1356,7 +1357,7 @@ class GRPOTrainerTester(unittest.TestCase):
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             attn_implementation="flash_attention_2",
-            torch_dtype="bfloat16",  # bfloat16",
+            torch_dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
@@ -1417,7 +1418,13 @@ class GRPOTrainerTester(unittest.TestCase):
             # At least some LoRA parameters should have changed during training
             self.assertTrue(lora_params_changed, "No LoRA parameters were updated during training.")
 
-    def test_custom_processor_disables_vllm(self):
+    @parameterized.expand(
+        [
+            ("Qwen/Qwen2-VL-2B-Instruct",),
+            ("HuggingFaceTB/SmolVLM-Instruct",),
+        ]
+    )
+    def test_custom_processor_disables_vllm(self, processor_model_name):
         """Test that VLM processors automatically disable vLLM and emit a warning (inspired by PR #3460)."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1432,7 +1439,7 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             # Create a VLM processor (has both tokenizer and image_processor attributes)
-            processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct")
+            processor = AutoProcessor.from_pretrained(processor_model_name)
 
             # This should emit a warning and automatically disable vLLM
             with self.assertWarns(UserWarning) as warning_context:
