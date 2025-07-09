@@ -27,7 +27,12 @@ from transformers import (
     AutoTokenizer,
     BitsAndBytesConfig,
 )
-from transformers.testing_utils import require_bitsandbytes, require_flash_attn, require_peft, require_torch_accelerator
+from transformers.testing_utils import (
+    require_bitsandbytes,
+    require_flash_attn,
+    require_peft,
+    require_torch_accelerator,
+)
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -429,19 +434,13 @@ class GRPOTrainerTester(unittest.TestCase):
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check that LoRA parameters have changed
-            # For VLM models, we're more permissive about which parameters can change
-            lora_params_changed = False
+            # Check that only LoRA parameters have changed, base model parameters remain unchanged
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 if "lora" in n.lower():  # LoRA parameters should change
-                    if not torch.equal(param, new_param):
-                        lora_params_changed = True
-                    else:
-                        print(f"Warning: LoRA parameter {n} has not changed.")
-                        
-            # At least some LoRA parameters should have changed during training
-            self.assertTrue(lora_params_changed, "No LoRA parameters were updated during training.")
+                    self.assertFalse(torch.equal(param, new_param), f"LoRA parameter {n} has not changed.")
+                else:  # Base model parameters should not change
+                    self.assertTrue(torch.equal(param, new_param), f"Base parameter {n} has changed.")
 
     def test_training_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
@@ -1079,7 +1078,7 @@ class GRPOTrainerTester(unittest.TestCase):
         # We mock the generate method because the model's random weights make it extremely unlikely to produce a
         # sequence containing the EOS token within the allowed max_completion_length. As a result, all tokens are
         # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
-        def fake_generate(prompt_ids, **kwargs):
+        def fake_generate(input_ids=None, **kwargs):
             # pad_token_id = 151643; eos_token_id = 151645
             completions_ids = torch.tensor(
                 [
@@ -1087,9 +1086,9 @@ class GRPOTrainerTester(unittest.TestCase):
                     [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
                     [12, 13, 14, 15, 16, 17, 18, 151645],  # particular case, eos is generated just within the limit
                 ],
-                device=prompt_ids.device,
+                device=input_ids.device,
             )
-            return torch.cat([prompt_ids, completions_ids], dim=1)
+            return torch.cat([input_ids, completions_ids], dim=1)
 
         mock_generate.side_effect = fake_generate
 
@@ -1268,6 +1267,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 generation_kwargs={"do_sample": True, "top_k": 50, "length_penalty": -0.1},  # Add some gen kwargs
                 report_to="none",
             )
+
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
@@ -1317,7 +1317,6 @@ class GRPOTrainerTester(unittest.TestCase):
     @require_peft
     @require_torch_accelerator
     def test_vlm_training(self):
-        print("Running!")
         # model_name = "HuggingFaceTB/SmolVLM-Instruct"
         model_name = "Qwen/Qwen2-VL-2B-Instruct"
 
@@ -1414,8 +1413,40 @@ class GRPOTrainerTester(unittest.TestCase):
                 if "lora" in n.lower():  # LoRA parameters should change
                     if not torch.equal(param, new_param):
                         lora_params_changed = True
-                    else:
-                        print(f"Warning: LoRA parameter {n} has not changed.")
-                        
+
             # At least some LoRA parameters should have changed during training
             self.assertTrue(lora_params_changed, "No LoRA parameters were updated during training.")
+
+    def test_custom_processor_disables_vllm(self):
+        """Test that VLM processors automatically disable vLLM and emit a warning (inspired by PR #3460)."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_completion_length=8,
+                use_vllm=True,  # Enable vLLM initially
+                report_to="none",
+            )
+
+            # Create a VLM processor (has both tokenizer and image_processor attributes)
+            processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct")
+
+            # This should emit a warning and automatically disable vLLM
+            with self.assertWarns(UserWarning) as warning_context:
+                trainer = GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=config,
+                    train_dataset=dataset,
+                    processing_class=processor,  # VLM processor should trigger vLLM disabling
+                )
+
+            # Verify the warning message
+            self.assertIn("VLM processors detected", str(warning_context.warning))
+            self.assertIn("Automatically disabling vLLM", str(warning_context.warning))
+
+            # Verify vLLM was disabled
+            self.assertFalse(trainer.use_vllm)
