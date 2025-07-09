@@ -1297,3 +1297,34 @@ class GRPOTrainerTester(unittest.TestCase):
                 train_dataset=dataset,
             )
             trainer.train()
+
+    def test_compute_entropy_mask(self):
+        """Test the _compute_entropy_mask method."""
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(token_entropy_percentile_threshold=0.8),
+        )
+
+        # Create dummy entropies and completion mask
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5], [0.5, 0.6, 0.7, 0.8, 0.9]])
+        completion_mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]])
+
+        entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
+
+        self.assertEqual(entropy_mask.shape, entropies.shape)
+
+        # We have a total of 10 tokens, for a token_entropy_percentile_threshold of 0.8,
+        # we expect the top 20% i.e 2 tokens corresponding to the highest entropy to be unmasked.
+        # In our example the two highest entropy values are 0.8 and 0.9, but both
+        # of them are pad tokens, so the next two highest values are 0.6 and 0.7,
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0], [0, 1, 1, 0, 0]], dtype=torch.bool)
+        self.assertTrue(torch.equal(entropy_mask, expected_mask))
+
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5], [0.5, 0.6, 0.7, 0.8, 0.9]])
+        completion_mask = torch.tensor([[1, 1, 1, 1, 0], [1, 1, 1, 1, 0]])
+
+        expected_mask = torch.tensor([[0, 0, 0, 1, 0], [0, 0, 0, 1, 0]], dtype=torch.bool)
+        entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
+
+        self.assertTrue(torch.equal(entropy_mask, expected_mask))

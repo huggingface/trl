@@ -1429,6 +1429,13 @@ class GRPOTrainer(Trainer):
         else:
             return self._compute_loss(model, inputs)
 
+    def _compute_entropy_mask(self, entropies, completion_mask):
+        entropies = entropies * completion_mask
+        # compute the entropy threshold across all tokens in the batch
+        entropy_threshold = torch.quantile(entropies.flatten().float(), self.token_entropy_percentile_threshold)
+        entropy_mask = entropies >= entropy_threshold
+        return entropy_mask
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1444,10 +1451,7 @@ class GRPOTrainer(Trainer):
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
-            # compute the entropy threshold across all tokens in the batch
-
-            entropy_threshold = torch.quantile(entropies.flatten().float(), self.token_entropy_percentile_threshold)
-            entropy_mask = entropies >= entropy_threshold
+            entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep
