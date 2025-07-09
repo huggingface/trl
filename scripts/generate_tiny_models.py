@@ -64,6 +64,8 @@ from transformers import (
     Qwen3Config,
     Qwen3ForCausalLM,
     Qwen3ForSequenceClassification,
+    Qwen3MoeConfig,
+    Qwen3MoeForCausalLM,
     SiglipVisionConfig,
     T5Config,
     T5ForConditionalGeneration,
@@ -139,6 +141,24 @@ for model_id, config_class, model_class, suffix in [
         num_key_value_heads=2,
         num_hidden_layers=2,
         intermediate_size=32,
+    )
+    model = model_class(config)
+    push_to_hub(model, tokenizer, "tiny", suffix)
+
+# MoE models
+for model_id, config_class, model_class, suffix in [
+    ("Qwen/Qwen3-30B-A3B", Qwen3MoeConfig, Qwen3MoeForCausalLM, None),
+]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config = config_class(
+        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        hidden_size=8,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        num_hidden_layers=2,
+        intermediate_size=32,
+        num_experts=4,
+        num_experts_per_tok=2,
     )
     model = model_class(config)
     push_to_hub(model, tokenizer, "tiny", suffix)
