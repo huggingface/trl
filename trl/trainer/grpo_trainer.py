@@ -314,6 +314,9 @@ class AdaptiveEntropyController:
     def __call__(self, ent):
         """
         Adjusts the entropy coefficient based on the current entropy.
+        Following https://github.com/SkyworkAI/Skywork-OR1/tree/main
+        Related post:
+        https://capricious-hydrogen-41c.notion.site/Skywork-Open-Reasoner-Series-1d0bc9ae823a80459b46c149e4f51680?pvs=25#1d1bc9ae823a801592a0c3891ea5328f
 
         Args:
             ent (`float`): Current entropy value.

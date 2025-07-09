@@ -534,6 +534,8 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Weight of the entropy regularization term in the loss. "
             "A positive coefficient adds an entropy bonus to encourage exploration."
+            "A negative coefficient dynamically adjusts the weight based on entropy loss."
+            "Zero coefficient disables the entropy regularization term."
         },
     )
     min_ent_coef: float = field(
