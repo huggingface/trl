@@ -130,7 +130,7 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         """Test that when using packing with position_ids, attention_mask is dropped with fa2."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, return_position_ids=True)
 
-        # Simulate packed sequences with position_ids that restart (typical of FFD packing)
+        # Simulate packed sequences with position_ids that restart (typical of BFD packing)
         examples = [
             {
                 "input_ids": [1, 2, 3, 4, 5, 6, 7, 8],  # Packed: [1,2,3] + [4,5] + [6,7,8]
@@ -1129,16 +1129,20 @@ add_generation_prompt %}ASSISTANT: {% endif %}"""
 
 # This new tester aims to replace the first one at some point
 class SFTTrainerTester2(unittest.TestCase):
-    def test_train(self):
+    @parameterized.expand(
+        [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM",),
+        ]
+    )
+    def test_train(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1396,7 +1400,7 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-    @parameterized.expand([("ffd",), ("wrapped",)])
+    @parameterized.expand([("bfd",), ("wrapped",)])
     def test_train_packing(self, packing_strategy):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
