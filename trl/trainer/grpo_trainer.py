@@ -1430,9 +1430,11 @@ class GRPOTrainer(Trainer):
             return self._compute_loss(model, inputs)
 
     def _compute_entropy_mask(self, entropies, completion_mask):
-        entropies = entropies * completion_mask
         # compute the entropy threshold across all tokens in the batch
-        entropy_threshold = torch.quantile(entropies.flatten().float(), self.token_entropy_percentile_threshold)
+        non_pad_entropies = entropies[completion_mask.bool()]
+        # disregard pad tokens when computing the entropy threshold
+        entropy_threshold = torch.quantile(non_pad_entropies.float(), self.token_entropy_percentile_threshold)
+        entropies = entropies * completion_mask.float()  # mask out the padding tokens
         entropy_mask = entropies >= entropy_threshold
         return entropy_mask
 

@@ -1307,24 +1307,25 @@ class GRPOTrainerTester(unittest.TestCase):
         )
 
         # Create dummy entropies and completion mask
-        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5], [0.5, 0.6, 0.7, 0.8, 0.9]])
-        completion_mask = torch.tensor([[1, 1, 1, 1, 1], [1, 1, 1, 0, 0]])
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        completion_mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
 
         entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
 
         self.assertEqual(entropy_mask.shape, entropies.shape)
 
-        # We have a total of 10 tokens, for a token_entropy_percentile_threshold of 0.8,
-        # we expect the top 20% i.e 2 tokens corresponding to the highest entropy to be unmasked.
-        # In our example the two highest entropy values are 0.8 and 0.9, but both
-        # of them are pad tokens, so the next two highest values are 0.6 and 0.7,
-        expected_mask = torch.tensor([[0, 0, 0, 0, 0], [0, 1, 1, 0, 0]], dtype=torch.bool)
+        # We have a total of 12 tokens out of which 10 are non-pad,
+        # for a token_entropy_percentile_threshold of 0.8,
+        # we expect the top 20% i.e 2 non-pad tokens corresponding to the highest entropy to be unmasked.
+        # In our example these will be the tokens corresponding to the entropies 0.9 and 1.0
+        # since 1.1 and 1.2 are pad tokens they are excluded from the entropy threshold calculation.
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 1, 1, 0, 0]], dtype=torch.bool)
         self.assertTrue(torch.equal(entropy_mask, expected_mask))
 
-        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5], [0.5, 0.6, 0.7, 0.8, 0.9]])
-        completion_mask = torch.tensor([[1, 1, 1, 1, 0], [1, 1, 1, 1, 0]])
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
+        completion_mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
 
-        expected_mask = torch.tensor([[0, 0, 0, 1, 0], [0, 0, 0, 1, 0]], dtype=torch.bool)
+        expected_mask = torch.tensor([[0, 0, 0, 1, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
         entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
 
         self.assertTrue(torch.equal(entropy_mask, expected_mask))
