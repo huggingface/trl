@@ -1461,7 +1461,8 @@ class GRPOTrainer(Trainer):
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
             per_token_kl = torch.clamp(per_token_kl, min=0.0)
-            warnings.warn(f"KL divergence value is 0")
+            if (per_token_kl == 0.0).all():
+                warnings.warn(f"KL divergence value is 0")
 
         # Compute the loss
         advantages = inputs["advantages"]
