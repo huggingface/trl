@@ -22,7 +22,6 @@ There were two main steps to the DPO training process:
     accelerate launch examples/research_projects/stack_llama_2/scripts/sft_llama2.py \
         --output_dir="./sft" \
         --max_steps=500 \
-        --logging_steps=10 \
         --save_steps=10 \
         --per_device_train_batch_size=4 \
         --per_device_eval_batch_size=1 \

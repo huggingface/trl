@@ -32,10 +32,6 @@
 
 [[autodoc]] maybe_unpair_preference_dataset
 
-## pack_examples
-
-[[autodoc]] pack_examples
-
 ## pack_dataset
 
 [[autodoc]] pack_dataset

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,8 @@ from transformers import Trainer, TrainingArguments
 
 from trl.trainer.callbacks import RichProgressCallback
 
+from .testing_utils import require_rich
+
 
 class DummyModel(nn.Module):
     def __init__(self):
@@ -32,6 +34,7 @@ class DummyModel(nn.Module):
         return self.a * x
 
 
+@require_rich
 class TestRichProgressCallback(unittest.TestCase):
     def setUp(self):
         self.dummy_model = DummyModel()

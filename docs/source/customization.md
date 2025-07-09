@@ -112,10 +112,10 @@ trainer = DPOTrainer(
 trainer.train()
 ```
 
-## Use the CUDA cache optimizer
+## Use the accelerator cache optimizer
 
-When training large models, you should better handle the CUDA cache by iteratively clearing it. To do so, simply pass `optimize_cuda_cache=True` to `DPOConfig`:
+When training large models, you should better handle the accelerator cache by iteratively clearing it. To do so, simply pass `optimize_device_cache=True` to `DPOConfig`:
 
 ```python
-training_args = DPOConfig(..., optimize_cuda_cache=True)
+training_args = DPOConfig(..., optimize_device_cache=True)
 ```

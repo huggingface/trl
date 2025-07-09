@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -75,7 +75,6 @@ if __name__ == "__main__":
         push_to_hub=True,
         hub_model_id=config.hub_model_id,
         output_dir=config.output_dir,
-        logging_steps=500,
         save_steps=1000,
         save_total_limit=2,
     )

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,7 +36,6 @@ def main():
     # Train model
     training_args = SFTConfig(
         output_dir=f"{model_id}-codeforces-SFT",
-        logging_steps=10,
         bf16=True,
         use_liger_kernel=True,
         gradient_checkpointing=True,
