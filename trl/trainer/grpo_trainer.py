@@ -1450,7 +1450,7 @@ class GRPOTrainer(Trainer):
         # Concatenate once, so the model does a single forward pass
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         entropies = None
         entropy_mask = None
