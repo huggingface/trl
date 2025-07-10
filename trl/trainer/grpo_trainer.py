@@ -1290,7 +1290,8 @@ class GRPOTrainer(Trainer):
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
-                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
+                    # vLLM v1 no longer supports request-level backend selection, use default backend
+                    guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
                 else:
                     guided_decoding = None
 
