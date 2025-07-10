@@ -264,7 +264,7 @@ class ScriptArguments:
     data_parallel_size: int = field(default=1, metadata={"help": "Number of data parallel workers to use."})
     host: str = field(default="0.0.0.0", metadata={"help": "Host address to run the server on."})
     port: int = field(default=8000, metadata={"help": "Port to run the server on."})
-    gpu_memory_utilization: float = field(default=0.5, metadata={"help": "GPU memory utilization ratio for vLLM."})
+    gpu_memory_utilization: float = field(default=0.8, metadata={"help": "GPU memory utilization ratio for vLLM."})
     dtype: str = field(default="auto", metadata={"help": "Data type to use for vLLM generation."})
     max_model_len: Optional[int] = field(default=None, metadata={"help": "Maximum model length for vLLM."})
     enable_prefix_caching: Optional[bool] = field(default=None, metadata={"help": "Whether to enable prefix caching in vLLM."})
@@ -1229,7 +1229,12 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             print(f"🧬 Protein successfully integrated into text embeddings!")
             
             # STEP 6: Generate using prompt embeddings with vLLM (EXACT same as ProteinLLMModel.generate)
-            sampling_params = kwargs.get("sampling_params", SamplingParams())
+            
+
+            from copy import deepcopy
+
+            base_sampling_params = kwargs.get("sampling_params", SamplingParams())
+            
             all_outputs = []
             
             print(f"🧬 ======= PROMPT EMBEDS ANALYSIS =======")
@@ -1387,7 +1392,9 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
             print(f"🧬 DNA successfully integrated into text embeddings!")
             
             # STEP 6: Generate using prompt embeddings with vLLM (EXACT same as DNALLMModel.generate)
-            sampling_params = kwargs.get("sampling_params", SamplingParams())
+            from copy import deepcopy
+
+            base_sampling_params = kwargs.get("sampling_params", SamplingParams())
             all_outputs = []
             
             print(f"🧬 ======= PROMPT EMBEDS ANALYSIS =======")
@@ -1405,11 +1412,11 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
                 for batch_idx in range(text_embeddings.shape[0]):
                     single_embeddings = text_embeddings[batch_idx]  # (seq_len, hidden_size)
                     print(f"🧬 Generating for batch {batch_idx} with embeddings shape: {single_embeddings.shape}")
-                    
+                    sparams = deepcopy(base_sampling_params)
                     with torch.no_grad():
                         batch_outputs = llm.generate(
                             {"prompt_embeds": single_embeddings},
-                            sampling_params
+                            sparams
                         )
                     all_outputs.extend(batch_outputs)
             elif text_embeddings.dim() == 2:
@@ -1723,6 +1730,7 @@ def main(script_args: ScriptArguments):
 
             # If no real work for this rank, send a placeholder so vLLM won't error.
             if not prompts_this_rank:
+                print(f"🧬 No real work for this rank, sending placeholder")
                 prompts_this_rank, dna_this_rank = ["<placeholder>"], [[]]
 
             # ---- build the per-example payload -------------------------------------------------------
