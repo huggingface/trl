@@ -592,16 +592,6 @@ class GRPOTrainer(Trainer):
         # `_get_train_sampler` and `_prepare_inputs`.
         self._buffered_inputs = None
 
-        # Check for VLM processor and disable vLLM if necessary (like PR #3460)
-        is_vlm_processor = hasattr(processing_class, "tokenizer") and hasattr(processing_class, "image_processor")
-        if is_vlm_processor and self.use_vllm:
-            warnings.warn(
-                "VLM processors detected with vLLM enabled. Automatically disabling vLLM for compatibility. "
-                "VLM models are not yet fully supported with vLLM generation.",
-                UserWarning,
-            )
-            self.use_vllm = False
-
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
         # "input_ids" key. Instead, the available keys is "prompt". As a result, the trainer issues the warning:
