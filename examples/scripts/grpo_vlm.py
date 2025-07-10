@@ -13,6 +13,8 @@
 # limitations under the License.
 
 """
+pip install math_verify
+
 # Tested on 8x H100 GPUs
 accelerate launch
     --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
@@ -31,9 +33,11 @@ import re
 
 import torch
 from datasets import load_dataset
+from latex2sympy2_extended import NormalizationConfig
+from math_verify import LatexExtractionConfig, parse, verify
 from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
 
-from trl import (
+from trl.trl import (
     GRPOConfig,
     GRPOTrainer,
     ModelConfig,
@@ -66,7 +70,10 @@ if __name__ == "__main__":
         quantization_config=quantization_config,
     )
     processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path, use_fast=True, trust_remote_code=model_args.trust_remote_code
+        model_args.model_name_or_path,
+        use_fast=True,
+        trust_remote_code=model_args.trust_remote_code,
+        padding_side="left",
     )
 
     model = Qwen2VLForConditionalGeneration.from_pretrained(
@@ -118,9 +125,54 @@ if __name__ == "__main__":
     ################
     def format_reward(completions, **kwargs):
         """Reward function that checks if the completion has a specific format."""
-        pattern = r"^<think>.*?</think>\s*<answer>.*?</answer>$"
-        matches = [re.match(pattern, content) for content in completions]
+        pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
+        matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in completions]
         rewards = [1.0 if match else 0.0 for match in matches]
+        return rewards
+
+    def accuracy_reward(completions, solution: list[str], **kwargs):
+        """Reward function that checks if the completion matches the ground truth.
+        - If both gold and prediction are parseable → use math verification.
+        - If not parseable → compare as normalized text.
+        """
+        rewards = []
+
+        for completion, sol in zip(completions, solution):
+            try:
+                gold_parsed = parse(sol, extraction_mode="first_match")
+            except Exception:
+                gold_parsed = []
+
+            if len(gold_parsed) != 0:
+                # Try parsing predicted answer too
+                try:
+                    answer_parsed = parse(
+                        completion,
+                        extraction_config=[
+                            LatexExtractionConfig(
+                                normalization_config=NormalizationConfig(
+                                    nits=False,
+                                    malformed_operators=False,
+                                    basic_latex=True,
+                                    boxed="all",
+                                    units=True,
+                                ),
+                                boxed_match_priority=0,
+                                try_extract_without_anchor=False,
+                            )
+                        ],
+                        extraction_mode="first_match",
+                    )
+                    reward = float(verify(gold_parsed, answer_parsed))
+                except Exception as e:
+                    print(f"verify failed: {e}, answer: {completion}, gold: {sol}")
+                    reward = None
+            else:
+                # fallback to text match
+                reward = float(completion.strip().lower() == sol.strip().lower())
+
+            rewards.append(reward)
+
         return rewards
 
     ################
@@ -129,7 +181,7 @@ if __name__ == "__main__":
     trainer = GRPOTrainer(
         model=model,
         args=training_args,
-        reward_funcs=[format_reward],
+        reward_funcs=[format_reward, accuracy_reward],
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=processor,
