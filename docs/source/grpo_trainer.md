@@ -661,7 +661,7 @@ When training VLMs, consider these configuration options:
 
 VLM datasets should include:
 - **`prompt`**: Text prompt formatted through the processor's chat template
-- **`image`**: PIL Image or numpy array representing the image
+- **`image`**: PIL Image or numpy array representing the image (only one image per prompt is supported)
 - Additional columns as needed for custom reward functions
 
 The trainer automatically handles the conversion of images to the required tensor format (`pixel_values`, `pixel_attention_mask`, etc.) using the model's image processor.
