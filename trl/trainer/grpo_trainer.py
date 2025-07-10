@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -1092,11 +1093,17 @@ class GRPOTrainer(Trainer):
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
         if self.max_prompt_length is not None:
+            # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
+            # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
+            # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
             prompt_ids = prompt_ids[:, -self.max_prompt_length :]
             prompt_mask = prompt_mask[:, -self.max_prompt_length :]
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
+            prompts_text = [
+                re.sub(rf"^({re.escape(self.processing_class.pad_token)})+", "", text) for text in prompts_text
+            ]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1423,34 +1430,62 @@ class GRPOTrainer(Trainer):
         else:
             return self._compute_loss(model, inputs)
 
-    def _compute_loss(self, model, inputs):
-        # Compute the per-token log probabilities for the model
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+    def _compute_entropy_mask(self, entropies, completion_mask):
+        # compute the entropy threshold across all tokens in the batch
+        non_pad_entropies = entropies[completion_mask.bool()]
+        # disregard pad tokens when computing the entropy threshold
+        entropy_threshold = torch.quantile(non_pad_entropies.float(), self.token_entropy_percentile_threshold)
+        entropies = entropies * completion_mask.float()  # mask out the padding tokens
+        entropy_mask = entropies >= entropy_threshold
+        return entropy_mask
+
+    def _gather_logps_and_entropy(
+        self,
+        model,
+        prompt_ids,
+        prompt_mask,
+        completion_ids,
+        completion_mask,
+    ):
+        # Concatenate once, so the model does a single forward pass
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        logits_to_keep = completion_ids.size(1)
 
         entropies = None
         entropy_mask = None
 
         compute_entropy = self.log_entropy or self.token_entropy_percentile_threshold > 0.0
         if compute_entropy:
-            logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
+            out = self._get_per_token_logps_and_entropies(
+                model,
+                input_ids,
+                attention_mask,
+                logits_to_keep,
+                compute_entropy=True,
             )
-            per_token_logps = logps_and_entropies["logps"]
-            entropies = logps_and_entropies["entropies"]
+            per_token_logps = out["logps"]
+            entropies = out["entropies"]
 
-            if self.token_entropy_percentile_threshold > 0.0:
-                entropy_threshold = torch.quantile(
-                    entropies.flatten().float(), self.token_entropy_percentile_threshold
-                )
-                entropy_mask = entropies >= entropy_threshold
+            entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep
+                model,
+                input_ids,
+                attention_mask,
+                logits_to_keep,
             )["logps"]
+
+        return per_token_logps, entropies, entropy_mask
+
+    def _compute_loss(self, model, inputs):
+        # Compute the per-token log probabilities for the model
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+
+        per_token_logps, entropies, entropy_mask = self._gather_logps_and_entropy(
+            model, prompt_ids, prompt_mask, completion_ids, completion_mask
+        )
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
