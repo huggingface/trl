@@ -1431,7 +1431,10 @@ class GRPOTrainer(Trainer):
             return self._compute_loss(model, inputs)
 
     def _compute_entropy_mask(self, entropies, completion_mask):
-        # compute the entropy threshold across all tokens in the batch
+        """
+        Return a boolean mask of tokens whose entropy is at or above the
+        batch-wise percentile threshold, ignoring padding.
+        """
         non_pad_entropies = entropies[completion_mask.bool()]
         # disregard pad tokens when computing the entropy threshold
         entropy_threshold = torch.quantile(non_pad_entropies.float(), self.token_entropy_percentile_threshold)
@@ -1447,7 +1450,10 @@ class GRPOTrainer(Trainer):
         completion_ids,
         completion_mask,
     ):
-        # Concatenate once, so the model does a single forward pass
+        """
+        Run a single forward pass to collect per-token log-probs for the completion span and,
+        if requested, token entropies.
+        """
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
