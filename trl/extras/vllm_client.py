@@ -311,6 +311,9 @@ class VLLMClient:
             "generation_kwargs": generation_kwargs or {},
         }
 
+        print(f"prompts: {prompts}")
+        
+        print(f"dna_sequences: {dna_sequences}")
 
         response = self.session.post(url, json=payload)
         
@@ -329,6 +332,7 @@ class VLLMClient:
     def generate_from_embeddings(
         self,
         prompt_embeds: List[List[List[float]]],
+        n: int = 1,
         temperature: float = 1.0,
         top_p: float = 1.0,
         top_k: int = -1,
@@ -366,6 +370,7 @@ class VLLMClient:
         
         payload = {
             "prompt_embeds": prompt_embeds,
+            "n": n,
             "temperature": temperature,
             "top_p": top_p,
             "top_k": top_k,

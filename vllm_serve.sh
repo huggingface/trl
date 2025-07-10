@@ -13,3 +13,7 @@ python trl/trl/scripts/vllm_serve.py \
     --max_length_protein 2048 \
     --gpu_memory_utilization 0.8 \
     --port 8000
+
+
+ps aux | grep -E "(vllm|python.*vllm_serve)" | grep -v grep \
+  | awk '{print $2}' | xargs -r kill -9 
