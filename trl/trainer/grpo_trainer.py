@@ -872,6 +872,9 @@ class GRPOTrainer(Trainer):
                         reward_func, evaluation_mode=True, device_placement=True
                     )
 
+        # Ensure signature columns are set for VLM support and custom reward functions
+        self._set_signature_columns_if_needed()
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
