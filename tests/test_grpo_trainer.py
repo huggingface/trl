@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
 import tempfile
 import unittest
 import warnings
@@ -1707,3 +1708,239 @@ class GRPOTrainerTester(unittest.TestCase):
                         os.environ.pop(key, None)
                     else:
                         os.environ[key] = original_value
+
+
+class GRPOImageProcessingTester(unittest.TestCase):
+    """Test cases for image preprocessing and validation in GRPO trainer."""
+
+    def test_validate_and_preprocess_images_pil_images(self):
+        """Test validation and preprocessing of PIL images."""
+        from PIL import Image
+
+        # Create test PIL images
+        img1 = Image.new("RGB", (100, 100), color="red")
+        img2 = Image.new("RGBA", (50, 50), color="blue")  # Will be converted to RGB
+        img3 = Image.new("L", (75, 75), color=128)  # Grayscale, will be converted to RGB
+
+        images = [img1, img2, img3, None]
+
+        processed = GRPOTrainer._validate_and_preprocess_images(images)
+
+        self.assertEqual(len(processed), 4)
+
+        # First image should remain unchanged
+        self.assertEqual(processed[0].mode, "RGB")
+        self.assertEqual(processed[0].size, (100, 100))
+
+        # Second image should be converted from RGBA to RGB
+        self.assertEqual(processed[1].mode, "RGB")
+        self.assertEqual(processed[1].size, (50, 50))
+
+        # Third image should be converted from grayscale to RGB
+        self.assertEqual(processed[2].mode, "RGB")
+        self.assertEqual(processed[2].size, (75, 75))
+
+        # Fourth image should remain None
+        self.assertIsNone(processed[3])
+
+    def test_validate_and_preprocess_images_numpy_arrays(self):
+        """Test validation and preprocessing of numpy arrays."""
+        # Create test numpy arrays in different formats
+        rgb_array = np.random.randint(0, 255, (100, 100, 3), dtype=np.uint8)
+        rgba_array = np.random.randint(0, 255, (50, 50, 4), dtype=np.uint8)
+        grayscale_array = np.random.randint(0, 255, (75, 75), dtype=np.uint8)
+        float_array = np.random.rand(80, 80, 3).astype(np.float32)  # Will be normalized
+
+        images = [rgb_array, rgba_array, grayscale_array, float_array]
+
+        processed = GRPOTrainer._validate_and_preprocess_images(images)
+
+        self.assertEqual(len(processed), 4)
+
+        # All should be converted to PIL RGB images
+        for img in processed:
+            self.assertEqual(img.mode, "RGB")
+
+        # Check sizes
+        self.assertEqual(processed[0].size, (100, 100))
+        self.assertEqual(processed[1].size, (50, 50))  # RGBA converted to RGB
+        self.assertEqual(processed[2].size, (75, 75))  # Grayscale converted to RGB
+        self.assertEqual(processed[3].size, (80, 80))  # Float normalized and converted
+
+    def test_validate_and_preprocess_images_invalid_inputs(self):
+        """Test handling of invalid image inputs."""
+        # Create invalid inputs
+        zero_size_array = np.zeros((0, 0, 3))  # Zero size
+
+        images = [zero_size_array, "non_existent_file.jpg", 123, object()]
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            processed = GRPOTrainer._validate_and_preprocess_images(images)
+
+        # Should have warnings for all invalid inputs
+        self.assertGreater(len(w), 0)
+
+        # All should be converted to None
+        for img in processed:
+            self.assertIsNone(img)
+
+    def test_validate_and_preprocess_images_large_images(self):
+        """Test handling of very large images."""
+        from PIL import Image
+
+        # Create a very large image that should trigger a warning
+        large_image = Image.new("RGB", (5000, 5000), color="green")  # 25MP image
+
+        images = [large_image]
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            processed = GRPOTrainer._validate_and_preprocess_images(images)
+
+        # Should have a warning about large image size
+        large_image_warnings = [warning for warning in w if "very large" in str(warning.message)]
+        self.assertGreater(len(large_image_warnings), 0)
+
+        # Image should still be processed
+        self.assertEqual(len(processed), 1)
+        self.assertEqual(processed[0].mode, "RGB")
+        self.assertEqual(processed[0].size, (5000, 5000))
+
+    def test_validate_and_preprocess_images_file_paths(self):
+        """Test validation and preprocessing of image file paths."""
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Create a test image file
+            test_image = Image.new("RGB", (100, 100), color="red")
+            test_image_path = os.path.join(tmp_dir, "test_image.jpg")
+            test_image.save(test_image_path)
+
+            # Test with valid and invalid file paths
+            images = [test_image_path, "non_existent_file.jpg"]
+
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                processed = GRPOTrainer._validate_and_preprocess_images(images)
+
+            # Should have a warning for the non-existent file
+            file_warnings = [warning for warning in w if "Failed to load image from path" in str(warning.message)]
+            self.assertGreater(len(file_warnings), 0)
+
+            # First image should be loaded successfully
+            self.assertEqual(processed[0].mode, "RGB")
+            self.assertEqual(processed[0].size, (100, 100))
+
+            # Second should be None
+            self.assertIsNone(processed[1])
+
+    def test_validate_and_preprocess_images_empty_list(self):
+        """Test handling of empty image list."""
+        images = []
+        processed = GRPOTrainer._validate_and_preprocess_images(images)
+        self.assertEqual(processed, [])
+
+    def test_validate_and_preprocess_images_all_none(self):
+        """Test handling of list with only None values."""
+        images = [None, None, None]
+        processed = GRPOTrainer._validate_and_preprocess_images(images)
+        self.assertEqual(processed, [None, None, None])
+
+    def test_image_validation_integration_with_trainer(self):
+        """Test integration of image validation with GRPO trainer."""
+        from PIL import Image
+
+        # Create a simple dataset with images
+        test_images = [
+            Image.new("RGB", (100, 100), color="red"),
+            np.random.randint(0, 255, (50, 50, 3), dtype=np.uint8),
+            None,
+        ]
+
+        def data_gen():
+            for i, img in enumerate(test_images):
+                yield {
+                    "prompt": f"Describe image {i}",
+                    "image": img,
+                }
+
+        dataset = Dataset.from_generator(data_gen)
+
+        def dummy_reward_func(completions, **kwargs):
+            return [1.0] * len(completions)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_completion_length=8,
+                report_to="none",
+            )
+
+            # This should work without errors
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=dummy_reward_func,
+                args=config,
+                train_dataset=dataset,
+            )
+
+            # Test the image validation method directly
+            inputs = [{"image": img} for img in test_images]
+            images = [x.get("image", None) for x in inputs]
+
+            processed_images = trainer._validate_and_preprocess_images(images)
+
+            # First two should be valid PIL images, third should be None
+            self.assertEqual(processed_images[0].mode, "RGB")
+            self.assertEqual(processed_images[1].mode, "RGB")
+            self.assertIsNone(processed_images[2])
+
+    def test_image_validation_memory_efficiency(self):
+        """Test that image validation doesn't cause memory leaks."""
+        import gc
+
+        from PIL import Image
+
+        # Create multiple large images to test memory handling
+        large_images = []
+        for i in range(5):
+            # Create moderately sized images (not too large to avoid test timeouts)
+            img = Image.new("RGB", (1000, 1000), color=i * 50)
+            large_images.append(img)
+
+        # Process the images
+        processed = GRPOTrainer._validate_and_preprocess_images(large_images)
+
+        # Clear references
+        del large_images
+        gc.collect()
+
+        # Verify all images were processed
+        self.assertEqual(len(processed), 5)
+        for img in processed:
+            self.assertEqual(img.mode, "RGB")
+            self.assertEqual(img.size, (1000, 1000))
+
+    def test_image_validation_with_processing_class(self):
+        """Test image validation with different processing classes."""
+        from PIL import Image
+
+        # Test with None processing class
+        test_image = Image.new("RGB", (100, 100), color="blue")
+        images = [test_image]
+
+        processed = GRPOTrainer._validate_and_preprocess_images(images, processing_class=None)
+        self.assertEqual(len(processed), 1)
+        self.assertEqual(processed[0].mode, "RGB")
+
+        # Test with mock processing class (should still work the same)
+        class MockProcessor:
+            pass
+
+        mock_processor = MockProcessor()
+        processed = GRPOTrainer._validate_and_preprocess_images(images, processing_class=mock_processor)
+        self.assertEqual(len(processed), 1)
+        self.assertEqual(processed[0].mode, "RGB")

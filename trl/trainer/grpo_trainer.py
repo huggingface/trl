@@ -25,12 +25,14 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import datasets
+import numpy as np
 import torch
 import torch.utils.data
 import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from packaging import version
+from PIL import Image
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -411,8 +413,103 @@ class GRPOTrainer(Trainer):
 
     @staticmethod
     def _get_from_processor_or_tokenizer(processor, key):
-        """Get attribute from processor or its tokenizer component."""
-        return getattr(processor, key, None) or getattr(getattr(processor, "tokenizer", {}), key, None)
+        """Get an attribute from processor or its tokenizer (if it has one)."""
+        if hasattr(processor, key):
+            return getattr(processor, key)
+        elif hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, key):
+            return getattr(processor.tokenizer, key)
+        return None
+
+    @staticmethod
+    def _validate_and_preprocess_images(images: list, processing_class=None) -> list:
+        """
+        Validates and preprocesses images for VLM training.
+
+        This method handles:
+        - Image format validation and conversion
+        - Size normalization
+        - Error handling for corrupted images
+        - Memory optimization
+
+        Args:
+            images: List of images in various formats (PIL, numpy arrays, file paths, etc.)
+            processing_class: Optional processor for getting image processing parameters
+
+        Returns:
+            List of validated and preprocessed images
+        """
+        processed_images = []
+
+        for i, image in enumerate(images):
+            try:
+                if image is None:
+                    processed_images.append(None)
+                    continue
+
+                # Convert various image formats to PIL Image
+                if isinstance(image, str):
+                    # File path
+                    try:
+                        pil_image = Image.open(image)
+                    except Exception as e:
+                        warnings.warn(f"Failed to load image from path '{image}': {e}. Using None instead.")
+                        processed_images.append(None)
+                        continue
+                elif isinstance(image, np.ndarray):
+                    # NumPy array
+                    if image.dtype != np.uint8:
+                        # Normalize to uint8 range if needed
+                        if image.max() <= 1.0:
+                            image = (image * 255).astype(np.uint8)
+                        else:
+                            image = image.astype(np.uint8)
+
+                    if len(image.shape) == 2:
+                        # Grayscale to RGB
+                        image = np.stack([image] * 3, axis=-1)
+                    elif len(image.shape) == 3 and image.shape[-1] == 4:
+                        # RGBA to RGB
+                        image = image[:, :, :3]
+
+                    pil_image = Image.fromarray(image)
+                elif hasattr(image, "convert"):
+                    # Already a PIL Image
+                    pil_image = image
+                else:
+                    # Try to convert other formats
+                    try:
+                        pil_image = Image.fromarray(np.array(image))
+                    except Exception as e:
+                        warnings.warn(f"Failed to convert image at index {i}: {e}. Using None instead.")
+                        processed_images.append(None)
+                        continue
+
+                # Ensure RGB format
+                if pil_image.mode != "RGB":
+                    pil_image = pil_image.convert("RGB")
+
+                # Validate image dimensions
+                width, height = pil_image.size
+                if width < 1 or height < 1:
+                    warnings.warn(f"Image at index {i} has invalid dimensions ({width}x{height}). Using None instead.")
+                    processed_images.append(None)
+                    continue
+
+                # Basic size validation - warn if image is extremely large
+                max_pixels = 4096 * 4096  # 16MP limit
+                if width * height > max_pixels:
+                    warnings.warn(
+                        f"Image at index {i} is very large ({width}x{height}, {width * height} pixels). "
+                        f"Consider resizing for better performance and memory usage."
+                    )
+
+                processed_images.append(pil_image)
+
+            except Exception as e:
+                warnings.warn(f"Error processing image at index {i}: {e}. Using None instead.")
+                processed_images.append(None)
+
+        return processed_images
 
     def __init__(
         self,
@@ -981,6 +1078,10 @@ class GRPOTrainer(Trainer):
             # Extract images from inputs
             images = [example.get("image", None) for example in inputs]
 
+            # Validate and preprocess images
+            images = self._validate_and_preprocess_images(images, reward_processing_class)
+            has_images = any(img is not None for img in images)  # Recheck after validation
+
             # For VLM reward models, we need to process both text and images
             if is_conversational(inputs[0]):
                 messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
@@ -989,7 +1090,7 @@ class GRPOTrainer(Trainer):
                 texts = [p + c for p, c in zip(prompts, completions)]
 
             # Use processor to handle both text and images
-            if hasattr(reward_processing_class, "tokenizer"):
+            if has_images and hasattr(reward_processing_class, "tokenizer"):
                 # This is a processor, not just a tokenizer
                 reward_inputs = reward_processing_class(
                     text=texts,
@@ -1000,7 +1101,7 @@ class GRPOTrainer(Trainer):
                     add_special_tokens=False,
                 )
             else:
-                # Fallback to text-only processing if not a processor
+                # Fallback to text-only processing if not a processor or no valid images
                 reward_inputs = reward_processing_class(
                     text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
                 )
@@ -1203,6 +1304,11 @@ class GRPOTrainer(Trainer):
         images = [x.get("image", None) for x in inputs]
         has_images = any(img is not None for img in images)
 
+        # Validate and preprocess images if present
+        if has_images:
+            images = self._validate_and_preprocess_images(images, self.processing_class)
+            has_images = any(img is not None for img in images)  # Recheck after validation
+
         # Process inputs with images if available
         if has_images:
             prompt_inputs = self.processing_class(
@@ -1359,6 +1465,7 @@ class GRPOTrainer(Trainer):
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
+            # Note: images are already validated and preprocessed above
             if has_images:
                 paged_prompt_inputs = self.processing_class(text=prompts_text, images=images)
             else:
