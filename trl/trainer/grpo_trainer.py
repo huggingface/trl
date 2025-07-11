@@ -952,9 +952,11 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             # Base signature columns
             signature_columns = ["prompt"]
-            
+
             # Check if this is a VLM setup (either VLM model OR VLM processor)
-            is_vlm_processor = hasattr(self.processing_class, "tokenizer") and hasattr(self.processing_class, "image_processor")
+            is_vlm_processor = hasattr(self.processing_class, "tokenizer") and hasattr(
+                self.processing_class, "image_processor"
+            )
             if self.is_vision_model or is_vlm_processor:
                 vlm_columns = ["image", "pixel_values", "pixel_attention_mask", "image_sizes"]
                 signature_columns.extend(vlm_columns)
