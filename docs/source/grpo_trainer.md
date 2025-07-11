@@ -549,96 +549,20 @@ The implementation has been tested with popular VLM architectures including:
 
 ### Example Usage
 
-```python
-from datasets import Dataset, Features, Image, Value
-from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
-from peft import LoraConfig
-from trl import GRPOConfig, GRPOTrainer
-import numpy as np
+We have an example script [examples/scripts/grpo_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) that you can use to train a VLM model. For example, to train a VLM model on the [multimodal-open-r1-8k-verified](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified) dataset, you can run the following command:
 
-# Create a VLM dataset
-def create_vlm_dataset():
-    processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct")
-    conversation = [
-        {
-            "role": "user", 
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": "What is in the image?"},
-            ],
-        },
-    ]
-    prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-    
-    def data_gen(num_samples):
-        for _ in range(num_samples):
-            yield {
-                "prompt": prompt,
-                "image": np.random.uniform(low=0.0, high=255.0, size=(224, 224, 3)).astype(np.uint8),
-            }
-    
-    return Dataset.from_generator(
-        data_gen, 
-        gen_kwargs={"num_samples": 16}, 
-        features=Features(image=Image(), prompt=Value(dtype="string"))
-    )
-
-# Configure model with quantization
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_compute_dtype="bfloat16",
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_use_double_quant=True,
-)
-
-model = AutoModelForImageTextToText.from_pretrained(
-    "Qwen/Qwen2-VL-2B-Instruct",
-    torch_dtype="bfloat16",
-    quantization_config=quantization_config,
-)
-
-processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct")
-
-# Define reward function for VLM
-def vlm_reward_func(prompts, completions, **kwargs):
-    # Custom reward logic for VLM outputs
-    return [-((len(c) - 25) ** 2) + 100 for c in completions]
-
-# Configure LoRA for efficient training
-lora_config = LoraConfig(
-    task_type="CAUSAL_LM",
-    r=8,
-    lora_alpha=32,
-    lora_dropout=0.1,
-    target_modules=["q_proj", "v_proj"],
-)
-
-# Training configuration
-training_args = GRPOConfig(
-    output_dir="./vlm_grpo_output",
-    learning_rate=1e-5,
-    per_device_train_batch_size=2,
-    num_generations=4,
-    max_completion_length=32,
-    max_prompt_length=None,  # Allow full length for image tokens
-    use_vllm=True,  # Enable vLLM acceleration
-    vllm_mode="colocate",  # Use colocate mode
-    vllm_gpu_memory_utilization=0.3,
-    report_to="wandb",
-)
-
-# Create trainer
-trainer = GRPOTrainer(
-    model=model,
-    processing_class=processor,  # VLM processor
-    reward_funcs=[vlm_reward_func],
-    args=training_args,
-    train_dataset=create_vlm_dataset(),
-    peft_config=lora_config,
-)
-
-# Start training
-trainer.train()
+```bash
+accelerate launch
+    --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/grpo_vlm.py \
+    --dataset_name lmms-lab/multimodal-open-r1-8k-verified \
+    --model_name_or_path Qwen/Qwen2-VL-2B-Instruct \
+    --per_device_train_batch_size 8 \
+    --output_dir grpo-Qwen2-VL-2B-Instruct \
+    --bf16 true \
+    --torch_dtype bfloat16 \
+    --use_peft \
+    --lora_target_modules "q_proj", "v_proj"
 ```
 
 ### VLM-Specific Configuration
@@ -653,7 +577,7 @@ When training VLMs, consider these configuration options:
 ### Performance Considerations
 
 - **Memory Usage**: VLMs require more memory due to image processing. Use quantization and LoRA for large models
-- **vLLM Support**: VLM models work with vLLM v0.6.1+ in both server and colocate modes
+- **vLLM Support**: Most modern VLM models work with vLLM in both server and colocate modes
 - **Batch Size**: Start with smaller batch sizes due to increased memory requirements from images
 - **Generation Length**: Consider longer max completion lengths for detailed image descriptions
 

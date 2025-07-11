@@ -49,6 +49,7 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
@@ -226,14 +227,47 @@ def split_tensor_dict(
     ```
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
-    chunk_size = first_tensor.shape[0] // num_chunks
-    return [
-        {
-            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
-            for key, tensor in tensor_dict.items()
-        }
-        for i in range(num_chunks)
-    ]
+
+    # Get batch size from first tensor, handling BatchFeature objects
+    if hasattr(first_tensor, "data") and isinstance(first_tensor.data, dict):
+        # BatchFeature object - get batch size from first available tensor in its data
+        batch_size = next(
+            t.shape[0] for t in first_tensor.data.values() if isinstance(t, torch.Tensor) and t.dim() > 0
+        )
+    else:
+        batch_size = first_tensor.shape[0]
+
+    chunk_size = batch_size // num_chunks
+
+    result = []
+    for i in range(num_chunks):
+        chunk = {}
+        for key, tensor in tensor_dict.items():
+            if tensor is None:
+                chunk[key] = None
+            elif hasattr(tensor, "data") and isinstance(tensor.data, dict):
+                # Handle BatchFeature or similar objects from processors
+                chunk_dict = {}
+                for sub_key, sub_tensor in tensor.data.items():
+                    if (
+                        isinstance(sub_tensor, torch.Tensor)
+                        and sub_tensor.dim() > 0
+                        and sub_tensor.shape[0] == batch_size
+                    ):
+                        # Only split tensors that have the expected batch dimension
+                        # This preserves visual metadata and prevents corruption
+                        chunk_dict[sub_key] = sub_tensor[i * chunk_size : (i + 1) * chunk_size]
+                    else:
+                        # Keep scalars, metadata, and tensors with different batch dimensions unchanged
+                        chunk_dict[sub_key] = sub_tensor
+                # Create a new object of the same type with chunked data
+                chunk[key] = type(tensor)(chunk_dict)
+            else:
+                # Regular tensor
+                chunk[key] = tensor[i * chunk_size : (i + 1) * chunk_size]
+        result.append(chunk)
+
+    return result
 
 
 def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
@@ -255,9 +289,40 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     ```
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
-    batch_size = first_tensor.shape[0]
+
+    # Get batch size from first tensor, handling BatchFeature objects
+    if hasattr(first_tensor, "data") and isinstance(first_tensor.data, dict):
+        # BatchFeature object - get batch size from first available tensor in its data
+        batch_size = next(
+            t.shape[0] for t in first_tensor.data.values() if isinstance(t, torch.Tensor) and t.dim() > 0
+        )
+    else:
+        batch_size = first_tensor.shape[0]
+
     permutation = torch.randperm(batch_size)
-    return {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
+
+    result = {}
+    for key, tensor in tensor_dict.items():
+        if tensor is None:
+            result[key] = None
+        elif hasattr(tensor, "data") and isinstance(tensor.data, dict):
+            # Handle BatchFeature or similar objects from processors
+            shuffled_dict = {}
+            for sub_key, sub_tensor in tensor.data.items():
+                if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0 and sub_tensor.shape[0] == batch_size:
+                    # Only shuffle tensors that have the expected batch dimension
+                    # This preserves visual metadata and prevents corruption
+                    shuffled_dict[sub_key] = sub_tensor[permutation]
+                else:
+                    # Keep scalars, metadata, and tensors with different batch dimensions unchanged
+                    shuffled_dict[sub_key] = sub_tensor
+            # Create a new object of the same type with shuffled data
+            result[key] = type(tensor)(shuffled_dict)
+        else:
+            # Regular tensor
+            result[key] = tensor[permutation]
+
+    return result
 
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
@@ -577,8 +642,12 @@ class GRPOTrainer(Trainer):
             model = self._enable_gradient_checkpointing(model, args)
 
         # Processing class
+        self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+            if self.is_vision_model:
+                processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
+            else:
+                processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # Handle pad token for processors or tokenizers
         pad_token = self._get_from_processor_or_tokenizer(processing_class, "pad_token")
@@ -883,10 +952,9 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             # Base signature columns
             signature_columns = ["prompt"]
-
-            # Add VLM-specific columns (inspired by DPO's DataCollatorForPreference)
-            vlm_columns = ["image", "pixel_values", "pixel_attention_mask", "image_sizes"]
-            signature_columns.extend(vlm_columns)
+            if self.is_vision_model:
+                vlm_columns = ["image", "pixel_values", "pixel_attention_mask", "image_sizes"]
+                signature_columns.extend(vlm_columns)
 
             # Additional columns needed based on the reward functions
             for func in self.reward_funcs:
@@ -1016,10 +1084,22 @@ class GRPOTrainer(Trainer):
         return model
 
     @profiling_decorator
-    def _get_last_hidden_state(self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None):
+    def _get_last_hidden_state(
+        self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None, visual_inputs=None
+    ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
-        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+
+        # Build model inputs
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+
+        # Add visual inputs if available (for VLM support)
+        if visual_inputs is not None:
+            for key, value in visual_inputs.items():
+                if key not in ["input_ids", "attention_mask"] and value is not None:
+                    model_inputs[key] = value
+
+        last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
@@ -1027,9 +1107,30 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
-        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
+        self,
+        model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        batch_size=None,
+        compute_entropy=False,
+        visual_inputs=None,
     ) -> dict[str, Optional[torch.Tensor]]:
-        """Compute log‐probs and (optionally) entropies for each token."""
+        """
+        Compute log‐probs and (optionally) entropies for each token.
+
+        Args:
+            model: The model to compute logps with
+            input_ids: Token IDs for the sequences
+            attention_mask: Attention mask for the sequences
+            logits_to_keep: Number of completion tokens to compute logits for
+            batch_size: Batch size for processing (optional)
+            compute_entropy: Whether to compute entropy along with logps (optional)
+            visual_inputs: Visual inputs for VLM models (pixel_values, etc.) (optional)
+
+        Returns:
+            Dictionary containing logps and optionally entropies
+        """
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -1042,6 +1143,16 @@ class GRPOTrainer(Trainer):
                 "input_ids": input_ids_batch,
                 "attention_mask": attention_mask_batch,
             }
+
+            # Add visual inputs if available (for VLM support)
+            if visual_inputs is not None:
+                for key, value in visual_inputs.items():
+                    if key not in ["input_ids", "attention_mask"] and value is not None:
+                        # Slice the visual inputs to match the current batch
+                        if isinstance(value, torch.Tensor) and value.dim() > 0:
+                            model_inputs[key] = value[start : start + batch_size]
+                        else:
+                            model_inputs[key] = value
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1074,8 +1185,9 @@ class GRPOTrainer(Trainer):
 
     def _prepare_inputs_for_reward_module(self, inputs, prompts, completions, reward_processing_class):
         """Prepare inputs for VLM reward modules that require both text and images."""
-        # Check if we have images in the inputs
-        has_images = any("image" in example for example in inputs)
+        has_images = False
+        if self.is_vision_model:
+            has_images = any("image" in example for example in inputs)
 
         if has_images:
             # Extract images from inputs
@@ -1303,14 +1415,16 @@ class GRPOTrainer(Trainer):
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
-        # Extract images if present (for VLM support)
-        images = [x.get("image", None) for x in inputs]
-        has_images = any(img is not None for img in images)
+        has_images = False
+        images = []
+        if self.is_vision_model:
+            images = [x.get("image", None) for x in inputs]
+            has_images = any(img is not None for img in images)
 
-        # Validate and preprocess images if present
-        if has_images:
-            images = self._validate_and_preprocess_images(images, self.processing_class)
-            has_images = any(img is not None for img in images)  # Recheck after validation
+            # Validate and preprocess images if present
+            if has_images:
+                images = self._validate_and_preprocess_images(images, self.processing_class)
+                has_images = any(img is not None for img in images)  # Recheck after validation
 
         # Process inputs with images if available
         if has_images:
@@ -1573,7 +1687,12 @@ class GRPOTrainer(Trainer):
             # per_token_logps.detach() instead.
             if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
                 old_per_token_logps = self._get_per_token_logps_and_entropies(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                    self.model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    logits_to_keep,
+                    batch_size,
+                    visual_inputs=prompt_inputs if has_images else None,
                 )["logps"]
             else:
                 old_per_token_logps = None
@@ -1582,12 +1701,20 @@ class GRPOTrainer(Trainer):
             if self.beta != 0.0:
                 if self.ref_model is not None:
                     ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                        self.ref_model,
+                        prompt_completion_ids,
+                        attention_mask,
+                        logits_to_keep,
+                        visual_inputs=prompt_inputs if has_images else None,
                     )["logps"]
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
                         ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                            self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                            self.model,
+                            prompt_completion_ids,
+                            attention_mask,
+                            logits_to_keep,
+                            visual_inputs=prompt_inputs if has_images else None,
                         )["logps"]
             else:
                 ref_per_token_logps = None
@@ -1669,8 +1796,7 @@ class GRPOTrainer(Trainer):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
-        # Log images if present (for VLM support)
-        if has_images:
+        if self.is_vision_model and has_images:
             if "images" not in self._textual_logs:
                 # Use the same maxlen as other textual logs
                 maxlen = (
@@ -1689,6 +1815,7 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
+            "visual_inputs": prompt_inputs if has_images else None,
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1699,8 +1826,13 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
+        # Extract visual inputs for VLM support
+        visual_inputs = inputs.get("visual_inputs", None)
+
         # get the last hidden state of the model
-        last_hidden_state = self._get_last_hidden_state(unwrapped_model, input_ids, attention_mask, logits_to_keep)
+        last_hidden_state = self._get_last_hidden_state(
+            unwrapped_model, input_ids, attention_mask, logits_to_keep, visual_inputs=visual_inputs
+        )
 
         # compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
@@ -1735,6 +1867,15 @@ class GRPOTrainer(Trainer):
         else:
             return self._compute_loss(model, inputs)
 
+    def _compute_entropy_mask(self, entropies, completion_mask):
+        # compute the entropy threshold across all tokens in the batch
+        non_pad_entropies = entropies[completion_mask.bool()]
+        # disregard pad tokens when computing the entropy threshold
+        entropy_threshold = torch.quantile(non_pad_entropies.float(), self.token_entropy_percentile_threshold)
+        entropies = entropies * completion_mask.float()  # mask out the padding tokens
+        entropy_mask = entropies >= entropy_threshold
+        return entropy_mask
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1743,20 +1884,20 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
+        # Extract visual inputs for VLM support
+        visual_inputs = inputs.get("visual_inputs", None)
+
         # Compute the entropy at each position in the completion
         if self.token_entropy_percentile_threshold > 0.0:
             logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
+                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True, visual_inputs=visual_inputs
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
-            # compute the entropy threshold across all tokens in the batch
-
-            entropy_threshold = torch.quantile(entropies.flatten().float(), self.token_entropy_percentile_threshold)
-            entropy_mask = entropies >= entropy_threshold
+            entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep
+                model, input_ids, attention_mask, logits_to_keep, visual_inputs=visual_inputs
             )["logps"]
             entropy_mask = None
 
@@ -1868,8 +2009,7 @@ class GRPOTrainer(Trainer):
                     "advantage": self._textual_logs["advantages"],
                 }
 
-                # Add images to wandb table if present (for VLM support)
-                if "images" in self._textual_logs and len(self._textual_logs["images"]) > 0:
+                if self.is_vision_model and "images" in self._textual_logs and len(self._textual_logs["images"]) > 0:
                     # Convert images to wandb Image objects for proper visualization
                     wandb_images = []
                     for img in self._textual_logs["images"]:
