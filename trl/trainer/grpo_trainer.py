@@ -249,9 +249,16 @@ def split_tensor_dict(
                 # Handle BatchFeature or similar objects from processors
                 chunk_dict = {}
                 for sub_key, sub_tensor in tensor.data.items():
-                    if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0:
+                    if (
+                        isinstance(sub_tensor, torch.Tensor)
+                        and sub_tensor.dim() > 0
+                        and sub_tensor.shape[0] == batch_size
+                    ):
+                        # Only split tensors that have the expected batch dimension
+                        # This preserves visual metadata and prevents corruption
                         chunk_dict[sub_key] = sub_tensor[i * chunk_size : (i + 1) * chunk_size]
                     else:
+                        # Keep scalars, metadata, and tensors with different batch dimensions unchanged
                         chunk_dict[sub_key] = sub_tensor
                 # Create a new object of the same type with chunked data
                 chunk[key] = type(tensor)(chunk_dict)
@@ -302,9 +309,12 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
             # Handle BatchFeature or similar objects from processors
             shuffled_dict = {}
             for sub_key, sub_tensor in tensor.data.items():
-                if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0:
+                if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0 and sub_tensor.shape[0] == batch_size:
+                    # Only shuffle tensors that have the expected batch dimension
+                    # This preserves visual metadata and prevents corruption
                     shuffled_dict[sub_key] = sub_tensor[permutation]
                 else:
+                    # Keep scalars, metadata, and tensors with different batch dimensions unchanged
                     shuffled_dict[sub_key] = sub_tensor
             # Create a new object of the same type with shuffled data
             result[key] = type(tensor)(shuffled_dict)

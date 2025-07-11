@@ -78,12 +78,14 @@ class SplitTensorDictTester(unittest.TestCase):
 
     def test_split_with_batch_feature(self):
         """Test splitting with BatchFeature objects (for VLM support)"""
-        # Create a BatchFeature object similar to what a processor would return
+        # Create a BatchFeature object with mixed data types like real VLM processors
         batch_feature = BatchFeature(
             {
-                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),
-                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]),
-                "pixel_values": torch.randn(4, 3, 224, 224),
+                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),  # batch_size=4
+                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]),  # batch_size=4
+                "pixel_values": torch.randn(4, 3, 224, 224),  # batch_size=4
+                "image_sizes": torch.tensor([[224, 224], [224, 224]]),  # Different batch size - should be preserved
+                "spatial_merge_size": 2,  # Scalar - should be preserved
             }
         )
 
@@ -99,17 +101,18 @@ class SplitTensorDictTester(unittest.TestCase):
         # Check that each chunk has the correct structure
         for i in range(2):
             self.assertIsInstance(result[i]["visual_inputs"], BatchFeature)
-            self.assertEqual(
-                set(result[i]["visual_inputs"].data.keys()), {"input_ids", "attention_mask", "pixel_values"}
-            )
+            expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_sizes", "spatial_merge_size"}
+            self.assertEqual(set(result[i]["visual_inputs"].data.keys()), expected_keys)
 
-            # Check chunk sizes (should be 2 for each chunk)
             self.assertEqual(result[i]["visual_inputs"]["input_ids"].shape, (2, 3))
             self.assertEqual(result[i]["visual_inputs"]["attention_mask"].shape, (2, 3))
             self.assertEqual(result[i]["visual_inputs"]["pixel_values"].shape, (2, 3, 224, 224))
             self.assertEqual(result[i]["prompt_ids"].shape, (2, 2))
 
-        # Check that the data is correctly split
+            self.assertTrue(torch.equal(result[i]["visual_inputs"]["image_sizes"], batch_feature["image_sizes"]))
+            self.assertEqual(result[i]["visual_inputs"]["spatial_merge_size"], batch_feature["spatial_merge_size"])
+
+        # Check that the main data is correctly split
         # First chunk should have first 2 samples, second chunk should have last 2 samples
         self.assertTrue(torch.equal(result[0]["visual_inputs"]["input_ids"], batch_feature["input_ids"][:2]))
         self.assertTrue(torch.equal(result[1]["visual_inputs"]["input_ids"], batch_feature["input_ids"][2:]))
@@ -163,9 +166,11 @@ class ShuffleTensorDictTester(unittest.TestCase):
         """Test shuffling with BatchFeature objects (for VLM support)"""
         batch_feature = BatchFeature(
             {
-                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
-                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]]),
-                "pixel_values": torch.randn(3, 3, 224, 224),
+                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),  # batch_size=3
+                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]]),  # batch_size=3
+                "pixel_values": torch.randn(3, 3, 224, 224),  # batch_size=3
+                "image_sizes": torch.tensor([[224, 224], [224, 224]]),  # Different batch size - should be preserved
+                "spatial_merge_size": 2,  # Scalar - should be preserved
             }
         )
 
@@ -175,12 +180,18 @@ class ShuffleTensorDictTester(unittest.TestCase):
         shuffled = shuffle_tensor_dict(tensor_dict)
 
         self.assertIsInstance(shuffled["visual_inputs"], BatchFeature)
-        self.assertEqual(set(shuffled["visual_inputs"].data.keys()), {"input_ids", "attention_mask", "pixel_values"})
+        expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_sizes", "spatial_merge_size"}
+        self.assertEqual(set(shuffled["visual_inputs"].data.keys()), expected_keys)
 
+        # Check that shapes are preserved for main tensors
         self.assertEqual(shuffled["visual_inputs"]["input_ids"].shape, (3, 3))
         self.assertEqual(shuffled["visual_inputs"]["attention_mask"].shape, (3, 3))
         self.assertEqual(shuffled["visual_inputs"]["pixel_values"].shape, (3, 3, 224, 224))
         self.assertEqual(shuffled["prompt_ids"].shape, (3, 2))
+
+        # Check that metadata is preserved (not shuffled)
+        self.assertTrue(torch.equal(shuffled["visual_inputs"]["image_sizes"], batch_feature["image_sizes"]))
+        self.assertEqual(shuffled["visual_inputs"]["spatial_merge_size"], batch_feature["spatial_merge_size"])
 
         # Check that shuffling is consistent between regular tensor and BatchFeature
         # (they should be shuffled with the same permutation)
