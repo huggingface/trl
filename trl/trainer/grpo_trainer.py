@@ -1361,20 +1361,23 @@ class GRPOTrainer(Trainer):
         self, generation_batch: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
-        # During training:
-        #   - Receives the local generation batch (Per-GPU batch size × steps per generation)
-        #     from the modified training dataloader instead of the standard local batch
-        #   - Generates completions once for the entire generation batch and splits it into batches of size
-        #     `per_device_train_batch_size`
-        #   - Buffers these completions and returns the appropriate slice for the current accumulation step
-        #   - Optimizes by regenerating completions only periodically (every steps_per_generation * num_iterations)
-        # During evaluation:
-        #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
-        #   - Completions are generated for each batch without buffering or reuse
-        # Returns a single local batch in both cases.
+        # Uses different strategies based on whether we're dealing with VLM or LLM data:
+        # - VLM Mode: Simple regeneration per step to avoid corrupting visual data structures
+        # - LLM Mode: Full buffering/shuffling/splitting for efficiency (preserves all existing features)
 
-        mode = "train" if self.model.training else "eval"
-        if mode == "train":
+        if self.is_vision_model or self._has_visual_inputs(generation_batch):
+            return self._prepare_inputs_vlm_mode(generation_batch)
+        else:
+            return self._prepare_inputs_llm_mode(generation_batch)
+
+    def _prepare_inputs_llm_mode(
+        self, generation_batch: dict[str, Union[torch.Tensor, Any]]
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        """
+        Original LLM-optimized input preparation with full buffering, shuffling, and splitting.
+        Preserves all existing efficiency features for text-only models.
+        """
+        if self.model.training:
             generate_every = self.args.steps_per_generation * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
@@ -1386,6 +1389,27 @@ class GRPOTrainer(Trainer):
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
             # local generation batch == local eval batch
+            inputs = self._generate_and_score_completions(generation_batch)
+        return inputs
+
+    def _prepare_inputs_vlm_mode(
+        self, generation_batch: dict[str, Union[torch.Tensor, Any]]
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        """
+        VLM-safe input preparation that preserves visual data structures while maintaining training benefits.
+        Uses BatchFeature-aware shuffling and splitting to avoid corrupting visual data.
+        """
+        mode = "train" if self.model.training else "eval"
+        if mode == "train":
+            generate_every = self.args.steps_per_generation * self.num_iterations
+            if self._step % generate_every == 0 or self._buffered_inputs is None:
+                generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = shuffle_tensor_dict(generation_batch)
+                self._buffered_inputs = self._split_vlm_batch_safely(generation_batch, self.args.steps_per_generation)
+
+            inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
+            self._step += 1
+        else:
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
@@ -1406,7 +1430,6 @@ class GRPOTrainer(Trainer):
         ):
             with profiling_context(self, reward_func_name):
                 if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
-                    # Use the new VLM-aware method for preparing reward inputs
                     reward_inputs = self._prepare_inputs_for_reward_module(
                         inputs, prompts, completions, reward_processing_class
                     )
@@ -1452,13 +1475,10 @@ class GRPOTrainer(Trainer):
         if self.is_vision_model:
             images = [x.get("image", None) for x in inputs]
             has_images = any(img is not None for img in images)
-
-            # Validate and preprocess images if present
             if has_images:
                 images = self._validate_and_preprocess_images(images, self.processing_class)
-                has_images = any(img is not None for img in images)  # Recheck after validation
+                has_images = any(img is not None for img in images)
 
-        # Process inputs with images if available
         if has_images:
             prompt_inputs = self.processing_class(
                 text=prompts_text,
@@ -1487,9 +1507,7 @@ class GRPOTrainer(Trainer):
             pad_token = self._get_from_processor_or_tokenizer(self.processing_class, "pad_token")
             prompts_text = [re.sub(rf"^({re.escape(pad_token)})+", "", text) for text in prompts_text]
 
-        # Generate completions using either vLLM or regular generation
         if self.use_vllm:
-            # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
@@ -1498,7 +1516,6 @@ class GRPOTrainer(Trainer):
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
 
-                # For VLM support, also gather images if present
                 if has_images:
                     all_images = gather_object(images)
                 else:
@@ -1510,7 +1527,6 @@ class GRPOTrainer(Trainer):
                     # prompt individually.
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
 
-                    # Prepare generation inputs for vLLM
                     generation_inputs = {
                         "prompts": ordered_set_of_prompts,
                         "n": self.num_generations,
@@ -1524,7 +1540,6 @@ class GRPOTrainer(Trainer):
                         "generation_kwargs": self.args.generation_kwargs,
                     }
 
-                    # Add images for VLM support
                     if has_images and all_images:
                         ordered_set_of_images = all_images[:: self.num_generations]
                         generation_inputs["images"] = ordered_set_of_images
@@ -1572,7 +1587,6 @@ class GRPOTrainer(Trainer):
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
                     all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
 
-                    # Also gather images if present
                     if has_images:
                         gathered_images = [None for _ in range(self.vllm_tensor_parallel_size)]
                         torch.distributed.all_gather_object(gathered_images, images, group=self.tp_group)
@@ -1583,9 +1597,7 @@ class GRPOTrainer(Trainer):
                     all_prompts_text = prompts_text
                     all_images = images if has_images else None
 
-                # Prepare inputs for vLLM generation
                 if has_images and all_images:
-                    # For VLM models, create multi-modal inputs
                     vllm_inputs = []
                     for prompt, image in zip(all_prompts_text, all_images):
                         if image is not None:
@@ -2134,3 +2146,106 @@ class GRPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+    def _has_visual_inputs(self, inputs: Union[dict, list]) -> bool:
+        """
+        Detect if the current batch contains visual inputs that require special handling.
+
+        Args:
+            inputs: Either a dictionary with visual_inputs key or a list of dicts with image/pixel_values
+
+        Returns:
+            bool: True if visual inputs are detected, False otherwise
+        """
+        if isinstance(inputs, dict):
+            # Check if we have visual_inputs key (processed batch)
+            if "visual_inputs" in inputs:
+                return inputs["visual_inputs"] is not None
+            # Check for raw visual keys
+            return any(key in inputs for key in ["image", "pixel_values", "pixel_attention_mask"])
+        elif isinstance(inputs, list):
+            # Check if any sample in the batch has visual data
+            if not inputs:
+                return False
+            return any(
+                any(key in sample for key in ["image", "pixel_values", "pixel_attention_mask"]) for sample in inputs
+            )
+        return False
+
+    def _split_vlm_batch_safely(
+        self, tensor_dict: dict[str, Union[torch.Tensor, Any]], num_chunks: int
+    ) -> list[dict[str, Union[torch.Tensor, Any]]]:
+        """
+        VLM-safe batch splitting that preserves BatchFeature objects and visual data integrity.
+
+        This method:
+        1. Handles BatchFeature objects without corrupting internal structure
+        2. Splits regular tensors normally
+        3. Preserves non-tensor data (scalars, metadata) in each chunk
+        4. Maintains visual data relationships
+
+        Args:
+            tensor_dict: Dictionary containing tensors and BatchFeature objects
+            num_chunks: Number of chunks to split into
+
+        Returns:
+            List of dictionaries, each representing a chunk
+        """
+        # Find batch size from the first available tensor
+        batch_size = None
+        for _key, value in tensor_dict.items():
+            if isinstance(value, torch.Tensor) and value.dim() > 0:
+                batch_size = value.shape[0]
+                break
+            elif hasattr(value, "data") and isinstance(value.data, dict):
+                # BatchFeature object
+                for sub_tensor in value.data.values():
+                    if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0:
+                        batch_size = sub_tensor.shape[0]
+                        break
+                if batch_size is not None:
+                    break
+
+        if batch_size is None:
+            raise ValueError("Could not determine batch size from tensor_dict")
+
+        chunk_size = batch_size // num_chunks
+        if chunk_size == 0:
+            raise ValueError(f"Cannot split batch of size {batch_size} into {num_chunks} chunks")
+
+        chunks = []
+        for i in range(num_chunks):
+            start_idx = i * chunk_size
+            end_idx = (i + 1) * chunk_size if i < num_chunks - 1 else batch_size
+
+            chunk = {}
+            for key, value in tensor_dict.items():
+                if value is None:
+                    chunk[key] = None
+                elif isinstance(value, torch.Tensor) and value.dim() > 0:
+                    # Regular tensor - slice normally
+                    chunk[key] = value[start_idx:end_idx]
+                elif hasattr(value, "data") and isinstance(value.data, dict):
+                    # BatchFeature object - slice each tensor in its data
+                    from transformers import BatchFeature
+
+                    chunk_data = {}
+                    for sub_key, sub_tensor in value.data.items():
+                        if (
+                            isinstance(sub_tensor, torch.Tensor)
+                            and sub_tensor.dim() > 0
+                            and sub_tensor.shape[0] == batch_size
+                        ):
+                            # Only slice tensors that match the batch size
+                            chunk_data[sub_key] = sub_tensor[start_idx:end_idx]
+                        else:
+                            # Keep non-batchable data as-is (metadata, scalars, etc.)
+                            chunk_data[sub_key] = sub_tensor
+                    chunk[key] = BatchFeature(chunk_data)
+                else:
+                    # Non-tensor data (scalars, metadata) - keep as-is
+                    chunk[key] = value
+
+            chunks.append(chunk)
+
+        return chunks
