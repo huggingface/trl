@@ -666,6 +666,13 @@ class GRPOTrainer(Trainer):
                         ]
                     )
 
+                # vLLM requires the environment variables to be set for distributed training.
+                os.environ["RANK"] = str(self.accelerator.process_index)
+                os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
+                os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
+                os.environ["MASTER_ADDR"] = "localhost"
+                os.environ["MASTER_PORT"] = "12345"
+
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
