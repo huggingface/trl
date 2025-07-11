@@ -227,14 +227,40 @@ def split_tensor_dict(
     ```
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
-    chunk_size = first_tensor.shape[0] // num_chunks
-    return [
-        {
-            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
-            for key, tensor in tensor_dict.items()
-        }
-        for i in range(num_chunks)
-    ]
+
+    # Get batch size from first tensor, handling BatchFeature objects
+    if hasattr(first_tensor, "data") and isinstance(first_tensor.data, dict):
+        # BatchFeature object - get batch size from first available tensor in its data
+        batch_size = next(
+            t.shape[0] for t in first_tensor.data.values() if isinstance(t, torch.Tensor) and t.dim() > 0
+        )
+    else:
+        batch_size = first_tensor.shape[0]
+
+    chunk_size = batch_size // num_chunks
+
+    result = []
+    for i in range(num_chunks):
+        chunk = {}
+        for key, tensor in tensor_dict.items():
+            if tensor is None:
+                chunk[key] = None
+            elif hasattr(tensor, "data") and isinstance(tensor.data, dict):
+                # Handle BatchFeature or similar objects from processors
+                chunk_dict = {}
+                for sub_key, sub_tensor in tensor.data.items():
+                    if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0:
+                        chunk_dict[sub_key] = sub_tensor[i * chunk_size : (i + 1) * chunk_size]
+                    else:
+                        chunk_dict[sub_key] = sub_tensor
+                # Create a new object of the same type with chunked data
+                chunk[key] = type(tensor)(chunk_dict)
+            else:
+                # Regular tensor
+                chunk[key] = tensor[i * chunk_size : (i + 1) * chunk_size]
+        result.append(chunk)
+
+    return result
 
 
 def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
@@ -256,9 +282,37 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     ```
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
-    batch_size = first_tensor.shape[0]
+
+    # Get batch size from first tensor, handling BatchFeature objects
+    if hasattr(first_tensor, "data") and isinstance(first_tensor.data, dict):
+        # BatchFeature object - get batch size from first available tensor in its data
+        batch_size = next(
+            t.shape[0] for t in first_tensor.data.values() if isinstance(t, torch.Tensor) and t.dim() > 0
+        )
+    else:
+        batch_size = first_tensor.shape[0]
+
     permutation = torch.randperm(batch_size)
-    return {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
+
+    result = {}
+    for key, tensor in tensor_dict.items():
+        if tensor is None:
+            result[key] = None
+        elif hasattr(tensor, "data") and isinstance(tensor.data, dict):
+            # Handle BatchFeature or similar objects from processors
+            shuffled_dict = {}
+            for sub_key, sub_tensor in tensor.data.items():
+                if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0:
+                    shuffled_dict[sub_key] = sub_tensor[permutation]
+                else:
+                    shuffled_dict[sub_key] = sub_tensor
+            # Create a new object of the same type with shuffled data
+            result[key] = type(tensor)(shuffled_dict)
+        else:
+            # Regular tensor
+            result[key] = tensor[permutation]
+
+    return result
 
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:

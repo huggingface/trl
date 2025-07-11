@@ -27,6 +27,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BatchFeature,
     BitsAndBytesConfig,
 )
 from transformers.testing_utils import (
@@ -75,6 +76,46 @@ class SplitTensorDictTester(unittest.TestCase):
             self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
             self.assertIsNone(result[i]["y"])
 
+    def test_split_with_batch_feature(self):
+        """Test splitting with BatchFeature objects (for VLM support)"""
+        # Create a BatchFeature object similar to what a processor would return
+        batch_feature = BatchFeature(
+            {
+                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),
+                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]),
+                "pixel_values": torch.randn(4, 3, 224, 224),
+            }
+        )
+
+        regular_tensor = torch.arange(8).reshape(4, 2)
+        tensor_dict = {"visual_inputs": batch_feature, "prompt_ids": regular_tensor}
+
+        # Split into 2 chunks
+        result = split_tensor_dict(tensor_dict, 2)
+
+        # Check that we get 2 chunks
+        self.assertEqual(len(result), 2)
+
+        # Check that each chunk has the correct structure
+        for i in range(2):
+            self.assertIsInstance(result[i]["visual_inputs"], BatchFeature)
+            self.assertEqual(
+                set(result[i]["visual_inputs"].data.keys()), {"input_ids", "attention_mask", "pixel_values"}
+            )
+
+            # Check chunk sizes (should be 2 for each chunk)
+            self.assertEqual(result[i]["visual_inputs"]["input_ids"].shape, (2, 3))
+            self.assertEqual(result[i]["visual_inputs"]["attention_mask"].shape, (2, 3))
+            self.assertEqual(result[i]["visual_inputs"]["pixel_values"].shape, (2, 3, 224, 224))
+            self.assertEqual(result[i]["prompt_ids"].shape, (2, 2))
+
+        # Check that the data is correctly split
+        # First chunk should have first 2 samples, second chunk should have last 2 samples
+        self.assertTrue(torch.equal(result[0]["visual_inputs"]["input_ids"], batch_feature["input_ids"][:2]))
+        self.assertTrue(torch.equal(result[1]["visual_inputs"]["input_ids"], batch_feature["input_ids"][2:]))
+        self.assertTrue(torch.equal(result[0]["prompt_ids"], regular_tensor[:2]))
+        self.assertTrue(torch.equal(result[1]["prompt_ids"], regular_tensor[2:]))
+
 
 class ShuffleTensorDictTester(unittest.TestCase):
     def test_shuffle_preserves_shape(self):
@@ -117,6 +158,45 @@ class ShuffleTensorDictTester(unittest.TestCase):
 
         self.assertIsNone(shuffled["y"])
         self.assertEqual(shuffled["x"].shape, x.shape)
+
+    def test_shuffle_with_batch_feature(self):
+        """Test shuffling with BatchFeature objects (for VLM support)"""
+        batch_feature = BatchFeature(
+            {
+                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
+                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]]),
+                "pixel_values": torch.randn(3, 3, 224, 224),
+            }
+        )
+
+        regular_tensor = torch.tensor([[10, 11], [12, 13], [14, 15]])
+        tensor_dict = {"visual_inputs": batch_feature, "prompt_ids": regular_tensor}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        self.assertIsInstance(shuffled["visual_inputs"], BatchFeature)
+        self.assertEqual(set(shuffled["visual_inputs"].data.keys()), {"input_ids", "attention_mask", "pixel_values"})
+
+        self.assertEqual(shuffled["visual_inputs"]["input_ids"].shape, (3, 3))
+        self.assertEqual(shuffled["visual_inputs"]["attention_mask"].shape, (3, 3))
+        self.assertEqual(shuffled["visual_inputs"]["pixel_values"].shape, (3, 3, 224, 224))
+        self.assertEqual(shuffled["prompt_ids"].shape, (3, 2))
+
+        # Check that shuffling is consistent between regular tensor and BatchFeature
+        # (they should be shuffled with the same permutation)
+        original_input_ids = batch_feature["input_ids"]
+        shuffled_input_ids = shuffled["visual_inputs"]["input_ids"]
+        shuffled_prompt_ids = shuffled["prompt_ids"]
+
+        for i in range(3):
+            original_pos = None
+            for j in range(3):
+                if torch.equal(shuffled_input_ids[i], original_input_ids[j]):
+                    original_pos = j
+                    break
+
+            self.assertIsNotNone(original_pos, "Could not find matching original position")
+            self.assertTrue(torch.equal(shuffled_prompt_ids[i], regular_tensor[original_pos]))
 
 
 class RepeatRandomSamplerTester(unittest.TestCase):
