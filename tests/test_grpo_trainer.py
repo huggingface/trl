@@ -11,16 +11,20 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 import tempfile
 import unittest
 import warnings
+from unittest.mock import patch
 
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
     AutoProcessor,
+    AutoTokenizer,
     BatchFeature,
 )
 from transformers.testing_utils import (
@@ -31,9 +35,11 @@ from transformers.utils import is_peft_available
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.grpo_trainer import RepeatSampler, shuffle_tensor_dict, split_tensor_dict
 
+from .testing_utils import require_vllm
+
 
 if is_peft_available():
-    from peft import LoraConfig
+    from peft import LoraConfig, PeftModel
 
 
 class SplitTensorDictTester(unittest.TestCase):
@@ -50,6 +56,18 @@ class SplitTensorDictTester(unittest.TestCase):
         for i in range(3):
             self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
             self.assertTrue(torch.equal(result[i]["y"], expected_y_chunks[i]))
+
+    def test_with_none_tensor(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": None}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        self.assertEqual(len(result), 2)
+        for i in range(2):
+            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
+            self.assertIsNone(result[i]["y"])
 
     def test_split_with_batch_feature(self):
         batch_feature = BatchFeature(
@@ -86,6 +104,16 @@ class SplitTensorDictTester(unittest.TestCase):
 
 
 class ShuffleTensorDictTester(unittest.TestCase):
+    def test_shuffle_preserves_shape(self):
+        x = torch.arange(6).reshape(3, 2)
+        y = torch.arange(3).reshape(3, 1)
+        tensor_dict = {"x": x.clone(), "y": y.clone()}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        self.assertEqual(shuffled["x"].shape, x.shape)
+        self.assertEqual(shuffled["y"].shape, y.shape)
+
     def test_shuffle_consistent_across_tensors(self):
         x = torch.tensor([[10, 11], [20, 21], [30, 31]])
         y = torch.tensor([[1], [2], [3]])
@@ -105,6 +133,15 @@ class ShuffleTensorDictTester(unittest.TestCase):
                 self.assertEqual(y_val, 3)
             else:
                 self.fail("Unexpected x row in shuffled output.")
+
+    def test_none_tensor_remains_none(self):
+        x = torch.arange(6).reshape(3, 2)
+        tensor_dict = {"x": x.clone(), "y": None}
+
+        shuffled = shuffle_tensor_dict(tensor_dict)
+
+        self.assertIsNone(shuffled["y"])
+        self.assertEqual(shuffled["x"].shape, x.shape)
 
     def test_shuffle_with_batch_feature(self):
         batch_feature = BatchFeature(
@@ -155,6 +192,20 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         assert set(sampled) == set(range(len(dataset)))
         assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
 
+    def test_sampler_no_shuffle(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, shuffle=False)
+        sampled = list(sampler)
+        expected = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
+        self.assertEqual(sampled, expected)
+
+    def test_sampler_no_repeat(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=1)
+        sampled = list(sampler)
+        assert len(sampled) == len(dataset)
+        assert set(sampled) == set(range(len(dataset)))
+
     def test_sampler_with_batch_size(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g", "h"]
         sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
@@ -162,6 +213,46 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         assert len(sampled) == 2 * len(dataset)
         assert set(sampled) == set(range(len(dataset)))
         assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
+
+    def test_sampler_with_batch_size_and_drop(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        sampled = list(sampler)
+        assert len(sampled) == 2 * (len(dataset) - 1)
+        assert set(sampled).issubset(set(range(len(dataset))))
+        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_1(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
+        sampled = list(sampler)
+        assert len(sampled) == 4 * (len(dataset) - 1)
+        assert set(sampled).issubset(set(range(len(dataset))))
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        assert sampled[0:6] == sampled[6:12]
+        assert sampled[12:18] == sampled[18:24]
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_2(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
+        sampled = list(sampler)
+        assert len(sampled) == 6 * (len(dataset) - 1)
+        assert set(sampled).issubset(set(range(len(dataset))))
+        assert all(sampled[i] == sampled[i + 1] == sampled[i + 2] for i in range(0, len(sampled), 3))
+        assert sampled[0:6] == sampled[6:12]
+        assert sampled[12:18] == sampled[18:24]
+        assert sampled[24:30] == sampled[30:36]
+
+    def test_sampler_with_mini_repeat_count_and_batch_size_3(self):
+        dataset = ["a", "b", "c", "d", "e", "f", "g"]
+        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
+        sampled = list(sampler)
+        assert len(sampled) == 6 * (len(dataset) - 1)
+        assert set(sampled).issubset(set(range(len(dataset))))
+        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        assert sampled[0:4] == sampled[4:8] == sampled[8:12]
+        assert sampled[12:16] == sampled[16:20] == sampled[20:24]
+        assert sampled[24:28] == sampled[28:32] == sampled[32:36]
 
 
 class GRPOTrainerTester(unittest.TestCase):
@@ -184,6 +275,35 @@ class GRPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=3,
                 num_generations=3,
                 max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @parameterized.expand([("bnpo",), ("dr_grpo",)])
+    def test_training_loss_types(self, loss_type):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=32,
+                loss_type=loss_type,
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -224,6 +344,34 @@ class GRPOTrainerTester(unittest.TestCase):
             )
             trainer.train()
 
+    def test_training_multiple_iterations(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                num_iterations=2,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
     @require_peft
     def test_training_peft(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -258,6 +406,142 @@ class GRPOTrainerTester(unittest.TestCase):
                 elif "base_layer" not in n:
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
+    @require_peft
+    def test_training_peft_with_gradient_checkpointing(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            torch_dtype=torch.float32,
+            use_cache=False,
+        )
+
+        lora_config = LoraConfig(
+            r=8, lora_alpha=32, target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none"
+        )
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                gradient_checkpointing=True,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
+
+            self.assertIsInstance(trainer.model, PeftModel)
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if "lora" in n.lower():
+                    self.assertFalse(torch.equal(param, new_param), f"LoRA parameter {n} has not changed.")
+                else:
+                    self.assertTrue(torch.equal(param, new_param), f"Base parameter {n} has changed.")
+
+    def test_training_different_reward_model(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+        reward_model_id = "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2"
+        reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id)
+        reward_tokenizer = AutoTokenizer.from_pretrained(reward_model_id)
+        reward_tokenizer.pad_token = "<|finetune_right_pad_id|>"
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_model,
+                reward_processing_classes=reward_tokenizer,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_reward_func_standard(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(set(completion))) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_reward_func_conversational(self):
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(set(completion[0]["content"]))) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
     def test_training_multiple_reward_funcs(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -290,6 +574,644 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_multiple_reward_funcs_with_None_output(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def applicable_reward_func(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        def non_applicable_reward_func(completions, **kwargs):
+            return [None for _ in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=[applicable_reward_func, non_applicable_reward_func],
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_multiple_reward_funcs_with_weights(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func1(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        def reward_func2(completions, **kwargs):
+            return [float(len(set(completion))) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                reward_weights=[0.3, 0.7],
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=[reward_func1, reward_func2],
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_multiple_mixed_reward_funcs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            return [float(len(completion)) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=[reward_func, "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"],
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_reward_func_additional_column(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = dataset.map(lambda x: {"some_values": list(range(10))})
+
+        def reward_func(completions, some_values, **kwargs):
+            return [float(len(completion)) + sum(some_values) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                remove_unused_columns=False,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_vllm
+    @unittest.skip("We should add a mock for the vLLM server.")
+    def test_training_vllm(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+                use_vllm=True,
+            )
+
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_sync_ref_model(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                sync_ref_model=True,
+                ref_model_mixup_alpha=0.6,
+                ref_model_sync_steps=2,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_beta_non_zero(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                beta=0.1,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_entropy_filter(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                token_entropy_percentile_threshold=0.8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @unittest.skip("We should add a mock for the vLLM server.")
+    @require_peft
+    @require_vllm
+    def test_training_vllm_and_peft(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+                use_vllm=True,
+            )
+
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if "lora" in n:
+                    self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_vllm
+    @unittest.skip("We should add a mock for the vLLM server.")
+    def test_training_vllm_guided_decoding(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+                use_vllm=True,
+                vllm_guided_decoding_regex=r"^[A-Za-z0-9 ]+$",
+            )
+
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_additional_generation_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+                top_p=0.9,
+                top_k=10,
+                min_p=0.01,
+                repetition_penalty=1.1,
+            )
+
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_vllm
+    @unittest.skip("We should add a mock for the vLLM server.")
+    def test_training_vllm_with_additional_generation_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                report_to="none",
+                use_vllm=True,
+                top_p=0.9,
+                top_k=10,
+                min_p=0.01,
+                repetition_penalty=1.1,
+            )
+
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_no_scale_rewards(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                scale_rewards=False,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @patch("transformers.generation.utils.GenerationMixin.generate")
+    def test_training_with_mask_truncated_completions(self, mock_generate):
+        def fake_generate(prompt_ids, **kwargs):
+            completions_ids = torch.tensor(
+                [
+                    [1, 2, 3, 4, 5, 6, 7, 8],
+                    [9, 10, 11, 151645, 151643, 151643, 151643, 151643],
+                    [12, 13, 14, 15, 16, 17, 18, 151645],
+                ],
+                device=prompt_ids.device,
+            )
+            return torch.cat([prompt_ids, completions_ids], dim=1)
+
+        mock_generate.side_effect = fake_generate
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                mask_truncated_completions=True,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_mask_truncated_completions_all_masked(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                mask_truncated_completions=True,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
+
+    def test_training_num_generations_larger_than_batch_size(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                max_completion_length=8,
+                num_generations=6,
+                gradient_accumulation_steps=2,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_delta_clipping(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                delta=2.0,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_multiple_dataloader_workers(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                dataloader_num_workers=2,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_generation_kwargs(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=8,
+                generation_kwargs={"do_sample": True, "top_k": 50, "length_penalty": -0.1},
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_reward_func_accessing_trainer_state(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            trainer_state = kwargs.get("trainer_state")
+            assert trainer_state is not None
+            assert hasattr(trainer_state, "global_step")
+            return [float(len(set(completion))) for completion in completions]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                num_generations=2,
+                max_completion_length=8,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_func,
+                args=training_args,
+                train_dataset=dataset,
+            )
+            trainer.train()
+
+    def test_compute_entropy_mask(self):
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=GRPOConfig(token_entropy_percentile_threshold=0.8),
+        )
+
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        completion_mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
+
+        entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
+
+        self.assertEqual(entropy_mask.shape, entropies.shape)
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 1, 1, 0, 0]], dtype=torch.bool)
+        self.assertTrue(torch.equal(entropy_mask, expected_mask))
+
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
+        completion_mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
+
+        expected_mask = torch.tensor([[0, 0, 0, 1, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
+        entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
+
+        self.assertTrue(torch.equal(entropy_mask, expected_mask))
 
     @parameterized.expand([("Qwen/Qwen2-VL-2B-Instruct",), ("HuggingFaceTB/SmolVLM-Instruct",)])
     def test_vlm_processor_detection(self, processor_model_name):
