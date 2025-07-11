@@ -1016,10 +1016,20 @@ class GRPOTrainer(Trainer):
         return model
 
     @profiling_decorator
-    def _get_last_hidden_state(self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None):
+    def _get_last_hidden_state(
+        self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None, visual_inputs=None
+    ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
-        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+
+        # Build model inputs
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if visual_inputs is not None:
+            for key, value in visual_inputs.items():
+                if key not in ["input_ids", "attention_mask"] and value is not None:
+                    model_inputs[key] = value
+
+        last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
@@ -1027,9 +1037,30 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
-        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
+        self,
+        model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        batch_size=None,
+        compute_entropy=False,
+        visual_inputs=None,
     ) -> dict[str, Optional[torch.Tensor]]:
-        """Compute log‐probs and (optionally) entropies for each token."""
+        """
+        Compute log‐probs and (optionally) entropies for each token.
+
+        Args:
+            model: The model to compute logps with
+            input_ids: Token IDs for the sequences
+            attention_mask: Attention mask for the sequences
+            logits_to_keep: Number of completion tokens to compute logits for
+            batch_size: Batch size for processing (optional)
+            compute_entropy: Whether to compute entropy along with logps (optional)
+            visual_inputs: Visual inputs for VLM models (pixel_values, etc.) (optional)
+
+        Returns:
+            Dictionary containing logps and optionally entropies
+        """
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -1042,6 +1073,14 @@ class GRPOTrainer(Trainer):
                 "input_ids": input_ids_batch,
                 "attention_mask": attention_mask_batch,
             }
+            if visual_inputs is not None:
+                for key, value in visual_inputs.items():
+                    if key not in ["input_ids", "attention_mask"] and value is not None:
+                        # Slice the visual inputs to match the current batch
+                        if isinstance(value, torch.Tensor) and value.dim() > 0:
+                            model_inputs[key] = value[start : start + batch_size]
+                        else:
+                            model_inputs[key] = value
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1573,7 +1612,12 @@ class GRPOTrainer(Trainer):
             # per_token_logps.detach() instead.
             if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
                 old_per_token_logps = self._get_per_token_logps_and_entropies(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                    self.model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    logits_to_keep,
+                    batch_size,
+                    visual_inputs=prompt_inputs if has_images else None,
                 )["logps"]
             else:
                 old_per_token_logps = None
@@ -1582,12 +1626,20 @@ class GRPOTrainer(Trainer):
             if self.beta != 0.0:
                 if self.ref_model is not None:
                     ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                        self.ref_model,
+                        prompt_completion_ids,
+                        attention_mask,
+                        logits_to_keep,
+                        visual_inputs=prompt_inputs if has_images else None,
                     )["logps"]
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
                         ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                            self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                            self.model,
+                            prompt_completion_ids,
+                            attention_mask,
+                            logits_to_keep,
+                            visual_inputs=prompt_inputs if has_images else None,
                         )["logps"]
             else:
                 ref_per_token_logps = None
@@ -1689,6 +1741,7 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
+            "visual_inputs": prompt_inputs if has_images else None,
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1699,8 +1752,13 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
+        # Extract visual inputs for VLM support
+        visual_inputs = inputs.get("visual_inputs", None)
+
         # get the last hidden state of the model
-        last_hidden_state = self._get_last_hidden_state(unwrapped_model, input_ids, attention_mask, logits_to_keep)
+        last_hidden_state = self._get_last_hidden_state(
+            unwrapped_model, input_ids, attention_mask, logits_to_keep, visual_inputs=visual_inputs
+        )
 
         # compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
@@ -1751,18 +1809,19 @@ class GRPOTrainer(Trainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        visual_inputs = inputs.get("visual_inputs", None)
 
         # Compute the entropy at each position in the completion
         if self.token_entropy_percentile_threshold > 0.0:
             logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
+                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True, visual_inputs=visual_inputs
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
             entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep
+                model, input_ids, attention_mask, logits_to_keep, visual_inputs=visual_inputs
             )["logps"]
             entropy_mask = None
 
