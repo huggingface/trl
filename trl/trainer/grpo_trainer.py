@@ -49,6 +49,7 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
@@ -577,8 +578,12 @@ class GRPOTrainer(Trainer):
             model = self._enable_gradient_checkpointing(model, args)
 
         # Processing class
+        self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+            if self.is_vision_model:
+                processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
+            else:
+                processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # Handle pad token for processors or tokenizers
         pad_token = self._get_from_processor_or_tokenizer(processing_class, "pad_token")
@@ -883,10 +888,9 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             # Base signature columns
             signature_columns = ["prompt"]
-
-            # Add VLM-specific columns (inspired by DPO's DataCollatorForPreference)
-            vlm_columns = ["image", "pixel_values", "pixel_attention_mask", "image_sizes"]
-            signature_columns.extend(vlm_columns)
+            if self.is_vision_model:
+                vlm_columns = ["image", "pixel_values", "pixel_attention_mask", "image_sizes"]
+                signature_columns.extend(vlm_columns)
 
             # Additional columns needed based on the reward functions
             for func in self.reward_funcs:
@@ -1024,6 +1028,8 @@ class GRPOTrainer(Trainer):
 
         # Build model inputs
         model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+
+        # Add visual inputs if available (for VLM support)
         if visual_inputs is not None:
             for key, value in visual_inputs.items():
                 if key not in ["input_ids", "attention_mask"] and value is not None:
@@ -1073,6 +1079,8 @@ class GRPOTrainer(Trainer):
                 "input_ids": input_ids_batch,
                 "attention_mask": attention_mask_batch,
             }
+
+            # Add visual inputs if available (for VLM support)
             if visual_inputs is not None:
                 for key, value in visual_inputs.items():
                     if key not in ["input_ids", "attention_mask"] and value is not None:
@@ -1113,8 +1121,9 @@ class GRPOTrainer(Trainer):
 
     def _prepare_inputs_for_reward_module(self, inputs, prompts, completions, reward_processing_class):
         """Prepare inputs for VLM reward modules that require both text and images."""
-        # Check if we have images in the inputs
-        has_images = any("image" in example for example in inputs)
+        has_images = False
+        if self.is_vision_model:
+            has_images = any("image" in example for example in inputs)
 
         if has_images:
             # Extract images from inputs
@@ -1342,14 +1351,16 @@ class GRPOTrainer(Trainer):
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
-        # Extract images if present (for VLM support)
-        images = [x.get("image", None) for x in inputs]
-        has_images = any(img is not None for img in images)
+        has_images = False
+        images = []
+        if self.is_vision_model:
+            images = [x.get("image", None) for x in inputs]
+            has_images = any(img is not None for img in images)
 
-        # Validate and preprocess images if present
-        if has_images:
-            images = self._validate_and_preprocess_images(images, self.processing_class)
-            has_images = any(img is not None for img in images)  # Recheck after validation
+            # Validate and preprocess images if present
+            if has_images:
+                images = self._validate_and_preprocess_images(images, self.processing_class)
+                has_images = any(img is not None for img in images)  # Recheck after validation
 
         # Process inputs with images if available
         if has_images:
@@ -1721,8 +1732,7 @@ class GRPOTrainer(Trainer):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
-        # Log images if present (for VLM support)
-        if has_images:
+        if self.is_vision_model and has_images:
             if "images" not in self._textual_logs:
                 # Use the same maxlen as other textual logs
                 maxlen = (
@@ -1809,6 +1819,8 @@ class GRPOTrainer(Trainer):
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+
+        # Extract visual inputs for VLM support
         visual_inputs = inputs.get("visual_inputs", None)
 
         # Compute the entropy at each position in the completion
@@ -1933,8 +1945,7 @@ class GRPOTrainer(Trainer):
                     "advantage": self._textual_logs["advantages"],
                 }
 
-                # Add images to wandb table if present (for VLM support)
-                if "images" in self._textual_logs and len(self._textual_logs["images"]) > 0:
+                if self.is_vision_model and "images" in self._textual_logs and len(self._textual_logs["images"]) > 0:
                     # Convert images to wandb Image objects for proper visualization
                     wandb_images = []
                     for img in self._textual_logs["images"]:
