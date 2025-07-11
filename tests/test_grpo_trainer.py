@@ -776,9 +776,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 vllm_gpu_memory_utilization=0.2,  # Use minimal memory
             )
 
-            # Set up environment for vLLM
-            import os
-
             original_env = {}
             required_env_vars = {
                 "RANK": "0",
@@ -943,9 +940,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 modules_to_save=["embed_tokens", "lm_head"],
             )
 
-            # Set up environment for vLLM
-            import os
-
             original_env = {}
             required_env_vars = {
                 "RANK": "0",
@@ -1014,9 +1008,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 vllm_gpu_memory_utilization=0.2,  # Use minimal memory
                 vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
             )
-
-            # Set up environment for vLLM
-            import os
 
             original_env = {}
             required_env_vars = {
@@ -1120,9 +1111,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 min_p=0.01,
                 repetition_penalty=1.1,
             )
-
-            # Set up environment for vLLM
-            import os
 
             original_env = {}
             required_env_vars = {
@@ -1696,9 +1684,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
             )
-
-            # Set required environment variables for vLLM distributed setup
-            import os
 
             original_env = {}
             required_env_vars = {
