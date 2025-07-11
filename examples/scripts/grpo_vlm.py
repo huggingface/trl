@@ -16,7 +16,7 @@
 pip install math_verify
 
 # Tested on 8x H100 GPUs
-accelerate launch
+accelerate launch \
     --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/grpo_vlm.py \
     --dataset_name lmms-lab/multimodal-open-r1-8k-verified \
@@ -35,7 +35,7 @@ import torch
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
-from transformers import AutoProcessor, Qwen2VLForConditionalGeneration
+from transformers import AutoProcessor, AutoModelForImageTextToText
 
 from trl.trl import (
     GRPOConfig,
@@ -76,7 +76,7 @@ if __name__ == "__main__":
         padding_side="left",
     )
 
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
 
