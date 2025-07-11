@@ -952,7 +952,10 @@ class GRPOTrainer(Trainer):
         if self._signature_columns is None:
             # Base signature columns
             signature_columns = ["prompt"]
-            if self.is_vision_model:
+            
+            # Check if this is a VLM setup (either VLM model OR VLM processor)
+            is_vlm_processor = hasattr(self.processing_class, "tokenizer") and hasattr(self.processing_class, "image_processor")
+            if self.is_vision_model or is_vlm_processor:
                 vlm_columns = ["image", "pixel_values", "pixel_attention_mask", "image_sizes"]
                 signature_columns.extend(vlm_columns)
 
@@ -1131,6 +1134,43 @@ class GRPOTrainer(Trainer):
         Returns:
             Dictionary containing logps and optionally entropies
         """
+        # For VLM models with visual inputs, avoid batching to prevent corruption of visual data structures
+        if visual_inputs is not None:
+            # Process the entire batch at once for VLMs to preserve visual data relationships
+            model_inputs = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+            }
+
+            # Add all visual inputs
+            for key, value in visual_inputs.items():
+                if key not in ["input_ids", "attention_mask"] and value is not None:
+                    model_inputs[key] = value
+
+            if "logits_to_keep" in self.model_kwarg_keys:
+                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+                model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+            logits = model(**model_inputs).logits
+
+            # For VLMs that don't support logits_to_keep, we need to slice the logits manually
+            if "logits_to_keep" not in self.model_kwarg_keys:
+                # Keep only the last logits_to_keep + 1 logits for efficiency
+                logits = logits[:, -(logits_to_keep + 1) :, :]
+
+            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            logits = logits / self.temperature
+
+            completion_ids = input_ids[:, -logits_to_keep:]
+            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+
+            if compute_entropy:
+                entropies = entropy_from_logits(logits)
+                return {"logps": logps, "entropies": entropies}
+            else:
+                return {"logps": logps, "entropies": None}
+
+        # For text-only models, use batching to reduce memory usage
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -1143,16 +1183,6 @@ class GRPOTrainer(Trainer):
                 "input_ids": input_ids_batch,
                 "attention_mask": attention_mask_batch,
             }
-
-            # Add visual inputs if available (for VLM support)
-            if visual_inputs is not None:
-                for key, value in visual_inputs.items():
-                    if key not in ["input_ids", "attention_mask"] and value is not None:
-                        # Slice the visual inputs to match the current batch
-                        if isinstance(value, torch.Tensor) and value.dim() > 0:
-                            model_inputs[key] = value[start : start + batch_size]
-                        else:
-                            model_inputs[key] = value
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
