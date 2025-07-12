@@ -1703,7 +1703,7 @@ class GRPOTrainer(Trainer):
                         if key not in ["input_ids", "attention_mask"]:
                             generation_inputs[key] = prompt_inputs[key]
 
-                prompt_completion_ids = unwrapped_model.generate(**generation_inputs, progress_bar=False)
+                prompt_completion_ids = unwrapped_model.generate(**generation_inputs)
 
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)

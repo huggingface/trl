@@ -677,7 +677,7 @@ class GRPOTrainerTester(unittest.TestCase):
         dataset = dataset.map(lambda x: {"some_values": list(range(10))})
 
         def reward_func(completions, some_values, **kwargs):
-            return [float(len(completion)) + sum(some_values) for completion in completions]
+            return [float(len(completion)) + sum(some_values[i]) for i, completion in enumerate(completions)]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
@@ -984,7 +984,8 @@ class GRPOTrainerTester(unittest.TestCase):
 
     @patch("transformers.generation.utils.GenerationMixin.generate")
     def test_training_with_mask_truncated_completions(self, mock_generate):
-        def fake_generate(prompt_ids, **kwargs):
+        def fake_generate(*args, **kwargs):
+            prompt_ids = kwargs.get("input_ids", args[1] if len(args) > 1 else None)
             completions_ids = torch.tensor(
                 [
                     [1, 2, 3, 4, 5, 6, 7, 8],
