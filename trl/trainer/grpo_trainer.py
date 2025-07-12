@@ -292,27 +292,26 @@ def identity(x):
 
 def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
     """
-    Returns a binary mask identifying tokens whose entropy exceeds a given percentile threshold.
+    Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
 
     Args:
         entropies (`torch.Tensor`):
-            A tensor of shape (batch_size, seq_len) containing per-token entropy values.
+            Tensor of shape (batch_size, seq_len) with per-token entropy values.
         mask (`torch.Tensor`):
-            A binary mask of the same shape as `entropies`, where `1` indicates a valid (non-padding) token and `0`
-            indicates padding.
+            Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
         threshold (`float`):
-            Percentile threshold (between `0.0` and `1.0`) used to select high-entropy tokens.
+            Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
 
     Returns:
         `torch.Tensor`:
-            A binary mask of shape (batch_size, seq_len), where 1 indicates tokens with entropy > threshold and `0`
-            otherwise.
+            Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
+            `False` otherwise.
     """
-    non_pad_entropies = entropies[mask.bool()].float()  # select only the entropy values of non-padding tokens
-    entropy_threshold = torch.quantile(non_pad_entropies, threshold)  # entropy threshold from the percentile
-    masked_entropies = entropies * mask.float()  # zero out padding positions before comparison
-    entropy_mask = masked_entropies > entropy_threshold  # create a mask for tokens exceeding the entropy threshold
-    return entropy_mask
+    non_pad_entropies = entropies[mask.bool()].float()
+    entropy_threshold = torch.quantile(non_pad_entropies, threshold)
+    masked_entropies = entropies * mask.float()
+    entropy_mask = masked_entropies >= entropy_threshold
+    return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
 
 class GRPOTrainer(Trainer):
@@ -548,8 +547,8 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
-        self.token_entropy_percentile_threshold = args.token_entropy_percentile_threshold
-        if self.use_liger_loss and self.token_entropy_percentile_threshold > 0.0:
+        self.top_entropy_quantile = args.top_entropy_quantile
+        if self.use_liger_loss and self.top_entropy_quantile > 0.0:
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
@@ -1466,13 +1465,13 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         # Compute the entropy at each position in the completion
-        if self.token_entropy_percentile_threshold > 0.0:
+        if self.top_entropy_quantile > 0.0:
             logps_and_entropies = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
-            entropy_mask = get_high_entropy_mask(entropies, completion_mask, self.token_entropy_percentile_threshold)
+            entropy_mask = get_high_entropy_mask(entropies, completion_mask, self.top_entropy_quantile)
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep

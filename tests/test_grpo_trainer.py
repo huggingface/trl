@@ -216,7 +216,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 class GetHighEntropyMaskTester(unittest.TestCase):
     def test_compute_entropy_mask_0(self):
         # We have a total of 12 tokens out of which 10 are non-pad.
-        # for a token_entropy_percentile_threshold of 0.8, we expect the top 20% i.e 2 non-pad tokens corresponding to
+        # for a top_entropy_quantile of 0.8, we expect the top 20% i.e 2 non-pad tokens corresponding to
         # the highest entropy to be unmasked.
         # In our example these will be the tokens corresponding to the entropies 0.9 and 1.0 since 1.1 and 1.2 are pad
         # tokens they are excluded from the entropy threshold calculation.
@@ -243,19 +243,19 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
     def test_compute_entropy_mask_all_tokens(self):
-        # For a threshold of 0.0 we expect all non-pad tokens BUT ONE to be unmasked.
+        # For a threshold of 0.0 we expect all non-pad tokens to be unmasked.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
         entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.0)
-        expected_mask = torch.tensor([[0, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]], dtype=torch.bool)
+        expected_mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
     def test_compute_entropy_mask_no_tokens(self):
-        # If there are no non-pad tokens we expect an empty mask.
+        # If there are no non-pad tokens we expect the mask to be all zeros BUT ONE VALUE.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
         entropy_mask = get_high_entropy_mask(entropies, mask, threshold=1.0)
-        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], dtype=torch.bool)
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
@@ -896,7 +896,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
-                token_entropy_percentile_threshold=0.8,
+                top_entropy_quantile=0.8,
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
