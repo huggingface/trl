@@ -290,6 +290,31 @@ def identity(x):
     return x
 
 
+def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
+    """
+    Returns a binary mask identifying tokens whose entropy exceeds a given percentile threshold.
+
+    Args:
+        entropies (`torch.Tensor`):
+            A tensor of shape (batch_size, seq_len) containing per-token entropy values.
+        mask (`torch.Tensor`):
+            A binary mask of the same shape as `entropies`, where `1` indicates a valid (non-padding) token and `0`
+            indicates padding.
+        threshold (`float`):
+            Percentile threshold (between `0.0` and `1.0`) used to select high-entropy tokens.
+
+    Returns:
+        `torch.Tensor`:
+            A binary mask of shape (batch_size, seq_len), where 1 indicates tokens with entropy > threshold and `0`
+            otherwise.
+    """
+    non_pad_entropies = entropies[mask.bool()].float()  # select only the entropy values of non-padding tokens
+    entropy_threshold = torch.quantile(non_pad_entropies, threshold)  # entropy threshold from the percentile
+    masked_entropies = entropies * mask.float()  # zero out padding positions before comparison
+    entropy_mask = masked_entropies > entropy_threshold  # create a mask for tokens exceeding the entropy threshold
+    return entropy_mask
+
+
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -1432,15 +1457,6 @@ class GRPOTrainer(Trainer):
         else:
             return self._compute_loss(model, inputs)
 
-    def _compute_entropy_mask(self, entropies, completion_mask):
-        # compute the entropy threshold across all tokens in the batch
-        non_pad_entropies = entropies[completion_mask.bool()]
-        # disregard pad tokens when computing the entropy threshold
-        entropy_threshold = torch.quantile(non_pad_entropies.float(), self.token_entropy_percentile_threshold)
-        entropies = entropies * completion_mask.float()  # mask out the padding tokens
-        entropy_mask = entropies >= entropy_threshold
-        return entropy_mask
-
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1456,7 +1472,7 @@ class GRPOTrainer(Trainer):
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
-            entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
+            entropy_mask = get_high_entropy_mask(entropies, completion_mask, self.token_entropy_percentile_threshold)
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep
