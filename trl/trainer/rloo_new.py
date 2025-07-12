@@ -1223,7 +1223,6 @@ class RLOOTrainer_NEW(Trainer):
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
-        prompts = [x["prompt"] for x in inputs]
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         rewards = inputs["rewards"]
@@ -1237,16 +1236,17 @@ class RLOOTrainer_NEW(Trainer):
         sequence_logps = (per_token_logps * completion_mask).sum(-1)
 
         # for calculating the advantages, we need to gather the rewards
-        #all_rewards = rewards.clone()
+        all_rewards = rewards.clone()
         rewards = gather(rewards)
 
         if self.normalize_rewards:
             rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
             rewards = torch.clamp(rewards, -self.reward_clip_range, self.reward_clip_range)
 
+        local = prompt_ids.size(0)
         process_slice = slice(
-            self.accelerator.process_index * len(prompts),
-            (self.accelerator.process_index + 1) * len(prompts),
+            self.accelerator.process_index * local,
+            (self.accelerator.process_index + 1) * local,
         )
 
         # Compute the KL divergence between the model and the reference model
@@ -1262,12 +1262,10 @@ class RLOOTrainer_NEW(Trainer):
                             self.model, input_ids, attention_mask, logits_to_keep
                         )
                 # if we have a ref model, we need to compute the sequence-level logprobs for the ref model
-                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(
-                    min=1.0
-                )
+                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) 
 
                 # Compute sequence-level KL divergence between the model and the ref model
-                sequence_kl = ref_sequence_logps - sequence_logps
+                sequence_kl = sequence_logps - ref_sequence_logps
 
                 # In RLOO, we include the KL penalty in the rewards
                 kl_penalty = -self.beta * sequence_kl
