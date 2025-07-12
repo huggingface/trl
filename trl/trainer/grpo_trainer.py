@@ -356,6 +356,15 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     return torch.max(tensor[~torch.isnan(tensor)])
 
 
+def get_from_processor_or_tokenizer(processor, key):
+    """Get an attribute from processor or its tokenizer (if it has one)."""
+    if hasattr(processor, key):
+        return getattr(processor, key)
+    elif hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, key):
+        return getattr(processor.tokenizer, key)
+    return None
+
+
 def identity(x):
     """Do we really need docs for this?"""
     return x
@@ -465,15 +474,6 @@ class GRPOTrainer(Trainer):
     """
 
     _tag_names = ["trl", "grpo"]
-
-    @staticmethod
-    def _get_from_processor_or_tokenizer(processor, key):
-        """Get an attribute from processor or its tokenizer (if it has one)."""
-        if hasattr(processor, key):
-            return getattr(processor, key)
-        elif hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, key):
-            return processor.tokenizer.key
-        return None
 
     @staticmethod
     def _validate_and_preprocess_images(images: list, processing_class=None) -> list:
@@ -640,9 +640,9 @@ class GRPOTrainer(Trainer):
                 processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # Handle pad token for processors or tokenizers
-        pad_token = self._get_from_processor_or_tokenizer(processing_class, "pad_token")
+        pad_token = get_from_processor_or_tokenizer(processing_class, "pad_token")
         if pad_token is None:
-            eos_token = self._get_from_processor_or_tokenizer(processing_class, "eos_token")
+            eos_token = get_from_processor_or_tokenizer(processing_class, "eos_token")
             processing_class.pad_token = eos_token
 
         # Reward functions
@@ -686,14 +686,14 @@ class GRPOTrainer(Trainer):
                     reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
 
                 # Handle pad token for reward processing class
-                rc_pad_token_id = self._get_from_processor_or_tokenizer(reward_processing_class, "pad_token_id")
+                rc_pad_token_id = get_from_processor_or_tokenizer(reward_processing_class, "pad_token_id")
                 if rc_pad_token_id is None:
-                    rc_eos_token = self._get_from_processor_or_tokenizer(reward_processing_class, "eos_token")
+                    rc_eos_token = get_from_processor_or_tokenizer(reward_processing_class, "eos_token")
                     reward_processing_class.pad_token = rc_eos_token
 
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = self._get_from_processor_or_tokenizer(
+                reward_func.config.pad_token_id = get_from_processor_or_tokenizer(
                     reward_processing_class, "pad_token_id"
                 )
                 reward_processing_classes[i] = reward_processing_class
@@ -895,9 +895,9 @@ class GRPOTrainer(Trainer):
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
                 "do_sample": True,
-                "pad_token_id": self._get_from_processor_or_tokenizer(processing_class, "pad_token_id"),
-                "bos_token_id": self._get_from_processor_or_tokenizer(processing_class, "bos_token_id"),
-                "eos_token_id": self._get_from_processor_or_tokenizer(processing_class, "eos_token_id"),
+                "pad_token_id": get_from_processor_or_tokenizer(processing_class, "pad_token_id"),
+                "bos_token_id": get_from_processor_or_tokenizer(processing_class, "bos_token_id"),
+                "eos_token_id": get_from_processor_or_tokenizer(processing_class, "eos_token_id"),
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -1505,7 +1505,7 @@ class GRPOTrainer(Trainer):
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            pad_token = self._get_from_processor_or_tokenizer(self.processing_class, "pad_token")
+            pad_token = get_from_processor_or_tokenizer(self.processing_class, "pad_token")
             prompts_text = [re.sub(rf"^({re.escape(pad_token)})+", "", text) for text in prompts_text]
 
         if self.use_vllm:
@@ -1701,7 +1701,7 @@ class GRPOTrainer(Trainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Mask everything after the first EOS token
-        eos_token_id = self._get_from_processor_or_tokenizer(self.processing_class, "eos_token_id")
+        eos_token_id = get_from_processor_or_tokenizer(self.processing_class, "eos_token_id")
         is_eos = completion_ids == eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
