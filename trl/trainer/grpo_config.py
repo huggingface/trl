@@ -85,8 +85,12 @@ class GRPOConfig(TrainingArguments):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
+        use_transformers_paged (`bool`, *optional*, defaults to `False`):
+            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
+            paged implementation will be used for generation instead of the default padded implementation. This
+            parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
-            Implementation of the cache method for faster generation when use_vllm is set to False.
+            Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
         generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
             using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
@@ -110,6 +114,7 @@ class GRPOConfig(TrainingArguments):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+
         vllm_server_base_url (`str` or `None`, *optional*, defaults to `None`):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `vllm_server_host` and
             `vllm_server_port` are ignored.
@@ -349,7 +354,7 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
             "`transformers` paged implementation will be used for generation instead of the default padded "
-            "implementation."
+            "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
     cache_implementation: Optional[str] = field(
