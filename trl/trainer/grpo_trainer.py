@@ -467,17 +467,6 @@ class GRPOTrainer(Trainer):
     _tag_names = ["trl", "grpo"]
 
     @staticmethod
-    def _get_nested_attr(obj, attr, default=None):
-        """Retrieve nested attribute from an object."""
-        attributes = attr.split(".")
-        for attribute in attributes:
-            try:
-                obj = getattr(obj, attribute)
-            except AttributeError:
-                return default
-        return obj
-
-    @staticmethod
     def _get_from_processor_or_tokenizer(processor, key):
         """Get an attribute from processor or its tokenizer (if it has one)."""
         if hasattr(processor, key):
