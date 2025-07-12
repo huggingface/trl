@@ -721,7 +721,7 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
@@ -839,7 +839,7 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
@@ -940,7 +940,7 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,

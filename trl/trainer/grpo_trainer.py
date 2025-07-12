@@ -41,6 +41,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
+    BatchFeature,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -229,7 +230,7 @@ def split_tensor_dict(
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
 
     # Get batch size from first tensor, handling BatchFeature objects
-    if hasattr(first_tensor, "data") and isinstance(first_tensor.data, dict):
+    if isinstance(first_tensor, BatchFeature):
         # BatchFeature object - get batch size from first available tensor in its data
         batch_size = next(
             t.shape[0] for t in first_tensor.data.values() if isinstance(t, torch.Tensor) and t.dim() > 0
@@ -245,7 +246,7 @@ def split_tensor_dict(
         for key, tensor in tensor_dict.items():
             if tensor is None:
                 chunk[key] = None
-            elif hasattr(tensor, "data") and isinstance(tensor.data, dict):
+            elif isinstance(tensor, BatchFeature):
                 # Handle BatchFeature or similar objects from processors
                 chunk_dict = {}
                 for sub_key, sub_tensor in tensor.data.items():
@@ -291,7 +292,7 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
 
     # Get batch size from first tensor, handling BatchFeature objects
-    if hasattr(first_tensor, "data") and isinstance(first_tensor.data, dict):
+    if isinstance(first_tensor, BatchFeature):
         # BatchFeature object - get batch size from first available tensor in its data
         batch_size = next(
             t.shape[0] for t in first_tensor.data.values() if isinstance(t, torch.Tensor) and t.dim() > 0
@@ -305,7 +306,7 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     for key, tensor in tensor_dict.items():
         if tensor is None:
             result[key] = None
-        elif hasattr(tensor, "data") and isinstance(tensor.data, dict):
+        elif isinstance(tensor, BatchFeature):
             # Handle BatchFeature or similar objects from processors
             shuffled_dict = {}
             for sub_key, sub_tensor in tensor.data.items():
@@ -2210,7 +2211,7 @@ class GRPOTrainer(Trainer):
             if isinstance(value, torch.Tensor) and value.dim() > 0:
                 batch_size = value.shape[0]
                 break
-            elif hasattr(value, "data") and isinstance(value.data, dict):
+            elif isinstance(value, BatchFeature):
                 # BatchFeature object
                 for sub_tensor in value.data.values():
                     if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0:
@@ -2238,10 +2239,8 @@ class GRPOTrainer(Trainer):
                 elif isinstance(value, torch.Tensor) and value.dim() > 0:
                     # Regular tensor - slice normally
                     chunk[key] = value[start_idx:end_idx]
-                elif hasattr(value, "data") and isinstance(value.data, dict):
+                elif isinstance(value, BatchFeature):
                     # BatchFeature object - slice each tensor in its data
-                    from transformers import BatchFeature
-
                     chunk_data = {}
                     for sub_key, sub_tensor in value.data.items():
                         if (
