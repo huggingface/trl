@@ -1265,11 +1265,18 @@ class RLOOTrainer_NEW(Trainer):
                 ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) 
 
                 # Compute sequence-level KL divergence between the model and the ref model
-                sequence_kl = sequence_logps - ref_sequence_logps
+                sequence_kl = sequence_logps - ref_sequence_logps #KL in original RLOO
 
-                # In RLOO, we include the KL penalty in the rewards
-                kl_penalty = -self.beta * sequence_kl
-                rewards_with_kl = rewards + kl_penalty
+                if self.args.token_level_kl:
+                    pass
+                
+                # Sequence-level KL penalty: sum KL across tokens first, in RLOO we include the KL in the reward
+                sequence_level_kl = sequence_kl.sum(1)
+                non_score_reward = -self.beta * sequence_level_kl
+                rewards_with_kl = non_score_reward + rewards
+                #OLD
+                # kl_penalty = -self.beta * sequence_kl
+                # rewards_with_kl = rewards + kl_penalty
         else:
             rewards_with_kl = rewards
 
