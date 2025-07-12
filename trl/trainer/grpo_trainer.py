@@ -472,7 +472,7 @@ class GRPOTrainer(Trainer):
         if hasattr(processor, key):
             return getattr(processor, key)
         elif hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, key):
-            return getattr(processor.tokenizer, key)
+            return processor.tokenizer.key
         return None
 
     @staticmethod
