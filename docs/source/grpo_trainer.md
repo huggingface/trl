@@ -554,7 +554,6 @@ accelerate launch
     --model_name_or_path Qwen/Qwen2-VL-2B-Instruct \
     --per_device_train_batch_size 8 \
     --output_dir grpo-Qwen2-VL-2B-Instruct \
-    --bf16 true \
     --torch_dtype bfloat16 \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj"
