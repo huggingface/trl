@@ -1233,7 +1233,7 @@ class RLOOTrainer_NEW(Trainer):
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
         # for rloo loss, we need to compute the sequence-level logprobs
-        sequence_logps = (per_token_logps * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        sequence_logps = (per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
 
         # for calculating the advantages, we need to gather the rewards
         all_rewards = rewards.clone()
@@ -1262,7 +1262,7 @@ class RLOOTrainer_NEW(Trainer):
                             self.model, input_ids, attention_mask, logits_to_keep
                         )
                 # if we have a ref model, we need to compute the sequence-level logprobs for the ref model
-                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
 
                 # Compute sequence-level KL divergence between the model and the ref model
                 sequence_kl = sequence_logps - ref_sequence_logps #KL in original RLOO
@@ -1302,7 +1302,7 @@ class RLOOTrainer_NEW(Trainer):
         old_per_token_logps = (
             per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
         )
-        old_sequence_logps = (old_per_token_logps * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        old_sequence_logps = (old_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
 
         coef_1 = torch.exp(sequence_logps - old_sequence_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
