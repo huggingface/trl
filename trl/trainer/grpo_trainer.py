@@ -1458,29 +1458,26 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        entropies = None
+        compute_entropy_mask = self.token_entropy_percentile_threshold > 0.0
+        compute_entropy = self.log_entropy or compute_entropy_mask
+
+        outputs = self._get_per_token_logps_and_entropies(
+            model=model,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            logits_to_keep=logits_to_keep,
+            compute_entropy=compute_entropy,
+        )
+        per_token_logps = outputs["logps"]
+        entropies = outputs.get("entropies", None)
+
         entropy_mask = None
-
-        compute_entropy = self.log_entropy or self.token_entropy_percentile_threshold > 0.0
-        if compute_entropy:
-            out = self._get_per_token_logps_and_entropies(
-                model,
-                input_ids,
-                attention_mask,
-                logits_to_keep,
-                compute_entropy=True,
-            )
-            per_token_logps = out["logps"]
-            entropies = out["entropies"]
-
+        if compute_entropy_mask:
             entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
-        else:
-            per_token_logps = self._get_per_token_logps_and_entropies(
-                model,
-                input_ids,
-                attention_mask,
-                logits_to_keep,
-            )["logps"]
+
+        if self.log_entropy and entropies is not None:
+            with torch.no_grad():
+                entropies = entropies.detach()
 
         return per_token_logps, entropies, entropy_mask
 
