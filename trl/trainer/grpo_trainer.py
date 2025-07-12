@@ -925,7 +925,7 @@ class GRPOTrainer(Trainer):
 
         logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
-        return {"logps": logps, "entropies": entropies}
+        return logps, entropies
 
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
@@ -1305,23 +1305,23 @@ class GRPOTrainer(Trainer):
             # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
             # per_token_logps.detach() instead.
             if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
-                old_per_token_logps = self._get_per_token_logps_and_entropies(
+                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                )["logps"]
+                )
             else:
                 old_per_token_logps = None
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps_and_entropies(
+                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                         self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
-                    )["logps"]
+                    )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps_and_entropies(
+                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                             self.model, prompt_completion_ids, attention_mask, logits_to_keep
-                        )["logps"]
+                        )
             else:
                 ref_per_token_logps = None
 
@@ -1464,18 +1464,14 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        # Compute the entropy at each position in the completion
+        # Compute the per_token_logps the entropy if necessary at each position in the completion
+        per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=self.top_entropy_quantile < 1.0
+        )
+
         if self.top_entropy_quantile < 1.0:
-            logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
-            )
-            per_token_logps = logps_and_entropies["logps"]
-            entropies = logps_and_entropies["entropies"]
             entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
-            per_token_logps = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep
-            )["logps"]
             entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
