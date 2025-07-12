@@ -670,8 +670,8 @@ class GRPOTrainer(Trainer):
                 os.environ["RANK"] = str(self.accelerator.process_index)
                 os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                os.environ["MASTER_ADDR"] = "localhost"
-                os.environ["MASTER_PORT"] = "12345"
+                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
 
                 self.llm = LLM(
                     model=model.name_or_path,
