@@ -88,6 +88,7 @@ Here's a brief explanation for the logged metrics provided in the data for the G
     *   `clip_ratio/high_mean`: The mean fraction of instances where the probability ratio `r_t(θ)` was clipped at the upper bound `1 + epsilon_high` (occurs when advantage is positive and ratio is above the bound).
     *   `clip_ratio/high_max`: The maximum observed fraction for `clip_ratio/high_mean` across batches/processes.
     *   `clip_ratio/region_mean`: The mean fraction of instances where the probability ratio was clipped at either the lower or upper bound.
+    *   `entropy`: The mean entropy of generated completions. Enable with `log_entropy=True`.
 
 ### Crucial GRPO values
 During GRPO training, monitor these values for insights into performance and stability:
