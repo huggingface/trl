@@ -365,6 +365,16 @@ def get_from_processor_or_tokenizer(processor, key):
     return None
 
 
+def set_pad_token_on_processor_or_tokenizer(processor, token):
+    """Set pad_token on the correct object (processor or its tokenizer)."""
+    if hasattr(processor, "tokenizer"):
+        # For VLM processors, set pad_token on the tokenizer
+        processor.tokenizer.pad_token = token
+    else:
+        # For regular tokenizers, set pad_token on the processor (which is the tokenizer)
+        processor.pad_token = token
+
+
 def identity(x):
     """Do we really need docs for this?"""
     return x
@@ -643,7 +653,7 @@ class GRPOTrainer(Trainer):
         pad_token = get_from_processor_or_tokenizer(processing_class, "pad_token")
         if pad_token is None:
             eos_token = get_from_processor_or_tokenizer(processing_class, "eos_token")
-            processing_class.pad_token = eos_token
+            set_pad_token_on_processor_or_tokenizer(processing_class, eos_token)
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -689,7 +699,7 @@ class GRPOTrainer(Trainer):
                 rc_pad_token_id = get_from_processor_or_tokenizer(reward_processing_class, "pad_token_id")
                 if rc_pad_token_id is None:
                     rc_eos_token = get_from_processor_or_tokenizer(reward_processing_class, "eos_token")
-                    reward_processing_class.pad_token = rc_eos_token
+                    set_pad_token_on_processor_or_tokenizer(reward_processing_class, rc_eos_token)
 
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
