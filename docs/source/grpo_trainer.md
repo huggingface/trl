@@ -552,7 +552,6 @@ accelerate launch
     examples/scripts/grpo_vlm.py \
     --dataset_name lmms-lab/multimodal-open-r1-8k-verified \
     --model_name_or_path Qwen/Qwen2-VL-2B-Instruct \
-    --per_device_train_batch_size 8 \
     --output_dir grpo-Qwen2-VL-2B-Instruct \
     --torch_dtype bfloat16 \
     --use_peft \
