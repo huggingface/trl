@@ -67,9 +67,11 @@ class GRPOConfig(TrainingArguments):
 
         generation_batch_size: (`int` or `None`, *optional*, defaults to `None`):
             Batch size to use for generation. If `None`, it defaults to the effective training batch size:
-            `per_device_train_batch_size * num_processes * steps_per_generation`.
-        steps_per_generations: (`int` or `None`, *optional*, defaults to `None`):
-            Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps.
+            `per_device_train_batch_size * num_processes * steps_per_generation`. In other words, there is one
+            generation batch processed per optimization step. Mutually exclusive with `steps_per_generation`.
+        steps_per_generation: (`int` or `None`, *optional*, defaults to `None`):
+            Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
+            with `generation_batch_size`.
         temperature (`float`, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
@@ -298,9 +300,7 @@ class GRPOConfig(TrainingArguments):
     )
     steps_per_generation: Optional[int] = field(
         default=None,
-        metadata={
-            "help": "Number of optimization steps per generation. If `None`, it defaults to gradient_accumulation_steps."
-        },
+        metadata={"help": "Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`."},
     )
     temperature: float = field(
         default=1.0,
@@ -376,8 +376,8 @@ class GRPOConfig(TrainingArguments):
         default="server",
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
-            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure a "
-            "TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
+            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
+            "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
         },
@@ -555,24 +555,23 @@ class GRPOConfig(TrainingArguments):
 
         num_processes = self.world_size
         # The current default effective batch size
-        if self.generation_batch_size is not None and self.steps_per_generation is not None:
+        if self.generation_batch_size is None and self.steps_per_generation is None:
+            self.generation_batch_size = (
+                self.per_device_train_batch_size * num_processes * self.gradient_accumulation_steps
+            )
+        elif self.generation_batch_size is not None and self.steps_per_generation is None:
+            # Just ensure the value is divisible by the global batch size
+            if self.generation_batch_size % (self.per_device_train_batch_size * num_processes) != 0:
+                raise ValueError(
+                    f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
+                    f"({self.per_device_train_batch_size * num_processes})."
+                )
+        elif self.generation_batch_size is None and self.steps_per_generation is not None:
+            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
+        else:
             raise ValueError(
                 "'generation_batch_size' and 'steps_per_generation' can not be both configured at the same time"
             )
-
-        if self.steps_per_generation is None:
-            self.steps_per_generation = self.gradient_accumulation_steps
-
-        if self.generation_batch_size is None:
-            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
-
-        if self.generation_batch_size % (self.per_device_train_batch_size * num_processes) != 0:
-            raise ValueError(
-                f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
-                f"({self.per_device_train_batch_size * num_processes})."
-            )
-
-        self.steps_per_generation = self.generation_batch_size // (self.per_device_train_batch_size * num_processes)
 
         # Check if the effective batch size can be divided by the number of generations
         if self.num_generations < 2:
@@ -580,28 +579,6 @@ class GRPOConfig(TrainingArguments):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
-        possible_values = [
-            n_gen for n_gen in range(2, self.generation_batch_size + 1) if (self.generation_batch_size) % n_gen == 0
-        ]
 
-        if self.num_generations not in possible_values:
-            raise ValueError(
-                f"The effective train batch size ({num_processes} x {self.per_device_train_batch_size} x "
-                f"{self.steps_per_generation}) must be evenly divisible by the number of generations per "
-                f"prompt ({self.num_generations}). Given the current effective train batch size, the valid values for "
-                f"the number of generations are: {possible_values}."
-            )
-        if self.eval_strategy != "no":
-            global_eval_batch_size = self.per_device_eval_batch_size * num_processes
-            possible_values = [
-                n_gen for n_gen in range(2, global_eval_batch_size + 1) if (global_eval_batch_size) % n_gen == 0
-            ]
-            if self.num_generations not in possible_values:
-                raise ValueError(
-                    f"The global eval batch size ({num_processes} x {self.per_device_eval_batch_size}) must be "
-                    f"evenly divisible by the number of generations per prompt ({self.num_generations}). Given the "
-                    "current global eval batch size, the valid values for the number of generations are: "
-                    f"{possible_values}."
-                )
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
