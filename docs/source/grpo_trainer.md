@@ -524,6 +524,66 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+## Vision Language Model (VLM) Training
+
+GRPO supports training Vision Language Models (VLMs) with comprehensive image processing capabilities. This feature enables training on multimodal datasets that include both text and images.
+
+### Key Features
+
+- **Automatic VLM Detection**: GRPO automatically detects VLM processors (those with both `tokenizer` and `image_processor` attributes) and configures appropriate data handling
+- **Image Processing**: Supports various image formats and automatically processes images through the model's image processor
+- **vLLM Integration**: Full compatibility with vLLM acceleration in both server and colocate modes for VLMs
+- **Memory Optimization**: Supports 4-bit quantization with LoRA for memory-efficient VLM training
+- **Enhanced Data Collation**: Proper handling of VLM-specific data structures including `pixel_values`, `pixel_attention_mask`, and `image_sizes`
+
+### Supported VLM Models
+
+The implementation has been tested with popular VLM architectures including:
+- **Qwen2-VL**: `Qwen/Qwen2-VL-2B-Instruct`
+- **SmolVLM**: `HuggingFaceTB/SmolVLM-Instruct`
+
+### Example Usage
+
+We have an example script [examples/scripts/grpo_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) that you can use to train a VLM model. For example, to train a VLM model on the [multimodal-open-r1-8k-verified](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified) dataset, you can run the following command:
+
+```bash
+accelerate launch
+    --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/grpo_vlm.py \
+    --dataset_name lmms-lab/multimodal-open-r1-8k-verified \
+    --model_name_or_path Qwen/Qwen2-VL-2B-Instruct \
+    --output_dir grpo-Qwen2-VL-2B-Instruct \
+    --torch_dtype bfloat16 \
+    --use_peft \
+    --lora_target_modules "q_proj", "v_proj"
+```
+
+### VLM-Specific Configuration
+
+When training VLMs, consider these configuration options:
+
+- **`max_prompt_length=None`**: Set to `None` to avoid truncating image tokens
+- **`vllm_gpu_memory_utilization`**: Reduce if using large VLMs (e.g., 0.2-0.3)
+- **LoRA Configuration**: Target vision-language projection layers if needed
+- **Quantization**: 4-bit quantization significantly reduces memory usage
+
+### Performance Considerations
+
+- **Memory Usage**: VLMs require more memory due to image processing. Use quantization and LoRA for large models
+- **vLLM Support**: Most modern VLM models work with vLLM in both server and colocate modes
+- **Batch Size**: Start with smaller batch sizes due to increased memory requirements from images
+- **Generation Length**: Consider longer max completion lengths for detailed image descriptions
+
+### Dataset Format
+
+VLM datasets should include:
+- **`prompt`**: Text prompt formatted through the processor's chat template
+- **`image`**: PIL Image or numpy array representing the image (only one image per prompt is supported)
+- Additional columns as needed for custom reward functions
+
+The trainer automatically handles the conversion of images to the required tensor format (`pixel_values`, `pixel_attention_mask`, etc.) using the model's image processor.
+
+
 ## GRPOTrainer
 
 [[autodoc]] GRPOTrainer
