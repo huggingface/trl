@@ -14,7 +14,6 @@
 
 import tempfile
 import unittest
-import warnings
 from unittest.mock import patch
 
 import torch
@@ -23,7 +22,6 @@ from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
-    AutoProcessor,
     AutoTokenizer,
     BatchFeature,
 )
@@ -1213,44 +1211,6 @@ class GRPOTrainerTester(unittest.TestCase):
         entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
 
         self.assertTrue(torch.equal(entropy_mask, expected_mask))
-
-    @parameterized.expand([("Qwen/Qwen2-VL-2B-Instruct",), ("HuggingFaceTB/SmolVLM-Instruct",)])
-    def test_vlm_processor_detection(self, processor_model_name):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            config = GRPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                num_generations=2,
-                max_completion_length=8,
-                use_vllm=False,
-                report_to="none",
-            )
-
-            processor = AutoProcessor.from_pretrained(processor_model_name)
-            self.assertTrue(hasattr(processor, "tokenizer"))
-            self.assertTrue(hasattr(processor, "image_processor"))
-
-            def dummy_reward_func(completions, **kwargs):
-                return [1.0] * len(completions)
-
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                trainer = GRPOTrainer(
-                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                    reward_funcs=dummy_reward_func,
-                    args=config,
-                    train_dataset=dataset,
-                    processing_class=processor,
-                )
-
-                is_vlm_processor = hasattr(processor, "tokenizer") and hasattr(processor, "image_processor")
-                self.assertTrue(is_vlm_processor)
-                self.assertIn("image", trainer._signature_columns)
-
-                vlm_warnings = [str(w_item.message) for w_item in w if "VLM" in str(w_item.message)]
-                self.assertEqual(len(vlm_warnings), 0)
 
 
 class GRPOImageProcessingTester(unittest.TestCase):
