@@ -1233,7 +1233,7 @@ class RLOOTrainer_NEW(Trainer):
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
         # for rloo loss, we need to compute the sequence-level logprobs
-        sequence_logps = (per_token_logps * completion_mask).sum(-1)
+        sequence_logps = (per_token_logps * completion_mask)
 
         # for calculating the advantages, we need to gather the rewards
         all_rewards = rewards.clone()
@@ -1262,7 +1262,7 @@ class RLOOTrainer_NEW(Trainer):
                             self.model, input_ids, attention_mask, logits_to_keep
                         )
                 # if we have a ref model, we need to compute the sequence-level logprobs for the ref model
-                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) 
+                ref_sequence_logps = (ref_per_token_logps * completion_mask) 
 
                 # Compute sequence-level KL divergence between the model and the ref model
                 sequence_kl = sequence_logps - ref_sequence_logps #KL in original RLOO
@@ -1281,16 +1281,15 @@ class RLOOTrainer_NEW(Trainer):
             rewards_with_kl = rewards
 
         # Reshape rewards back to (num_prompts, num_generations) for RLOO baseline calculation
-        rewards_with_kl = rewards_with_kl.view(-1, self.num_generations)
+        rewards_with_kl = rewards_with_kl.view(self.num_generations, -1)
+        baseline = (rewards_with_kl.sum(0) - rewards_with_kl) / (self.num_generations - 1)
 
-        # Compute RLOO baseline with KL-adjusted rewards
-        sum_all_rewards = rewards_with_kl.sum(dim=1, keepdim=True)
-        baseline = (sum_all_rewards - rewards_with_kl) / (self.num_generations - 1)
-
-        # Compute advantages as r_i - baseline_i
+        # Compute the advantages: rewards_with_kl - baseline
         advantages = rewards_with_kl - baseline
         advantages = advantages.flatten()
-        all_advantages = advantages.clone()  # keep the aggregated advantages for logging
+
+        # keep the aggregated advantages for logging
+        all_advantages = advantages.clone() 
         advantages = advantages[process_slice]
 
         # Normalize advantages if arg is set
