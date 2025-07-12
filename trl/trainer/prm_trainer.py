@@ -364,7 +364,7 @@ class PRMTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             trainer_name="PRM",
             trainer_citation=citation,
             paper_title="Solving math word problems with process-and outcome-based feedback",
