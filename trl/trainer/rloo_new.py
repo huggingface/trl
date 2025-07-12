@@ -1237,7 +1237,7 @@ class RLOOTrainer_NEW(Trainer):
         sequence_logps = (per_token_logps * completion_mask).sum(-1)
 
         # for calculating the advantages, we need to gather the rewards
-        all_rewards = rewards.clone()
+        #all_rewards = rewards.clone()
         rewards = gather(rewards)
 
         if self.normalize_rewards:
