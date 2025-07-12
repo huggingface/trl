@@ -1671,7 +1671,9 @@ class GRPOTrainer(Trainer):
                     )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id, padding_side="right")
+            completion_ids = pad(
+                completion_ids, padding_value=self.processing_class.pad_token_id, padding_side="right"
+            )
             prompt_ids = [torch.tensor(ids, device=device) for ids in paged_prompt_inputs.input_ids]
             prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id, padding_side="left")
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
