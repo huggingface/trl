@@ -185,15 +185,12 @@ class GRPOTrainerSlowTester(unittest.TestCase):
             )
 
             model = AutoModelForCausalLM.from_pretrained(model_name)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
             trainer = GRPOTrainer(
                 model=model,
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=self.train_dataset,
-                processing_class=tokenizer,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
