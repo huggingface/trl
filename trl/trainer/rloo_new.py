@@ -1233,7 +1233,7 @@ class RLOOTrainer_NEW(Trainer):
         per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
 
         # for rloo loss, we need to compute the sequence-level logprobs
-        sequence_logps = (per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+        sequence_logps = (per_token_logps * completion_mask).sum(-1)
 
         # for calculating the advantages, we need to gather the rewards
         all_rewards = rewards.clone()
