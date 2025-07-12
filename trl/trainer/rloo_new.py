@@ -1223,6 +1223,7 @@ class RLOOTrainer_NEW(Trainer):
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
+        prompts = [x["prompt"] for x in inputs]
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
         rewards = inputs["rewards"]
@@ -1244,8 +1245,8 @@ class RLOOTrainer_NEW(Trainer):
             rewards = torch.clamp(rewards, -self.reward_clip_range, self.reward_clip_range)
 
         process_slice = slice(
-            self.accelerator.process_index * all_rewards.shape[0],
-            (self.accelerator.process_index + 1) * all_rewards.shape[0],
+            self.accelerator.process_index * len(prompts),
+            (self.accelerator.process_index + 1) * len(prompts),
         )
 
         # Compute the KL divergence between the model and the reference model
