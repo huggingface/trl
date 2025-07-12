@@ -191,9 +191,9 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-        top_entropy_quantile (`float`, *optional*, defaults to `0.0`):
+        top_entropy_quantile (`float`, *optional*, defaults to `1.0`):
             ρ parameter from [Beyond the 80/20 Rule](https://huggingface.co/papers/2506.01939). Keeps in the policy
-            loss term only the top-ρ quantile of tokens by entropy of the probability distribution at each sequence 
+            loss term only the top-ρ quantile of tokens by entropy of the probability distribution at each sequence
             position, improving results. Range: `[0.0-1.0]`. A value of `1.0` masks all but the highest entropy token;
             `0.0` keeps all tokens. The paper recommends a value of `0.2`.
             If used with `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
@@ -521,7 +521,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     top_entropy_quantile: float = field(
-        default=0.0,
+        default=1.0,
         metadata={
             "help": "ρ parameter from Beyond the 80/20 Rule. Keeps in the policy loss term only the top-ρ quantile of "
             "tokens by entropy of the probability distribution at each sequence position, improving results. Range: "
