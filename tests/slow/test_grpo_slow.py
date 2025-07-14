@@ -38,6 +38,7 @@ from transformers.testing_utils import (
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
+    require_vllm,
     torch_device,
 )
 from transformers.utils import is_peft_available
@@ -342,6 +343,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
 
         release_memory(model, trainer)
 
+    @require_vllm
     @require_bitsandbytes
     @require_peft
     def test_vlm_processor_vllm_colocate_mode(self):
