@@ -216,6 +216,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
         sampled = list(sampler)
+        # one element is dropped, because it's not enough to form a batch
         assert len(sampled) == 2 * (len(dataset) - 1)
         assert set(sampled).issubset(set(range(len(dataset))))
         assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
