@@ -14,7 +14,6 @@
 
 import inspect
 import os
-import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path

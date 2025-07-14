@@ -14,7 +14,6 @@
 
 import os
 import textwrap
-import warnings
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, Union

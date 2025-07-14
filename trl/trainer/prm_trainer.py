@@ -15,7 +15,6 @@
 import inspect
 import os
 import textwrap
-import warnings
 from itertools import chain
 from pathlib import Path
 from typing import Callable, Optional, Union

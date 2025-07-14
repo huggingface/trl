@@ -16,7 +16,6 @@ import inspect
 import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from operator import itemgetter
