@@ -359,9 +359,9 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
 def get_from_processor_or_tokenizer(processor, key):
     """Get an attribute from processor or its tokenizer (if it has one)."""
     if hasattr(processor, key):
-        return processor.key
+        return getattr(processor, key)
     elif hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, key):
-        return processor.tokenizer.key
+        return getattr(processor.tokenizer, key)
     return None
 
 

@@ -284,8 +284,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
                 gradient_accumulation_steps=2,  # Maintain effective batch size
                 num_generations=2,
                 max_completion_length=8,  # Much shorter completions
-                max_prompt_length=128,  # Limit prompt length to save memory
-                gradient_checkpointing=True,  # Enable gradient checkpointing
+                max_prompt_length=None,  # Don't limit prompt length for VLM
                 bf16=True,  # Use bfloat16 precision
                 max_steps=1,  # Only do 1 training step to save time and memory
                 report_to="none",
