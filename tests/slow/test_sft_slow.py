@@ -398,6 +398,18 @@ class SFTTrainerSlowTester(unittest.TestCase):
         Tests if passing use_liger=True to SFTConfig loads and runs the trainer with AutoLigerKernelForCausalLM as
         expected.
         """
+        import importlib
+
+        def cleanup_liger_patches(trainer):
+            """Clean up liger_kernel patches by reloading the model's specific module"""
+            try:
+                # Get the specific module that was used by the trainer's model
+                module_path = trainer.model.__module__
+                reload_module = importlib.import_module(module_path)
+                importlib.reload(reload_module)
+            except Exception:
+                pass  # Continue if reload fails
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 output_dir=tmp_dir,
@@ -416,6 +428,9 @@ class SFTTrainerSlowTester(unittest.TestCase):
                 train_dataset=self.train_dataset,
                 eval_dataset=self.eval_dataset,
             )
+
+            # Register cleanup now that we have the trainer
+            self.addCleanup(cleanup_liger_patches, trainer)
 
             trainer.train()
 

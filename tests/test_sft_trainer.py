@@ -126,6 +126,53 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, 4, 5]]))
 
+    def test_packing_drops_attention_mask_for_flash_attention(self):
+        """Test that when using packing with position_ids, attention_mask is dropped with fa2."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, return_position_ids=True)
+
+        # Simulate packed sequences with position_ids that restart (typical of BFD packing)
+        examples = [
+            {
+                "input_ids": [1, 2, 3, 4, 5, 6, 7, 8],  # Packed: [1,2,3] + [4,5] + [6,7,8]
+                "seq_lengths": [3, 2, 3],
+            }
+        ]
+
+        result = collator(examples)
+
+        # Verify that attention_mask is NOT present - this allows flash attention to use position_ids
+        self.assertNotIn("attention_mask", result, "attention_mask should be dropped for packing with position_ids")
+
+        # Verify essential keys are present
+        self.assertIn("input_ids", result)
+        self.assertIn("position_ids", result)
+        self.assertIn("labels", result)
+
+        # Verify the data is correctly processed
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 0, 1, 2]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]))
+
+    def test_padding_free_without_position_ids_keeps_attention_mask(self):
+        """
+        Test that padding_free mode without explicit position_ids still creates attention_mask.
+        """
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, return_position_ids=True)
+
+        # Examples without position_ids (not packed)
+        examples = [{"input_ids": [1, 2, 3, 4, 5]}]
+
+        result = collator(examples)
+
+        # Should still have attention_mask since no packed position_ids
+        self.assertIn("attention_mask", result, "attention_mask should be present when no packed position_ids")
+        self.assertIn("position_ids", result)
+        self.assertIn("input_ids", result)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 3, 4]]))
+
     def test_pad_to_multiple_of(self):
         """Test padding to multiple of specified value."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, pad_to_multiple_of=4)
@@ -141,7 +188,7 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
     def test_custom_position_ids(self):
         """Test handling of custom position IDs in examples."""
         self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
-        examples = [{"input_ids": [1, 2, 3], "position_ids": [0, 0, 1]}, {"input_ids": [4, 5], "position_ids": [0, 1]}]
+        examples = [{"input_ids": [1, 2, 3], "seq_lengths": [1, 2]}, {"input_ids": [4, 5], "seq_lengths": [2]}]
 
         result = self.collator(examples)
 
@@ -1082,16 +1129,20 @@ add_generation_prompt %}ASSISTANT: {% endif %}"""
 
 # This new tester aims to replace the first one at some point
 class SFTTrainerTester2(unittest.TestCase):
-    def test_train(self):
+    @parameterized.expand(
+        [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM",),
+        ]
+    )
+    def test_train(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1349,7 +1400,7 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-    @parameterized.expand([("ffd",), ("wrapped",)])
+    @parameterized.expand([("bfd",), ("wrapped",)])
     def test_train_packing(self, packing_strategy):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
