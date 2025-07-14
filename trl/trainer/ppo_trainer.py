@@ -12,27 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import gc
+import inspect
 import math
 import os
 import textwrap
 import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
-import functools
 from pathlib import Path
 from typing import Optional, Union
-import inspect
 
 import numpy as np
 import pandas as pd
-from packaging import version
 import torch
 import torch.nn as nn
 from accelerate import Accelerator
-from accelerate.utils import broadcast, gather_object
 from accelerate import __version__ as accelerate_version
+from accelerate.utils import broadcast, gather_object
 from datasets import Dataset
+from packaging import version
 from torch.utils.data import DataLoader
 from transformers import (
     BaseImageProcessor,
@@ -282,7 +282,9 @@ class PPOTrainer(Trainer):
         # sync random states for DataLoader(shuffle=True) before `accelerator.prepare`
         # see https://gist.github.com/vwxyzjn/2581bff1e48e185e0b85b6dfe1def79c
         torch.manual_seed(args.seed)
-        self.model, self.optimizer, self.dataloader = self.accelerator.prepare(self.model, self.optimizer, self.dataloader)
+        self.model, self.optimizer, self.dataloader = self.accelerator.prepare(
+            self.model, self.optimizer, self.dataloader
+        )
         torch.manual_seed(self.local_seed)  # reset the local seed again
 
         self.eval_dataloader = DataLoader(
@@ -334,7 +336,7 @@ class PPOTrainer(Trainer):
 
         if is_accelerate_available("0.28.0"):
             from accelerate.utils import DataLoaderConfiguration
-        
+
             # Extract dataloader config params from accelerator config
             dataloader_params = ["split_batches", "dispatch_batches", "even_batches", "use_seedable_sampler"]
             dataloader_config = DataLoaderConfiguration(
@@ -371,6 +373,7 @@ class PPOTrainer(Trainer):
             self.is_tp_enabled = True
             if version.parse(accelerate_version) > version.parse("1.3.0"):
                 from accelerate.utils import TorchTensorParallelPlugin
+
                 args["torch_tp_plugin"] = TorchTensorParallelPlugin(tp_size=self.model.tp_size)
             else:
                 raise ValueError("Requires accelerate>1.3.0 to use Tensor Parallelism.")
