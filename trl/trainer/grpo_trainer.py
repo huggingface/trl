@@ -290,6 +290,12 @@ def identity(x):
     return x
 
 
+def remove_lora_prefixes(name: str) -> str:
+    for extra in ("base_model.model.", ".base_layer", ".lora_layer"):
+        name = name.replace(extra, "")
+    return name
+
+
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -910,7 +916,7 @@ class GRPOTrainer(Trainer):
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         return {"logps": logps, "entropies": entropies}
 
-    def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
+    def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None, summon_full_params: bool = True):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         if visited is None:
             visited = set()
@@ -922,15 +928,20 @@ class GRPOTrainer(Trainer):
             )  # recurse into the child
 
         if isinstance(module, FSDP):
-            with FSDP.summon_full_params(module, recurse=False, writeback=False):
+            ctx = FSDP.summon_full_params(module, recurse=False, writeback=False) if summon_full_params else nullcontext()
+            with ctx:
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
                     for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
                         full_name = full_name.replace(extra, "")
+                    full_name = remove_lora_prefixes(full_name)
 
                     if full_name in visited:
                         continue  # skip FSDP subtrees already traversed
                     visited.add(full_name)
+                    if "lora" in full_name:
+                        # We merge lora parameters into the base model parameters, so we don't need to update vLLM with them
+                        continue
 
                     if self.vllm_mode == "server" and self.accelerator.is_main_process:
                         self.vllm_client.update_named_param(full_name, param.data)
@@ -941,32 +952,37 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _move_model_to_vllm(self):
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
-        if zero_stage_3:
-            import deepspeed
-
-            gather_if_zero3 = deepspeed.zero.GatheredParameters
-        else:
-            gather_if_zero3 = nullcontext
+        def gather_if_zero3(params):
+            deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+            zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+            if zero_stage_3:
+                import deepspeed
+                return deepspeed.zero.GatheredParameters(params)
+            else:
+                return nullcontext()
+            
+        def summon_if_fsdp(module):
+            if self.is_fsdp_enabled:
+                return FSDP.summon_full_params(module, recurse=True)
+            else:
+                return nullcontext()
 
         if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
-            # TODO: does this work with FSDP?
-            with gather_if_zero3(list(self.model.parameters())):
+            with gather_if_zero3(list(self.model.parameters())), summon_if_fsdp(self.model):
                 self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
                 if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
                     # Update vLLM weights while parameters are gathered
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    self._sync_fsdp_params_to_vllm(self.model)
+                    self._sync_fsdp_params_to_vllm(self.model, summon_full_params=False)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name and discard some parameters
-                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        name = remove_lora_prefixes(name)
                         if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
@@ -985,7 +1001,7 @@ class GRPOTrainer(Trainer):
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:
-                self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
+                self._sync_fsdp_params_to_vllm(self.model, summon_full_params=True)  # use memory-efficient post-order traversal for FSDP
             else:
                 for name, param in self.model.named_parameters():
                     with gather_if_zero3([param]):
