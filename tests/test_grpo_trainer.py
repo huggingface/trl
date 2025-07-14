@@ -155,6 +155,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         assert len(sampled) == 2 * (
             len(dataset) - 1
         )  # one element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
         # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
         # Check that each element is repeated as expected
@@ -168,6 +169,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         sampled = list(sampler)
         # Check that the length is quadrupled
         assert len(sampled) == 4 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
         # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
         # Check that each element is repeated as expected
@@ -185,6 +187,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         sampled = list(sampler)
         # Check that the length is sextupled
         assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
         # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
         # Check that each element is repeated as expected
