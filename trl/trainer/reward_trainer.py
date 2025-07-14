@@ -52,6 +52,7 @@ from .utils import (
     get_comet_experiment_url,
     log_table_to_comet_experiment,
     print_rich_table,
+    warn0,
 )
 
 
@@ -154,7 +155,7 @@ class RewardTrainer(Trainer):
                     prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
 
                     if not _supports_gc_kwargs and args.gradient_checkpointing_kwargs is not None:
-                        warnings.warn(
+                        warn0(
                             "You passed `gradient_checkpointing_kwargs` in the trainer's kwargs, but your peft version does not support it. "
                             "please update to the latest version of peft to use `gradient_checkpointing_kwargs`.",
                             UserWarning,
@@ -189,7 +190,7 @@ class RewardTrainer(Trainer):
                 except FrozenInstanceError:
                     args = replace(args, remove_unused_columns=False)
                 # warn users
-                warnings.warn(
+                warn0(
                     "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,

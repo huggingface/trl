@@ -66,6 +66,7 @@ from .utils import (
     pad_to_length,
     peft_module_casting_to_bf16,
     selective_log_softmax,
+    warn0,
 )
 
 
@@ -495,7 +496,7 @@ class BCOTrainer(Trainer):
                 "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
             )
         if args.max_length is None:
-            warnings.warn(
+            warn0(
                 "When using DPODataCollatorWithPadding, you should set `max_length` in the `BCOConfig`. "
                 "It will be set to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -505,7 +506,7 @@ class BCOTrainer(Trainer):
             max_length = args.max_length
 
         if args.max_prompt_length is None:
-            warnings.warn(
+            warn0(
                 "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the `BCOConfig`. "
                 "It will be set to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -516,7 +517,7 @@ class BCOTrainer(Trainer):
 
         max_completion_length = None
         if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
+            warn0(
                 "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the BCOTrainer's init"
                 " it will be set to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -535,7 +536,7 @@ class BCOTrainer(Trainer):
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
-                warnings.warn(
+                warn0(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your BCOConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
@@ -573,7 +574,7 @@ class BCOTrainer(Trainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            warn0(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "

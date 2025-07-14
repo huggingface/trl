@@ -61,6 +61,7 @@ from .utils import (
     pad_to_length,
     peft_module_casting_to_bf16,
     selective_log_softmax,
+    warn0,
 )
 
 
@@ -230,7 +231,7 @@ class ORPOTrainer(Trainer):
         if processing_class is None:
             raise ValueError("processing_class must be specified to tokenize a ORPO dataset.")
         if args.max_length is None:
-            warnings.warn(
+            warn0(
                 "`max_length` is not set in the ORPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -239,7 +240,7 @@ class ORPOTrainer(Trainer):
         else:
             max_length = args.max_length
         if args.max_prompt_length is None:
-            warnings.warn(
+            warn0(
                 "`max_prompt_length` is not set in the ORPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -249,7 +250,7 @@ class ORPOTrainer(Trainer):
             max_prompt_length = args.max_prompt_length
 
         if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
+            warn0(
                 "When using an encoder decoder architecture, you should set `max_completion_length` in the ORPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -268,7 +269,7 @@ class ORPOTrainer(Trainer):
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
-                warnings.warn(
+                warn0(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
@@ -294,7 +295,7 @@ class ORPOTrainer(Trainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            warn0(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
@@ -897,9 +898,10 @@ class ORPOTrainer(Trainer):
         ignore_keys: Optional[list[str]] = None,
     ):
         if not self.use_dpo_data_collator:
-            warnings.warn(
+            warn0(
                 "prediction_step is only implemented for DPODataCollatorWithPadding, and you passed a datacollator that is different than "
-                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator"
+                "DPODataCollatorWithPadding - you might see unexpected behavior. Alternatively, you can implement your own prediction_step method if you are using a custom data collator",
+                state=self.accelerator.state,
             )
         if ignore_keys is None:
             if hasattr(model, "config"):

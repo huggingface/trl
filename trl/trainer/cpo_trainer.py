@@ -60,6 +60,7 @@ from .utils import (
     pad_to_length,
     peft_module_casting_to_bf16,
     selective_log_softmax,
+    warn0,
 )
 
 
@@ -226,7 +227,7 @@ class CPOTrainer(Trainer):
         if processing_class is None:
             raise ValueError("processing_class must be specified to tokenize a CPO dataset.")
         if args.max_length is None:
-            warnings.warn(
+            warn0(
                 "`max_length` is not set in the CPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -235,7 +236,7 @@ class CPOTrainer(Trainer):
         else:
             max_length = args.max_length
         if args.max_prompt_length is None:
-            warnings.warn(
+            warn0(
                 "`max_prompt_length` is not set in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -250,7 +251,7 @@ class CPOTrainer(Trainer):
             )
 
         if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
+            warn0(
                 "When using an encoder decoder architecture, you should set `max_completion_length` in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
                 UserWarning,
@@ -269,7 +270,7 @@ class CPOTrainer(Trainer):
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
-                warnings.warn(
+                warn0(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,
@@ -293,7 +294,7 @@ class CPOTrainer(Trainer):
         self.processing_class = processing_class
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
-            warnings.warn(
+            warn0(
                 f"You are using the {args.loss_type} loss type that does not support label smoothing. The "
                 "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
                 UserWarning,
@@ -308,7 +309,7 @@ class CPOTrainer(Trainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            warn0(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "

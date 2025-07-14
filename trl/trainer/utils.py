@@ -1892,3 +1892,13 @@ def print_prompt_completions_sample(
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
+
+
+def warn0(message, *args, state=None, **kwargs):
+    """
+    A wrapper for warnings.warn that only emits warnings on the main process (rank 0).
+    """
+    if state is None:
+        state = PartialState()
+    if state.is_main_process:
+        warnings.warn(message, *args, **kwargs)

@@ -34,6 +34,7 @@ from transformers import (
     ProcessorMixin,
     Trainer,
     is_wandb_available,
+    warn0,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
@@ -124,7 +125,7 @@ class PRMTrainer(Trainer):
                     prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
 
                     if not _supports_gc_kwargs and args.gradient_checkpointing_kwargs is not None:
-                        warnings.warn(
+                        warn0(
                             "You passed `gradient_checkpointing_kwargs` in the trainer's kwargs, but your peft version does not support it. "
                             "please update to the latest version of peft to use `gradient_checkpointing_kwargs`."
                         )

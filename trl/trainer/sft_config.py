@@ -18,6 +18,8 @@ from typing import Any, Optional
 
 from transformers import TrainingArguments
 
+from .utils import warn0
+
 
 @dataclass
 class SFTConfig(TrainingArguments):
@@ -254,7 +256,7 @@ class SFTConfig(TrainingArguments):
         super().__post_init__()
 
         if self.max_seq_length is not None:
-            warnings.warn(
+            warn0(
                 "`max_seq_length` is deprecated and will be removed in version 0.20.0. Use `max_length` instead.",
                 DeprecationWarning,
             )
