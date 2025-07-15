@@ -143,6 +143,28 @@ The DPO algorithm supports several loss functions. The loss function can be set 
 | `"apo_zero"` or `loss_type="apo_down"` | The [APO](https://huggingface.co/papers/2408.06266) method introduces an "anchored" version of the alignment objective. There are two variants: `apo_zero` and `apo_down`. The `apo_zero` loss increases the likelihood of winning outputs while decreasing the likelihood of losing outputs, making it suitable when the model is less performant than the winning outputs. On the other hand, `apo_down` decreases the likelihood of both winning and losing outputs, but with a stronger emphasis on reducing the likelihood of losing outputs. This variant is more effective when the model is better than the winning outputs.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `"discopop"`                           | The [DiscoPOP](https://huggingface.co/papers/2406.08414) paper uses LLMs to discover more efficient offline preference optimization losses. In the paper the proposed DiscoPOP loss (which is a log-ratio modulated loss) outperformed other optimization losses on different tasks (IMDb positive text generation, Reddit TLDR summarization, and Alpaca Eval 2.0).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 
+### Multi-loss combinations
+
+The DPO trainer supports combining multiple loss functions with different weights, enabling more sophisticated optimization strategies. This is particularly useful for implementing algorithms like MPO (Mixed Preference Optimization). MPO is a training approach that combines multiple optimization objectives, as described in the paper [Mixed Preference Optimization: Reinforcement Learning with Data Selection and Better Reference Model](https://huggingface.co/papers/2411.10442). 
+
+To combine multiple losses, specify the loss types and corresponding weights as lists:
+
+```python
+# MPO: Combines DPO (sigmoid) for preference and BCO (bco_pair) for quality
+training_args = DPOConfig(
+    loss_type=["sigmoid", "bco_pair"],
+    loss_weights=[1.0, 0.5]  # Corresponding weights
+)
+
+# Or using comma-separated string format
+training_args = DPOConfig(
+    loss_type="sigmoid,bco_pair",
+    loss_weights=[1.0, 0.5]
+)
+```
+
+If `loss_weights` is not provided, all loss types will have equal weights (1.0 by default).
+
 ### Label smoothing
 
 The [cDPO](https://ericmitchell.ai/cdpo.pdf) is a tweak on the DPO loss where we assume that the preference labels are noisy with some probability. In this approach, the `label_smoothing` parameter in the [`DPOConfig`] is used to model the probability of existing label noise. To apply this conservative loss, set `label_smoothing` to a value greater than 0.0 (between 0.0 and 0.5; the default is 0.0).

@@ -459,7 +459,7 @@ class DPOConfig(TrainingArguments):
         # Normalize loss_type to string format for internal use
         if isinstance(self.loss_type, list):
             self.loss_type = ",".join(self.loss_type)
-        
+
         # Handle loss_weights validation and conversion
         if self.loss_weights is not None:
             # Convert list format to dictionary format for internal use

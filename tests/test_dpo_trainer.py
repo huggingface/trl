@@ -285,6 +285,128 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
+    def test_mpo_functionality(self):
+        """Test MPO (Mixed Preference Optimization) functionality.
+
+        Tests multi-loss combinations, loss type inference, and weight configuration.
+        MPO combines DPO (sigmoid), BCO (bco_pair), and SFT (sft) losses.
+        """
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Test 1: Basic MPO with explicit loss_type
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                learning_rate=9e-1,
+                loss_type="sigmoid,bco_pair",
+                loss_weights=[1.0, 0.5],
+                report_to="none",
+                bf16=False,
+                fp16=False,
+                use_cpu=True,
+                max_steps=1,
+            )
+            trainer = DPOTrainer(
+                model=model_id,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+            # Test that training works
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Test 2: List format for loss_type and loss_weights
+            config_list = DPOConfig(
+                output_dir=tmp_dir,
+                loss_type=["sigmoid", "bco_pair", "sft"],
+                loss_weights=[1.0, 0.5, 0.1],
+                report_to="none",
+                bf16=False,
+                fp16=False,
+                use_cpu=True,
+            )
+            self.assertEqual(config_list.loss_type, "sigmoid,bco_pair,sft")
+            self.assertEqual(config_list.loss_weights, {"sigmoid": 1.0, "bco_pair": 0.5, "sft": 0.1})
+
+            # Test 2b: Mixed format - string loss_type with list loss_weights
+            config_mixed = DPOConfig(
+                output_dir=tmp_dir,
+                loss_type="sigmoid,bco_pair",
+                loss_weights=[1.0, 0.5],
+                report_to="none",
+                bf16=False,
+                fp16=False,
+                use_cpu=True,
+            )
+            self.assertEqual(config_mixed.loss_type, "sigmoid,bco_pair")
+            self.assertEqual(config_mixed.loss_weights, {"sigmoid": 1.0, "bco_pair": 0.5})
+
+            # Test 2c: Error when lengths don't match
+            with self.assertRaises(ValueError) as context:
+                DPOConfig(
+                    output_dir=tmp_dir,
+                    loss_type=["sigmoid", "bco_pair"],
+                    loss_weights=[1.0, 0.5, 0.1],  # Wrong length
+                    report_to="none",
+                    bf16=False,
+                    fp16=False,
+                    use_cpu=True,
+                )
+            self.assertIn("Length of loss_weights list", str(context.exception))
+
+            # Test 3: Complete MPO with SFT loss
+            mpo_config = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                learning_rate=9e-1,
+                loss_type=["sigmoid", "bco_pair", "sft"],
+                loss_weights=[1.0, 0.5, 0.1],
+                report_to="none",
+                bf16=False,
+                fp16=False,
+                use_cpu=True,
+                max_steps=1,
+            )
+            self.assertEqual(mpo_config.loss_type, "sigmoid,bco_pair,sft")
+
+            mpo_trainer = DPOTrainer(
+                model=model_id,
+                args=mpo_config,
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+            mpo_trainer.train()
+
+            # Verify SFT loss components are computed
+            with torch.no_grad():
+                batch = next(iter(mpo_trainer.get_train_dataloader()))
+                loss, metrics = mpo_trainer.get_batch_loss_metrics(mpo_trainer.model, batch)
+                self.assertIn("nll_loss", metrics)  # SFT loss should be computed
+                self.assertIsInstance(metrics["nll_loss"], float)
+
+            # Test 4: Multi-loss computation with mock data
+            batch_size = 2
+            chosen_logps = torch.randn(batch_size)
+            rejected_logps = torch.randn(batch_size)
+            ref_chosen_logps = torch.randn(batch_size)
+            ref_rejected_logps = torch.randn(batch_size)
+            model_output = {"nll_loss": torch.tensor(0.5)}
+
+            losses, chosen_rewards, rejected_rewards = trainer._compute_multi_loss(
+                chosen_logps, rejected_logps, ref_chosen_logps, ref_rejected_logps, model_output
+            )
+
+            # Verify output shapes and finite values
+            self.assertEqual(losses.shape, (batch_size,))
+            self.assertTrue(torch.all(torch.isfinite(losses)))
+            self.assertTrue(torch.all(torch.isfinite(chosen_rewards)))
+            self.assertTrue(torch.all(torch.isfinite(rejected_rewards)))
+
     @parameterized.expand(
         [
             (None, "Test when rpo_alpha is set to None"),
@@ -1027,7 +1149,7 @@ class DPOTrainerTester(unittest.TestCase):
             reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
             reference_rejected_logps = torch.FloatTensor([110.6, 0.5])
             losses, _, _ = trainer.dpo_loss(
-                "sigmoid", policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
             )
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
@@ -1070,7 +1192,7 @@ class DPOTrainerTester(unittest.TestCase):
             reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
             reference_rejected_logps = torch.FloatTensor([5.5, 0.5])
             losses, _, _ = trainer.dpo_loss(
-                "sigmoid", policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
             )
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 

@@ -1581,7 +1581,9 @@ class DPOTrainer(Trainer):
 
             # Compute the log probabilities of the labels
             output["nll_loss"] = F.cross_entropy(
-                torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=self.label_pad_token_id
+                torch.flatten(chosen_logits, end_dim=1),
+                torch.flatten(chosen_labels, end_dim=1),
+                ignore_index=self.label_pad_token_id,
             )
 
         if self.loss_type == "ipo":
