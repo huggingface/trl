@@ -910,6 +910,13 @@ class GRPOTrainer(Trainer):
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         return {"logps": logps, "entropies": entropies}
 
+    def _fix_param_name_to_vllm(self, name, extra_prefixes: Optional[list[str]] = None):
+        extra_prefixes = extra_prefixes or []
+        prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
+        for prefix in prefixes:
+            name = name.replace(prefix, "")
+        return name
+
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         if visited is None:
@@ -925,8 +932,7 @@ class GRPOTrainer(Trainer):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
-                    for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
-                        full_name = full_name.replace(extra, "")
+                    full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
 
                     if full_name in visited:
                         continue  # skip FSDP subtrees already traversed
@@ -972,7 +978,7 @@ class GRPOTrainer(Trainer):
                         # When module to save, remove its prefix and discard the original module
                         if "original_module" in name:
                             continue
-                        name = name.replace("modules_to_save.default.", "")
+                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
@@ -988,6 +994,7 @@ class GRPOTrainer(Trainer):
                 self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
             else:
                 for name, param in self.model.named_parameters():
+                    name = self._fix_param_name_to_vllm(name)
                     with gather_if_zero3([param]):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
