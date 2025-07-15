@@ -103,7 +103,7 @@ class DPOConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        loss_type (`str`, *optional*, defaults to `"sigmoid"`):
+        loss_type (`str` or `list[str]`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
@@ -454,6 +454,9 @@ class DPOConfig(TrainingArguments):
     )
 
     def __post_init__(self):
+        if self.loss_type is None:
+            self.loss_type = "sigmoid"
+
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         # Normalize loss_type to string format for internal use
