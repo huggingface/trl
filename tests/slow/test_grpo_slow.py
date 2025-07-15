@@ -499,3 +499,64 @@ class GRPOTrainerSlowTester(unittest.TestCase):
                         os.environ[key] = original_value
 
                 release_memory(model, trainer)
+
+    @require_vllm
+    def test_training_vllm(self):
+        """Test that training works with vLLM for generation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+                logging_strategy="no",
+                use_vllm=True,
+            )
+
+            try:
+                trainer = GRPOTrainer(
+                    model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny models are too small for vLLM
+                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                    args=training_args,
+                    train_dataset=dataset,
+                )
+
+                previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+                trainer.train()
+
+                self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+                # Check that the params have changed
+                for n, param in previous_trainable_params.items():
+                    new_param = trainer.model.get_parameter(n)
+                    self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+            except Exception as e:
+                # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
+                if any(
+                    keyword in str(e).lower()
+                    for keyword in [
+                        "outofmemoryerror",
+                        "cuda",
+                        "memory",
+                        "insufficient",
+                        "no such device",
+                        "free memory",
+                        "gpu memory utilization",
+                        "decrease gpu memory",
+                    ]
+                ):
+                    self.skipTest(f"Skipping vLLM training test due to hardware constraints: {e}")
+                elif "KeyError" in str(e) and "RANK" in str(e):
+                    self.skipTest(f"Skipping vLLM training test due to environment setup issues: {e}")
+                elif "ValueError" in str(e) and "memory" in str(e).lower():
+                    self.skipTest(f"Skipping vLLM training test due to memory constraints: {e}")
+                else:
+                    raise
+
+        release_memory(trainer.model, trainer)

@@ -19,15 +19,8 @@ from unittest.mock import patch
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-    BatchFeature,
-)
-from transformers.testing_utils import (
-    require_peft,
-)
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, BatchFeature
+from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -67,39 +60,6 @@ class SplitTensorDictTester(unittest.TestCase):
             self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
             self.assertIsNone(result[i]["y"])
 
-    def test_split_with_batch_feature(self):
-        batch_feature = BatchFeature(
-            {
-                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),
-                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]),
-                "pixel_values": torch.randn(4, 3, 224, 224),
-                "image_sizes": torch.tensor([[224, 224], [224, 224]]),
-                "spatial_merge_size": 2,
-            }
-        )
-
-        regular_tensor = torch.arange(8).reshape(4, 2)
-        tensor_dict = {"visual_inputs": batch_feature, "prompt_ids": regular_tensor}
-
-        result = split_tensor_dict(tensor_dict, 2)
-
-        self.assertEqual(len(result), 2)
-        for i in range(2):
-            self.assertIsInstance(result[i]["visual_inputs"], BatchFeature)
-            expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_sizes", "spatial_merge_size"}
-            self.assertEqual(set(result[i]["visual_inputs"].data.keys()), expected_keys)
-            self.assertEqual(result[i]["visual_inputs"]["input_ids"].shape, (2, 3))
-            self.assertEqual(result[i]["visual_inputs"]["attention_mask"].shape, (2, 3))
-            self.assertEqual(result[i]["visual_inputs"]["pixel_values"].shape, (2, 3, 224, 224))
-            self.assertEqual(result[i]["prompt_ids"].shape, (2, 2))
-            self.assertTrue(torch.equal(result[i]["visual_inputs"]["image_sizes"], batch_feature["image_sizes"]))
-            self.assertEqual(result[i]["visual_inputs"]["spatial_merge_size"], batch_feature["spatial_merge_size"])
-
-        self.assertTrue(torch.equal(result[0]["visual_inputs"]["input_ids"], batch_feature["input_ids"][:2]))
-        self.assertTrue(torch.equal(result[1]["visual_inputs"]["input_ids"], batch_feature["input_ids"][2:]))
-        self.assertTrue(torch.equal(result[0]["prompt_ids"], regular_tensor[:2]))
-        self.assertTrue(torch.equal(result[1]["prompt_ids"], regular_tensor[2:]))
-
 
 class ShuffleTensorDictTester(unittest.TestCase):
     def test_shuffle_preserves_shape(self):
@@ -113,12 +73,14 @@ class ShuffleTensorDictTester(unittest.TestCase):
         self.assertEqual(shuffled["y"].shape, y.shape)
 
     def test_shuffle_consistent_across_tensors(self):
+        # Use known patterns to check alignment
         x = torch.tensor([[10, 11], [20, 21], [30, 31]])
         y = torch.tensor([[1], [2], [3]])
         tensor_dict = {"x": x.clone(), "y": y.clone()}
 
         shuffled = shuffle_tensor_dict(tensor_dict)
 
+        # Build a reverse map from shuffled x rows to y values
         for i in range(3):
             x_row = shuffled["x"][i]
             y_val = shuffled["y"][i].item()
@@ -180,14 +142,51 @@ class ShuffleTensorDictTester(unittest.TestCase):
             self.assertIsNotNone(original_pos)
             self.assertTrue(torch.equal(shuffled_prompt_ids[i], regular_tensor[original_pos]))
 
+    def test_split_with_batch_feature(self):
+        batch_feature = BatchFeature(
+            {
+                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),
+                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]),
+                "pixel_values": torch.randn(4, 3, 224, 224),
+                "image_sizes": torch.tensor([[224, 224], [224, 224]]),
+                "spatial_merge_size": 2,
+            }
+        )
+
+        regular_tensor = torch.arange(8).reshape(4, 2)
+        tensor_dict = {"visual_inputs": batch_feature, "prompt_ids": regular_tensor}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        self.assertEqual(len(result), 2)
+        for i in range(2):
+            self.assertIsInstance(result[i]["visual_inputs"], BatchFeature)
+            expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_sizes", "spatial_merge_size"}
+            self.assertEqual(set(result[i]["visual_inputs"].data.keys()), expected_keys)
+            self.assertEqual(result[i]["visual_inputs"]["input_ids"].shape, (2, 3))
+            self.assertEqual(result[i]["visual_inputs"]["attention_mask"].shape, (2, 3))
+            self.assertEqual(result[i]["visual_inputs"]["pixel_values"].shape, (2, 3, 224, 224))
+            self.assertEqual(result[i]["prompt_ids"].shape, (2, 2))
+            self.assertTrue(torch.equal(result[i]["visual_inputs"]["image_sizes"], batch_feature["image_sizes"]))
+            self.assertEqual(result[i]["visual_inputs"]["spatial_merge_size"], batch_feature["spatial_merge_size"])
+
+        self.assertTrue(torch.equal(result[0]["visual_inputs"]["input_ids"], batch_feature["input_ids"][:2]))
+        self.assertTrue(torch.equal(result[1]["visual_inputs"]["input_ids"], batch_feature["input_ids"][2:]))
+        self.assertTrue(torch.equal(result[0]["prompt_ids"], regular_tensor[:2]))
+        self.assertTrue(torch.equal(result[1]["prompt_ids"], regular_tensor[2:]))
+
 
 class RepeatRandomSamplerTester(unittest.TestCase):
     def test_sampler(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 1, 1, 2, 2, 6, 6, 5, 5]
         sampled = list(sampler)
+        # Check that the length is doubled
         assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
         assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated twice
         assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
 
     def test_sampler_no_shuffle(self):
@@ -200,44 +199,69 @@ class RepeatRandomSamplerTester(unittest.TestCase):
     def test_sampler_no_repeat(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=1)
+        # Should output something like [4, 3, 0, 1, 2, 6, 5]
         sampled = list(sampler)
+        # Check that the length is the same
         assert len(sampled) == len(dataset)
+        # Check that all indexes are present
         assert set(sampled) == set(range(len(dataset)))
 
     def test_sampler_with_batch_size(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g", "h"]
         sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6, 5, 7, 5, 7]
         sampled = list(sampler)
+        # Check that the length is doubled
         assert len(sampled) == 2 * len(dataset)
+        # Check that all indexes are present
         assert set(sampled) == set(range(len(dataset)))
+        # Check that each element is repeated as expected
         assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
 
     def test_sampler_with_batch_size_and_drop(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
+        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6]
         sampled = list(sampler)
-        # one element is dropped, because it's not enough to form a batch
-        assert len(sampled) == 2 * (len(dataset) - 1)
+        # Check that the length is doubled
+        assert len(sampled) == 2 * (
+            len(dataset) - 1
+        )  # one element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
         assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
 
     def test_sampler_with_mini_repeat_count_and_batch_size_1(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
+        # Should output something like [4, 4, 3, 3, 0, 0, 4, 4, 3, 3, 0, 0,
+        #                               1, 1, 2, 2, 6, 6, 1, 1, 2, 2, 6, 6]
         sampled = list(sampler)
-        assert len(sampled) == 4 * (len(dataset) - 1)
+        # Check that the length is quadrupled
+        assert len(sampled) == 4 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
         assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        # Check that the batch is repeated as expected
         assert sampled[0:6] == sampled[6:12]
         assert sampled[12:18] == sampled[18:24]
 
     def test_sampler_with_mini_repeat_count_and_batch_size_2(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
+        # Should output something like [4, 4, 4, 3, 3, 3, 4, 4, 4, 3, 3, 3,
+        #                               0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1,
+        #                               2, 2, 2, 6, 6, 6, 2, 2, 2, 6, 6, 6]
         sampled = list(sampler)
-        assert len(sampled) == 6 * (len(dataset) - 1)
+        # Check that the length is sextupled
+        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
         assert all(sampled[i] == sampled[i + 1] == sampled[i + 2] for i in range(0, len(sampled), 3))
+        # Check that the batch is repeated as expected
         assert sampled[0:6] == sampled[6:12]
         assert sampled[12:18] == sampled[18:24]
         assert sampled[24:30] == sampled[30:36]
@@ -245,10 +269,17 @@ class RepeatRandomSamplerTester(unittest.TestCase):
     def test_sampler_with_mini_repeat_count_and_batch_size_3(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
+        # Should output something like [4, 4, 3, 3, 4, 4, 3, 3, 4, 4, 3, 3,
+        #                               0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
+        #                               2, 2, 6, 6, 2, 2, 6, 6, 2, 2, 6, 6]
         sampled = list(sampler)
-        assert len(sampled) == 6 * (len(dataset) - 1)
+        # Check that the length is sextupled
+        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
+        # Check that each element is repeated as expected
         assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
+        # Check that the batch is repeated as expected
         assert sampled[0:4] == sampled[4:8] == sampled[8:12]
         assert sampled[12:16] == sampled[16:20] == sampled[20:24]
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
@@ -256,6 +287,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
 class GRPOTrainerTester(unittest.TestCase):
     def test_init_minimal(self):
+        # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -270,10 +302,10 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -284,9 +316,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -298,10 +333,10 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=32,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=32,  # reduce the completion length to reduce memory usage
                 loss_type=loss_type,
                 report_to="none",
             )
@@ -313,9 +348,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -326,10 +364,10 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                per_device_train_batch_size=3,
-                per_device_eval_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 eval_strategy="steps",
                 eval_steps=2,
                 report_to="none",
@@ -341,6 +379,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 train_dataset=dataset["train"],
                 eval_dataset=dataset["test"],
             )
+
             trainer.train()
 
     def test_training_multiple_iterations(self):
@@ -349,10 +388,10 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 num_iterations=2,
                 report_to="none",
             )
@@ -364,9 +403,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -380,10 +422,10 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -395,24 +437,28 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the peft params have changed and the base model params have not changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                if n in base_param_names:
+                if n in base_param_names:  # We expect the base model params to be the same
                     self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
-                elif "base_layer" not in n:
+                elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
     @require_peft
     def test_training_peft_with_gradient_checkpointing(self):
+        """Test that training works with PEFT and gradient checkpointing enabled."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            torch_dtype=torch.float32,
-            use_cache=False,
+            torch_dtype=torch.float32,  # Use float32 for testing to avoid precision issues
+            use_cache=False,  # Required for gradient checkpointing
         )
 
         lora_config = LoraConfig(
@@ -426,7 +472,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=3,
                 num_generations=3,
                 max_completion_length=8,
-                gradient_checkpointing=True,
+                gradient_checkpointing=True,  # Enable gradient checkpointing
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -437,63 +483,79 @@ class GRPOTrainerTester(unittest.TestCase):
                 peft_config=lora_config,
             )
 
+            # Verify gradient checkpointing is enabled
             self.assertIsInstance(trainer.model, PeftModel)
+
+            # Store initial parameters to check which ones change
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that only LoRA parameters have changed, base model parameters remain unchanged
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                if "lora" in n.lower():
+                if "lora" in n.lower():  # LoRA parameters should change
                     self.assertFalse(torch.equal(param, new_param), f"LoRA parameter {n} has not changed.")
-                else:
+                else:  # Base model parameters should not change
                     self.assertTrue(torch.equal(param, new_param), f"Base parameter {n} has changed.")
 
     def test_training_different_reward_model(self):
+        # Use a reward model different from the model: different chat template, tokenization, etc.
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
         reward_model_id = "trl-internal-testing/tiny-LlamaForSequenceClassification-3.2"
         reward_model = AutoModelForSequenceClassification.from_pretrained(reward_model_id)
         reward_tokenizer = AutoTokenizer.from_pretrained(reward_model_id)
+        # By default, the trainer uses the eos token as the padding token. However, for Llama models, the eos token
+        # appears in the chat template. Using it as a pad token disrupts the reward calculation, as the calculation
+        # considers the score of the last token before the first pad token. To ensure correct reward calculations,
+        # we use a separate pad token instead.
         reward_tokenizer.pad_token = "<|finetune_right_pad_id|>"
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs=reward_model,
-                reward_processing_classes=reward_tokenizer,
                 args=training_args,
                 train_dataset=dataset,
+                reward_processing_classes=reward_tokenizer,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_reward_func_standard(self):
+        # Test if trainer can handle reward function with standard format
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
-            return [float(len(set(completion))) for completion in completions]
+            """Reward function that rewards longer completions."""
+            return [float(len(completion)) for completion in completions]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -504,26 +566,32 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_reward_func_conversational(self):
+        # Test if trainer can handle reward function with conversational format
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
-            return [float(len(set(completion[0]["content"]))) for completion in completions]
+            """Reward function that gives higher scores to longer completion content."""
+            completion_contents = [completion[0]["content"] for completion in completions]
+            return [float(len(content)) for content in completion_contents]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -534,29 +602,35 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_multiple_reward_funcs(self):
+        # Test that GRPOTrainer can be instantiated with multiple reward functions
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func1(completions, **kwargs):
+            """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
         def reward_func2(completions, **kwargs):
+            """Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -567,21 +641,27 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_multiple_reward_funcs_with_None_output(self):
+        """Test that a valid math reward function is processed correctly while the code reward function returns None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def applicable_reward_func(completions, **kwargs):
+            """A reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
         def non_applicable_reward_func(completions, **kwargs):
-            return [None for _ in completions]
+            """A reward function that returns None for all inputs, as it is not applicable to this sample."""
+            return [None] * len(completions)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
@@ -592,39 +672,51 @@ class GRPOTrainerTester(unittest.TestCase):
                 max_completion_length=8,
                 report_to="none",
             )
+
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=[applicable_reward_func, non_applicable_reward_func],
+                reward_funcs=[
+                    applicable_reward_func,
+                    non_applicable_reward_func,
+                ],  # One applicable, one non applicable
                 args=training_args,
                 train_dataset=dataset,
             )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            previous_trainable_params = {
+                n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
+            }
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_multiple_reward_funcs_with_weights(self):
+        """Test that GRPOTrainer can handle multiple reward functions with weights."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func1(completions, **kwargs):
+            """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
         def reward_func2(completions, **kwargs):
+            """Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                reward_weights=[0.3, 0.7],
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
+                reward_weights=[0.7, 0.3],  # weight of reward_func1 and reward_func2 respectively
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -634,26 +726,36 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-            trainer.train()
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            trainer.train()
+
+            # Check that training logs contain both reward metrics
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            self.assertIn("rewards/reward_func1/mean", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func1/std", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func2/mean", trainer.state.log_history[-1])
+            self.assertIn("rewards/reward_func2/std", trainer.state.log_history[-1])
+
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_multiple_mixed_reward_funcs(self):
+        # Test if the trainer can handle a mix of reward functions and reward models
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -664,28 +766,35 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_reward_func_additional_column(self):
+        # Test if trainer can handle reward function that rely on additional columns in the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        dataset = dataset.map(lambda x: {"some_values": list(range(10))})
+
+        # Add a column to the dataset (dummy example, the column could be anything)
+        some_values = list(range(len(dataset)))
+        dataset = dataset.add_column("some_values", some_values)
 
         def reward_func(completions, some_values, **kwargs):
-            return [float(len(completion)) + sum(some_values[i]) for i, completion in enumerate(completions)]
+            """Reward function that rewards completions with lengths closer to the values in some_values."""
+            return [float(abs(len(completion) - value)) for completion, value in zip(completions, some_values)]
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                remove_unused_columns=False,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -696,40 +805,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
-    @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
-    def test_training_vllm(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                report_to="none",
-                use_vllm=True,
-            )
-
-            trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
-
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-            trainer.train()
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -740,13 +821,12 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 sync_ref_model=True,
-                ref_model_mixup_alpha=0.6,
-                ref_model_sync_steps=2,
+                ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -757,24 +837,26 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                beta=0.1,
+                beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -785,25 +867,28 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_with_entropy_filter(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                token_entropy_percentile_threshold=0.8,
+                beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
+                token_entropy_percentile_threshold=0.8,
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -813,9 +898,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -824,78 +912,95 @@ class GRPOTrainerTester(unittest.TestCase):
     @require_peft
     @require_vllm
     def test_training_vllm_and_peft(self):
+        """Test that training works with vLLM for generation."""
+        model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
             )
-
+            lora_config = LoraConfig(
+                target_modules="all-linear",
+                # test with non-default modules as it add extra keys in state_dict tht we need to handle
+                modules_to_save=["embed_tokens", "lm_head"],
+            )
             trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model=model,
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(),
+                peft_config=lora_config,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the peft params have changed and the base model params have not changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
-                if "lora" in n:
-                    self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+                if n in base_param_names:  # We expect the base model params to be the same
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                elif "base_layer" not in n and "original_module" not in n:
+                    # We expect the peft params to be different (except for the base layer)
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
     @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_guided_decoding(self):
+        """Test that training works with vLLM for generation with guided decoding."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
-                vllm_guided_decoding_regex=r"^[A-Za-z0-9 ]+$",
+                vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
             )
-
             trainer = GRPOTrainer(
-                model="Qwen/Qwen2.5-0.5B-Instruct",
+                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_with_additional_generation_kwargs(self):
+        """Test that training works with additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 top_p=0.9,
                 top_k=10,
@@ -911,9 +1016,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -921,15 +1029,16 @@ class GRPOTrainerTester(unittest.TestCase):
     @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_with_additional_generation_kwargs(self):
+        """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
                 use_vllm=True,
                 top_p=0.9,
@@ -939,16 +1048,19 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -959,10 +1071,10 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
                 scale_rewards=False,
                 report_to="none",
             )
@@ -974,22 +1086,30 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     @patch("transformers.generation.utils.GenerationMixin.generate")
     def test_training_with_mask_truncated_completions(self, mock_generate):
-        def fake_generate(*args, **kwargs):
-            prompt_ids = kwargs.get("input_ids", args[1] if len(args) > 1 else None)
+        """Test that training works with mask_truncated_completions=True parameter."""
+
+        # We mock the generate method because the model's random weights make it extremely unlikely to produce a
+        # sequence containing the EOS token within the allowed max_completion_length. As a result, all tokens are
+        # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
+        def fake_generate(prompt_ids, **kwargs):
+            # pad_token_id = 151643; eos_token_id = 151645
             completions_ids = torch.tensor(
                 [
-                    [1, 2, 3, 4, 5, 6, 7, 8],
-                    [9, 10, 11, 151645, 151643, 151643, 151643, 151643],
-                    [12, 13, 14, 15, 16, 17, 18, 151645],
+                    [1, 2, 3, 4, 5, 6, 7, 8],  # this one is truncated
+                    [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
+                    [12, 13, 14, 15, 16, 17, 18, 151645],  # particular case, eos is generated just within the limit
                 ],
                 device=prompt_ids.device,
             )
@@ -1002,11 +1122,11 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                mask_truncated_completions=True,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                mask_truncated_completions=True,  # Enable masking of truncated completions
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1017,24 +1137,35 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_with_mask_truncated_completions_all_masked(self):
+        """
+        Test that when all generated completions are truncated (i.e., none contain an EOS token), and
+        mask_truncated_completions=True, the model receives no effective learning signal and therefore does not update
+        its parameters.
+
+        Here, we don't mock the generate method, be we rely on the fact that the model the probability of generating
+        the EOS token is extremely low, so all generated completions are truncated.
+        """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                mask_truncated_completions=True,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                mask_truncated_completions=True,  # Enable masking of truncated completions
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1045,9 +1176,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
@@ -1058,11 +1192,11 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                max_completion_length=8,
-                num_generations=6,
-                gradient_accumulation_steps=2,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                num_generations=6,  # the number of generations is larger than the batch size, but
+                gradient_accumulation_steps=2,  # gradient accumulation should allow that
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1073,9 +1207,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -1086,11 +1223,11 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                delta=2.0,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                delta=2.0,  # set delta to a non-None value
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1101,9 +1238,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -1114,11 +1254,11 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                dataloader_num_workers=2,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                dataloader_num_workers=2,  # use multiple dataloader workers
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1129,9 +1269,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -1142,11 +1285,11 @@ class GRPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
                 output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                max_completion_length=8,
-                generation_kwargs={"do_sample": True, "top_k": 50, "length_penalty": -0.1},
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                generation_kwargs={"do_sample": True, "top_k": 50, "length_penalty": -0.1},  # Add some gen kwargs
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1157,9 +1300,12 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
             trainer.train()
+
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+            # Check that the params have changed
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -1170,6 +1316,7 @@ class GRPOTrainerTester(unittest.TestCase):
         def reward_func(completions, **kwargs):
             trainer_state = kwargs.get("trainer_state")
             assert trainer_state is not None
+            # transformers.TrainerState instance should have a `global_step` property.
             assert hasattr(trainer_state, "global_step")
             return [float(len(set(completion))) for completion in completions]
 
@@ -1190,18 +1337,26 @@ class GRPOTrainerTester(unittest.TestCase):
             trainer.train()
 
     def test_compute_entropy_mask(self):
+        """Test the _compute_entropy_mask method."""
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=GRPOConfig(token_entropy_percentile_threshold=0.8),
         )
 
+        # Create dummy entropies and completion mask
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         completion_mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
 
         entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
 
         self.assertEqual(entropy_mask.shape, entropies.shape)
+
+        # We have a total of 12 tokens out of which 10 are non-pad,
+        # for a token_entropy_percentile_threshold of 0.8,
+        # we expect the top 20% i.e 2 non-pad tokens corresponding to the highest entropy to be unmasked.
+        # In our example these will be the tokens corresponding to the entropies 0.9 and 1.0
+        # since 1.1 and 1.2 are pad tokens they are excluded from the entropy threshold calculation.
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 1, 1, 0, 0]], dtype=torch.bool)
         self.assertTrue(torch.equal(entropy_mask, expected_mask))
 
