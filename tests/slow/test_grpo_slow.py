@@ -38,7 +38,6 @@ from transformers.testing_utils import (
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
-    require_vllm,
     torch_device,
 )
 from transformers.utils import is_peft_available
@@ -46,6 +45,7 @@ from transformers.utils import is_peft_available
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.utils import get_kbit_device_map
 
+from ..testing_utils import require_vllm
 from .testing_constants import MODELS_TO_TEST
 
 
@@ -230,20 +230,20 @@ class GRPOTrainerSlowTester(unittest.TestCase):
         - Gradient checkpointing and bfloat16
         """
 
-        def data_gen(num_samples):
-            processor = AutoProcessor.from_pretrained(model_name, use_fast=True, padding_side="left")
-            conversation = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image"},
-                        {"type": "text", "text": "What is in the image?"},
-                    ],
-                },
-            ]
-            prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
-            del processor
+        # Create processor once outside the data generator
+        processor = AutoProcessor.from_pretrained(model_name, use_fast=True, padding_side="left")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": "What is in the image?"},
+                ],
+            },
+        ]
+        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
 
+        def data_gen(num_samples):
             for _ in range(num_samples):
                 yield {
                     "prompt": prompt,
@@ -270,7 +270,6 @@ class GRPOTrainerSlowTester(unittest.TestCase):
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
-
 
         def reward_func(prompts, completions, **kwargs):
             # simple nonsensical reward
@@ -377,7 +376,9 @@ class GRPOTrainerSlowTester(unittest.TestCase):
             )
 
             # Create a VLM processor
-            processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-Instruct", use_fast=True, padding_side="left")
+            processor = AutoProcessor.from_pretrained(
+                "HuggingFaceTB/SmolVLM-Instruct", use_fast=True, padding_side="left"
+            )
 
             # Verify processor has both required attributes for VLM detection
             self.assertTrue(hasattr(processor, "tokenizer"))
