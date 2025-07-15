@@ -296,13 +296,13 @@ class DPOTrainerTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            # Test 1: Basic MPO with explicit loss_type
+            # Test 1: Basic MPO with explicit loss_type (including SFT)
             training_args = DPOConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
                 learning_rate=9e-1,
-                loss_type="sigmoid,bco_pair",
-                loss_weights=[1.0, 0.5],
+                loss_type="sigmoid,bco_pair,sft",
+                loss_weights=[1.0, 0.5, 0.1],
                 report_to="none",
                 bf16=False,
                 fp16=False,
@@ -319,6 +319,12 @@ class DPOTrainerTester(unittest.TestCase):
             # Test that training works
             trainer.train()
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Verify SFT loss is computed in the first test too
+            with torch.no_grad():
+                batch = next(iter(trainer.get_train_dataloader()))
+                loss, metrics = trainer.get_batch_loss_metrics(trainer.model, batch)
+                self.assertIn("nll_loss", metrics)  # SFT loss should be computed
 
             # Test 2: List format for loss_type and loss_weights
             config_list = DPOConfig(
