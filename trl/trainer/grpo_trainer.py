@@ -963,7 +963,7 @@ class GRPOTrainer(Trainer):
             data_source=dataset,
             mini_repeat_count=self.num_generations,
             batch_size=self.args.generation_batch_size // self.num_generations,
-            repeat_count=self.num_iterations,
+            repeat_count=self.num_iterations * self.args.steps_per_generation,
             shuffle=self.shuffle_dataset,
             seed=self.args.seed,
         )
