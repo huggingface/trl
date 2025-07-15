@@ -1371,7 +1371,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         self.assertTrue(torch.equal(entropy_mask, expected_mask))
 
-        def test_prepare_input_called_with_correct_data(self):
+    def test_prepare_input_called_with_correct_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
