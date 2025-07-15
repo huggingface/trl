@@ -231,7 +231,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
         """
 
         def data_gen(num_samples):
-            processor = AutoProcessor.from_pretrained(model_name)
+            processor = AutoProcessor.from_pretrained(model_name, use_fast=True, padding_side="left")
             conversation = [
                 {
                     "role": "user",
