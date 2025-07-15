@@ -271,7 +271,6 @@ class GRPOTrainerSlowTester(unittest.TestCase):
             quantization_config=quantization_config,
         )
 
-        processor = AutoProcessor.from_pretrained(model_name)
 
         def reward_func(prompts, completions, **kwargs):
             # simple nonsensical reward
