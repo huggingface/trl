@@ -377,7 +377,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
             )
 
             # Create a VLM processor
-            processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-Instruct")
+            processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-Instruct", use_fast=True, padding_side="left")
 
             # Verify processor has both required attributes for VLM detection
             self.assertTrue(hasattr(processor, "tokenizer"))
