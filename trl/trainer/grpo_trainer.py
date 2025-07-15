@@ -978,7 +978,7 @@ class GRPOTrainer(Trainer):
                         # When module to save, remove its prefix and discard the original module
                         if "original_module" in name:
                             continue
-                        full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["modules_to_save.default."])
+                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
