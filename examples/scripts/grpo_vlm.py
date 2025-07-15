@@ -21,9 +21,7 @@ accelerate launch \
     examples/scripts/grpo_vlm.py \
     --dataset_name lmms-lab/multimodal-open-r1-8k-verified \
     --model_name_or_path Qwen/Qwen2-VL-2B-Instruct \
-    --per_device_train_batch_size 8 \
     --output_dir grpo-Qwen2-VL-2B-Instruct \
-    --bf16 true \
     --torch_dtype bfloat16 \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj"
@@ -84,6 +82,7 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config, split="train[:5%]")
+
     split_dataset = dataset.train_test_split(test_size=0.2, seed=42)
 
     SYSTEM_PROMPT = (

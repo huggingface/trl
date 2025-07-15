@@ -228,7 +228,7 @@ training_args = GRPOConfig(
 
 Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
 
-We provide a [small script](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
+We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
 
 <iframe
 	src="https://trl-lib-recommend-vllm-memory.hf.space"
@@ -242,7 +242,9 @@ If the recommended value does not work in your environment, we suggest adding a 
 </Tip>
 
 <Tip>
+
 By default, GRPO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, but you can override these values by setting the environment variables accordingly.
+
 </Tip>
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
@@ -329,7 +331,7 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
      - `completions_ids` (contains the tokenized completions),
-     - `trainer_state` ([`transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress. For more details on the available attributes, refer to the [`TrainerState`](https://huggingface.co/docs/transformers/main/en/main_classes/callback#transformers.TrainerState) documentation.
+     - `trainer_state` ([`transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -532,13 +534,14 @@ GRPO supports training Vision Language Models (VLMs) with comprehensive image pr
 
 - **Automatic VLM Detection**: GRPO automatically detects VLM processors (those with both `tokenizer` and `image_processor` attributes) and configures appropriate data handling
 - **Image Processing**: Supports various image formats and automatically processes images through the model's image processor
-- **vLLM Integration**: Full compatibility with vLLM acceleration in both server and colocate modes for VLMs
+- **vLLM Integration**: Full compatibility with vLLM acceleration in both `server` and `colocate` modes for VLMs
 - **Memory Optimization**: Supports 4-bit quantization with LoRA for memory-efficient VLM training
 - **Enhanced Data Collation**: Proper handling of VLM-specific data structures including `pixel_values`, `pixel_attention_mask`, and `image_sizes`
 
 ### Supported VLM Models
 
 The implementation has been tested with popular VLM architectures including:
+- **Qwen2.5-VL**: `Qwen/Qwen2.5-VL-3B-Instruct`
 - **Qwen2-VL**: `Qwen/Qwen2-VL-2B-Instruct`
 - **SmolVLM**: `HuggingFaceTB/SmolVLM-Instruct`
 
@@ -547,7 +550,7 @@ The implementation has been tested with popular VLM architectures including:
 We have an example script [examples/scripts/grpo_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) that you can use to train a VLM model. For example, to train a VLM model on the [multimodal-open-r1-8k-verified](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified) dataset, you can run the following command:
 
 ```bash
-accelerate launch
+accelerate launch \
     --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/grpo_vlm.py \
     --dataset_name lmms-lab/multimodal-open-r1-8k-verified \
@@ -570,8 +573,8 @@ When training VLMs, consider these configuration options:
 ### Performance Considerations
 
 - **Memory Usage**: VLMs require more memory due to image processing. Use quantization and LoRA for large models
-- **vLLM Support**: Most modern VLM models work with vLLM in both server and colocate modes
-- **Batch Size**: Start with smaller batch sizes due to increased memory requirements from images
+- **vLLM Support**: Most modern VLM models work with vLLM in both `server` and `colocate` modes
+- **Batch Size**: Start with smaller batch sizes due to increased memory requirements for images
 - **Generation Length**: Consider longer max completion lengths for detailed image descriptions
 
 ### Dataset Format
