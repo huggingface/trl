@@ -227,6 +227,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         assert len(sampled) == 2 * (
             len(dataset) - 1
         )  # one element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
         # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
         # Check that each element is repeated as expected
@@ -240,6 +241,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         sampled = list(sampler)
         # Check that the length is quadrupled
         assert len(sampled) == 4 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
         # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
         # Check that each element is repeated as expected
@@ -257,6 +259,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         sampled = list(sampler)
         # Check that the length is sextupled
         assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
+        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
         # Check that the sampled indexes are a subset of the dataset indexes
         assert set(sampled).issubset(set(range(len(dataset))))
         # Check that each element is repeated as expected
@@ -1367,6 +1370,58 @@ class GRPOTrainerTester(unittest.TestCase):
         entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
 
         self.assertTrue(torch.equal(entropy_mask, expected_mask))
+
+        def test_prepare_input_called_with_correct_data(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                gradient_accumulation_steps=3,  # can be anything in this test
+                # steps_per_generation*per_device_train_batch_size=24 is divisible by num_generations=4
+                steps_per_generation=4,
+                num_generations=4,
+                per_device_train_batch_size=6,  # reduce the batch size to reduce memory usage
+                num_iterations=2,
+                shuffle_dataset=False,
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+            # steps_per_generation=4, per_device_train_batch_size=6 and num_generations=4, so we expect a
+            # generation batch of 24 samples (steps_per_generation * per_device_train_batch_size), containing 6
+            # different prompts (steps_per_generation * per_device_train_batch_size // num_generations), each repeated
+            # 4 times (num_generations).
+            expected_first_generation_batch = (
+                [{"prompt": "Beautiful is better than"}] * 4
+                + [{"prompt": "Explicit is"}] * 4
+                + [{"prompt": "Simple is better"}] * 4
+                + [{"prompt": "Complex"}] * 4
+                + [{"prompt": "Flat is better than"}] * 4
+                + [{"prompt": "Sparse is better"}] * 4
+            )
+            expected_second_generation_batch = (
+                [{"prompt": "Readability"}] * 4
+                + [{"prompt": "Special cases aren't special"}] * 4
+                + [{"prompt": "Although practicality beats"}] * 4
+                + [{"prompt": "Errors should never"}] * 4
+                + [{"prompt": "Unless explicitly"}] * 4
+                + [{"prompt": "In the face of ambiguity, refuse"}] * 4
+            )
+
+            with patch.object(GRPOTrainer, "training_step", wraps=trainer.training_step) as mock_prepare:
+                trainer.train()
+                # 3 epochs * 2 iterations * 2 generation batches to cover the dataset * 4 steps_per_generation
+                self.assertEqual(mock_prepare.call_count, 48)
+                for i in range(0, 8):  # Generation batch repeated 8 times (steps_per_generation*num_iterations)
+                    assert mock_prepare.call_args_list[i].args[1] == expected_first_generation_batch
+                for i in range(8, 16):
+                    assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
 
 
 class DualModeBatchingTester(unittest.TestCase):
