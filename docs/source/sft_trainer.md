@@ -662,7 +662,7 @@ trainer = SFTTrainer(
     args=training_args,
     data_collator=collate_fn,
     train_dataset=train_dataset,
-    processing_class=processor.tokenizer,
+    processing_class=processor,
 )
 ```
 
