@@ -509,7 +509,7 @@ class DPOTrainer(Trainer):
 
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        if self.loss_type == "bco_pair" or "bco_pair" in self.loss_type:
+        if "bco_pair" in self.loss_type:
             self.running = RunningMoments(self.accelerator)
 
     def _create_model_from_path(self, model_path: str, args: DPOConfig, is_ref: bool = False) -> PreTrainedModel:
@@ -1586,7 +1586,7 @@ class DPOTrainer(Trainer):
                 ignore_index=self.label_pad_token_id,
             )
 
-        if self.loss_type == "ipo":
+        if "ipo" in self.loss_type:
             all_logps = all_logps / loss_mask.sum(-1)
 
         if self.args.ld_alpha is not None and not is_ref_model:
@@ -1670,7 +1670,7 @@ class DPOTrainer(Trainer):
                 weight = 1.0  # Default weight when no loss_weights dictionary is provided
 
             # Handle SFT loss separately as it uses NLL loss from model output
-            if self.loss_type == "sft":
+            if "sft" in self.loss_type:
                 # SFT loss is the negative log likelihood loss on chosen responses
                 # This acts as the generation loss component in MPO
                 if model_output is None or "nll_loss" not in model_output:
