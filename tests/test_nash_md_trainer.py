@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -158,6 +158,38 @@ class TestNashMDTrainer(unittest.TestCase):
             trainer.train()
 
             # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @require_peft
+    def test_training_pre_pefted_model_implicit_ref_with_reward_model(self):
+        lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
+        # self.model from setUp is a base AutoModelForCausalLM
+        peft_model_instance = get_peft_model(self.model, lora_config)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = NashMDConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=1,  # Keep small for quick test
+                max_steps=2,  # Few steps
+                learning_rate=5.0e-7,
+                eval_strategy="no",
+                report_to="none",
+                remove_unused_columns=False,  # Important for the dummy dataset
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")["train"]
+
+            trainer = NashMDTrainer(
+                model=peft_model_instance,  # Pass the already PEFT model
+                ref_model=None,  # Implicit reference from peft_model_instance's base
+                reward_model=self.reward_model,  # To trigger GeometricMixtureWrapper path
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+                # peft_config is not passed, as model is already PEFT
+            )
+
+            trainer.train()
+
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])

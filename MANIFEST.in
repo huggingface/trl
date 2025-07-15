@@ -1,6 +1,6 @@
-include settings.ini
 include LICENSE
 include CONTRIBUTING.md
 include README.md
 recursive-exclude * __pycache__
 include trl/templates/*.md
+include trl/accelerate_configs/*.yaml

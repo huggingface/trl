@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,13 +13,13 @@
 # limitations under the License.
 
 import re
+import warnings
 from typing import Optional
 
 import torch
 from accelerate.utils import extract_model_from_parallel
 from transformers import StoppingCriteria, StoppingCriteriaList
-
-from ..import_utils import is_rich_available
+from transformers.utils import is_rich_available
 
 
 if is_rich_available():
@@ -145,8 +145,7 @@ class TextHistory:
         """
         if not is_rich_available():
             raise ImportError(
-                "The `rich` library is required to display text with formatting. "
-                "Install it using `pip install rich`."
+                "The `rich` library is required to display text with formatting. Install it using `pip install rich`."
             )
 
         text = Text(self.text)
@@ -224,7 +223,7 @@ class TextEnvironment:
         reward_fn=None,
         prompt=None,
         max_turns=4,
-        max_tool_reponse=100,
+        max_tool_response=100,
         max_length=None,
         generation_kwargs=None,
     ):
@@ -232,16 +231,29 @@ class TextEnvironment:
         Initialize TextEnvironment.
 
         Args:
-            model (`PreTrainedModelWrapper`): The model to use for generation.
-            tokenizer (`transformers.PreTrainedTokenizer`): The tokenizer to use for generation.
-            tools (list): A list of tools to use for interaction.
-            reward_fn (function): A function that takes a string and returns a reward.
-            prompt (str): The base prompt to use for generation. Is prepended to the tasks.
-            max_turns (Optional[int]): The maximum number of turns to allow.
-            max_tool_response (Optional[int]): The maximum number of characters to allow in a tool response.
-            max_length (Optional[int]): The maximum number of tokens to allow in an episode.
-            generation_kwargs (Optional[dict]): A dictionary of keyword arguments to pass to the model's generate method.
+            model (`PreTrainedModelWrapper`):
+                The model to use for generation.
+            tokenizer (`transformers.PreTrainedTokenizer`):
+                The tokenizer to use for generation.
+            tools (list):
+                A list of tools to use for interaction.
+            reward_fn (function):
+                A function that takes a string and returns a reward.
+            prompt (str):
+                The base prompt to use for generation. Is prepended to the tasks.
+            max_turns (Optional[int]):
+                The maximum number of turns to allow.
+            max_tool_response (Optional[int]):
+                The maximum number of characters to allow in a tool response.
+            max_length (Optional[int]):
+                The maximum number of tokens to allow in an episode.
+            generation_kwargs (Optional[dict]):
+                A dictionary of keyword arguments to pass to the model's generate method.
         """
+        warnings.warn(
+            "This class is deprecated and will be removed in version 0.21.0. To enable tool use with LLMs, check out smolagents (https://huggingface.co/docs/smolagents/index)",
+            DeprecationWarning,
+        )
         self.model = model
         self.tokenizer = tokenizer
         self.prompt = prompt
@@ -256,7 +268,7 @@ class TextEnvironment:
         self.response_token = "<response>"
         self.submit_token = "<submit>"
         self.max_turns = max_turns
-        self.max_tool_response = max_tool_reponse
+        self.max_tool_response = max_tool_response
 
         if generation_kwargs is None:
             self.generation_kwargs = dict()

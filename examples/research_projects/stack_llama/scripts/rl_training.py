@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -82,7 +82,7 @@ config = PPOConfig(
     batch_size=script_args.batch_size,
     mini_batch_size=script_args.mini_batch_size,
     gradient_accumulation_steps=script_args.gradient_accumulation_steps,
-    optimize_cuda_cache=True,
+    optimize_device_cache=True,
     early_stopping=script_args.early_stopping,
     target_kl=script_args.target_kl,
     ppo_epochs=script_args.ppo_epochs,

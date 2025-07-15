@@ -1,74 +1,99 @@
 # Logging
 
 As reinforcement learning algorithms are historically challenging to debug, it's important to pay careful attention to logging.
-By default, the TRL [`PPOTrainer`] saves a lot of relevant information to wandb or tensorboard.
+By default, TRL trainers like [`PPOTrainer`] and [`GRPOTrainer`] save a lot of relevant information to supported experiment trackers like Weights & Biases (wandb) or TensorBoard.
 
-Upon initialization, pass one of these two options to the [`PPOConfig`]:
+Upon initialization, pass the `report_to` argument to the respective configuration object (e.g., [`PPOConfig`] for `PPOTrainer`, or [`GRPOConfig`] for `GRPOTrainer`):
 
+```python
+# For PPOTrainer
+ppo_config = PPOConfig(
+    # ...,
+    report_to="wandb"  # or "tensorboard"
+)
+
+# For GRPOTrainer
+grpc_config = GRPOConfig(
+    # ...,
+    report_to="wandb"  # or "tensorboard"
+)
 ```
-training_args = PPOConfig(..., report_to="wandb")  # or "tensorboard"
-```
 
-If you want to log with tensorboard, add the kwarg `project_kwargs={"logging_dir": PATH_TO_LOGS}` to the PPOConfig.
+If you want to log with TensorBoard, you might also need to specify logging directories, for example, by adding `logging_dir=PATH_TO_LOGS` to the configuration object (e.g., `PPOConfig` or `GRPOConfig`).
 
 ## PPO Logging
 
 Here's a brief explanation for the logged metrics provided in the data:
 
-Key metrics to monitor. We want to maximize the reward, maintain a low KL divergence, and maximize entropy:
-1. `env/reward_mean`: The average reward obtained from the environment. Alias `ppo/mean_scores`, which is used to specifically monitor the reward model.
-1. `env/reward_std`: The standard deviation of the reward obtained from the environment. Alias ``ppo/std_scores`, which is used to specifically monitor the reward model.
-1. `env/reward_dist`: The histogram distribution of the reward obtained from the environment.
-1. `objective/kl`: The mean Kullback-Leibler (KL) divergence between the old and new policies. It measures how much the new policy deviates from the old policy. The KL divergence is used to compute the KL penalty in the objective function.
-1. `objective/kl_dist`: The histogram distribution of the `objective/kl`.
-1. `objective/kl_coef`: The coefficient for Kullback-Leibler (KL) divergence in the objective function. 
-1. `ppo/mean_non_score_reward`: The **KL penalty** calculated by `objective/kl * objective/kl_coef` as the total reward for optimization to prevent the new policy from deviating too far from the old policy.
-1. `objective/entropy`: The entropy of the model's policy, calculated by `-logprobs.sum(-1).mean()`. High entropy means the model's actions are more random, which can be beneficial for exploration.
-
-Training stats:
-1. `ppo/learning_rate`: The learning rate for the PPO algorithm.
-1. `ppo/policy/entropy`: The entropy of the model's policy, calculated by `pd = torch.nn.functional.softmax(logits, dim=-1); entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)`. It measures the randomness of the policy.
-1. `ppo/policy/clipfrac`: The fraction of probability ratios (old policy / new policy) that fell outside the clipping range in the PPO objective. This can be used to monitor the optimization process.
-1. `ppo/policy/approxkl`: The approximate KL divergence between the old and new policies, measured by `0.5 * masked_mean((logprobs - old_logprobs) ** 2, mask)`, corresponding to the `k2` estimator in http://joschu.net/blog/kl-approx.html
-1. `ppo/policy/policykl`: Similar to `ppo/policy/approxkl`, but measured by `masked_mean(old_logprobs - logprobs, mask)`, corresponding to the `k1` estimator in http://joschu.net/blog/kl-approx.html
-1. `ppo/policy/ratio`:  The histogram distribution of the ratio between the new and old policies, used to compute the PPO objective.
-1. `ppo/policy/advantages_mean`: The average of the GAE (Generalized Advantage Estimation) advantage estimates. The advantage function measures how much better an action is compared to the average action at a state.
-1. `ppo/policy/advantages`: The histogram distribution of `ppo/policy/advantages_mean`.
-1. `ppo/returns/mean`: The mean of the TD(λ) returns, calculated by `returns = advantage + values`, another indicator of model performance. See https://iclr-blog-track.github.io/2022/03/25/ppo-implementation-details/ for more details.
-1. `ppo/returns/var`: The variance of the TD(λ) returns, calculated by `returns = advantage + values`, another indicator of model performance.
-1. `ppo/val/mean`: The mean of the values, used to monitor the value function's performance.
-1. `ppo/val/var` : The variance of the values, used to monitor the value function's performance.
-1. `ppo/val/var_explained`: The explained variance for the value function, used to monitor the value function's performance.
-1. `ppo/val/clipfrac`: The fraction of the value function's predicted values that are clipped.
-1. `ppo/val/vpred`: The predicted values from the value function.
-1. `ppo/val/error`: The mean squared error between the `ppo/val/vpred` and returns, used to monitor the value function's performance.
-1. `ppo/loss/policy`: The policy loss for the Proximal Policy Optimization (PPO) algorithm.
-1. `ppo/loss/value`: The loss for the value function in the PPO algorithm. This value quantifies how well the function estimates the expected future rewards.
-1. `ppo/loss/total`: The total loss for the PPO algorithm. It is the sum of the policy loss and the value function loss.
-
-
-Stats on queries, responses, and logprobs:
-1. `tokens/queries_len_mean`: The average length of the queries tokens.
-1. `tokens/queries_len_std`: The standard deviation of the length of the queries tokens.
-1. `tokens/queries_dist`: The histogram distribution of the length of the queries tokens.
-1. `tokens/responses_len_mean`: The average length of the responses tokens.
-1. `tokens/responses_len_std`: The standard deviation of the length of the responses tokens.
-1. `tokens/responses_dist`: The histogram distribution of the length of the responses tokens. (Costa: inconsistent naming, should be `tokens/responses_len_dist`)
-1. `objective/logprobs`: The histogram distribution of the log probabilities of the actions taken by the model.
-1. `objective/ref_logprobs`: The histogram distribution of the log probabilities of the actions taken by the reference model.
-
-
+* `eps`: Tracks the number of episodes per second.
+* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
+* `objective/entropy`: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
+* `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
+* `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
+* `objective/scores`: The mean scores returned by the reward model / environment.
+* `policy/approxkl_avg`: The average approximate KL divergence between consecutive PPO policies. Note that this is not the same as `objective/kl`.
+* `policy/clipfrac_avg`: The average fraction of policy updates that are clipped, indicating how often the policy updates are constrained to prevent large changes.
+* `loss/policy_avg`: The average policy loss, indicating how well the policy is performing.
+* `loss/value_avg`: The average value loss, indicating the difference between the predicted value and the actual reward.
+* `val/clipfrac_avg`: The average fraction of value function updates that are clipped, similar to `policy/clipfrac_avg` but for the value function.
+* `policy/entropy_avg`: The average entropy of the policy during training, indicating how diverse the policy's actions are.
+* `val/ratio`: The mean ratio of the current policy probability to the old policy probability, providing a measure of how much the policy has changed.
+* `val/ratio_var`: The variance of the `val/ratio`, indicating the variability in policy changes.
+* `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
+* `lr`: The current learning rate used by the optimizer.
+* `episode`: The current episode count in the training process.
 
 ### Crucial values
 During training, many values are logged, here are the most important ones:
 
-1. `env/reward_mean`,`env/reward_std`, `env/reward_dist`: the properties of the reward distribution from the "environment" /  reward model
-1. `ppo/mean_non_score_reward`: The mean negated KL penalty during training (shows the delta between the reference model and the new policy over the batch in the step)
+1. `objective/scores`: The mean scores returned by the reward model / environment.
+1. `objective/rlhf_reward`: The mean RLHF reward. This is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
+1. `objective/non_score_reward`: The mean reward from non-score-related sources (e.g., KL penalty).
 
 Here are some parameters that are useful to monitor for stability (when these diverge or collapse to 0, try tuning variables):
 
-1. `ppo/loss/value`: it will spike / NaN when not going well.
-1. `ppo/policy/ratio`: `ratio` being 1 is a baseline value, meaning that the probability of sampling a token is the same under the new and old policy. If the ratio is too high like 200, it means the probability of sampling a token is 200 times higher under the new policy than the old policy. This is a sign that the new policy is too different from the old policy, which will likely cause overoptimization and collapse training later on.
-1. `ppo/policy/clipfrac` and `ppo/policy/approxkl`: if `ratio` is too high, the `ratio` is going to get clipped, resulting in high `clipfrac` and high `approxkl` as well.
-1. `objective/kl`: it should stay positive so that the policy is not too far away from the reference policy.
-1. `objective/kl_coef`: The target coefficient with [`AdaptiveKLController`]. Often increases before numerical instabilities.
+1. `loss/value_avg`: The average value loss. It will spike / NaN when not going well.
+1. `val/ratio`: The mean ratio of the current policy probability to the old policy probability. This number should float around 1.0. If this `ratio` is too high (e.g., 2.0 or 1000.0) or too small (e.g., 0.1), it means the updates between consecutive policies are too drastic.
+1. `policy/clipfrac_avg` and `policy/approxkl_avg`: If `val/ratio` is too high, the `ratio` is going to get clipped, resulting in high `policy/clipfrac_avg` and high `policy/approxkl_avg` as well.
+1. `objective/kl`: The mean KL divergence. It should stay positive and ideally not too large, so that the policy is not too far away from the reference policy.
+
+## GRPO Logging
+
+Here's a brief explanation for the logged metrics provided in the data for the GRPO trainer:
+
+* `num_tokens`: Total number of input tokens processed during training so far.
+
+**Completions:**
+* `completions/mean_length`: Mean length of all generated completions (including those not ending with an EOS token).
+* `completions/min_length`: Minimum length among all generated completions.
+* `completions/max_length`: Maximum length among all generated completions.
+* `completions/clipped_ratio`: The ratio of completions that did not end with an EOS token before reaching the maximum generation length (i.e., they were truncated).
+* `completions/mean_terminated_length`: Mean length of only those completions that successfully ended with an EOS token.
+* `completions/min_terminated_length`: Minimum length among completions that ended with an EOS token.
+* `completions/max_terminated_length`: Maximum length among completions that ended with an EOS token.
+
+**Rewards:**
+* `rewards/{reward_func_name}/mean`: The mean reward obtained from a specific, named reward function (e.g., `rewards/my_custom_reward/mean`). This is logged for each reward function used.
+* `rewards/{reward_func_name}/std`: The standard deviation of rewards from a specific, named reward function.
+* `reward`: The overall mean of the (potentially weighted and, if `args.scale_rewards` is true, normalized) rewards, after group-wise normalization (advantages).
+* `reward_std`: The standard deviation of the (potentially weighted) rewards *before* group-wise normalization for advantages.
+
+**Policy and Loss Metrics:**
+* `kl`: The mean Kullback-Leibler (KL) divergence between the current policy and the reference policy. This is logged only if `beta` (the KL coefficient in `GRPOConfig`) is non-zero.
+* If Liger GRPOLoss is used (`use_liger_loss: True` in `GRPOConfig`):
+    *   `clip_ratio`: The fraction of policy updates where the probability ratio was clipped according to the GRPO loss's epsilon bounds.
+* If standard GRPOLoss is used (`use_liger_loss: False`):
+    *   `clip_ratio/low_mean`: The mean fraction of instances where the probability ratio `r_t(θ)` was clipped at the lower bound `1 - epsilon_low` (occurs when advantage is negative and ratio is below the bound).
+    *   `clip_ratio/low_min`: The minimum observed fraction for `clip_ratio/low_mean` across batches/processes.
+    *   `clip_ratio/high_mean`: The mean fraction of instances where the probability ratio `r_t(θ)` was clipped at the upper bound `1 + epsilon_high` (occurs when advantage is positive and ratio is above the bound).
+    *   `clip_ratio/high_max`: The maximum observed fraction for `clip_ratio/high_mean` across batches/processes.
+    *   `clip_ratio/region_mean`: The mean fraction of instances where the probability ratio was clipped at either the lower or upper bound.
+
+### Crucial GRPO values
+During GRPO training, monitor these values for insights into performance and stability:
+
+1.  `reward`: This is the primary objective. It reflects the (group-wise normalized) rewards the policy is achieving. It should generally increase during successful training.
+1.  `kl`: If `beta > 0`, this tracks the divergence from the reference model. Keep an eye on it to ensure the policy doesn't stray too far, which can lead to instability.
+1.  `clip_ratio/*` (either `clip_ratio` for Liger loss or the more detailed `clip_ratio/...` metrics for standard loss): These indicate how often the policy updates are being constrained by the GRPO clipping mechanism. Very high values might suggest that the policy is trying to change too drastically (potentially due to large advantages or a learning rate that's too high) or that the epsilon clipping range is too restrictive.
+1.  `completions/clipped_ratio`: A high ratio here indicates that the model is frequently generating completions that are cut off by `max_completion_length` rather than naturally ending with an EOS token. This might suggest issues with learning sequence termination or that `max_completion_length` is too short.
+1. `rewards/{reward_func_name}/mean`: Monitoring the mean of individual reward functions can help diagnose which aspects of the desired behavior the model is learning or struggling with, especially when using multiple reward sources.

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,7 +27,6 @@ accelerate launch \
     --gradient_accumulation_steps=4 \
     --num_train_epochs=4 \
     --optim="adamw_torch_fused" \
-    --logging_steps=1 \
     --log_level="debug" \
     --log_level_replica="debug" \
     --save_strategy="steps" \
@@ -233,7 +232,7 @@ if __name__ == "__main__":
         train_dataset=prepared_dataset,
         data_collator=collate_fn,
         peft_config=peft_config,
-        tokenizer=processor.tokenizer,
+        processing_class=processor,
     )
 
     # Train model

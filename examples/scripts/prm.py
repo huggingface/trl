@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ python examples/scripts/prm.py \
     --num_train_epochs 1 \
     --gradient_checkpointing True \
     --learning_rate 1.0e-5 \
-    --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 50
 
@@ -35,7 +34,6 @@ python examples/scripts/prm.py \
     --num_train_epochs 1 \
     --gradient_checkpointing True \
     --learning_rate 1.0e-4 \
-    --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 50
     --use_peft \

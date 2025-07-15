@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.15.0.dev0"
+__version__ = "0.20.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -26,26 +26,22 @@ _import_structure = {
         "extract_prompt",
         "is_conversational",
         "maybe_apply_chat_template",
+        "maybe_convert_to_chatml",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
+        "pack_dataset",
+        "pack_examples",
+        "truncate_dataset",
         "unpair_preference_dataset",
     ],
     "environment": ["TextEnvironment", "TextHistory"],
     "extras": ["BestOfNSampler"],
-    "import_utils": [
-        "is_deepspeed_available",
-        "is_diffusers_available",
-        "is_llm_blender_available",
-        "is_mergekit_available",
-        "is_rich_available",
-        "is_unsloth_available",
-        "is_vllm_available",
-    ],
     "models": [
         "SUPPORTED_ARCHITECTURES",
         "AutoModelForCausalLMWithValueHead",
         "AutoModelForSeq2SeqLMWithValueHead",
         "PreTrainedModelWrapper",
+        "clone_chat_template",
         "create_reference_model",
         "setup_chat_format",
     ],
@@ -71,6 +67,7 @@ _import_structure = {
         "GRPOConfig",
         "GRPOTrainer",
         "HfPairwiseJudge",
+        "IterativeSFTConfig",
         "IterativeSFTTrainer",
         "KTOConfig",
         "KTOTrainer",
@@ -125,26 +122,22 @@ if TYPE_CHECKING:
         extract_prompt,
         is_conversational,
         maybe_apply_chat_template,
+        maybe_convert_to_chatml,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
+        pack_dataset,
+        pack_examples,
+        truncate_dataset,
         unpair_preference_dataset,
     )
     from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
-    from .import_utils import (
-        is_deepspeed_available,
-        is_diffusers_available,
-        is_llm_blender_available,
-        is_mergekit_available,
-        is_rich_available,
-        is_unsloth_available,
-        is_vllm_available,
-    )
     from .models import (
         SUPPORTED_ARCHITECTURES,
         AutoModelForCausalLMWithValueHead,
         AutoModelForSeq2SeqLMWithValueHead,
         PreTrainedModelWrapper,
+        clone_chat_template,
         create_reference_model,
         setup_chat_format,
     )
@@ -171,6 +164,7 @@ if TYPE_CHECKING:
         GRPOConfig,
         GRPOTrainer,
         HfPairwiseJudge,
+        IterativeSFTConfig,
         IterativeSFTTrainer,
         KTOConfig,
         KTOTrainer,

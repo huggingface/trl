@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,9 +21,9 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl import XPOConfig, XPOTrainer, is_llm_blender_available
+from trl import XPOConfig, XPOTrainer
 
-from .testing_utils import RandomPairwiseJudge
+from .testing_utils import RandomPairwiseJudge, require_llm_blender
 
 
 if is_peft_available():
@@ -160,7 +160,37 @@ class TestXPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_llm_blender_available(), "llm-blender is not available")
+    @require_peft
+    def test_training_pre_pefted_model_implicit_ref(self):
+        lora_config = LoraConfig(r=8, lora_alpha=16, lora_dropout=0.1, bias="none", task_type="CAUSAL_LM")
+        peft_model_instance = get_peft_model(self.model, lora_config)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = XPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=1,
+                max_steps=2,
+                learning_rate=5.0e-7,
+                eval_strategy="no",
+                report_to="none",
+                remove_unused_columns=False,
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")["train"]
+
+            trainer = XPOTrainer(
+                model=peft_model_instance,
+                ref_model=None,
+                reward_model=self.reward_model,  # Using reward_model to ensure _generate_completions is used as expected
+                args=training_args,
+                processing_class=self.tokenizer,
+                train_dataset=dummy_dataset,
+            )
+
+            trainer.train()
+
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @require_llm_blender
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_xpo_trainer_judge_training(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:

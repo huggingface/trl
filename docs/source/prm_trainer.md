@@ -42,7 +42,7 @@ model = AutoModelForTokenClassification.from_pretrained("Qwen/Qwen2-0.5B", num_l
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B")
 train_dataset = load_dataset("trl-lib/math_shepherd", split="train[:10%]")
 
-training_args = PRMConfig(output_dir="Qwen2-0.5B-Reward-Math-Sheperd", logging_steps=10)
+training_args = PRMConfig(output_dir="Qwen2-0.5B-Reward-Math-Sheperd")
 trainer = PRMTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
@@ -112,7 +112,6 @@ accelerate launch examples/scripts/prm.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/math_shepherd \
     --num_train_epochs 1 \
-    --logging_steps 25 \
     --output_dir Qwen2-0.5B-Reward-Math-Sheperd
 ```
 

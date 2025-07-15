@@ -4,7 +4,7 @@
 
 ## Overview
 
-Exploratory Preference Optimization (XPO) was proposed in the paper [Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF](https://huggingface.co/papers/2405.21046) by Tengyang Xie, Dylan J. Foster, Akshay Krishnamurthy, [Corby Rosset](https://huggingface.co/corbyrosset), [Ahmed Awadallah](https://huggingface.co/AhmedAwadallah), and Alexander Rakhlin. It is a simple online preference tuning method based on the DPO loss together with a reward model (RM). XPO augments the DPO objective with an exploration bonus allowing the method to explore outside the support of the intitial model and human feedback data.
+Exploratory Preference Optimization (XPO) was proposed in the paper [Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF](https://huggingface.co/papers/2405.21046) by Tengyang Xie, Dylan J. Foster, Akshay Krishnamurthy, [Corby Rosset](https://huggingface.co/corbyrosset), [Ahmed Awadallah](https://huggingface.co/AhmedAwadallah), and Alexander Rakhlin. It is a simple online preference tuning method based on the DPO loss together with a reward model (RM). XPO augments the DPO objective with an exploration bonus allowing the method to explore outside the support of the initial model and human feedback data.
 
 The abstract from the paper is the following:
 
@@ -35,7 +35,7 @@ tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 judge = PairRMJudge()
 train_dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO", logging_steps=10)
+training_args = XPOConfig(output_dir="Qwen2-0.5B-XPO")
 trainer = XPOTrainer(
     model=model, judge=judge, args=training_args, processing_class=tokenizer, train_dataset=train_dataset
 )
@@ -50,9 +50,9 @@ accelerate launch train_xpo.py
 
 Distributed across 8 GPUs, the training takes approximately 1 hour.
 
-To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-XPO) performs, you can use the [TRL Chat CLI](clis#chat-interface).
+To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-XPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ trl chat --model_name_or_path trl-lib/Qwen2-0.5B-XPO
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-XPO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
@@ -124,7 +124,6 @@ python examples/scripts/xpo.py \
     --judge pair_rm \
     --dataset_name trl-lib/ultrafeedback-prompt \
     --learning_rate 5.0e-7 \
-    --logging_steps 25 \
     --output_dir Qwen2.5-0.5B-XPO-PairRM \
     --warmup_ratio 0.1 \
     --push_to_hub
