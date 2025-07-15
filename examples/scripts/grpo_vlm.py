@@ -15,7 +15,6 @@
 """
 pip install math_verify
 
-# Tested on 8x H100 GPUs
 accelerate launch \
     --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/grpo_vlm.py \
@@ -35,7 +34,7 @@ from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
-from trl.trl import (
+from trl import (
     GRPOConfig,
     GRPOTrainer,
     ModelConfig,
