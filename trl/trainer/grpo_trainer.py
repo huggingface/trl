@@ -104,7 +104,7 @@ class RepeatSampler(Sampler):
 
     Example:
     ```python
-    >>> sampler = RepeatRandomSampler(
+    >>> sampler = RepeatSampler(
     ...     ["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4
     ... )
     >>> list(sampler)
@@ -179,7 +179,7 @@ class RepeatSampler(Sampler):
                         yield index
 
     def __len__(self) -> int:
-        return self.num_samples * self.mini_repeat_count * self.repeat_count
+        return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -506,7 +506,6 @@ class GRPOTrainer(Trainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
-        self.use_transformers_paged = args.use_transformers_paged or False
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
@@ -515,6 +514,7 @@ class GRPOTrainer(Trainer):
         self.top_k = args.top_k
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
+        self.use_transformers_paged = args.use_transformers_paged
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
@@ -617,14 +617,12 @@ class GRPOTrainer(Trainer):
         self.log_completions = args.log_completions
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
-        # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
-        # final optimization step.
-        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.steps_per_generation
+        # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._textual_logs = {
-            "prompt": deque(maxlen=maxlen),
-            "completion": deque(maxlen=maxlen),
-            "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
-            "advantages": deque(maxlen=maxlen),
+            "prompt": deque(maxlen=args.generation_batch_size),
+            "completion": deque(maxlen=args.generation_batch_size),
+            "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
+            "advantages": deque(maxlen=args.generation_batch_size),
         }
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
@@ -666,6 +664,13 @@ class GRPOTrainer(Trainer):
                         ]
                     )
 
+                # vLLM requires the environment variables to be set for distributed training.
+                os.environ["RANK"] = str(self.accelerator.process_index)
+                os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
+                os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
+                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
@@ -704,6 +709,10 @@ class GRPOTrainer(Trainer):
                 "repetition_penalty": self.repetition_penalty,
                 "cache_implementation": args.cache_implementation,
             }
+            if args.use_transformers_paged:
+                generation_kwargs["max_batch_tokens"] = 512
+                generation_kwargs["num_blocks"] = 1024
+                generation_kwargs["block_size"] = 128
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs)
@@ -899,6 +908,13 @@ class GRPOTrainer(Trainer):
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         return {"logps": logps, "entropies": entropies}
 
+    def _fix_param_name_to_vllm(self, name, extra_prefixes: Optional[list[str]] = None):
+        extra_prefixes = extra_prefixes or []
+        prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
+        for prefix in prefixes:
+            name = name.replace(prefix, "")
+        return name
+
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         if visited is None:
@@ -914,8 +930,7 @@ class GRPOTrainer(Trainer):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
-                    for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
-                        full_name = full_name.replace(extra, "")
+                    full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
 
                     if full_name in visited:
                         continue  # skip FSDP subtrees already traversed
@@ -961,7 +976,7 @@ class GRPOTrainer(Trainer):
                         # When module to save, remove its prefix and discard the original module
                         if "original_module" in name:
                             continue
-                        name = name.replace("modules_to_save.default.", "")
+                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
@@ -977,6 +992,7 @@ class GRPOTrainer(Trainer):
                 self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
             else:
                 for name, param in self.model.named_parameters():
+                    name = self._fix_param_name_to_vllm(name)
                     with gather_if_zero3([param]):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
@@ -1193,9 +1209,6 @@ class GRPOTrainer(Trainer):
 
         elif self.use_transformers_paged:
             prompt_inputs = self.processing_class(text=prompts_text)
-            self.generation_config.max_batch_tokens = 512
-            self.generation_config.num_blocks = 1024
-            self.generation_config.block_size = 128
             previous_attn = self.model_wrapped.config._attn_implementation
 
             if is_flash_attn_2_available():
@@ -1217,29 +1230,31 @@ class GRPOTrainer(Trainer):
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
                     all_outputs = unwrapped_model.generate_batch(
-                        prompt_inputs.input_ids, generation_config=self.generation_config
+                        prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
                     )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            completion_ids = pad(
+                completion_ids, padding_value=self.processing_class.pad_token_id, padding_side="right"
+            )
             prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_inputs.input_ids]
-            prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id, padding_side="left")
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
             # Restore the original attention implementation, training mode
             self.model_wrapped.config._attn_implementation = previous_attn
         else:
             # Regular generation path
-            with unwrap_model_for_generation(
-                self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-            ) as unwrapped_model:
-                with (
-                    FSDP.summon_full_params(self.model_wrapped, recurse=False)
-                    if self.is_fsdp_enabled
-                    else nullcontext()
-                ):
-                    prompt_completion_ids = unwrapped_model.generate(
-                        prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
-                    )
+            with (
+                profiling_context(self, "transformers.generate"),
+                unwrap_model_for_generation(
+                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model,
+                torch.no_grad(),
+                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+            ):
+                prompt_completion_ids = unwrapped_model.generate(
+                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+                )
 
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
@@ -1274,10 +1289,13 @@ class GRPOTrainer(Trainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
-            # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
-            # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
-            # per_token_logps.detach() instead.
-            if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
+            # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
+            # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
+            # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
+            # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
+            # old_per_token_logps to None.
+            generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
+            if self.args.gradient_accumulation_steps % generate_every != 0:
                 old_per_token_logps = self._get_per_token_logps_and_entropies(
                     self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )["logps"]
@@ -1429,6 +1447,15 @@ class GRPOTrainer(Trainer):
         else:
             return self._compute_loss(model, inputs)
 
+    def _compute_entropy_mask(self, entropies, completion_mask):
+        # compute the entropy threshold across all tokens in the batch
+        non_pad_entropies = entropies[completion_mask.bool()]
+        # disregard pad tokens when computing the entropy threshold
+        entropy_threshold = torch.quantile(non_pad_entropies.float(), self.token_entropy_percentile_threshold)
+        entropies = entropies * completion_mask.float()  # mask out the padding tokens
+        entropy_mask = entropies >= entropy_threshold
+        return entropy_mask
+
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1444,10 +1471,7 @@ class GRPOTrainer(Trainer):
             )
             per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
-            # compute the entropy threshold across all tokens in the batch
-
-            entropy_threshold = torch.quantile(entropies.flatten().float(), self.token_entropy_percentile_threshold)
-            entropy_mask = entropies >= entropy_threshold
+            entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
         else:
             per_token_logps = self._get_per_token_logps_and_entropies(
                 model, input_ids, attention_mask, logits_to_keep
@@ -1630,7 +1654,7 @@ class GRPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="GRPO",
             trainer_citation=citation,
