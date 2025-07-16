@@ -201,6 +201,8 @@ class GRPOConfig(TrainingArguments):
             masked. Recommended value is `0.8`.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
+        entropy_coef (`float` or `None`, *optional*, defaults to `0.0`):
+            Coef of entropy regularization loss. If not specified, default to 0.0
 
         > Parameters that control the logging
 
@@ -531,6 +533,43 @@ class GRPOConfig(TrainingArguments):
     use_liger_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
+    entropy_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Weight of the entropy regularization term in the loss. "
+            "A positive coefficient adds an entropy bonus to encourage exploration."
+            "A negative coefficient dynamically adjusts the weight based on entropy loss."
+            "Zero coefficient disables the entropy regularization term."
+        },
+    )
+    min_ent_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Minimum weight of the entropy regularization term. "
+            "Used to cap minimum entropy term weight in adaptive entropy control."
+        },
+    )
+    max_ent_coef: float = field(
+        default=1.0,
+        metadata={
+            "help": "Maximum weight of the entropy regularization term. "
+            "Used to cap maximum entropy term weight in adaptive entropy control."
+        },
+    )
+    delta_ent_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Per step delta weight of the entropy regularization term. "
+            "Used to adjust entorpy term based on current entropy in adaptive entropy control."
+        },
+    )
+    target_entropy: float = field(
+        default=0.0,
+        metadata={
+            "help": "Target entropy value as the upper bound of entropy loss. "
+            "Target entropy value in adaptive entropy control."
+        },
     )
 
     # Parameters that control the logging

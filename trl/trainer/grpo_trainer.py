@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import datasets
+import numpy as np
 import torch
 import torch.utils.data
 import transformers
@@ -290,6 +291,50 @@ def identity(x):
     return x
 
 
+def agg_loss(per_token_loss: torch.Tensor, loss_mask: torch.Tensor, loss_type: str, **kwargs) -> torch.Tensor:
+    if loss_type == "grpo":
+        loss = ((per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)).mean()
+    elif loss_type == "bnpo":
+        loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
+    elif loss_type == "dr_grpo":
+        max_completion_length = kwargs.get("max_completion_length", 1)
+        loss = (per_token_loss * loss_mask).sum() / (per_token_loss.size(0) * max_completion_length)
+    else:
+        raise ValueError(f"Unknown loss type: {loss_type}")
+    return loss
+
+
+class AdaptiveEntropyController:
+    def __init__(self, min_ent_coef, max_ent_coef, delta_ent_coef, target_ent):
+        self.value = min_ent_coef
+        self.min_ent_coef = min_ent_coef
+        self.max_ent_coef = max_ent_coef
+        self.delta_ent_coef = delta_ent_coef
+        self.target_ent = target_ent
+
+    def __call__(self, ent):
+        """
+        Adjusts the entropy coefficient based on the current entropy.
+        Following https://github.com/SkyworkAI/Skywork-OR1/tree/main
+        Related post:
+        https://capricious-hydrogen-41c.notion.site/Skywork-Open-Reasoner-Series-1d0bc9ae823a80459b46c149e4f51680?pvs=25#1d1bc9ae823a801592a0c3891ea5328f
+
+        Args:
+            ent (`float`): Current entropy value.
+
+        Returns:
+            `float`: Adjusted entropy coefficient.
+        """
+        if ent < self.target_ent:
+            self.value += self.delta_ent_coef
+        else:
+            self.value -= self.delta_ent_coef
+
+        self.value = float(np.clip(self.value, self.min_ent_coef, self.max_ent_coef))
+
+        return self.value * (ent < self.target_ent)
+
+
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -528,6 +573,18 @@ class GRPOTrainer(Trainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
+        # Entropy loss weight
+        self.entropy_coef = args.entropy_coef
+        if args.entropy_coef < 0.0:
+            # Use adaptive entropy controller when args.entropy_coef is negative
+            self.ent_ctrl = AdaptiveEntropyController(
+                min_ent_coef=args.min_ent_coef,
+                max_ent_coef=args.max_ent_coef,
+                delta_ent_coef=args.delta_ent_coef,
+                target_ent=args.target_entropy,
+            )
+        else:
+            self.ent_ctrl = None
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1465,17 +1522,15 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
         # Compute the entropy at each position in the completion
+        compute_entropy = self.token_entropy_percentile_threshold > 0.0 or self.entropy_coef != 0
+        logps_and_entropies = self._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=compute_entropy
+        )
+        per_token_logps = logps_and_entropies["logps"]
         if self.token_entropy_percentile_threshold > 0.0:
-            logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
-            )
-            per_token_logps = logps_and_entropies["logps"]
             entropies = logps_and_entropies["entropies"]
             entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
         else:
-            per_token_logps = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep
-            )["logps"]
             entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
@@ -1508,17 +1563,22 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-        else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
+        loss = agg_loss(
+            per_token_loss, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
+        )
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
+
+        if self.entropy_coef != 0:
+            per_token_entropy = logps_and_entropies["entropies"]
+            entropy_loss = agg_loss(
+                per_token_entropy, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
+            )
+            entropy_loss_coef = self.entropy_coef if self.entropy_coef >= 0 else self.ent_ctrl(entropy_loss.item())
+            loss = loss - entropy_loss_coef * entropy_loss
+            self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
+            self._metrics[mode]["entropy_loss_coef"].append(entropy_loss_coef)
 
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
