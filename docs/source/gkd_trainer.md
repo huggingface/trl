@@ -21,7 +21,7 @@ This post-training method was contributed by [Kashif Rasul](https://huggingface.
 
 The [`GKDTrainer`] is a wrapper around the [`SFTTrainer`] class that takes in a teacher model argument. It needs three parameters to be set via the [`GKDConfig`] namely:
 * `lmbda`:  controls the student data fraction, i.e., the proportion of on-policy student-generated outputs. When `lmbda=0.0`, the loss reduces to supervised JSD where the student is trained with the token-level probabilities of the teacher. When `lmbda=1.0`, the loss reduces to on-policy JSD, where the student generates output sequences and token-specific feedback on these sequences from the teacher. For values in between [0, 1] it is random between the two based on the `lmbda` value for each batch.
-* `seq_kd`:  controls whether to perform Sequence-Level KD (can be viewed as supervised FT on teacher-generated out). When `seq_kd=True` and `lmbda=0.0`, the loss reduces to supervised JSD, where the teacher generates output sequences and the student receives token-specific feedback on these sequences from the teacher. 
+* `seq_kd`: controls whether to perform Sequence-Level KD which can be viewed as supervised FT on teacher-generated outputs. When `seq_kd=True` and `lmbda=0.0`, the loss reduces to supervised JSD, where the teacher generates output sequences and the student receives token-specific feedback on these sequences from the teacher.
 * `beta`: controls the interpolation in the generalized Jensen-Shannon Divergence.  When `beta=0.0` the loss approximates forward KL divergence, while for `beta=1.0` the loss approximates reverse KL divergence. For values in between [0, 1] it interpolates between the two.
 
 The authors find that on-policy data (high `lmbda`) performs better and the optimal `beta` varied depending on the task and evaluation method.
@@ -87,6 +87,17 @@ trainer.train()
 The dataset should be formatted as a list of "messages" where each message is a list of dictionaries with the following keys:
 * `role`: either `system`, `assistant` or `user`
 * `content`: the message content
+
+
+## Accelerated Generation with vLLM
+
+GKD training supports accelerated student model generation using [vLLM](https://github.com/vllm-project/vllm), which can significantly speed up the on-policy data generation process. Two integration modes are available:
+
+**Server Mode (`student_vllm_mode="server"`)**: In this mode, vLLM runs as a separate server process on dedicated GPUs, and the trainer communicates with it via HTTP. This approach provides good isolation between training and inference but requires additional GPU resources for the vLLM server.
+
+**Co-locate Mode (`student_vllm_mode="colocate"`)**: In this mode, vLLM runs within the same distributed process group as the training job, sharing the same GPUs. This approach maximizes GPU utilization by allowing training and inference to take turns on the same hardware, eliminating idle GPU time and reducing the total number of GPUs required. Co-locate mode typically provides better throughput and is more resource-efficient.
+
+To enable vLLM integration, set `student_use_vllm=True` in your [`GKDConfig`] and configure the appropriate mode. For co-locate mode, adjust `student_vllm_gpu_memory_utilization` (recommended: 0.3 for smaller models) and `student_vllm_tensor_parallel_size` based on your model size and available resources. The `student_vllm_sync_frequency` parameter controls how often the student model weights are synchronized to the vLLM engine (default: every step).
 
 
 ## GKDTrainer
