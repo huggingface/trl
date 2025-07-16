@@ -308,6 +308,8 @@ def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold
             `False` otherwise.
     """
     non_pad_entropies = entropies[mask.bool()].float()
+    if non_pad_entropies.numel() == 0:
+        return torch.zeros_like(entropies, dtype=torch.bool)
     entropy_threshold = torch.quantile(non_pad_entropies, threshold)
     masked_entropies = entropies * mask.float()
     entropy_mask = masked_entropies >= entropy_threshold

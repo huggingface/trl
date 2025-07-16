@@ -242,20 +242,28 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 1], [1, 1, 1, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
-    def test_compute_entropy_mask_all_tokens(self):
-        # For a threshold of 0.0 we expect all non-pad tokens to be unmasked.
+    def test_compute_entropy_threshold_0(self):
+        # If the threshold is 0.0 then we expect the mask to be all ones for non-pad tokens.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
         entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.0)
         expected_mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
-    def test_compute_entropy_mask_no_tokens(self):
-        # If there are no non-pad tokens we expect the mask to be all zeros BUT ONE VALUE.
+    def test_compute_entropy_threshold_1(self):
+        # If the threshold is 1.0 then we expect the mask to be all zeros BUT ONE VALUE.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
         entropy_mask = get_high_entropy_mask(entropies, mask, threshold=1.0)
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
+        torch.testing.assert_close(entropy_mask, expected_mask)
+
+    def test_compute_entropy_all_masked(self):
+        # If there are no non-pad tokens we expect the mask to be all zeros BUT ONE VALUE.
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]])
+        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.5)
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
