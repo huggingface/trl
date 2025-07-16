@@ -223,16 +223,7 @@ training_args = GRPOConfig(
     vllm_mode="colocate",
 )
 ```
-Note that in this mode, if you want to run with an accelerate config file of your choice (e.g. [accelerate-configs](https://github.com/huggingface/trl/tree/main/examples/accelerate_configs)), you need to set some environment variable before launching the training script:
 
-```bash
-#required environment variables for vLLM colocate mode on a single node single GPU
-os.environ["RANK"] = "0"
-os.environ["LOCAL_RANK"] = "0"
-os.environ["WORLD_SIZE"] = "1"
-os.environ["MASTER_ADDR"] = "localhost"
-os.environ["MASTER_PORT"] = "12355"
-```
 <Tip>
 
 Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
@@ -248,6 +239,10 @@ We provide a [small script](https://huggingface.co/spaces/trl-lib/recommend-vllm
 
 If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
 
+</Tip>
+
+<Tip>
+By default, GRPO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, but you can override these values by setting the environment variables accordingly.
 </Tip>
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).

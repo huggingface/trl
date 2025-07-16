@@ -508,7 +508,9 @@ class OnlineDPOTrainer(Trainer):
         output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
 
         # There is 1 offset, because the model predict the next token
-        logits = output.logits[:, prompt_ids.size(1) - 1 : -1]
+        prompt_len = prompt_ids.size(1)
+        start_idx = prompt_len - 1 if prompt_len > 0 else 0
+        logits = output.logits[:, start_idx:-1]
 
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
@@ -798,7 +800,7 @@ class OnlineDPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="Online DPO",
             trainer_citation=citation,
