@@ -1306,12 +1306,12 @@ class GRPOTrainer(Trainer):
             if self.beta != 0.0:
                 if self.ref_model is not None:
                     ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                     )["logps"]
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
                         ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                            self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                            self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                         )["logps"]
             else:
                 ref_per_token_logps = None
