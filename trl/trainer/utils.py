@@ -1901,4 +1901,5 @@ def warn0(message, *args, state=None, **kwargs):
     if state is None:
         state = PartialState()
     if state.is_main_process:
+        kwargs.setdefault("stacklevel", 2)
         warnings.warn(message, *args, **kwargs)
