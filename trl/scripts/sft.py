@@ -51,11 +51,27 @@ python trl/scripts/sft.py \
     --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
 ```
+
+# Local dataset
+```
+python trl/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name ./data/my_dataset.json \
+    --learning_rate 2.0e-5 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 8 \
+    --gradient_checkpointing \
+    --eos_token '<|im_end|>' \
+    --eval_strategy steps \
+    --eval_steps 100 \
+    --output_dir Qwen2-0.5B-SFT
+```
 """
 
 import argparse
 
-from datasets import load_dataset
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 
@@ -70,6 +86,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.scripts.utils import load_dataset_with_local_support
 
 
 def main(script_args, training_args, model_args):
@@ -112,7 +129,9 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    dataset = load_dataset_with_local_support(
+        script_args.dataset_name, name=script_args.dataset_config, streaming=script_args.dataset_streaming
+    )
 
     ################
     # Training

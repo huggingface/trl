@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import json
 import os
 import sys
 import tempfile
@@ -96,6 +97,43 @@ class TestCLI(unittest.TestCase):
 
             # Verify that output directory was created
             self.assertTrue(os.path.exists(output_dir))
+
+    def test_sft_with_local_dataset(self):
+        """Test SFT CLI with local dataset."""
+        from trl.cli import main
+
+        # Create a temporary dataset file
+        sample_data = [
+            {"messages": [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi there!"}]},
+            {
+                "messages": [
+                    {"role": "user", "content": "How are you?"},
+                    {"role": "assistant", "content": "I'm doing well."},
+                ]
+            },
+        ]
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(sample_data, f)
+            dataset_file = f.name
+
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                command = f"trl sft --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name {dataset_file} --report_to none --max_steps 1"
+                with patch("sys.argv", command.split(" ")):
+                    main()
+
+                # Verify that output directory was created and contains model files
+                self.assertTrue(os.path.exists(tmp_dir))
+                self.assertTrue(
+                    any(
+                        os.path.exists(os.path.join(tmp_dir, f))
+                        for f in ["pytorch_model.bin", "model.safetensors", "config.json"]
+                    )
+                )
+
+        finally:
+            os.unlink(dataset_file)
 
 
 if __name__ == "__main__":

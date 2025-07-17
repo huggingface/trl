@@ -56,7 +56,6 @@ python trl/scripts/dpo.py \
 import argparse
 
 import torch
-from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
@@ -69,6 +68,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.scripts.utils import load_dataset_with_local_support
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
@@ -114,7 +114,7 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    dataset = load_dataset(
+    dataset = load_dataset_with_local_support(
         script_args.dataset_name,
         name=script_args.dataset_config,
         streaming=script_args.dataset_streaming,

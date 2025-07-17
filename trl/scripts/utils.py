@@ -21,9 +21,11 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Union
 
 import yaml
+from datasets import load_dataset
 from transformers import HfArgumentParser
 from transformers.hf_argparser import DataClass, DataClassType
 from transformers.utils import is_rich_available
@@ -56,7 +58,13 @@ class ScriptArguments:
             https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
-    dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
+    dataset_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Dataset name or path. Can be a HuggingFace dataset name or a local file path "
+            "(starting with './', '/', '~', or Windows drive letter)."
+        },
+    )
     dataset_config: Optional[str] = field(
         default=None,
         metadata={
@@ -282,3 +290,124 @@ def get_git_commit_hash(package_name):
             return None
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+def is_local_dataset(dataset_name: str) -> bool:
+    """
+    Detect if dataset_name refers to a local file or directory.
+
+    Only detects paths that are explicitly intended to be local:
+    - Start with './' (current directory)
+    - Start with '/' (absolute path on Unix)
+    - Start with '~' (home directory)
+    - Start with drive letter on Windows (e.g., 'C:')
+
+    Args:
+        dataset_name (`str`):
+            Dataset name to check.
+
+    Returns:
+        `bool`: True if the dataset name appears to be a local path, False otherwise.
+
+    Examples:
+    ```python
+    >>> is_local_dataset("./data/train.json")
+    True
+    >>> is_local_dataset("/home/user/data.csv")
+    True
+    >>> is_local_dataset("~/datasets/my_data.parquet")
+    True
+    >>> is_local_dataset("C:\\data\\train.json")  # Windows
+    True
+    >>> is_local_dataset("huggingface/dataset")
+    False
+    >>> is_local_dataset("my-dataset")
+    False
+    ```
+    """
+    if dataset_name.startswith(("./", "/", "~")):
+        return True
+    # Windows drive letter detection (C:, D:, etc.)
+    if len(dataset_name) >= 2 and dataset_name[1] == ":" and dataset_name[0].isalpha():
+        return True
+    return False
+
+
+def _infer_dataset_format(file_path: str) -> Optional[str]:
+    """
+    Infer the dataset format from the file extension.
+
+    Args:
+        file_path (`str`):
+            Path to the dataset file.
+
+    Returns:
+        `Optional[str]`: The inferred format for datasets.load_dataset(), or None if unknown.
+    """
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+
+    if suffix == ".json":
+        return "json"
+    elif suffix == ".csv":
+        return "csv"
+    elif suffix == ".parquet":
+        return "parquet"
+    elif suffix == ".txt":
+        return "text"
+    elif suffix == ".jsonl":
+        return "json"
+    else:
+        # For unknown extensions, let datasets.load_dataset() handle it
+        return None
+
+
+def load_dataset_with_local_support(dataset_name: str, name: Optional[str] = None, streaming: bool = False, **kwargs):
+    """
+    Load dataset with support for local files.
+
+    This function extends the standard datasets.load_dataset() to support local files
+    while maintaining full backward compatibility with HuggingFace datasets.
+
+    Args:
+        dataset_name (`str`):
+            Dataset name or path. If it appears to be a local path (starts with './', '/', '~',
+            or Windows drive letter), it will be loaded as a local dataset. Otherwise, it will
+            be loaded as a HuggingFace dataset.
+        name (`str`, *optional*):
+            Dataset configuration name. Only used for HuggingFace datasets.
+        streaming (`bool`, *optional*, defaults to `False`):
+            Whether to stream the dataset.
+        **kwargs:
+            Additional arguments passed to datasets.load_dataset().
+
+    Returns:
+        `Dataset` or `DatasetDict`: The loaded dataset.
+
+    Examples:
+    ```python
+    >>> # Load local dataset
+    >>> dataset = load_dataset_with_local_support("./data/train.json")
+
+    >>> # Load HuggingFace dataset (unchanged behavior)
+    >>> dataset = load_dataset_with_local_support("squad", name="v1.1")
+    ```
+    """
+    if is_local_dataset(dataset_name):
+        # Handle local dataset
+        expanded_path = os.path.expanduser(dataset_name)
+
+        if not os.path.exists(expanded_path):
+            raise FileNotFoundError(f"Local dataset file not found: {expanded_path}")
+
+        # Infer format from file extension
+        inferred_format = _infer_dataset_format(expanded_path)
+
+        if inferred_format:
+            return load_dataset(inferred_format, data_files=expanded_path, streaming=streaming, **kwargs)
+        else:
+            # Let datasets.load_dataset() try to infer the format
+            return load_dataset(expanded_path, streaming=streaming, **kwargs)
+    else:
+        # Handle HuggingFace dataset (unchanged behavior)
+        return load_dataset(dataset_name, name=name, streaming=streaming, **kwargs)

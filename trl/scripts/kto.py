@@ -59,7 +59,6 @@ python trl/scripts/kto.py \
 
 import argparse
 
-from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
@@ -71,6 +70,7 @@ from trl import (
     get_peft_config,
     setup_chat_format,
 )
+from trl.scripts.utils import load_dataset_with_local_support
 
 
 def main(script_args, training_args, model_args):
@@ -93,7 +93,9 @@ def main(script_args, training_args, model_args):
         model, tokenizer = setup_chat_format(model, tokenizer)
 
     # Load the dataset
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    dataset = load_dataset_with_local_support(
+        script_args.dataset_name, name=script_args.dataset_config, streaming=script_args.dataset_streaming
+    )
 
     # Initialize the KTO trainer
     trainer = KTOTrainer(
