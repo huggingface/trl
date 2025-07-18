@@ -60,6 +60,7 @@ from .utils import (
     get_comet_experiment_url,
     pad,
     peft_module_casting_to_bf16,
+    warn0,
 )
 
 
@@ -392,7 +393,7 @@ class SFTTrainer(Trainer):
 
         # Model
         if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
+            warn0(
                 "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
                 "The `model_init_kwargs` will be ignored."
             )
@@ -418,12 +419,12 @@ class SFTTrainer(Trainer):
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if args.packing and args.packing_strategy == "wrapped":
-                warnings.warn(
+                warn0(
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
                     "recommended. Please refer to the documentation to understand why this is not recommended."
                 )
             if model.config._attn_implementation != "flash_attention_2":
-                warnings.warn(
+                warn0(
                     "Padding-free training is enabled, but the attention implementation is not set to "
                     "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
                     "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
@@ -432,7 +433,7 @@ class SFTTrainer(Trainer):
                     "attention mechanism can handle flattened sequences."
                 )
             if args.per_device_train_batch_size == 1 and not args.packing:
-                warnings.warn(
+                warn0(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
@@ -469,7 +470,7 @@ class SFTTrainer(Trainer):
             and args.packing_strategy == "bfd"
             and model.config._attn_implementation != "flash_attention_2"
         ):
-            warnings.warn(
+            warn0(
                 "You are using packing, but the attention implementation is not set to 'flash_attention_2'. Packing "
                 "flattens batches into a single sequence, and 'flash_attention_2' is the only known attention "
                 "mechanism that reliably supports this. Using other implementations may lead to cross-contamination "
