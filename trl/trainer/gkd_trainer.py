@@ -344,12 +344,11 @@ class GKDTrainer(SFTTrainer):
 
         citation = textwrap.dedent("""\
         @inproceedings{agarwal2024on-policy,
-            title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-            author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-            year         = 2024,
-            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+            title = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}}, author =
+            {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and
+            Matthieu Geist and Olivier Bachem}, year = 2024, booktitle = {The Twelfth International Conference on
+            Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024}, publisher = {OpenReview.net}, url
+            = {https://openreview.net/forum?id=3zKtaqxLhW},
         }""")
 
         model_card = generate_model_card(
