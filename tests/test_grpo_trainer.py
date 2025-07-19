@@ -24,7 +24,7 @@ from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.grpo_trainer import RepeatSampler, shuffle_tensor_dict, split_tensor_dict
+from trl.trainer.grpo_trainer import RepeatSampler, get_high_entropy_mask, shuffle_tensor_dict, split_tensor_dict
 
 from .testing_utils import require_vllm
 
@@ -286,6 +286,60 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         assert sampled[0:4] == sampled[4:8] == sampled[8:12]
         assert sampled[12:16] == sampled[16:20] == sampled[20:24]
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
+
+
+class GetHighEntropyMaskTester(unittest.TestCase):
+    def test_compute_entropy_mask_0(self):
+        # We have a total of 12 tokens out of which 10 are non-pad.
+        # for a top_entropy_quantile of 0.8, we expect the top 20% i.e 2 non-pad tokens corresponding to
+        # the highest entropy to be unmasked.
+        # In our example these will be the tokens corresponding to the entropies 0.9 and 1.0 since 1.1 and 1.2 are pad
+        # tokens they are excluded from the entropy threshold calculation.
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
+        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.8)
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 1, 1, 0, 0]], dtype=torch.bool)
+        torch.testing.assert_close(entropy_mask, expected_mask)
+
+    def test_compute_entropy_mask_1(self):
+        # Another example with a different set of entropies and a different mask.
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
+        mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
+        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.8)
+        expected_mask = torch.tensor([[0, 0, 0, 1, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
+        torch.testing.assert_close(entropy_mask, expected_mask)
+
+    def test_compute_entropy_mask_lower_threshold(self):
+        # For a threshold of 0.5 we expect the top half of the non-pad tokens to be unmasked.
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
+        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.5)
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 1], [1, 1, 1, 1, 0, 0]], dtype=torch.bool)
+        torch.testing.assert_close(entropy_mask, expected_mask)
+
+    def test_compute_entropy_threshold_0(self):
+        # If the threshold is 0.0 then we expect the mask to be all ones for non-pad tokens.
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
+        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.0)
+        expected_mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]], dtype=torch.bool)
+        torch.testing.assert_close(entropy_mask, expected_mask)
+
+    def test_compute_entropy_threshold_1(self):
+        # If the threshold is 1.0 then we expect the mask to be all zeros BUT ONE VALUE.
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
+        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=1.0)
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
+        torch.testing.assert_close(entropy_mask, expected_mask)
+
+    def test_compute_entropy_all_masked(self):
+        # If there are no non-pad tokens we expect the mask to be all zeros.
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]])
+        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.5)
+        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], dtype=torch.bool)
+        torch.testing.assert_close(entropy_mask, expected_mask)
 
 
 class GRPOTrainerTester(unittest.TestCase):
@@ -891,7 +945,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
                 report_to="none",
-                token_entropy_percentile_threshold=0.8,
+                top_entropy_quantile=0.2,
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
@@ -1338,38 +1392,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 train_dataset=dataset,
             )
             trainer.train()
-
-    def test_compute_entropy_mask(self):
-        """Test the _compute_entropy_mask method."""
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=GRPOConfig(token_entropy_percentile_threshold=0.8),
-        )
-
-        # Create dummy entropies and completion mask
-        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
-        completion_mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
-
-        entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
-
-        self.assertEqual(entropy_mask.shape, entropies.shape)
-
-        # We have a total of 12 tokens out of which 10 are non-pad,
-        # for a token_entropy_percentile_threshold of 0.8,
-        # we expect the top 20% i.e 2 non-pad tokens corresponding to the highest entropy to be unmasked.
-        # In our example these will be the tokens corresponding to the entropies 0.9 and 1.0
-        # since 1.1 and 1.2 are pad tokens they are excluded from the entropy threshold calculation.
-        expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 1, 1, 0, 0]], dtype=torch.bool)
-        self.assertTrue(torch.equal(entropy_mask, expected_mask))
-
-        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
-        completion_mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
-
-        expected_mask = torch.tensor([[0, 0, 0, 1, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
-        entropy_mask = trainer._compute_entropy_mask(entropies, completion_mask)
-
-        self.assertTrue(torch.equal(entropy_mask, expected_mask))
 
     def test_prepare_input_called_with_correct_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

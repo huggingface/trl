@@ -390,6 +390,32 @@ def identity(x):
     return x
 
 
+def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
+    """
+    Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
+
+    Args:
+        entropies (`torch.Tensor`):
+            Tensor of shape (batch_size, seq_len) with per-token entropy values.
+        mask (`torch.Tensor`):
+            Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
+        threshold (`float`):
+            Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
+
+    Returns:
+        `torch.Tensor`:
+            Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
+            `False` otherwise.
+    """
+    non_pad_entropies = entropies[mask.bool()].float()
+    if non_pad_entropies.numel() == 0:
+        return torch.zeros_like(entropies, dtype=torch.bool)
+    entropy_threshold = torch.quantile(non_pad_entropies, threshold)
+    masked_entropies = entropies * mask.float()
+    entropy_mask = masked_entropies >= entropy_threshold
+    return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
+
+
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -642,8 +668,8 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
-        self.token_entropy_percentile_threshold = args.token_entropy_percentile_threshold
-        if self.use_liger_loss and self.token_entropy_percentile_threshold > 0.0:
+        self.top_entropy_quantile = args.top_entropy_quantile
+        if self.use_liger_loss and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
@@ -1130,7 +1156,7 @@ class GRPOTrainer(Trainer):
 
         logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
-        return {"logps": logps, "entropies": entropies}
+        return logps, entropies
 
     def _prepare_inputs_for_reward_module(self, inputs, prompts, completions, reward_processing_class):
         """Prepare inputs for VLM reward modules that require both text and images."""
@@ -1659,36 +1685,23 @@ class GRPOTrainer(Trainer):
             # old_per_token_logps to None.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
             if self.args.gradient_accumulation_steps % generate_every != 0:
-                old_per_token_logps = self._get_per_token_logps_and_entropies(
-                    self.model,
-                    prompt_completion_ids,
-                    attention_mask,
-                    logits_to_keep,
-                    batch_size,
-                    visual_inputs=prompt_inputs if has_images else None,
-                )["logps"]
+                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size, visual_inputs=prompt_inputs if has_images else None,
+                )
             else:
                 old_per_token_logps = None
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
                 if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                        self.ref_model,
-                        prompt_completion_ids,
-                        attention_mask,
-                        logits_to_keep,
-                        visual_inputs=prompt_inputs if has_images else None,
-                    )["logps"]
+                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, visual_inputs=prompt_inputs if has_images else None,
+                    )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps_and_entropies(
-                            self.model,
-                            prompt_completion_ids,
-                            attention_mask,
-                            logits_to_keep,
-                            visual_inputs=prompt_inputs if has_images else None,
-                        )["logps"]
+                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                            self.model, prompt_completion_ids, attention_mask, logits_to_keep, visual_inputs=prompt_inputs if has_images else None,
+                        )
             else:
                 ref_per_token_logps = None
 
@@ -1840,15 +1853,6 @@ class GRPOTrainer(Trainer):
         else:
             return self._compute_loss(model, inputs)
 
-    def _compute_entropy_mask(self, entropies, completion_mask):
-        # compute the entropy threshold across all tokens in the batch
-        non_pad_entropies = entropies[completion_mask.bool()]
-        # disregard pad tokens when computing the entropy threshold
-        entropy_threshold = torch.quantile(non_pad_entropies.float(), self.token_entropy_percentile_threshold)
-        entropies = entropies * completion_mask.float()  # mask out the padding tokens
-        entropy_mask = entropies >= entropy_threshold
-        return entropy_mask
-
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -1860,18 +1864,14 @@ class GRPOTrainer(Trainer):
         # Extract visual inputs for VLM support
         visual_inputs = inputs.get("visual_inputs", None)
 
-        # Compute the entropy at each position in the completion
-        if self.token_entropy_percentile_threshold > 0.0:
-            logps_and_entropies = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, compute_entropy=True, visual_inputs=visual_inputs
-            )
-            per_token_logps = logps_and_entropies["logps"]
-            entropies = logps_and_entropies["entropies"]
-            entropy_mask = self._compute_entropy_mask(entropies, completion_mask)
+        # Compute the per_token_logps and the entropy (if necessary) at each position in the completion
+        per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=self.top_entropy_quantile < 1.0, visual_inputs=visual_inputs
+        )
+
+        if self.top_entropy_quantile < 1.0:
+            entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
-            per_token_logps = self._get_per_token_logps_and_entropies(
-                model, input_ids, attention_mask, logits_to_keep, visual_inputs=visual_inputs
-            )["logps"]
             entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
