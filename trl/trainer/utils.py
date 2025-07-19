@@ -52,6 +52,12 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
 from ..trainer.model_config import ModelConfig
 
 
@@ -1805,6 +1811,123 @@ def entropy_from_logits(logits, chunk_size: int = 1) -> torch.Tensor:
 
     per_token_entropies = torch.stack(per_token_entropies)
     return per_token_entropies
+
+
+def validate_and_preprocess_images(images: list, processing_class=None) -> list:
+    """
+    Validates and preprocesses images for VLM (Vision-Language Model) training.
+
+    This function handles:
+    - Image format validation and conversion
+    - Size normalization
+    - Error handling for corrupted images
+    - Memory optimization
+
+    Args:
+        images (`list`):
+            List of images in various formats (PIL, numpy arrays, file paths, etc.)
+        processing_class (*optional*):
+            Optional processor for getting image processing parameters
+
+    Returns:
+        `list`:
+            List of validated and preprocessed images
+
+    Example:
+    ```python
+    >>> from trl.trainer.utils import validate_and_preprocess_images
+    >>> import numpy as np
+    >>> from PIL import Image
+
+    >>> # Mix of different image formats
+    >>> images = [
+    ...     Image.new("RGB", (64, 64), color="red"),  # PIL Image
+    ...     np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8),  # NumPy array
+    ...     "path/to/image.jpg",  # File path
+    ...     None  # None value
+    ... ]
+    >>> processed = validate_and_preprocess_images(images)
+    >>> # All images are now PIL Images in RGB format or None
+    ```
+    """
+    if Image is None:
+        raise ImportError(
+            "The `validate_and_preprocess_images` function requires the `Pillow` library. "
+            "Please install it with `pip install Pillow`."
+        )
+
+    processed_images = []
+
+    for i, image in enumerate(images):
+        try:
+            if image is None:
+                processed_images.append(None)
+                continue
+
+            # Convert various image formats to PIL Image
+            if isinstance(image, str):
+                # File path
+                try:
+                    pil_image = Image.open(image)
+                except Exception as e:
+                    warnings.warn(f"Failed to load image from path '{image}': {e}. Using None instead.")
+                    processed_images.append(None)
+                    continue
+            elif isinstance(image, np.ndarray):
+                # NumPy array
+                if image.dtype != np.uint8:
+                    # Normalize to uint8 range if needed
+                    if image.max() <= 1.0:
+                        image = (image * 255).astype(np.uint8)
+                    else:
+                        image = image.astype(np.uint8)
+
+                if len(image.shape) == 2:
+                    # Grayscale to RGB
+                    image = np.stack([image] * 3, axis=-1)
+                elif len(image.shape) == 3 and image.shape[-1] == 4:
+                    # RGBA to RGB
+                    image = image[:, :, :3]
+
+                pil_image = Image.fromarray(image)
+            elif hasattr(image, "convert"):
+                # Already a PIL Image
+                pil_image = image
+            else:
+                # Try to convert other formats
+                try:
+                    pil_image = Image.fromarray(np.array(image))
+                except Exception as e:
+                    warnings.warn(f"Failed to convert image at index {i}: {e}. Using None instead.")
+                    processed_images.append(None)
+                    continue
+
+            # Ensure RGB format
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+
+            # Validate image dimensions
+            width, height = pil_image.size
+            if width < 1 or height < 1:
+                warnings.warn(f"Image at index {i} has invalid dimensions ({width}x{height}). Using None instead.")
+                processed_images.append(None)
+                continue
+
+            # Basic size validation - warn if image is extremely large
+            max_pixels = 4096 * 4096  # 16MP limit
+            if width * height > max_pixels:
+                warnings.warn(
+                    f"Image at index {i} is very large ({width}x{height}, {width * height} pixels). "
+                    f"Consider resizing for better performance and memory usage."
+                )
+
+            processed_images.append(pil_image)
+
+        except Exception as e:
+            warnings.warn(f"Error processing image at index {i}: {e}. Using None instead.")
+            processed_images.append(None)
+
+    return processed_images
 
 
 def print_prompt_completions_sample(

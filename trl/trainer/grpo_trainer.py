@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import inspect
 import os
 import re
 import textwrap
@@ -36,10 +37,13 @@ from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForCausalLM,
     AutoModelForSequenceClassification,
+    AutoProcessor,
     AutoTokenizer,
+    BatchFeature,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
+    ProcessorMixin,
     Trainer,
     TrainerCallback,
     is_wandb_available,
@@ -53,6 +57,7 @@ from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
+from ..trainer.utils import validate_and_preprocess_images
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
@@ -221,14 +226,47 @@ def split_tensor_dict(
     ```
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
-    chunk_size = first_tensor.shape[0] // num_chunks
-    return [
-        {
-            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
-            for key, tensor in tensor_dict.items()
-        }
-        for i in range(num_chunks)
-    ]
+
+    # Get batch size from first tensor, handling BatchFeature objects
+    if isinstance(first_tensor, BatchFeature):
+        # BatchFeature object - get batch size from first available tensor in its data
+        batch_size = next(
+            t.shape[0] for t in first_tensor.data.values() if isinstance(t, torch.Tensor) and t.dim() > 0
+        )
+    else:
+        batch_size = first_tensor.shape[0]
+
+    chunk_size = batch_size // num_chunks
+
+    result = []
+    for i in range(num_chunks):
+        chunk = {}
+        for key, tensor in tensor_dict.items():
+            if tensor is None:
+                chunk[key] = None
+            elif isinstance(tensor, BatchFeature):
+                # Handle BatchFeature or similar objects from processors
+                chunk_dict = {}
+                for sub_key, sub_tensor in tensor.data.items():
+                    if (
+                        isinstance(sub_tensor, torch.Tensor)
+                        and sub_tensor.dim() > 0
+                        and sub_tensor.shape[0] == batch_size
+                    ):
+                        # Only split tensors that have the expected batch dimension
+                        # This preserves visual metadata and prevents corruption
+                        chunk_dict[sub_key] = sub_tensor[i * chunk_size : (i + 1) * chunk_size]
+                    else:
+                        # Keep scalars, metadata, and tensors with different batch dimensions unchanged
+                        chunk_dict[sub_key] = sub_tensor
+                # Create a new object of the same type with chunked data
+                chunk[key] = type(tensor)(chunk_dict)
+            else:
+                # Regular tensor
+                chunk[key] = tensor[i * chunk_size : (i + 1) * chunk_size]
+        result.append(chunk)
+
+    return result
 
 
 def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
@@ -250,9 +288,40 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     ```
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
-    batch_size = first_tensor.shape[0]
+
+    # Get batch size from first tensor, handling BatchFeature objects
+    if isinstance(first_tensor, BatchFeature):
+        # BatchFeature object - get batch size from first available tensor in its data
+        batch_size = next(
+            t.shape[0] for t in first_tensor.data.values() if isinstance(t, torch.Tensor) and t.dim() > 0
+        )
+    else:
+        batch_size = first_tensor.shape[0]
+
     permutation = torch.randperm(batch_size)
-    return {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
+
+    result = {}
+    for key, tensor in tensor_dict.items():
+        if tensor is None:
+            result[key] = None
+        elif isinstance(tensor, BatchFeature):
+            # Handle BatchFeature or similar objects from processors
+            shuffled_dict = {}
+            for sub_key, sub_tensor in tensor.data.items():
+                if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0 and sub_tensor.shape[0] == batch_size:
+                    # Only shuffle tensors that have the expected batch dimension
+                    # This preserves visual metadata and prevents corruption
+                    shuffled_dict[sub_key] = sub_tensor[permutation]
+                else:
+                    # Keep scalars, metadata, and tensors with different batch dimensions unchanged
+                    shuffled_dict[sub_key] = sub_tensor
+            # Create a new object of the same type with shuffled data
+            result[key] = type(tensor)(shuffled_dict)
+        else:
+            # Regular tensor
+            result[key] = tensor[permutation]
+
+    return result
 
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
@@ -283,6 +352,37 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     if torch.isnan(tensor).all():
         return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
     return torch.max(tensor[~torch.isnan(tensor)])
+
+
+def get_from_processor_or_tokenizer(processor: Union[PreTrainedTokenizerBase, ProcessorMixin], key: str) -> Any:
+    """
+    Returns the attribute `key` from the processor or its tokenizer.
+
+    Checks if `key` exists on `processor`; if not, checks `processor.tokenizer` if available.
+    Raises AttributeError if the attribute is not found.
+    """
+    if hasattr(processor, key):
+        return processor.key
+    elif hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, key):
+        return processor.tokenizer.key
+    else:
+        if hasattr(processor, "tokenizer"):
+            raise AttributeError(
+                f"Attribute '{key}' not found on '{type(processor).__name__}' or its tokenizer (type: "
+                f"'{type(processor.tokenizer).__name__}')."
+            )
+        else:
+            raise AttributeError(f"Attribute '{key}' not found on '{type(processor).__name__}'.")
+
+
+def set_pad_token_on_processor_or_tokenizer(processor, token):
+    """Set pad_token on the correct object (processor or its tokenizer)."""
+    if hasattr(processor, "tokenizer"):
+        # For VLM processors, set pad_token on the tokenizer
+        processor.tokenizer.pad_token = token
+    else:
+        # For regular tokenizers, set pad_token on the processor (which is the tokenizer)
+        processor.pad_token = token
 
 
 def identity(x):
@@ -391,10 +491,10 @@ class GRPOTrainer(Trainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.AutoProcessor`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
-            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
-            padding token, `processing_class.pad_token`, must be set. If the processing class has not set a padding
+            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`] or [`~transformers.AutoProcessor.from_pretrained`], depending on the model type.
+            A padding token, `processing_class.pad_token`, must be set. If the processing class has not set a padding
             token, `processing_class.eos_token` will be used as the default.
         reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
@@ -428,7 +528,7 @@ class GRPOTrainer(Trainer):
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[PreTrainedTokenizerBase] = None,
+        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
@@ -469,6 +569,14 @@ class GRPOTrainer(Trainer):
                     "This argument can only be used when the `model` argument is a string."
                 )
 
+        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
+        # Inspect the forward method before we wrap the model with PEFT
+        self.model_kwarg_keys = (
+            inspect.signature(model.forward).parameters.keys()
+            if not hasattr(model, "get_base_model")
+            else inspect.signature(model.get_base_model().forward).parameters.keys()
+        )
+
         if peft_config is not None:
             if not is_peft_available():
                 raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
@@ -480,9 +588,13 @@ class GRPOTrainer(Trainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
-        if processing_class.pad_token is None:
-            processing_class.pad_token = processing_class.eos_token
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
+
+        # Handle pad token for processors or tokenizers
+        pad_token = get_from_processor_or_tokenizer(processing_class, "pad_token")
+        if pad_token is None:
+            eos_token = get_from_processor_or_tokenizer(processing_class, "eos_token")
+            set_pad_token_on_processor_or_tokenizer(processing_class, eos_token)
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -523,11 +635,18 @@ class GRPOTrainer(Trainer):
             if isinstance(reward_func, PreTrainedModel):
                 if reward_processing_class is None:
                     reward_processing_class = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
-                if reward_processing_class.pad_token_id is None:
-                    reward_processing_class.pad_token = reward_processing_class.eos_token
+
+                # Handle pad token for reward processing class
+                rc_pad_token_id = get_from_processor_or_tokenizer(reward_processing_class, "pad_token_id")
+                if rc_pad_token_id is None:
+                    rc_eos_token = get_from_processor_or_tokenizer(reward_processing_class, "eos_token")
+                    set_pad_token_on_processor_or_tokenizer(reward_processing_class, rc_eos_token)
+
                 # The reward model computes the reward for the latest non-padded token in the input sequence.
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
-                reward_func.config.pad_token_id = reward_processing_class.pad_token_id
+                reward_func.config.pad_token_id = get_from_processor_or_tokenizer(
+                    reward_processing_class, "pad_token_id"
+                )
                 reward_processing_classes[i] = reward_processing_class
         self.reward_processing_classes = reward_processing_classes
 
@@ -725,9 +844,9 @@ class GRPOTrainer(Trainer):
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
                 "do_sample": True,
-                "pad_token_id": processing_class.pad_token_id,
-                "bos_token_id": processing_class.bos_token_id,
-                "eos_token_id": processing_class.eos_token_id,
+                "pad_token_id": get_from_processor_or_tokenizer(processing_class, "pad_token_id"),
+                "bos_token_id": get_from_processor_or_tokenizer(processing_class, "bos_token_id"),
+                "eos_token_id": get_from_processor_or_tokenizer(processing_class, "eos_token_id"),
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -778,7 +897,30 @@ class GRPOTrainer(Trainer):
         # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt"]
+            # Base signature columns
+            signature_columns = ["prompt"]
+
+            if self.is_vision_model:
+                vlm_columns = ["image", "pixel_values", "pixel_attention_mask", "image_sizes"]
+                signature_columns.extend(vlm_columns)
+
+            # Additional columns needed based on the reward functions
+            for func in self.reward_funcs:
+                if not isinstance(func, (str, PreTrainedModel)):
+                    try:
+                        # Custom reward function - inspect its signature to see what columns it expects
+                        func_sig = inspect.signature(func)
+                        params = func_sig.parameters
+                        # Add any parameter that's not one of the expected defaults
+                        for param_name in params:
+                            if param_name not in ["prompts", "completions", "kwargs", "trainer_state"]:
+                                if param_name not in signature_columns:
+                                    signature_columns.append(param_name)
+                    except (ValueError, TypeError):
+                        # If we can't inspect the function, just skip it
+                        pass
+
+            self._signature_columns = signature_columns
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -890,10 +1032,22 @@ class GRPOTrainer(Trainer):
         return model
 
     @profiling_decorator
-    def _get_last_hidden_state(self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None):
+    def _get_last_hidden_state(
+        self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None, visual_inputs=None
+    ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
-        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+
+        # Build model inputs
+        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+
+        # Add visual inputs if available (for VLM support)
+        if visual_inputs is not None:
+            for key, value in visual_inputs.items():
+                if key not in ["input_ids", "attention_mask"] and value is not None:
+                    model_inputs[key] = value
+
+        last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         if logits_to_keep is not None:
             last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
@@ -901,9 +1055,67 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
-        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
+        self,
+        model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        batch_size=None,
+        compute_entropy=False,
+        visual_inputs=None,
     ) -> dict[str, Optional[torch.Tensor]]:
-        """Compute log‐probs and (optionally) entropies for each token."""
+        """
+        Compute log‐probs and (optionally) entropies for each token.
+
+        Args:
+            model: The model to compute logps with
+            input_ids: Token IDs for the sequences
+            attention_mask: Attention mask for the sequences
+            logits_to_keep: Number of completion tokens to compute logits for
+            batch_size: Batch size for processing (optional)
+            compute_entropy: Whether to compute entropy along with logps (optional)
+            visual_inputs: Visual inputs for VLM models (pixel_values, etc.) (optional)
+
+        Returns:
+            Dictionary containing logps and optionally entropies
+        """
+        # For VLM models with visual inputs, avoid batching to prevent corruption of visual data structures
+        if visual_inputs is not None:
+            # Process the entire batch at once for VLMs to preserve visual data relationships
+            model_inputs = {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+            }
+
+            # Add all visual inputs
+            for key, value in visual_inputs.items():
+                if key not in ["input_ids", "attention_mask"] and value is not None:
+                    model_inputs[key] = value
+
+            if "logits_to_keep" in self.model_kwarg_keys:
+                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+                model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+            logits = model(**model_inputs).logits
+
+            # For VLMs that don't support logits_to_keep, we need to slice the logits manually
+            if "logits_to_keep" not in self.model_kwarg_keys:
+                # Keep only the last logits_to_keep + 1 logits for efficiency
+                logits = logits[:, -(logits_to_keep + 1) :, :]
+
+            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            logits = logits / self.temperature
+
+            completion_ids = input_ids[:, -logits_to_keep:]
+            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
+
+            if compute_entropy:
+                entropies = entropy_from_logits(logits)
+                return {"logps": logps, "entropies": entropies}
+            else:
+                return {"logps": logps, "entropies": None}
+
+        # For text-only models, use batching to reduce memory usage
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -911,12 +1123,24 @@ class GRPOTrainer(Trainer):
             input_ids_batch = input_ids[start : start + batch_size]
             attention_mask_batch = attention_mask[start : start + batch_size]
 
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            logits = model(
-                input_ids=input_ids_batch,
-                attention_mask=attention_mask_batch,
-                logits_to_keep=logits_to_keep + 1,
-            ).logits
+            # Build model inputs - check if the model supports logits_to_keep (some VLMs don't)
+            model_inputs = {
+                "input_ids": input_ids_batch,
+                "attention_mask": attention_mask_batch,
+            }
+
+            # Only add logits_to_keep if the model supports it
+            if "logits_to_keep" in self.model_kwarg_keys:
+                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+                model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+            logits = model(**model_inputs).logits
+
+            # For VLMs that don't support logits_to_keep, we need to slice the logits manually
+            if "logits_to_keep" not in self.model_kwarg_keys:
+                # Keep only the last logits_to_keep + 1 logits for efficiency
+                logits = logits[:, -(logits_to_keep + 1) :, :]
+
             logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
@@ -933,6 +1157,56 @@ class GRPOTrainer(Trainer):
         logps = torch.cat(all_logps, dim=0)
         entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
         return logps, entropies
+
+    def _prepare_inputs_for_reward_module(self, inputs, prompts, completions, reward_processing_class):
+        """Prepare inputs for VLM reward modules that require both text and images."""
+        has_images = False
+        if self.is_vision_model:
+            has_images = any("image" in example for example in inputs)
+
+        if has_images:
+            # Extract images from inputs
+            images = [example.get("image", None) for example in inputs]
+
+            # Validate and preprocess images
+            images = validate_and_preprocess_images(images, reward_processing_class)
+            has_images = any(img is not None for img in images)  # Recheck after validation
+
+            # For VLM reward models, we need to process both text and images
+            if is_conversational(inputs[0]):
+                messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+                texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+            else:
+                texts = [p + c for p, c in zip(prompts, completions)]
+
+            # Use processor to handle both text and images
+            if has_images and hasattr(reward_processing_class, "tokenizer"):
+                # This is a processor, not just a tokenizer
+                reward_inputs = reward_processing_class(
+                    text=texts,
+                    images=images,
+                    return_tensors="pt",
+                    padding=True,
+                    padding_side="right",
+                    add_special_tokens=False,
+                )
+            else:
+                # Fallback to text-only processing if not a processor or no valid images
+                reward_inputs = reward_processing_class(
+                    text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                )
+        else:
+            # No images, use standard text-only processing
+            if is_conversational(inputs[0]):
+                messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+                texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+            else:
+                texts = [p + c for p, c in zip(prompts, completions)]
+            reward_inputs = reward_processing_class(
+                text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+            )
+
+        return reward_inputs
 
     def _fix_param_name_to_vllm(self, name, extra_prefixes: Optional[list[str]] = None):
         extra_prefixes = extra_prefixes or []
@@ -1037,20 +1311,23 @@ class GRPOTrainer(Trainer):
         self, generation_batch: dict[str, Union[torch.Tensor, Any]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
         # Prepares inputs for model training/evaluation by managing completion generation and batch handling.
-        # During training:
-        #   - Receives the local generation batch (Per-GPU batch size × steps per generation)
-        #     from the modified training dataloader instead of the standard local batch
-        #   - Generates completions once for the entire generation batch and splits it into batches of size
-        #     `per_device_train_batch_size`
-        #   - Buffers these completions and returns the appropriate slice for the current accumulation step
-        #   - Optimizes by regenerating completions only periodically (every steps_per_generation * num_iterations)
-        # During evaluation:
-        #   - The input is treated as a standard local batch (no accumulation, no multiple iterations)
-        #   - Completions are generated for each batch without buffering or reuse
-        # Returns a single local batch in both cases.
+        # Uses different strategies based on whether we're dealing with VLM or LLM data:
+        # - VLM Mode: Simple regeneration per step to avoid corrupting visual data structures
+        # - LLM Mode: Full buffering/shuffling/splitting for efficiency (preserves all existing features)
 
-        mode = "train" if self.model.training else "eval"
-        if mode == "train":
+        if self.is_vision_model or self._has_visual_inputs(generation_batch):
+            return self._prepare_inputs_vlm_mode(generation_batch)
+        else:
+            return self._prepare_inputs_llm_mode(generation_batch)
+
+    def _prepare_inputs_llm_mode(
+        self, generation_batch: dict[str, Union[torch.Tensor, Any]]
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        """
+        Original LLM-optimized input preparation with full buffering, shuffling, and splitting.
+        Preserves all existing efficiency features for text-only models.
+        """
+        if self.model.training:
             generate_every = self.args.steps_per_generation * self.num_iterations
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
@@ -1062,6 +1339,27 @@ class GRPOTrainer(Trainer):
         else:
             # In evaluation, there is neither batch grouping for generation, nor multiple iterations, hence
             # local generation batch == local eval batch
+            inputs = self._generate_and_score_completions(generation_batch)
+        return inputs
+
+    def _prepare_inputs_vlm_mode(
+        self, generation_batch: dict[str, Union[torch.Tensor, Any]]
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        """
+        VLM-safe input preparation that preserves visual data structures while maintaining training benefits.
+        Uses BatchFeature-aware shuffling and splitting to avoid corrupting visual data.
+        """
+        mode = "train" if self.model.training else "eval"
+        if mode == "train":
+            generate_every = self.args.steps_per_generation * self.num_iterations
+            if self._step % generate_every == 0 or self._buffered_inputs is None:
+                generation_batch = self._generate_and_score_completions(generation_batch)
+                generation_batch = shuffle_tensor_dict(generation_batch)
+                self._buffered_inputs = self._split_vlm_batch_safely(generation_batch, self.args.steps_per_generation)
+
+            inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
+            self._step += 1
+        else:
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
@@ -1082,13 +1380,8 @@ class GRPOTrainer(Trainer):
         ):
             with profiling_context(self, reward_func_name):
                 if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
-                    if is_conversational(inputs[0]):
-                        messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
-                        texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
-                    else:
-                        texts = [p + c for p, c in zip(prompts, completions)]
-                    reward_inputs = reward_processing_class(
-                        text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                    reward_inputs = self._prepare_inputs_for_reward_module(
+                        inputs, prompts, completions, reward_processing_class
                     )
                     reward_inputs = super()._prepare_inputs(reward_inputs)
                     with torch.inference_mode():
@@ -1127,9 +1420,28 @@ class GRPOTrainer(Trainer):
         prompts = [x["prompt"] for x in inputs]
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
-        prompt_inputs = self.processing_class(
-            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
+        has_images = False
+        images = []
+        if self.is_vision_model:
+            images = [x.get("image", None) for x in inputs]
+            has_images = any(img is not None for img in images)
+            if has_images:
+                images = validate_and_preprocess_images(images, self.processing_class)
+                has_images = any(img is not None for img in images)
+
+        if has_images:
+            prompt_inputs = self.processing_class(
+                text=prompts_text,
+                images=images,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                add_special_tokens=False,
+            )
+        else:
+            prompt_inputs = self.processing_class(
+                text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+            )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
@@ -1142,13 +1454,10 @@ class GRPOTrainer(Trainer):
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            prompts_text = [
-                re.sub(rf"^({re.escape(self.processing_class.pad_token)})+", "", text) for text in prompts_text
-            ]
+            pad_token = get_from_processor_or_tokenizer(self.processing_class, "pad_token")
+            prompts_text = [re.sub(rf"^({re.escape(pad_token)})+", "", text) for text in prompts_text]
 
-        # Generate completions using either vLLM or regular generation
         if self.use_vllm:
-            # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
                 self._last_loaded_step = self.state.global_step
@@ -1156,24 +1465,37 @@ class GRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
+
+                if has_images:
+                    all_images = gather_object(images)
+                else:
+                    all_images = None
+
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+
+                    generation_inputs = {
+                        "prompts": ordered_set_of_prompts,
+                        "n": self.num_generations,
+                        "repetition_penalty": self.repetition_penalty,
+                        "temperature": self.temperature,
+                        "top_p": self.top_p,
+                        "top_k": -1 if self.top_k is None else self.top_k,
+                        "min_p": 0.0 if self.min_p is None else self.min_p,
+                        "max_tokens": self.max_completion_length,
+                        "guided_decoding_regex": self.guided_decoding_regex,
+                        "generation_kwargs": self.args.generation_kwargs,
+                    }
+
+                    if has_images and all_images:
+                        ordered_set_of_images = all_images[:: self.num_generations]
+                        generation_inputs["images"] = ordered_set_of_images
+
                     with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
-                            prompts=ordered_set_of_prompts,
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                            generation_kwargs=self.args.generation_kwargs,
-                        )
+                        completion_ids = self.vllm_client.generate(**generation_inputs)
                 else:
                     completion_ids = [None] * len(all_prompts_text)
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its
@@ -1188,7 +1510,8 @@ class GRPOTrainer(Trainer):
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
-                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
+                    # vLLM v1 no longer supports request-level backend selection, use default backend
+                    guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
                 else:
                     guided_decoding = None
 
@@ -1213,11 +1536,29 @@ class GRPOTrainer(Trainer):
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
                     all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+
+                    if has_images:
+                        gathered_images = [None for _ in range(self.vllm_tensor_parallel_size)]
+                        torch.distributed.all_gather_object(gathered_images, images, group=self.tp_group)
+                        all_images = [img for sublist in gathered_images for img in sublist]
+                    else:
+                        all_images = None
                 else:
                     all_prompts_text = prompts_text
+                    all_images = images if has_images else None
+
+                if has_images and all_images:
+                    vllm_inputs = []
+                    for prompt, image in zip(all_prompts_text, all_images):
+                        if image is not None:
+                            vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image}})
+                        else:
+                            vllm_inputs.append(prompt)
+                else:
+                    vllm_inputs = all_prompts_text
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+                    all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
@@ -1234,7 +1575,16 @@ class GRPOTrainer(Trainer):
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
 
         elif self.use_transformers_paged:
-            prompt_inputs = self.processing_class(text=prompts_text)
+            # Re-process inputs for paged generation if needed
+            # Note: images are already validated and preprocessed above
+            if has_images:
+                paged_prompt_inputs = self.processing_class(text=prompts_text, images=images)
+            else:
+                paged_prompt_inputs = self.processing_class(text=prompts_text)
+
+            self.generation_config.max_batch_tokens = 512
+            self.generation_config.num_blocks = 1024
+            self.generation_config.block_size = 128
             previous_attn = self.model_wrapped.config._attn_implementation
 
             if is_flash_attn_2_available():
@@ -1256,14 +1606,14 @@ class GRPOTrainer(Trainer):
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
                     all_outputs = unwrapped_model.generate_batch(
-                        prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
+                        paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
                     )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(
                 completion_ids, padding_value=self.processing_class.pad_token_id, padding_side="right"
             )
-            prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_inputs.input_ids]
+            prompt_ids = [torch.tensor(ids, device=device) for ids in paged_prompt_inputs.input_ids]
             prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id, padding_side="left")
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
             # Restore the original attention implementation, training mode
@@ -1278,9 +1628,21 @@ class GRPOTrainer(Trainer):
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
-                prompt_completion_ids = unwrapped_model.generate(
-                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
-                )
+                # Prepare generation inputs
+                generation_inputs = {
+                    "input_ids": prompt_ids,
+                    "attention_mask": prompt_mask,
+                    "generation_config": self.generation_config,
+                }
+
+                # Add images for VLM models
+                if has_images:
+                    # Extract visual inputs from processor output
+                    for key in prompt_inputs:
+                        if key not in ["input_ids", "attention_mask"]:
+                            generation_inputs[key] = prompt_inputs[key]
+
+                prompt_completion_ids = unwrapped_model.generate(**generation_inputs)
 
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
@@ -1288,7 +1650,8 @@ class GRPOTrainer(Trainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
+        eos_token_id = get_from_processor_or_tokenizer(self.processing_class, "eos_token_id")
+        is_eos = completion_ids == eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1323,7 +1686,7 @@ class GRPOTrainer(Trainer):
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
             if self.args.gradient_accumulation_steps % generate_every != 0:
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size, visual_inputs=prompt_inputs if has_images else None,
                 )
             else:
                 old_per_token_logps = None
@@ -1332,12 +1695,12 @@ class GRPOTrainer(Trainer):
             if self.beta != 0.0:
                 if self.ref_model is not None:
                     ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, visual_inputs=prompt_inputs if has_images else None,
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
                         ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                            self.model, prompt_completion_ids, attention_mask, logits_to_keep
+                            self.model, prompt_completion_ids, attention_mask, logits_to_keep, visual_inputs=prompt_inputs if has_images else None,
                         )
             else:
                 ref_per_token_logps = None
@@ -1419,6 +1782,17 @@ class GRPOTrainer(Trainer):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
+        if self.is_vision_model and has_images:
+            if "images" not in self._textual_logs:
+                # Use the same maxlen as other textual logs
+                maxlen = (
+                    self.accelerator.num_processes
+                    * self.args.per_device_train_batch_size
+                    * self.args.steps_per_generation
+                )
+                self._textual_logs["images"] = deque(maxlen=maxlen)
+            self._textual_logs["images"].extend(gather_object(images))
+
         return {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
@@ -1427,6 +1801,7 @@ class GRPOTrainer(Trainer):
             "advantages": advantages,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
+            "visual_inputs": prompt_inputs if has_images else None,
         }
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1437,8 +1812,13 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
+        # Extract visual inputs for VLM support
+        visual_inputs = inputs.get("visual_inputs", None)
+
         # get the last hidden state of the model
-        last_hidden_state = self._get_last_hidden_state(unwrapped_model, input_ids, attention_mask, logits_to_keep)
+        last_hidden_state = self._get_last_hidden_state(
+            unwrapped_model, input_ids, attention_mask, logits_to_keep, visual_inputs=visual_inputs
+        )
 
         # compute loss and metrics using liger grpo loss
         loss, metrics = self.liger_grpo_loss(
@@ -1481,9 +1861,12 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
+        # Extract visual inputs for VLM support
+        visual_inputs = inputs.get("visual_inputs", None)
+
         # Compute the per_token_logps and the entropy (if necessary) at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
-            model, input_ids, attention_mask, logits_to_keep, compute_entropy=self.top_entropy_quantile < 1.0
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=self.top_entropy_quantile < 1.0, visual_inputs=visual_inputs
         )
 
         if self.top_entropy_quantile < 1.0:
@@ -1598,6 +1981,22 @@ class GRPOTrainer(Trainer):
                     **self._textual_logs["rewards"],
                     "advantage": self._textual_logs["advantages"],
                 }
+
+                if self.is_vision_model and "images" in self._textual_logs and len(self._textual_logs["images"]) > 0:
+                    # Convert images to wandb Image objects for proper visualization
+                    wandb_images = []
+                    for img in self._textual_logs["images"]:
+                        if img is not None:
+                            try:
+                                # Handle different image formats (PIL, numpy, etc.)
+                                wandb_images.append(wandb.Image(img))
+                            except Exception:
+                                # If image conversion fails, append None
+                                wandb_images.append(None)
+                        else:
+                            wandb_images.append(None)
+                    table["image"] = wandb_images
+
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
@@ -1676,3 +2075,104 @@ class GRPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
+    def _has_visual_inputs(self, inputs: Union[dict, list]) -> bool:
+        """
+        Detect if the current batch contains visual inputs that require special handling.
+
+        Args:
+            inputs: Either a dictionary with visual_inputs key or a list of dicts with image/pixel_values
+
+        Returns:
+            bool: True if visual inputs are detected, False otherwise
+        """
+        if isinstance(inputs, dict):
+            # Check if we have visual_inputs key (processed batch)
+            if "visual_inputs" in inputs:
+                return inputs["visual_inputs"] is not None
+            # Check for raw visual keys
+            return any(key in inputs for key in ["image", "pixel_values", "pixel_attention_mask"])
+        elif isinstance(inputs, list):
+            # Check if any sample in the batch has visual data
+            if not inputs:
+                return False
+            return any(
+                any(key in sample for key in ["image", "pixel_values", "pixel_attention_mask"]) for sample in inputs
+            )
+        return False
+
+    def _split_vlm_batch_safely(
+        self, tensor_dict: dict[str, Union[torch.Tensor, Any]], num_chunks: int
+    ) -> list[dict[str, Union[torch.Tensor, Any]]]:
+        """
+        VLM-safe batch splitting that preserves BatchFeature objects and visual data integrity.
+
+        This method:
+        1. Handles BatchFeature objects without corrupting internal structure
+        2. Splits regular tensors normally
+        3. Preserves non-tensor data (scalars, metadata) in each chunk
+        4. Maintains visual data relationships
+
+        Args:
+            tensor_dict: Dictionary containing tensors and BatchFeature objects
+            num_chunks: Number of chunks to split into
+
+        Returns:
+            List of dictionaries, each representing a chunk
+        """
+        # Find batch size from the first available tensor
+        batch_size = None
+        for _key, value in tensor_dict.items():
+            if isinstance(value, torch.Tensor) and value.dim() > 0:
+                batch_size = value.shape[0]
+                break
+            elif isinstance(value, BatchFeature):
+                # BatchFeature object
+                for sub_tensor in value.data.values():
+                    if isinstance(sub_tensor, torch.Tensor) and sub_tensor.dim() > 0:
+                        batch_size = sub_tensor.shape[0]
+                        break
+                if batch_size is not None:
+                    break
+
+        if batch_size is None:
+            raise ValueError("Could not determine batch size from tensor_dict")
+
+        chunk_size = batch_size // num_chunks
+        if chunk_size == 0:
+            raise ValueError(f"Cannot split batch of size {batch_size} into {num_chunks} chunks")
+
+        chunks = []
+        for i in range(num_chunks):
+            start_idx = i * chunk_size
+            end_idx = (i + 1) * chunk_size if i < num_chunks - 1 else batch_size
+
+            chunk = {}
+            for key, value in tensor_dict.items():
+                if value is None:
+                    chunk[key] = None
+                elif isinstance(value, torch.Tensor) and value.dim() > 0:
+                    # Regular tensor - slice normally
+                    chunk[key] = value[start_idx:end_idx]
+                elif isinstance(value, BatchFeature):
+                    # BatchFeature object - slice each tensor in its data
+                    chunk_data = {}
+                    for sub_key, sub_tensor in value.data.items():
+                        if (
+                            isinstance(sub_tensor, torch.Tensor)
+                            and sub_tensor.dim() > 0
+                            and sub_tensor.shape[0] == batch_size
+                        ):
+                            # Only slice tensors that match the batch size
+                            chunk_data[sub_key] = sub_tensor[start_idx:end_idx]
+                        else:
+                            # Keep non-batchable data as-is (metadata, scalars, etc.)
+                            chunk_data[sub_key] = sub_tensor
+                    chunk[key] = BatchFeature(chunk_data)
+                else:
+                    # Non-tensor data (scalars, metadata) - keep as-is
+                    chunk[key] = value
+
+            chunks.append(chunk)
+
+        return chunks

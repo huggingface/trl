@@ -24,7 +24,6 @@ from transformers import (
     BartModel,
     BloomConfig,
     BloomForCausalLM,
-    CLIPVisionConfig,
     CohereConfig,
     CohereForCausalLM,
     DbrxConfig,
@@ -58,6 +57,8 @@ from transformers import (
     PaliGemmaForConditionalGeneration,
     Phi3Config,
     Phi3ForCausalLM,
+    Qwen2_5_VLConfig,
+    Qwen2_5_VLForConditionalGeneration,
     Qwen2Config,
     Qwen2ForCausalLM,
     Qwen2ForSequenceClassification,
@@ -66,11 +67,9 @@ from transformers import (
     Qwen3ForSequenceClassification,
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
-    SiglipVisionConfig,
     T5Config,
     T5ForConditionalGeneration,
 )
-from transformers.models.idefics2.configuration_idefics2 import Idefics2VisionConfig
 
 
 ORGANIZATION = "trl-internal-testing"
@@ -232,26 +231,29 @@ for model_id, config_class, model_class, suffix in [
 
 
 # Vision Language Models
-# fmt: off
-for model_id, config_class, text_config_class, vision_config_class, model_class in [
-    ("HuggingFaceM4/idefics2-8b", Idefics2Config, MistralConfig, Idefics2VisionConfig, Idefics2ForConditionalGeneration),
-    ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlamaConfig, CLIPVisionConfig, LlavaForConditionalGeneration),
-    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, MistralConfig, CLIPVisionConfig, LlavaNextForConditionalGeneration),
-    ("google/paligemma-3b-pt-224", PaliGemmaConfig, GemmaConfig, SiglipVisionConfig, PaliGemmaForConditionalGeneration),
+for model_id, config_class, model_class in [
+    ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
+    ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
+    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
+    ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
+    ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLConfig, Qwen2_5_VLForConditionalGeneration),
 ]:
-# fmt: on
     processor = AutoProcessor.from_pretrained(model_id)
     kwargs = {}
     if config_class == PaliGemmaConfig:
         kwargs["projection_dim"] = 8
     vision_kwargs = {}
-    if vision_config_class in [CLIPVisionConfig, SiglipVisionConfig]:
+    if config_class in [LlavaConfig, LlavaNextConfig, PaliGemmaConfig]:
         vision_kwargs["projection_dim"] = 8
-    if vision_config_class == CLIPVisionConfig:
+    if config_class in [LlavaConfig, LlavaNextConfig, Qwen2_5_VLConfig]:
         vision_kwargs["image_size"] = 336
+    if config_class in [LlavaConfig, LlavaNextConfig]:
         vision_kwargs["patch_size"] = 14
+    if config_class == Qwen2_5_VLConfig:
+        vision_kwargs["depth"] = 4
+
     config = config_class(
-        text_config=text_config_class(
+        text_config=dict(
             vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
             hidden_size=8,
             num_attention_heads=4,
@@ -259,8 +261,8 @@ for model_id, config_class, text_config_class, vision_config_class, model_class 
             num_hidden_layers=2,
             intermediate_size=32,
         ),
-        vision_config=vision_config_class(
-            hidden_size=8,
+        vision_config=dict(
+            hidden_size=32,
             num_attention_heads=4,
             num_hidden_layers=2,
             intermediate_size=32,
