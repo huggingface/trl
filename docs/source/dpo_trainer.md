@@ -145,7 +145,7 @@ The DPO algorithm supports several loss functions. The loss function can be set 
 
 ### Multi-loss combinations
 
-The DPO trainer supports combining multiple loss functions with different weights, enabling more sophisticated optimization strategies. This is particularly useful for implementing algorithms like MPO (Mixed Preference Optimization). MPO is a training approach that combines multiple optimization objectives, as described in the paper [Mixed Preference Optimization: Reinforcement Learning with Data Selection and Better Reference Model](https://huggingface.co/papers/2411.10442). 
+The DPO trainer supports combining multiple loss functions with different weights, enabling more sophisticated optimization strategies. This is particularly useful for implementing algorithms like MPO (Mixed Preference Optimization). MPO is a training approach that combines multiple optimization objectives, as described in the paper [Enhancing the Reasoning Ability of Multimodal Large Language Models via Mixed Preference Optimization](https://huggingface.co/papers/2411.10442).
 
 To combine multiple losses, specify the loss types and corresponding weights as lists:
 

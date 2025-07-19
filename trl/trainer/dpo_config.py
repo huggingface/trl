@@ -125,7 +125,8 @@ class DPOConfig(TrainingArguments):
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
 
-                Multiple loss types can be combined using comma separation (e.g., `"sigmoid,bco_pair"` for MPO).
+                Multiple loss types can be combined using comma separation (e.g., `"sigmoid,bco_pair"` for
+                [MPO](https://huggingface.co/papers/2411.10442)).
 
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Liger loss.
@@ -160,12 +161,13 @@ class DPOConfig(TrainingArguments):
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
-        loss_weights (`Dict[str, float]`, *optional*, defaults to `None`):
-            Dictionary of loss weights for multi-loss combinations. Used when combining multiple loss types.
-            Example: `{'sigmoid': 1.0, 'bco_pair': 0.5}` for MPO. If not provided, defaults to equal weights (1.0) for all loss types.
+        loss_weights (`list[float]`, *optional*, defaults to `None`):
+            List of loss weights for multi-loss combinations. Used when combining multiple loss types.
+            Example: `[1.0, 0.5]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults to
+            equal weights (1.0) for all loss types.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
-            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
