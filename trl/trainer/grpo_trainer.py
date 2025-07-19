@@ -48,7 +48,6 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
-from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
@@ -355,13 +354,25 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     return torch.max(tensor[~torch.isnan(tensor)])
 
 
-def get_from_processor_or_tokenizer(processor, key):
-    """Get an attribute from processor or its tokenizer (if it has one)."""
+def get_from_processor_or_tokenizer(processor: Union[PreTrainedTokenizerBase, ProcessorMixin], key: str) -> Any:
+    """
+    Returns the attribute `key` from the processor or its tokenizer.
+
+    Checks if `key` exists on `processor`; if not, checks `processor.tokenizer` if available.
+    Raises AttributeError if the attribute is not found.
+    """
     if hasattr(processor, key):
-        return getattr(processor, key)
+        return processor.key
     elif hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, key):
-        return getattr(processor.tokenizer, key)
-    return None
+        return processor.tokenizer.key
+    else:
+        if hasattr(processor, "tokenizer"):
+            raise AttributeError(
+                f"Attribute '{key}' not found on '{type(processor).__name__}' or its tokenizer (type: "
+                f"'{type(processor.tokenizer).__name__}')."
+            )
+        else:
+            raise AttributeError(f"Attribute '{key}' not found on '{type(processor).__name__}'.")
 
 
 def set_pad_token_on_processor_or_tokenizer(processor, token):
@@ -491,7 +502,7 @@ class GRPOTrainer(Trainer):
         args: Optional[GRPOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, AutoProcessor, ProcessorMixin]] = None,
+        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
@@ -550,12 +561,8 @@ class GRPOTrainer(Trainer):
             model = self._enable_gradient_checkpointing(model, args)
 
         # Processing class
-        self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
         if processing_class is None:
-            if self.is_vision_model:
-                processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
-            else:
-                processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # Handle pad token for processors or tokenizers
         pad_token = get_from_processor_or_tokenizer(processing_class, "pad_token")
