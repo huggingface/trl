@@ -14,8 +14,12 @@
 
 from dataclasses import dataclass, field
 
-from datasets import Dataset
+import numpy as np
+from datasets import Dataset, Features, Image, Sequence, Value
 from transformers import HfArgumentParser
+
+
+Message = [{"content": Value("string"), "role": Value("string")}]
 
 
 @dataclass
@@ -41,14 +45,15 @@ class ScriptArguments:
         metadata={"help": "Whether to push the dataset to the Hugging Face Hub."},
     )
     repo_id: str = field(
-        default="trl-internal-testing/zen",
+        default="trl-internal-testing/zen-image",
         metadata={"help": "Hugging Face repository ID to push the dataset to."},
     )
 
 
 def main(test_size, push_to_hub, repo_id):
     # fmt: off
-    standard_language_modeling_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "text": [
             "Beautiful is better than ugly.",
             "Explicit is better than implicit.",
@@ -70,12 +75,15 @@ def main(test_size, push_to_hub, repo_id):
             "If the implementation is easy to explain, it may be a good idea.",
             "Namespaces are one honking great idea -- let's do more of those!",
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    standard_language_modeling_dataset = Dataset.from_dict(data, features=Features(text=Value("string"), image=Image()))
     standard_language_modeling_dataset = standard_language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_language_modeling_dataset.push_to_hub(repo_id, config_name="standard_language_modeling")
 
-    standard_prompt_only_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data =  {
         "prompt": [
             "Beautiful is better than",
             "Explicit is",
@@ -97,12 +105,15 @@ def main(test_size, push_to_hub, repo_id):
             "If the implementation is easy",
             "Namespaces are one honking great",
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    standard_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), image=Image()))
     standard_prompt_only_dataset = standard_prompt_only_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_prompt_only_dataset.push_to_hub(repo_id, config_name="standard_prompt_only")
 
-    standard_prompt_completion_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "prompt": [
             "Beautiful is better than",
             "Explicit is",
@@ -145,12 +156,15 @@ def main(test_size, push_to_hub, repo_id):
             " to explain, it may be a good idea.",
             " idea -- let's do more of those!",
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    standard_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completion=Value("string"), image=Image()))
     standard_prompt_completion_dataset = standard_prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_prompt_completion_dataset.push_to_hub(repo_id, config_name="standard_prompt_completion")
 
-    standard_preference_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "prompt": [
             "Beautiful is better than",
             "Explicit is",
@@ -214,12 +228,15 @@ def main(test_size, push_to_hub, repo_id):
             " it's probably magic.",
             " watermelon -- let's plant some!",
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    standard_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), chosen=Value("string"), rejected=Value("string"), image=Image()))
     standard_preference_dataset = standard_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_preference_dataset.push_to_hub(repo_id, config_name="standard_preference")
 
-    standard_implicit_prompt_preference_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "chosen": [
             "Beautiful is better than ugly.",
             "Explicit is better than implicit.",
@@ -262,12 +279,16 @@ def main(test_size, push_to_hub, repo_id):
             "If the implementation is easy it's probably magic.",
             "Namespaces are one honking great watermelon -- let's plant some!",
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    standard_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Value("string"), rejected=Value("string"), image=Image()))
+    {'prompt': Value(dtype='string'), 'completions': Sequence(feature=Value(dtype='string'), length=-1), 'labels': Sequence(feature=Value(dtype='bool'), length=-1)}
     standard_implicit_prompt_preference_dataset = standard_implicit_prompt_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_implicit_prompt_preference_dataset.push_to_hub(repo_id, config_name="standard_implicit_prompt_preference")
 
-    standard_unpaired_preference_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "prompt": [
             "Beautiful is better than",
             "Explicit is",
@@ -311,12 +332,15 @@ def main(test_size, push_to_hub, repo_id):
             " watermelon -- let's plant some!",
         ],
         "label": [True, False, False, True, True, False, True, False, True, True, False, True, True, False, True, False, True, False, False],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    standard_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completion=Value("string"), label=Value("bool"), image=Image()))
     standard_unpaired_preference_dataset = standard_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_unpaired_preference_dataset.push_to_hub(repo_id, config_name="standard_unpaired_preference")
 
-    standard_stepwise_supervision_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "prompt": [
             "Beautiful is better than",
             "Explicit is better than",
@@ -378,13 +402,16 @@ def main(test_size, push_to_hub, repo_id):
             [False],
             [True, True],
             [False]
-        ]
-    })
+        ],
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    standard_stepwise_supervision_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completions=Sequence(Value("string")), labels=Sequence(Value("bool")), image=Image()))
     standard_stepwise_supervision_dataset = standard_stepwise_supervision_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_stepwise_supervision_dataset.push_to_hub(repo_id, config_name="standard_stepwise_supervision")
 
-    conversational_language_modeling_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "messages": [
             [{"role": "user", "content": "What is better than ugly?"}, {"role": "assistant", "content": "Beautiful."},],
             [{"role": "user", "content": "What is better than implicit?"}, {"role": "assistant", "content": "Explicit."}],
@@ -406,12 +433,15 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}, {"role": "assistant", "content": "It means it may be a good idea."}],
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "content": "Namespaces are one honking great idea."}],
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    conversational_language_modeling_dataset = Dataset.from_dict(data, features=Features(messages=Message, image=Image()))
     conversational_language_modeling_dataset = conversational_language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_language_modeling_dataset.push_to_hub(repo_id, config_name="conversational_language_modeling")
 
-    conversational_prompt_only_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "prompt": [
             [{"role": "user", "content": "What is better than ugly?"}],
             [{"role": "user", "content": "What is better than implicit?"}],
@@ -433,12 +463,15 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}],
             [{"role": "user", "content": "Any great ideas?"}],
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    conversational_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Message, image=Image()))
     conversational_prompt_only_dataset = conversational_prompt_only_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_prompt_only_dataset.push_to_hub(repo_id, config_name="conversational_prompt_only")
 
-    conversational_prompt_completion_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "prompt": [
             [{"role": "user", "content": "What is better than ugly?"}],
             [{"role": "user", "content": "What is better than implicit?"}],
@@ -481,12 +514,15 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "content": "It means it may be a good idea."}],
             [{"role": "assistant", "content": "Namespaces are one honking great idea."}],
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    conversational_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, image=Image()))
     conversational_prompt_completion_dataset = conversational_prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_prompt_completion_dataset.push_to_hub(repo_id, config_name="conversational_prompt_completion")
 
-    conversational_preference_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "prompt": [
             [{"role": "user", "content": "What is better than ugly?"}],
             [{"role": "user", "content": "What is better than implicit?"}],
@@ -550,12 +586,15 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "content": "It means it's a bad idea."}],
             [{"role": "assistant", "content": "Recursion."}],
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    conversational_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, chosen=Message, rejected=Message, image=Image()))
     conversational_preference_dataset = conversational_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_preference_dataset.push_to_hub(repo_id, config_name="conversational_preference")
 
-    conversational_implicit_prompt_preference_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "chosen": [
             [{"role": "user", "content": "What is better than ugly?"}, {"role": "assistant", "content": "Beautiful."}],
             [{"role": "user", "content": "What is better than implicit?"}, {"role": "assistant", "content": "Explicit."}],
@@ -598,12 +637,15 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}, {"role": "assistant", "content": "It means it's a bad idea."}],
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "content": "Recursion."}],
         ],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    conversational_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Message, rejected=Message, image=Image()))
     conversational_implicit_prompt_preference_dataset = conversational_implicit_prompt_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_implicit_prompt_preference_dataset.push_to_hub(repo_id, config_name="conversational_implicit_prompt_preference")
 
-    conversational_unpaired_preference_dataset = Dataset.from_dict({
+    sizes = np.random.randint(32, 64, size=(19, 2))
+    data = {
         "prompt": [
             [{"role": "user", "content": "What is better than ugly?"}],
             [{"role": "user", "content": "What is better than implicit?"}],
@@ -647,7 +689,9 @@ def main(test_size, push_to_hub, repo_id):
             [{'role': 'assistant', 'content': 'Namespaces are one honking great idea.'}],
         ],
         "label": [True, True, True, False, True, True, True, False, True, False, True, False, True, False, False, True, True, True, True],
-    })
+        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+    }
+    conversational_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, label=Value("bool"), image=Image()))
     conversational_unpaired_preference_dataset = conversational_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_unpaired_preference_dataset.push_to_hub(repo_id, config_name="conversational_unpaired_preference")
