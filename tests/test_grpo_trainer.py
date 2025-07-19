@@ -1106,7 +1106,7 @@ class GRPOTrainerTester(unittest.TestCase):
         # We mock the generate method because the model's random weights make it extremely unlikely to produce a
         # sequence containing the EOS token within the allowed max_completion_length. As a result, all tokens are
         # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
-        def fake_generate(input_ids, **kwargs):
+        def fake_generate(prompt_ids, **kwargs):
             # pad_token_id = 151643; eos_token_id = 151645
             completions_ids = torch.tensor(
                 [
@@ -1114,9 +1114,9 @@ class GRPOTrainerTester(unittest.TestCase):
                     [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
                     [12, 13, 14, 15, 16, 17, 18, 151645],  # particular case, eos is generated just within the limit
                 ],
-                device=input_ids.device,
+                device=prompt_ids.device,
             )
-            return torch.cat([input_ids, completions_ids], dim=1)
+            return torch.cat([prompt_ids, completions_ids], dim=1)
 
         mock_generate.side_effect = fake_generate
 
