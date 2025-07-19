@@ -103,7 +103,7 @@ class DPOConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        loss_type (`str`, *optional*, defaults to `"sigmoid"`):
+        loss_type (`str` or `list[str]`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
@@ -124,6 +124,9 @@ class DPOConfig(TrainingArguments):
                   [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+
+                Multiple loss types can be combined using comma separation (e.g., `"sigmoid,bco_pair"` for
+                [MPO](https://huggingface.co/papers/2411.10442)).
 
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Liger loss.
@@ -158,9 +161,13 @@ class DPOConfig(TrainingArguments):
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
+        loss_weights (`list[float]`, *optional*, defaults to `None`):
+            List of loss weights for multi-loss combinations. Used when combining multiple loss types.
+            Example: `[1.0, 0.5]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults to
+            equal weights (1.0) for all loss types.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
-            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
@@ -313,10 +320,12 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    loss_type: str = field(
+    loss_type: Union[str, list[str]] = field(
         default="sigmoid",
         metadata={
-            "help": "Type of loss to use.",
+            "help": "Type of loss to use. Can be a single loss type (string) or multiple loss types (list of strings). "
+            "For multiple losses, use comma-separated string or list format. "
+            "Example: 'sigmoid,bco_pair' or ['sigmoid', 'bco_pair'].",
             "choices": [
                 "sigmoid",
                 "hinge",
@@ -331,6 +340,7 @@ class DPOConfig(TrainingArguments):
                 "discopop",
                 "apo_zero",
                 "apo_down",
+                "sft",
             ],
         },
     )
@@ -405,6 +415,14 @@ class DPOConfig(TrainingArguments):
             "loss. The paper recommends the default value `discopop_tau=0.05`."
         },
     )
+    loss_weights: Optional[list[float]] = field(
+        default=None,
+        metadata={
+            "help": "Weights for multi-loss combinations. List of weights corresponding to loss_type order. "
+            "Example: [1.0, 0.5] with loss_type=['sigmoid', 'bco_pair'] for MPO. "
+            "If not provided, defaults to equal weights (1.0) for all loss types."
+        },
+    )
     sync_ref_model: bool = field(
         default=False,
         metadata={
@@ -438,6 +456,25 @@ class DPOConfig(TrainingArguments):
     )
 
     def __post_init__(self):
+        if self.loss_type is None:
+            self.loss_type = "sigmoid"
+
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Normalize loss_type to string format for internal use
+        if isinstance(self.loss_type, list):
+            self.loss_type = ",".join(self.loss_type)
+
+        # Handle loss_weights validation and conversion
+        if self.loss_weights is not None:
+            # Convert list format to dictionary format for internal use
+            loss_types = self.loss_type.split(",") if "," in self.loss_type else [self.loss_type]
+            if len(self.loss_weights) != len(loss_types):
+                raise ValueError(
+                    f"Length of loss_weights list ({len(self.loss_weights)}) must match "
+                    f"number of loss types ({len(loss_types)}). "
+                    f"Loss types: {loss_types}, Loss weights: {self.loss_weights}"
+                )
+            self.loss_weights = {loss_type.strip(): weight for loss_type, weight in zip(loss_types, self.loss_weights)}
 
         super().__post_init__()

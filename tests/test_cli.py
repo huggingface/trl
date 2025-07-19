@@ -37,6 +37,18 @@ class TestCLI(unittest.TestCase):
             with patch("sys.argv", command.split(" ")):
                 main()
 
+    def test_dpo_multiple_loss_types(self):
+        from trl.cli import main
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            command = (
+                f"trl dpo --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 "
+                f"--dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none "
+                f"--loss_type sigmoid bco_pair --loss_weights 1.0 0.5"
+            )
+            with patch("sys.argv", command.split(" ")):
+                main()
+
     @patch("sys.stdout", new_callable=StringIO)
     def test_env(self, mock_stdout):
         from trl.cli import main
