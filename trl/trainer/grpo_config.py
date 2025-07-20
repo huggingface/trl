@@ -582,7 +582,8 @@ class GRPOConfig(TrainingArguments):
                 "'generation_batch_size' and 'steps_per_generation' can not be both configured at the same time"
             )
 
-        # Il faut que dans un batch de geenration, il n'y ait pas de completion imcomplete. Donc ce batch peut être soit 1xnum_completions, 2xnum_completions, etc.
+        # The generation batch must contain full prompt groups (no partials), so it must be divisible by
+        # num_generations.
         if self.generation_batch_size % self.num_generations != 0:
             raise ValueError(
                 f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations "
