@@ -1236,6 +1236,7 @@ class GRPOTrainer(Trainer):
         # VLM chat template.
         original_prompts = copy.deepcopy(prompts)
 
+        kwargs = {}
         if "image" in inputs[0]:
             kwargs = {"images": [[example.get("image")] for example in inputs]}
             for prompt in prompts:
