@@ -52,12 +52,6 @@ from transformers.utils import (
     is_torch_xpu_available,
 )
 
-
-try:
-    from PIL import Image
-except ImportError:
-    Image = None
-
 from ..trainer.model_config import ModelConfig
 
 
