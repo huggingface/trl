@@ -582,7 +582,13 @@ class GRPOConfig(TrainingArguments):
                 "'generation_batch_size' and 'steps_per_generation' can not be both configured at the same time"
             )
 
-        # Check if the effective batch size can be divided by the number of generations
+        # Il faut que dans un batch de geenration, il n'y ait pas de completion imcomplete. Donc ce batch peut être soit 1xnum_completions, 2xnum_completions, etc.
+        if self.generation_batch_size % self.num_generations != 0:
+            raise ValueError(
+                f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations "
+                f"({self.num_generations})."
+            )
+
         if self.num_generations < 2:
             raise ValueError(
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
