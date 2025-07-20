@@ -19,7 +19,12 @@ from unittest.mock import patch
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
@@ -124,7 +129,6 @@ class ShuffleSequenceDictTester(unittest.TestCase):
                 self.assertEqual(y_val, "c")
             else:
                 self.fail("Unexpected x row in shuffled output.")
-
 
     # def ...():
     #     batch_feature = BatchFeature(
@@ -1009,7 +1013,7 @@ class GRPOTrainerTester(unittest.TestCase):
             )
             lora_config = LoraConfig(
                 target_modules="all-linear",
-                # test with non-default modules as it add extra keys in state_dict tht we need to handle
+                # test with non-default modules as it add extra keys in state_dict that we need to handle
                 modules_to_save=["embed_tokens", "lm_head"],
             )
             trainer = GRPOTrainer(
@@ -1498,7 +1502,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-
     def test_training_vlm_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1530,6 +1533,44 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    @require_peft
+    def test_training_vlm_peft(self):
+        model = AutoModelForImageTextToText.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
+        )
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_modules="all-linear"),
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the peft params have changed and the base model params have not changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if n in base_param_names:  # We expect the base model params to be the same
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
 
 class DualModeBatchingTester(unittest.TestCase):

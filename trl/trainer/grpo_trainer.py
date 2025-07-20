@@ -12,10 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import inspect
 import os
-import copy
-
 import re
 import textwrap
 import warnings
@@ -42,7 +41,6 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
-    BatchFeature,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -1238,7 +1236,7 @@ class GRPOTrainer(Trainer):
 
         kwargs = {}
         if "image" in inputs[0]:
-            kwargs = {"images": [[example.get("image")] for example in inputs]}
+            kwargs["images"] = [[example.get("image")] for example in inputs]
             for prompt in prompts:
                 prompt[0]["content"] = [{"type": "image"}, {"type": "text", "text": prompt[0]["content"]}]
 
@@ -1388,10 +1386,7 @@ class GRPOTrainer(Trainer):
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
             # Note: images are already validated and preprocessed above
-            if has_images:
-                paged_prompt_inputs = self.processing_class(text=prompts_text, images=images)
-            else:
-                paged_prompt_inputs = self.processing_class(text=prompts_text)
+            paged_prompt_inputs = self.processing_class(text=prompts_text, **kwargs)
 
             self.generation_config.max_batch_tokens = 512
             self.generation_config.num_blocks = 1024
@@ -1487,7 +1482,8 @@ class GRPOTrainer(Trainer):
                     attention_mask,
                     logits_to_keep,
                     batch_size,
-                    visual_inputs=prompt_inputs if has_images else None,
+                    pixel_values=prompt_inputs.get("pixel_values"),
+                    image_grid_thw=prompt_inputs.get("image_grid_thw"),
                 )
             else:
                 old_per_token_logps = None
@@ -1500,7 +1496,8 @@ class GRPOTrainer(Trainer):
                         prompt_completion_ids,
                         attention_mask,
                         logits_to_keep,
-                        visual_inputs=prompt_inputs if has_images else None,
+                        pixel_values=prompt_inputs.get("pixel_values"),
+                        image_grid_thw=prompt_inputs.get("image_grid_thw"),
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -1509,7 +1506,8 @@ class GRPOTrainer(Trainer):
                             prompt_completion_ids,
                             attention_mask,
                             logits_to_keep,
-                            visual_inputs=prompt_inputs if has_images else None,
+                            pixel_values=prompt_inputs.get("pixel_values"),
+                            image_grid_thw=prompt_inputs.get("image_grid_thw"),
                         )
             else:
                 ref_per_token_logps = None
