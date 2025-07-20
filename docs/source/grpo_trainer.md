@@ -565,7 +565,7 @@ accelerate launch \
 
 When training VLMs, consider these configuration options:
 
-- **`max_prompt_length=None`**: Set to `None` to avoid truncating image tokens
+- **`max_prompt_length`**: Set to `None` to avoid truncating image tokens. If set, the trainer will truncate the prompt to preserve the image tokens. If the image tokens exceed the `max_prompt_length`, the trainer will raise an error.
 - **`vllm_gpu_memory_utilization`**: Reduce if using large VLMs (e.g., 0.2-0.3)
 - **LoRA Configuration**: Target vision-language projection layers if needed
 - **Quantization**: 4-bit quantization significantly reduces memory usage
