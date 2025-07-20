@@ -1555,7 +1555,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
-                peft_config=LoraConfig(target_modules="all-linear"),
+                peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
             )
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
