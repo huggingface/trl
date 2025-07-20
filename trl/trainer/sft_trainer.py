@@ -805,7 +805,15 @@ class SFTTrainer(Trainer):
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
-                dataset = dataset.select_columns("input_ids")
+
+                columns = ["input_ids"]
+                if "completion_mask" in dataset.column_names:
+                    columns.append("completion_mask")
+                elif "assistant_mask" in dataset.column_names:
+                    columns.append("assistant_mask")
+
+                dataset = dataset.select_columns(columns)
+
                 # Packing adds new column "seq_lengths" needed for document aware flash attention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
