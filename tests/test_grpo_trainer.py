@@ -25,7 +25,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
-from transformers.testing_utils import require_peft
+from transformers.testing_utils import require_liger_kernel, require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -1472,7 +1472,13 @@ class GRPOTrainerTester(unittest.TestCase):
                 for i in range(8, 16):
                     assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
 
-    def test_training_vlm(self):
+    @parameterized.expand(
+        [
+            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
+        ]
+    )
+    def test_training_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1485,7 +1491,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
             trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                model=model_id,
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
@@ -1571,6 +1577,69 @@ class GRPOTrainerTester(unittest.TestCase):
                     self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
                 elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_vlm_and_importance_sampling(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                steps_per_generation=2,  # increase the steps per generation to trigger IS
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_liger_kernel
+    def test_training_vlm_and_liger(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                use_liger_loss=True,  # Enable Liger loss
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
 
 # class DualModeBatchingTester(unittest.TestCase):
