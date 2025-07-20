@@ -39,7 +39,6 @@ from trl.trainer.utils import (
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
-    validate_and_preprocess_images,
 )
 
 from .testing_utils import require_rich
@@ -639,24 +638,3 @@ class TestEntropyFromLogits(unittest.TestCase):
             entropy = -(torch.exp(logps) * logps).sum(-1)
         predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
         torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
-
-
-class TestValidateAndPreprocessImages(unittest.TestCase):
-    def test_validate_and_preprocess_images_pil_images(self):
-        from PIL import Image
-
-        img1 = Image.new("RGB", (100, 100), color="red")
-        img2 = Image.new("RGBA", (50, 50), color="blue")
-        img3 = Image.new("L", (75, 75), color=128)
-        images = [img1, img2, img3, None]
-
-        processed = validate_and_preprocess_images(images)
-
-        self.assertEqual(len(processed), 4)
-        self.assertEqual(processed[0].mode, "RGB")
-        self.assertEqual(processed[0].size, (100, 100))
-        self.assertEqual(processed[1].mode, "RGB")
-        self.assertEqual(processed[1].size, (50, 50))
-        self.assertEqual(processed[2].mode, "RGB")
-        self.assertEqual(processed[2].size, (75, 75))
-        self.assertIsNone(processed[3])

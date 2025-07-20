@@ -19,12 +19,12 @@ from unittest.mock import patch
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, BatchFeature
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.grpo_trainer import RepeatSampler, get_high_entropy_mask, shuffle_tensor_dict, split_tensor_dict
+from trl.trainer.grpo_trainer import RepeatSampler, get_high_entropy_mask, shuffle_sequence_dict, split_tensor_dict
 
 from .testing_utils import require_vllm
 
@@ -61,13 +61,13 @@ class SplitTensorDictTester(unittest.TestCase):
             self.assertIsNone(result[i]["y"])
 
 
-class ShuffleTensorDictTester(unittest.TestCase):
+class ShuffleSequenceDictTester(unittest.TestCase):
     def test_shuffle_preserves_shape(self):
         x = torch.arange(6).reshape(3, 2)
         y = torch.arange(3).reshape(3, 1)
         tensor_dict = {"x": x.clone(), "y": y.clone()}
 
-        shuffled = shuffle_tensor_dict(tensor_dict)
+        shuffled = shuffle_sequence_dict(tensor_dict)
 
         self.assertEqual(shuffled["x"].shape, x.shape)
         self.assertEqual(shuffled["y"].shape, y.shape)
@@ -78,7 +78,7 @@ class ShuffleTensorDictTester(unittest.TestCase):
         y = torch.tensor([[1], [2], [3]])
         tensor_dict = {"x": x.clone(), "y": y.clone()}
 
-        shuffled = shuffle_tensor_dict(tensor_dict)
+        shuffled = shuffle_sequence_dict(tensor_dict)
 
         # Build a reverse map from shuffled x rows to y values
         for i in range(3):
@@ -98,82 +98,105 @@ class ShuffleTensorDictTester(unittest.TestCase):
         x = torch.arange(6).reshape(3, 2)
         tensor_dict = {"x": x.clone(), "y": None}
 
-        shuffled = shuffle_tensor_dict(tensor_dict)
+        shuffled = shuffle_sequence_dict(tensor_dict)
 
         self.assertIsNone(shuffled["y"])
         self.assertEqual(shuffled["x"].shape, x.shape)
 
-    def test_shuffle_with_batch_feature(self):
-        batch_feature = BatchFeature(
-            {
-                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
-                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]]),
-                "pixel_values": torch.randn(3, 3, 224, 224),
-                "image_sizes": torch.tensor([[224, 224], [224, 224]]),
-                "spatial_merge_size": 2,
-            }
-        )
+    def test_shuffle_with_list(self):
+        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
+        y = ["a", "b", "c"]
 
-        regular_tensor = torch.tensor([[10, 11], [12, 13], [14, 15]])
-        tensor_dict = {"visual_inputs": batch_feature, "prompt_ids": regular_tensor}
+        sequence_dict = {"x": x.clone(), "y": y}
 
-        shuffled = shuffle_tensor_dict(tensor_dict)
+        shuffled = shuffle_sequence_dict(sequence_dict)
 
-        self.assertIsInstance(shuffled["visual_inputs"], BatchFeature)
-        expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_sizes", "spatial_merge_size"}
-        self.assertEqual(set(shuffled["visual_inputs"].data.keys()), expected_keys)
-        self.assertEqual(shuffled["visual_inputs"]["input_ids"].shape, (3, 3))
-        self.assertEqual(shuffled["visual_inputs"]["attention_mask"].shape, (3, 3))
-        self.assertEqual(shuffled["visual_inputs"]["pixel_values"].shape, (3, 3, 224, 224))
-        self.assertEqual(shuffled["prompt_ids"].shape, (3, 2))
-        self.assertTrue(torch.equal(shuffled["visual_inputs"]["image_sizes"], batch_feature["image_sizes"]))
-        self.assertEqual(shuffled["visual_inputs"]["spatial_merge_size"], batch_feature["spatial_merge_size"])
-
-        original_input_ids = batch_feature["input_ids"]
-        shuffled_input_ids = shuffled["visual_inputs"]["input_ids"]
-        shuffled_prompt_ids = shuffled["prompt_ids"]
-
+        # Check that the list y is shuffled in the same order as x
         for i in range(3):
-            original_pos = None
-            for j in range(3):
-                if torch.equal(shuffled_input_ids[i], original_input_ids[j]):
-                    original_pos = j
-                    break
-            self.assertIsNotNone(original_pos)
-            self.assertTrue(torch.equal(shuffled_prompt_ids[i], regular_tensor[original_pos]))
+            x_row = shuffled["x"][i]
+            y_val = shuffled["y"][i]
 
-    def test_split_with_batch_feature(self):
-        batch_feature = BatchFeature(
-            {
-                "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),
-                "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]),
-                "pixel_values": torch.randn(4, 3, 224, 224),
-                "image_sizes": torch.tensor([[224, 224], [224, 224]]),
-                "spatial_merge_size": 2,
-            }
-        )
+            if torch.equal(x_row, torch.tensor([10, 11])):
+                self.assertEqual(y_val, "a")
+            elif torch.equal(x_row, torch.tensor([20, 21])):
+                self.assertEqual(y_val, "b")
+            elif torch.equal(x_row, torch.tensor([30, 31])):
+                self.assertEqual(y_val, "c")
+            else:
+                self.fail("Unexpected x row in shuffled output.")
 
-        regular_tensor = torch.arange(8).reshape(4, 2)
-        tensor_dict = {"visual_inputs": batch_feature, "prompt_ids": regular_tensor}
 
-        result = split_tensor_dict(tensor_dict, 2)
+    # def ...():
+    #     batch_feature = BatchFeature(
+    #         {
+    #             "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
+    #             "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1]]),
+    #             "pixel_values": torch.randn(3, 3, 224, 224),
+    #             "image_sizes": torch.tensor([[224, 224], [224, 224]]),
+    #             "spatial_merge_size": 2,
+    #         }
+    #     )
 
-        self.assertEqual(len(result), 2)
-        for i in range(2):
-            self.assertIsInstance(result[i]["visual_inputs"], BatchFeature)
-            expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_sizes", "spatial_merge_size"}
-            self.assertEqual(set(result[i]["visual_inputs"].data.keys()), expected_keys)
-            self.assertEqual(result[i]["visual_inputs"]["input_ids"].shape, (2, 3))
-            self.assertEqual(result[i]["visual_inputs"]["attention_mask"].shape, (2, 3))
-            self.assertEqual(result[i]["visual_inputs"]["pixel_values"].shape, (2, 3, 224, 224))
-            self.assertEqual(result[i]["prompt_ids"].shape, (2, 2))
-            self.assertTrue(torch.equal(result[i]["visual_inputs"]["image_sizes"], batch_feature["image_sizes"]))
-            self.assertEqual(result[i]["visual_inputs"]["spatial_merge_size"], batch_feature["spatial_merge_size"])
+    #     regular_tensor = torch.tensor([[10, 11], [12, 13], [14, 15]])
+    #     tensor_dict = {"visual_inputs": batch_feature, "prompt_ids": regular_tensor}
 
-        self.assertTrue(torch.equal(result[0]["visual_inputs"]["input_ids"], batch_feature["input_ids"][:2]))
-        self.assertTrue(torch.equal(result[1]["visual_inputs"]["input_ids"], batch_feature["input_ids"][2:]))
-        self.assertTrue(torch.equal(result[0]["prompt_ids"], regular_tensor[:2]))
-        self.assertTrue(torch.equal(result[1]["prompt_ids"], regular_tensor[2:]))
+    #     shuffled = shuffle_sequence_dict(tensor_dict)
+
+    #     self.assertIsInstance(shuffled["visual_inputs"], BatchFeature)
+    #     expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_sizes", "spatial_merge_size"}
+    #     self.assertEqual(set(shuffled["visual_inputs"].data.keys()), expected_keys)
+    #     self.assertEqual(shuffled["visual_inputs"]["input_ids"].shape, (3, 3))
+    #     self.assertEqual(shuffled["visual_inputs"]["attention_mask"].shape, (3, 3))
+    #     self.assertEqual(shuffled["visual_inputs"]["pixel_values"].shape, (3, 3, 224, 224))
+    #     self.assertEqual(shuffled["prompt_ids"].shape, (3, 2))
+    #     self.assertTrue(torch.equal(shuffled["visual_inputs"]["image_sizes"], batch_feature["image_sizes"]))
+    #     self.assertEqual(shuffled["visual_inputs"]["spatial_merge_size"], batch_feature["spatial_merge_size"])
+
+    #     original_input_ids = batch_feature["input_ids"]
+    #     shuffled_input_ids = shuffled["visual_inputs"]["input_ids"]
+    #     shuffled_prompt_ids = shuffled["prompt_ids"]
+
+    #     for i in range(3):
+    #         original_pos = None
+    #         for j in range(3):
+    #             if torch.equal(shuffled_input_ids[i], original_input_ids[j]):
+    #                 original_pos = j
+    #                 break
+    #         self.assertIsNotNone(original_pos)
+    #         self.assertTrue(torch.equal(shuffled_prompt_ids[i], regular_tensor[original_pos]))
+
+    # def test_split_with_batch_feature(self):
+    #     batch_feature = BatchFeature(
+    #         {
+    #             "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),
+    #             "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 1], [1, 1, 1], [1, 1, 1]]),
+    #             "pixel_values": torch.randn(4, 3, 224, 224),
+    #             "image_sizes": torch.tensor([[224, 224], [224, 224]]),
+    #             "spatial_merge_size": 2,
+    #         }
+    #     )
+
+    #     regular_tensor = torch.arange(8).reshape(4, 2)
+    #     tensor_dict = {"visual_inputs": batch_feature, "prompt_ids": regular_tensor}
+
+    #     result = split_tensor_dict(tensor_dict, 2)
+
+    #     self.assertEqual(len(result), 2)
+    #     for i in range(2):
+    #         self.assertIsInstance(result[i]["visual_inputs"], BatchFeature)
+    #         expected_keys = {"input_ids", "attention_mask", "pixel_values", "image_sizes", "spatial_merge_size"}
+    #         self.assertEqual(set(result[i]["visual_inputs"].data.keys()), expected_keys)
+    #         self.assertEqual(result[i]["visual_inputs"]["input_ids"].shape, (2, 3))
+    #         self.assertEqual(result[i]["visual_inputs"]["attention_mask"].shape, (2, 3))
+    #         self.assertEqual(result[i]["visual_inputs"]["pixel_values"].shape, (2, 3, 224, 224))
+    #         self.assertEqual(result[i]["prompt_ids"].shape, (2, 2))
+    #         self.assertTrue(torch.equal(result[i]["visual_inputs"]["image_sizes"], batch_feature["image_sizes"]))
+    #         self.assertEqual(result[i]["visual_inputs"]["spatial_merge_size"], batch_feature["spatial_merge_size"])
+
+    #     self.assertTrue(torch.equal(result[0]["visual_inputs"]["input_ids"], batch_feature["input_ids"][:2]))
+    #     self.assertTrue(torch.equal(result[1]["visual_inputs"]["input_ids"], batch_feature["input_ids"][2:]))
+    #     self.assertTrue(torch.equal(result[0]["prompt_ids"], regular_tensor[:2]))
+    #     self.assertTrue(torch.equal(result[1]["prompt_ids"], regular_tensor[2:]))
 
 
 class RepeatRandomSamplerTester(unittest.TestCase):
@@ -1444,6 +1467,69 @@ class GRPOTrainerTester(unittest.TestCase):
                     assert mock_prepare.call_args_list[i].args[1] == expected_first_generation_batch
                 for i in range(8, 16):
                     assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
+
+    def test_training_vlm(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+
+    def test_training_vlm_beta_non_zero(self):
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
 
 
 class DualModeBatchingTester(unittest.TestCase):
