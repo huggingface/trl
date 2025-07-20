@@ -331,7 +331,7 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
      - `completions_ids` (contains the tokenized completions),
-     - `trainer_state` ([`transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
+     - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
