@@ -1499,6 +1499,7 @@ class GRPOTrainer(Trainer):
                         prompt_completion_ids,
                         attention_mask,
                         logits_to_keep,
+                        batch_size=batch_size,
                         pixel_values=prompt_inputs.get("pixel_values"),
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
                     )
@@ -1509,6 +1510,7 @@ class GRPOTrainer(Trainer):
                             prompt_completion_ids,
                             attention_mask,
                             logits_to_keep,
+                            batch_size=batch_size,
                             pixel_values=prompt_inputs.get("pixel_values"),
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
                         )
