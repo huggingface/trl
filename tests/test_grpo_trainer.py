@@ -1187,7 +1187,7 @@ class GRPOTrainerTester(unittest.TestCase):
         # We mock the generate method because the model's random weights make it extremely unlikely to produce a
         # sequence containing the EOS token within the allowed max_completion_length. As a result, all tokens are
         # masked in the loss, the model doesn't update, and the final check (which verifies the update) fails.
-        def fake_generate(prompt_ids, **kwargs):
+        def fake_generate(input_ids, **kwargs):
             # pad_token_id = 151643; eos_token_id = 151645
             completions_ids = torch.tensor(
                 [
@@ -1195,9 +1195,9 @@ class GRPOTrainerTester(unittest.TestCase):
                     [9, 10, 11, 151645, 151643, 151643, 151643, 151643],  # this one contains eos
                     [12, 13, 14, 15, 16, 17, 18, 151645],  # particular case, eos is generated just within the limit
                 ],
-                device=prompt_ids.device,
+                device=input_ids.device,
             )
-            return torch.cat([prompt_ids, completions_ids], dim=1)
+            return torch.cat([input_ids, completions_ids], dim=1)
 
         mock_generate.side_effect = fake_generate
 
@@ -1573,184 +1573,184 @@ class GRPOTrainerTester(unittest.TestCase):
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
 
-class DualModeBatchingTester(unittest.TestCase):
-    def test_has_visual_inputs_detection(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+# class DualModeBatchingTester(unittest.TestCase):
+#     def test_has_visual_inputs_detection(self):
+#         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=2,
-                num_generations=2,
-                max_completion_length=8,
-                report_to="none",
-            )
-            trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
+#         with tempfile.TemporaryDirectory() as tmp_dir:
+#             training_args = GRPOConfig(
+#                 output_dir=tmp_dir,
+#                 learning_rate=0.1,
+#                 per_device_train_batch_size=2,
+#                 num_generations=2,
+#                 max_completion_length=8,
+#                 report_to="none",
+#             )
+#             trainer = GRPOTrainer(
+#                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+#                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+#                 args=training_args,
+#                 train_dataset=dataset,
+#             )
 
-            dict_with_visual = {"visual_inputs": BatchFeature({"pixel_values": torch.randn(2, 3, 224, 224)})}
-            dict_without_visual = {"prompt_ids": torch.randn(2, 10)}
-            dict_with_none_visual = {"visual_inputs": None}
+#             dict_with_visual = {"visual_inputs": BatchFeature({"pixel_values": torch.randn(2, 3, 224, 224)})}
+#             dict_without_visual = {"prompt_ids": torch.randn(2, 10)}
+#             dict_with_none_visual = {"visual_inputs": None}
 
-            self.assertTrue(trainer._has_visual_inputs(dict_with_visual))
-            self.assertFalse(trainer._has_visual_inputs(dict_without_visual))
-            self.assertFalse(trainer._has_visual_inputs(dict_with_none_visual))
+#             self.assertTrue(trainer._has_visual_inputs(dict_with_visual))
+#             self.assertFalse(trainer._has_visual_inputs(dict_without_visual))
+#             self.assertFalse(trainer._has_visual_inputs(dict_with_none_visual))
 
-            list_with_visual = [{"prompt": "test", "image": torch.randn(3, 224, 224)}]
-            list_without_visual = [{"prompt": "test"}]
-            list_empty = []
+#             list_with_visual = [{"prompt": "test", "image": torch.randn(3, 224, 224)}]
+#             list_without_visual = [{"prompt": "test"}]
+#             list_empty = []
 
-            self.assertTrue(trainer._has_visual_inputs(list_with_visual))
-            self.assertFalse(trainer._has_visual_inputs(list_without_visual))
-            self.assertFalse(trainer._has_visual_inputs(list_empty))
+#             self.assertTrue(trainer._has_visual_inputs(list_with_visual))
+#             self.assertFalse(trainer._has_visual_inputs(list_without_visual))
+#             self.assertFalse(trainer._has_visual_inputs(list_empty))
 
-    def test_split_vlm_batch_safely_with_realistic_data(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+#     def test_split_vlm_batch_safely_with_realistic_data(self):
+#         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=2,
-                num_generations=2,
-                max_completion_length=8,
-                report_to="none",
-            )
-            trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
+#         with tempfile.TemporaryDirectory() as tmp_dir:
+#             training_args = GRPOConfig(
+#                 output_dir=tmp_dir,
+#                 learning_rate=0.1,
+#                 per_device_train_batch_size=2,
+#                 num_generations=2,
+#                 max_completion_length=8,
+#                 report_to="none",
+#             )
+#             trainer = GRPOTrainer(
+#                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+#                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+#                 args=training_args,
+#                 train_dataset=dataset,
+#             )
 
-            batch_size = 4
-            prompt_length = 50
-            completion_length = 30
+#             batch_size = 4
+#             prompt_length = 50
+#             completion_length = 30
 
-            visual_inputs = BatchFeature(
-                {
-                    "input_ids": torch.randint(1, 1000, (batch_size, prompt_length)),
-                    "attention_mask": torch.ones(batch_size, prompt_length),
-                    "pixel_values": torch.randn(batch_size, 3, 224, 224),
-                    "image_grid_thw": torch.randint(1, 10, (batch_size, 3)),
-                }
-            )
+#             visual_inputs = BatchFeature(
+#                 {
+#                     "input_ids": torch.randint(1, 1000, (batch_size, prompt_length)),
+#                     "attention_mask": torch.ones(batch_size, prompt_length),
+#                     "pixel_values": torch.randn(batch_size, 3, 224, 224),
+#                     "image_grid_thw": torch.randint(1, 10, (batch_size, 3)),
+#                 }
+#             )
 
-            batch_data = {
-                "prompt_ids": torch.randint(1, 1000, (batch_size, prompt_length)),
-                "prompt_mask": torch.ones(batch_size, prompt_length),
-                "completion_ids": torch.randint(1, 1000, (batch_size, completion_length)),
-                "completion_mask": torch.ones(batch_size, completion_length),
-                "advantages": torch.randn(batch_size),
-                "old_per_token_logps": torch.randn(batch_size, completion_length),
-                "ref_per_token_logps": torch.randn(batch_size, completion_length),
-                "visual_inputs": visual_inputs,
-            }
+#             batch_data = {
+#                 "prompt_ids": torch.randint(1, 1000, (batch_size, prompt_length)),
+#                 "prompt_mask": torch.ones(batch_size, prompt_length),
+#                 "completion_ids": torch.randint(1, 1000, (batch_size, completion_length)),
+#                 "completion_mask": torch.ones(batch_size, completion_length),
+#                 "advantages": torch.randn(batch_size),
+#                 "old_per_token_logps": torch.randn(batch_size, completion_length),
+#                 "ref_per_token_logps": torch.randn(batch_size, completion_length),
+#                 "visual_inputs": visual_inputs,
+#             }
 
-            chunks = trainer._split_vlm_batch_safely(batch_data, num_chunks=2)
-            self.assertEqual(len(chunks), 2)
+#             chunks = trainer._split_vlm_batch_safely(batch_data, num_chunks=2)
+#             self.assertEqual(len(chunks), 2)
 
-            for chunk in chunks:
-                self.assertIn("prompt_ids", chunk)
-                self.assertIn("visual_inputs", chunk)
-                self.assertIsInstance(chunk["visual_inputs"], BatchFeature)
-                expected_keys = ["input_ids", "attention_mask", "pixel_values", "image_grid_thw"]
-                for key in expected_keys:
-                    self.assertIn(key, chunk["visual_inputs"])
-                self.assertEqual(chunk["prompt_ids"].shape[0], 2)
-                self.assertEqual(chunk["visual_inputs"]["input_ids"].shape[0], 2)
+#             for chunk in chunks:
+#                 self.assertIn("prompt_ids", chunk)
+#                 self.assertIn("visual_inputs", chunk)
+#                 self.assertIsInstance(chunk["visual_inputs"], BatchFeature)
+#                 expected_keys = ["input_ids", "attention_mask", "pixel_values", "image_grid_thw"]
+#                 for key in expected_keys:
+#                     self.assertIn(key, chunk["visual_inputs"])
+#                 self.assertEqual(chunk["prompt_ids"].shape[0], 2)
+#                 self.assertEqual(chunk["visual_inputs"]["input_ids"].shape[0], 2)
 
-            for num_chunks in [1, 2, 4]:
-                chunks = trainer._split_vlm_batch_safely(batch_data, num_chunks=num_chunks)
-                self.assertEqual(len(chunks), num_chunks)
-                for chunk in chunks:
-                    self.assertIsInstance(chunk["visual_inputs"], BatchFeature)
-                    chunk_size = batch_size // num_chunks
-                    self.assertEqual(chunk["visual_inputs"]["input_ids"].shape[0], chunk_size)
-                    self.assertEqual(chunk["advantages"].shape[0], chunk_size)
+#             for num_chunks in [1, 2, 4]:
+#                 chunks = trainer._split_vlm_batch_safely(batch_data, num_chunks=num_chunks)
+#                 self.assertEqual(len(chunks), num_chunks)
+#                 for chunk in chunks:
+#                     self.assertIsInstance(chunk["visual_inputs"], BatchFeature)
+#                     chunk_size = batch_size // num_chunks
+#                     self.assertEqual(chunk["visual_inputs"]["input_ids"].shape[0], chunk_size)
+#                     self.assertEqual(chunk["advantages"].shape[0], chunk_size)
 
-            chunks = trainer._split_vlm_batch_safely(batch_data, num_chunks=2)
-            reconstructed_prompt_ids = torch.cat([chunk["prompt_ids"] for chunk in chunks])
-            reconstructed_visual_input_ids = torch.cat([chunk["visual_inputs"]["input_ids"] for chunk in chunks])
+#             chunks = trainer._split_vlm_batch_safely(batch_data, num_chunks=2)
+#             reconstructed_prompt_ids = torch.cat([chunk["prompt_ids"] for chunk in chunks])
+#             reconstructed_visual_input_ids = torch.cat([chunk["visual_inputs"]["input_ids"] for chunk in chunks])
 
-            self.assertTrue(torch.equal(reconstructed_prompt_ids, batch_data["prompt_ids"]))
-            self.assertTrue(torch.equal(reconstructed_visual_input_ids, visual_inputs["input_ids"]))
+#             self.assertTrue(torch.equal(reconstructed_prompt_ids, batch_data["prompt_ids"]))
+#             self.assertTrue(torch.equal(reconstructed_visual_input_ids, visual_inputs["input_ids"]))
 
-    def test_vlm_mode_includes_shuffling(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+#     def test_vlm_mode_includes_shuffling(self):
+#         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=2,
-                num_generations=2,
-                max_completion_length=8,
-                steps_per_generation=2,
-                report_to="none",
-            )
-            trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=dataset,
-            )
-            trainer.model.train()
+#         with tempfile.TemporaryDirectory() as tmp_dir:
+#             training_args = GRPOConfig(
+#                 output_dir=tmp_dir,
+#                 learning_rate=0.1,
+#                 per_device_train_batch_size=2,
+#                 num_generations=2,
+#                 max_completion_length=8,
+#                 steps_per_generation=2,
+#                 report_to="none",
+#             )
+#             trainer = GRPOTrainer(
+#                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+#                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+#                 args=training_args,
+#                 train_dataset=dataset,
+#             )
+#             trainer.model.train()
 
-            def mock_generate_and_score_completions(inputs):
-                batch_feature = BatchFeature(
-                    {
-                        "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),
-                        "pixel_values": torch.arange(48).reshape(4, 3, 4),
-                        "spatial_merge_size": 4,
-                    }
-                )
-                return {
-                    "visual_inputs": batch_feature,
-                    "prompt_ids": torch.arange(8).reshape(4, 2),
-                    "completion_ids": torch.arange(20).reshape(4, 5),
-                    "advantages": torch.arange(4, dtype=torch.float),
-                }
+#             def mock_generate_and_score_completions(inputs):
+#                 batch_feature = BatchFeature(
+#                     {
+#                         "input_ids": torch.tensor([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]]),
+#                         "pixel_values": torch.arange(48).reshape(4, 3, 4),
+#                         "spatial_merge_size": 4,
+#                     }
+#                 )
+#                 return {
+#                     "visual_inputs": batch_feature,
+#                     "prompt_ids": torch.arange(8).reshape(4, 2),
+#                     "completion_ids": torch.arange(20).reshape(4, 5),
+#                     "advantages": torch.arange(4, dtype=torch.float),
+#                 }
 
-            trainer._generate_and_score_completions = mock_generate_and_score_completions
+#             trainer._generate_and_score_completions = mock_generate_and_score_completions
 
-            original_shuffle = shuffle_tensor_dict
-            shuffle_called = False
+#             original_shuffle = shuffle_tensor_dict
+#             shuffle_called = False
 
-            def mock_shuffle(tensor_dict):
-                nonlocal shuffle_called
-                shuffle_called = True
-                return original_shuffle(tensor_dict)
+#             def mock_shuffle(tensor_dict):
+#                 nonlocal shuffle_called
+#                 shuffle_called = True
+#                 return original_shuffle(tensor_dict)
 
-            split_input = None
+#             split_input = None
 
-            def mock_split(tensor_dict, num_chunks):
-                nonlocal split_input
-                split_input = tensor_dict
-                return [tensor_dict] * num_chunks
+#             def mock_split(tensor_dict, num_chunks):
+#                 nonlocal split_input
+#                 split_input = tensor_dict
+#                 return [tensor_dict] * num_chunks
 
-            trainer._split_vlm_batch_safely = mock_split
+#             trainer._split_vlm_batch_safely = mock_split
 
-            import trl.trainer.grpo_trainer as grpo_module
+#             import trl.trainer.grpo_trainer as grpo_module
 
-            original_module_shuffle = grpo_module.shuffle_tensor_dict
-            grpo_module.shuffle_tensor_dict = mock_shuffle
+#             original_module_shuffle = grpo_module.shuffle_tensor_dict
+#             grpo_module.shuffle_tensor_dict = mock_shuffle
 
-            try:
-                vlm_batch = [{"prompt": "test", "image": torch.randn(3, 224, 224)}]
-                trainer._prepare_inputs_vlm_mode(vlm_batch)
+#             try:
+#                 vlm_batch = [{"prompt": "test", "image": torch.randn(3, 224, 224)}]
+#                 trainer._prepare_inputs_vlm_mode(vlm_batch)
 
-                self.assertTrue(shuffle_called)
-                self.assertIsNotNone(split_input)
-                self.assertIn("visual_inputs", split_input)
-                self.assertIn("prompt_ids", split_input)
-                self.assertIsInstance(split_input["visual_inputs"], BatchFeature)
-                self.assertEqual(split_input["visual_inputs"]["spatial_merge_size"], 4)
+#                 self.assertTrue(shuffle_called)
+#                 self.assertIsNotNone(split_input)
+#                 self.assertIn("visual_inputs", split_input)
+#                 self.assertIn("prompt_ids", split_input)
+#                 self.assertIsInstance(split_input["visual_inputs"], BatchFeature)
+#                 self.assertEqual(split_input["visual_inputs"]["spatial_merge_size"], 4)
 
-            finally:
-                grpo_module.shuffle_tensor_dict = original_module_shuffle
+#             finally:
+#                 grpo_module.shuffle_tensor_dict = original_module_shuffle

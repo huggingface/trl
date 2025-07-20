@@ -1235,10 +1235,13 @@ class GRPOTrainer(Trainer):
         original_prompts = copy.deepcopy(prompts)
 
         kwargs = {}
-        if "image" in inputs[0]:
-            kwargs["images"] = [[example.get("image")] for example in inputs]
+        has_images = "image" in inputs[0]
+        if has_images:
+            images = [example.get("image") for example in inputs]
+            kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
-                prompt[0]["content"] = [{"type": "image"}, {"type": "text", "text": prompt[0]["content"]}]
+                if isinstance(prompt, list) and len(prompt) > 0 and isinstance(prompt[0], dict):
+                    prompt[0]["content"] = [{"type": "image"}, {"type": "text", "text": prompt[0]["content"]}]
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1641,8 +1644,8 @@ class GRPOTrainer(Trainer):
             attention_mask=completion_mask,
             advantages=inputs["advantages"],
             bias=unwrapped_model.lm_head.bias,
-            old_per_token_logps=inputs["old_per_token_logps"],
-            ref_per_token_logps=inputs["ref_per_token_logps"],
+            old_per_token_logps=inputs.get("old_per_token_logps"),
+            ref_per_token_logps=inputs.get("ref_per_token_logps"),
         )
         # Extract metrics from the liger_grpo_loss output
         # KL divergence is the first metric when beta is non-zero
