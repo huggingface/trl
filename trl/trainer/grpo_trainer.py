@@ -903,7 +903,7 @@ class GRPOTrainer(Trainer):
     def _get_per_token_logps_and_entropies(
         self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
     ) -> dict[str, Optional[torch.Tensor]]:
-        """Compute log‐probs and (optionally) entropies for each token."""
+        """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -927,7 +927,8 @@ class GRPOTrainer(Trainer):
             all_logps.append(logps)
 
             if compute_entropy:
-                entropies = entropy_from_logits(logits)
+                with torch.no_grad():
+                    entropies = entropy_from_logits(logits)
                 all_entropies.append(entropies)
 
         logps = torch.cat(all_logps, dim=0)
@@ -1483,7 +1484,7 @@ class GRPOTrainer(Trainer):
 
         # Compute the per_token_logps and the entropy (if necessary) at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
-            model, input_ids, attention_mask, logits_to_keep, compute_entropy=self.top_entropy_quantile < 1.0
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=True
         )
 
         if self.top_entropy_quantile < 1.0:
@@ -1536,6 +1537,9 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+
+        mean_entropy = (entropies * completion_mask).sum() / completion_mask.sum()
+        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
