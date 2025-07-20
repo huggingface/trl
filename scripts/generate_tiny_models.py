@@ -240,9 +240,10 @@ for model_id, config_class, model_class in [
 ]:
     processor = AutoProcessor.from_pretrained(model_id)
     kwargs = {}
+    text_kwargs = {}
+    vision_kwargs = {}
     if config_class == PaliGemmaConfig:
         kwargs["projection_dim"] = 8
-    vision_kwargs = {}
     if config_class in [LlavaConfig, LlavaNextConfig, PaliGemmaConfig]:
         vision_kwargs["projection_dim"] = 8
     if config_class in [LlavaConfig, LlavaNextConfig, Qwen2_5_VLConfig]:
@@ -250,7 +251,9 @@ for model_id, config_class, model_class in [
     if config_class in [LlavaConfig, LlavaNextConfig]:
         vision_kwargs["patch_size"] = 14
     if config_class == Qwen2_5_VLConfig:
+        kwargs["vision_start_token_id"] = 151652
         vision_kwargs["depth"] = 4
+        text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [1]}
 
     config = config_class(
         text_config=dict(
@@ -260,9 +263,10 @@ for model_id, config_class, model_class in [
             num_key_value_heads=2,
             num_hidden_layers=2,
             intermediate_size=32,
+            **text_kwargs,
         ),
         vision_config=dict(
-            hidden_size=32,
+            hidden_size=16,
             num_attention_heads=4,
             num_hidden_layers=2,
             intermediate_size=32,
