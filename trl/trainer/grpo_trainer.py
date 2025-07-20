@@ -411,16 +411,15 @@ class GRPOTrainer(Trainer):
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: The function is provided with the prompts and the generated completions,
                   plus any additional columns in the dataset. It should return a list of rewards. Custom reward
-                  functions can also return None when the reward is not applicable to those samples. This is useful for
-                  multi-task training where different reward functions apply to different types of samples. When a
-                  reward function returns None for a sample, that reward function is excluded from the reward
+                  functions can also return `None` when the reward is not applicable to those samples. This is useful
+                  for multi-task training where different reward functions apply to different types of samples. When a
+                  reward function returns `None` for a sample, that reward function is excluded from the reward
                   calculation for that sample. For more details, see [Using a custom reward
                   function](#using-a-custom-reward-function).
 
-                  The trainer's state is also passed to the reward function. The trainer's state is an
-                  instance of [`transformers.TrainerState`](https://huggingface.co/docs/transformers/main/main_classes/callback#transformers.TrainerState)
-                  and can be accessed by accessing the `trainer_state` argument
-                  to the reward function's signature.
+                  The trainer's state is also passed to the reward function. The trainer's state is an instance of
+                  [`~transformers.TrainerState`] and can be accessed by accessing the `trainer_state` argument to the
+                  reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
         args ([`GRPOConfig`], *optional*, defaults to `None`):
@@ -962,24 +961,29 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _get_last_hidden_state(
-        self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None, visual_inputs=None
+        self, unwrapped_model, input_ids, attention_mask, logits_to_keep, pixel_values, image_grid_thw
     ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
 
-        # Build model inputs
+        # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
         model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
 
-        # Add visual inputs if available (for VLM support)
-        if visual_inputs is not None:
-            for key, value in visual_inputs.items():
-                if key not in ["input_ids", "attention_mask"] and value is not None:
-                    model_inputs[key] = value
+        if image_grid_thw is not None and pixel_values is not None:
+            model_inputs["image_grid_thw"] = image_grid_thw
+        if pixel_values is not None:
+            model_inputs["pixel_values"] = pixel_values
+
+        # Only add logits_to_keep if the model supports it
+        if "logits_to_keep" in self.model_kwarg_keys:
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            model_inputs["logits_to_keep"] = logits_to_keep + 1
 
         last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
+        # Exclude the last value: it corresponds to the next token pred
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
-        if logits_to_keep is not None:
-            last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
+        last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
     @profiling_decorator
@@ -1002,7 +1006,7 @@ class GRPOTrainer(Trainer):
             input_ids_batch = input_ids[start : start + batch_size]
             attention_mask_batch = attention_mask[start : start + batch_size]
 
-            # Build model inputs - check if the model supports logits_to_keep (some VLMs don't)
+            # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
 
             if image_grid_thw is not None and pixel_values is not None:
@@ -1017,8 +1021,10 @@ class GRPOTrainer(Trainer):
                 model_inputs["logits_to_keep"] = logits_to_keep + 1
 
             logits = model(**model_inputs).logits
-            logits = logits[:, -(logits_to_keep + 1) :, :]  # For models that don't support logits_to_keep
-            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            # Exclude the last value: it corresponds to the next token pred
+            logits = logits[:, :-1, :]  # (B, L-1, H)
+            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
+            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
@@ -1630,12 +1636,14 @@ class GRPOTrainer(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        # Extract visual inputs for VLM support
-        visual_inputs = inputs.get("visual_inputs", None)
-
-        # get the last hidden state of the model
+        # Get the last hidden state of the model
         last_hidden_state = self._get_last_hidden_state(
-            unwrapped_model, input_ids, attention_mask, logits_to_keep, visual_inputs=visual_inputs
+            unwrapped_model,
+            input_ids,
+            attention_mask,
+            logits_to_keep,
+            inputs.get("pixel_values"),
+            inputs.get("image_grid_thw"),
         )
 
         # compute loss and metrics using liger grpo loss
