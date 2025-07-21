@@ -27,8 +27,8 @@ from typing import Optional
 
 import torch
 from fastapi import FastAPI
-from PIL import Image
 from pydantic import BaseModel
+from transformers import is_vision_available
 
 from trl import TrlParser
 from trl.import_utils import (
@@ -50,6 +50,10 @@ if is_pydantic_available():
 
 if is_uvicorn_available():
     import uvicorn
+
+
+if is_vision_available():
+    from PIL import Image
 
 
 if is_vllm_available():
