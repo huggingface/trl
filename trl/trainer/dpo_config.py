@@ -127,7 +127,8 @@ class DPOConfig(TrainingArguments):
                 - `"sft"`: Negative log-likelihood loss (standard supervised fine-tuning loss).
 
             Multiple loss types can be combined using comma separation (e.g., `["sigmoid", "bco_pair", "sft"]` for
-            [MPO](https://huggingface.co/papers/2411.10442)).
+            [MPO](https://huggingface.co/papers/2411.10442)). The `loss_weights` parameter can be used to specify
+            corresponding weights for each loss type.
 
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Liger loss.
@@ -327,7 +328,8 @@ class DPOConfig(TrainingArguments):
             "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
             "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_pair'`, `'discopop'`, "
             "`'apo_zero'`, `'apo_down'` and `'sft'`. Multiple loss types can be combined using comma separation "
-            "(e.g., `['sigmoid', 'bco_pair', 'sft']` for MPO).",
+            "(e.g., `['sigmoid', 'bco_pair', 'sft']` for MPO). The `loss_weights` parameter can be used to specify "
+            "corresponding weights for each loss type."
         },
     )
     use_liger_loss: bool = field(
