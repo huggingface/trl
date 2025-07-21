@@ -272,16 +272,6 @@ class SFTTrainerTester(unittest.TestCase):
                 ],
             }
         )
-        self.dummy_tokenized_dataset = Dataset.from_dict(
-            {
-                "input_ids": [
-                    self.tokenizer.encode(
-                        "TRL is a library to post-train LLMs and diffusion models with methods such as Supervised Fine-tuning (SFT), Proximal Policy Optimization (PPO), and Direct Preference Optimization (DPO)."
-                    )
-                ]
-                * 10
-            }
-        )
 
         self.conversational_lm_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
         self.standard_prompt_completion_dataset = load_dataset(
