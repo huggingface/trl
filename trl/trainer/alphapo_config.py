@@ -61,7 +61,7 @@ class AlphaPOConfig(TrainingArguments):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from the model to W&B or Comet during evaluation.
+            If `True`, generates and logs completions from the model to W&B during evaluation.
         is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
@@ -157,7 +157,7 @@ where pi_len_norm is the length-normalized probability of the sequence.
     )
     generate_during_eval: bool = field(
         default=False,
-        metadata={"help": "If `True`, generates and logs completions from the model to W&B or Comet during evaluation."},
+        metadata={"help": "If `True`, generates and logs completions from the model to W&B during evaluation."},
     )
     is_encoder_decoder: Optional[bool] = field(
         default=None,
