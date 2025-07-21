@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from transformers import TrainingArguments
 
@@ -41,14 +41,14 @@ class AlphaPOConfig(TrainingArguments):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         alpha (`float`, *optional*, defaults to `-1.0`):
-            Parameter controlling reward shape in the AlphaPO loss. In the paper, it is used in
-            \pi_theta =  [exp(a * log p / length) - 1]/ a
-            a = 1: linear
-            a = -1: inverse linear
-            a ->0 : SimPO https://arxiv.org/abs/2405.14734.
+            Parameter controlling the reward shape in the AlphaPO loss. The reward is defined as:
+            r(y, x) = (1 - pi_len_norm(y|x)^(-alpha)) / alpha, where pi_len_norm is the length-normalized probability of the
+            sequence.
+            - alpha = 1: inverse-linear reward
+            - alpha = -1: linear reward
+            - alpha -> 0: SimPO's log reward.
         beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the relative ratio loss weight in the AlphaPO loss. In the [paper](https://arxiv.org/abs/2501.03884),
-            it is denoted by λ.
+            The beta parameter in the AlphaPO loss. This parameter controls the reward scaling.
         gamma_beta_ratio (`float`, *optional*, defaults to `0.25`):
             Parameter controlling the target reward margin.
         disable_dropout (`bool`, *optional*, defaults to `True`):
@@ -61,7 +61,7 @@ class AlphaPOConfig(TrainingArguments):
             Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
             This argument is required if you want to use the default data collator.
         generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from the model to W&B or Comet during evaluation.
+            If `True`, generates and logs completions from the model to W&B during evaluation.
         is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
             When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
             you need to specify if the model returned by the callable is an encoder-decoder model.
@@ -86,8 +86,8 @@ class AlphaPOConfig(TrainingArguments):
             "will be interpreted as ratio of total training steps."
         },
     )
-    bf16: Optional[bool] = field(
-        default=None,
+    bf16: bool = field(
+        default=False,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
             "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
@@ -103,7 +103,7 @@ class AlphaPOConfig(TrainingArguments):
         default=512,
         metadata={
             "help": "Maximum length of the prompt. This argument is required if you want to use the default data "
-            "collator and your model is an encoder-decoder."
+            "collator."
         },
     )
     max_completion_length: Optional[int] = field(
@@ -116,18 +116,18 @@ class AlphaPOConfig(TrainingArguments):
     alpha: float = field(
         default=-1.0,
         metadata={
-            "help": "Parameter controlling reward shape in the AlphaPO loss. In the paper, it is used in "
-            r"\pi_theta =  [exp(a * log p / length) - 1]/ a "
-            "a = 1: linear "
-            "a = -1: inverse linear "
-            "a ->0 : SimPO https://arxiv.org/abs/2405.14734."
+            "help": r"""Parameter controlling the reward shape in the AlphaPO loss.
+The reward is defined as: r(y, x) = (1 - pi_len_norm(y|x)^(-alpha)) / alpha,
+where pi_len_norm is the length-normalized probability of the sequence.
+- alpha = 1: inverse-linear reward
+- alpha = -1: linear reward
+- alpha -> 0: SimPO's log reward."""
         },
     )
     beta: float = field(
         default=0.1,
         metadata={
-            "help": "Parameter controlling the relative ratio loss weight in the AlphaPO loss. In the paper, it is "
-            "denoted by λ."
+            "help": "The beta parameter in the AlphaPO loss. This parameter controls the reward scaling."
         },
     )
     gamma_beta_ratio: float = field(
@@ -166,7 +166,7 @@ class AlphaPOConfig(TrainingArguments):
             "argument, you need to specify if the model returned by the callable is an encoder-decoder model."
         },
     )
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: Optional[Dict[str, Any]] = field(
         default=None,
         metadata={
             "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
@@ -178,6 +178,8 @@ class AlphaPOConfig(TrainingArguments):
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
     def __post_init__(self):
-        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
+        if self.model_init_kwargs is None:
+            self.model_init_kwargs = {}
         super().__post_init__()
+        if self.bf16 and self.fp16:
+            raise ValueError("fp16 and bf16 cannot be simultaneously enabled")
