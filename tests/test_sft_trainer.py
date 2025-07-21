@@ -961,16 +961,20 @@ add_generation_prompt %}ASSISTANT: {% endif %}"""
 
 # This new tester aims to replace the first one at some point
 class SFTTrainerTester2(unittest.TestCase):
-    def test_train(self):
+    @parameterized.expand(
+        [
+            ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),
+            ("trl-internal-testing/tiny-Qwen3MoeForCausalLM",),
+        ]
+    )
+    def test_train(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
