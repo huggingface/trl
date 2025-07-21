@@ -638,7 +638,7 @@ class AlphaPOTrainer(Trainer):
         self,
         policy_chosen_logps: torch.FloatTensor,
         policy_rejected_logps: torch.FloatTensor,
-    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """Compute AlphaPO's loss for a batch of policy and chosen/reject rewards.
 
         Args:
@@ -649,20 +649,23 @@ class AlphaPOTrainer(Trainer):
             A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
             The losses tensor contains the AlphaPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
-            The log odds ratio of the chosen responses over the rejected responses ratio for logging purposes.
-            The `log(sigmoid(log_odds_chosen))` for logging purposes.
         """
-        # Implementation based on the AlphaPO loss, equation (9) from AlphaPO - Reward shape matters for LLM alignment
-        # https://arxiv.org/abs/2501.03884
-        policy_chosen_ps = torch.exp(-self.alpha * policy_chosen_logps)
-        policy_rejected_ps = torch.exp(-self.alpha * policy_rejected_logps)
-        policy_chosen_ps = (-policy_chosen_ps / self.alpha).to(self.accelerator.device)
-        policy_rejected_ps = (-policy_rejected_ps / self.alpha).to(self.accelerator.device)
-        logits = policy_chosen_ps - policy_rejected_ps - self.gamma_beta_ratio
+
+        # Implementation of the AlphaPO loss, based on the AlphaPO paper, equation (4): https://arxiv.org/abs/2501.03884
+        # The reward function is r(y, x) = beta * (1 - pi_len_norm(y|x)^(-alpha)) / alpha, where pi_len_norm is the length-normalized probability.
+        # The loss is -log_sigmoid(r(y_w, x) - r(y_l, x) - gamma)
+        policy_chosen_probs_pow_alpha = torch.exp(-self.alpha * policy_chosen_logps)
+        policy_rejected_probs_pow_alpha = torch.exp(-self.alpha * policy_rejected_logps)
+
+        chosen_rewards_unscaled = (1 - policy_chosen_probs_pow_alpha) / self.alpha
+        rejected_rewards_unscaled = (1 - policy_rejected_probs_pow_alpha) / self.alpha
+
+        logits = chosen_rewards_unscaled - rejected_rewards_unscaled - self.gamma_beta_ratio
         losses = -F.logsigmoid(self.beta * logits)
-        # Implementation based on the AlphaPO reward, equation (8) from AlphaPO - Reward shape matters for LLM alignment
-        chosen_rewards = self.beta * (1 / self.alpha + policy_chosen_ps).to(self.accelerator.device).detach()
-        rejected_rewards = self.beta * (1 / self.alpha + policy_rejected_ps).to(self.accelerator.device).detach()
+
+        chosen_rewards = self.beta * chosen_rewards_unscaled.to(self.accelerator.device).detach()
+        rejected_rewards = self.beta * rejected_rewards_unscaled.to(self.accelerator.device).detach()
+
         return losses, chosen_rewards, rejected_rewards
 
     @staticmethod
@@ -1071,11 +1074,13 @@ class AlphaPOTrainer(Trainer):
         tags.update(self._tag_names)
 
         citation = textwrap.dedent("""\
-        @article{gupta2025alphapo,
-            title        = {{AlphaPO--Reward shape matters for LLM alignment}},
-            author       = {Gupta, Aman and Tang, Shao and Song, Qingquan and Zhu, Sirou and Hong, Jiwoo and Saha, Ankan and Gupta, Viral and Lee, Noah and Kim, Eunki and Zhu, Siyu and Agrawal, Parag and Pillai, Natesh and Keerthi, S. Sathiya},
-            year         = 2054,
-            eprint       = {arXiv:2501.03884}
+        @inproceedings{
+        gupta2025alphapo,
+        title={Alpha{PO}: Reward Shape Matters for {LLM} Alignment},
+        author={Aman Gupta and Shao Tang and Qingquan Song and Sirou Zhu and Jiwoo Hong and Ankan Saha and Viral Gupta and Noah Lee and Eunki Kim and Siyu Zhu and Parag Agrawal and Natesh S. Pillai and Sathiya Keerthi},
+        booktitle={Forty-second International Conference on Machine Learning},
+        year={2025},
+        url={https://openreview.net/forum?id=LmdZ0pSWtG}
         }""")
 
         model_card = generate_model_card(
@@ -1088,8 +1093,8 @@ class AlphaPOTrainer(Trainer):
             comet_url=get_comet_experiment_url(),
             trainer_name="AlphaPO",
             trainer_citation=citation,
-            paper_title="AlphaPO -- Reward shape matters for LLM alignmentl",
-            paper_id="2403.07691",
+            paper_title="AlphaPO -- Reward shape matters for LLM alignment",
+            paper_id="2501.03884",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
