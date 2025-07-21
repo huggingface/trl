@@ -27,7 +27,6 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
     LlavaForConditionalGeneration,
-    TrainingArguments,
     is_vision_available,
 )
 from transformers.testing_utils import require_flash_attn, require_peft, require_vision
@@ -47,7 +46,7 @@ def formatting_func_for_pretokenized(example):
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, get_peft_model
 
 if is_vision_available():
     from PIL import Image as PILImage
@@ -333,50 +332,6 @@ class SFTTrainerTester(unittest.TestCase):
                 "images", Sequence(Image())
             )
 
-    def test_backward_compatibility(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                hub_token="not_a_real_token",
-                report_to="none",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                formatting_func=formatting_prompts_func,
-            )
-
-            self.assertEqual(trainer.args.hub_token, training_args.hub_token)
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-            trainer.train()
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # Check that the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
-    def test_with_pretokenized_data_packing(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                packing=True,
-                report_to="none",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset_from_pretokenized,
-            )
-
-            trainer.train()
-
-            assert trainer.state.log_history[-1]["train_loss"] is not None
-
     def test_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Shoud work as SFTTrainer natively supports conversational lm dataset
@@ -448,61 +403,6 @@ class SFTTrainerTester(unittest.TestCase):
                 formatting_func=formatting_prompts_func,
             )
 
-    def test_sft_trainer_with_model_num_train_epochs(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                num_train_epochs=2,
-                per_device_train_batch_size=2,
-                packing=True,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-            )
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                num_train_epochs=2,
-                max_length=16,
-                packing=True,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-            )
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                num_train_epochs=2,
-                per_device_train_batch_size=2,
-                max_length=16,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-            )
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
     def test_with_model_(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
@@ -558,245 +458,6 @@ class SFTTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-    def test_with_multiple_eval_datasets(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                eval_strategy="steps",
-                eval_steps=3,
-                report_to="none",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                eval_dataset={
-                    "data1": self.eval_dataset,
-                    "data2": self.eval_dataset,
-                },
-            )
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_data1_loss"])
-            self.assertIsNotNone(trainer.state.log_history[1]["eval_data2_loss"])
-
-    def test_with_model_neftune(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                neftune_noise_alpha=5,
-                packing=True,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.train_dataset,
-            )
-
-            trainer.model = trainer._activate_neftune(trainer.model)
-
-            device = trainer.model.get_input_embeddings().weight.device
-            trainer.model.train()
-
-            torch.random.manual_seed(42)
-            embeds_neftune = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
-
-            torch.random.manual_seed(24)
-            embeds_neftune_2 = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
-
-            self.assertFalse(torch.allclose(embeds_neftune, embeds_neftune_2))
-            self.assertGreater(len(trainer.model.get_input_embeddings()._forward_hooks), 0)
-
-            trainer.neftune_hook_handle.remove()
-
-            trainer.train()
-
-            # Make sure forward pass works fine
-            _ = trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
-            self.assertEqual(len(trainer.model.get_input_embeddings()._forward_hooks), 0)
-
-    @require_peft
-    def test_peft_str(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            peft_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                lora_dropout=0.05,
-                task_type="CAUSAL_LM",
-            )
-
-            training_args = SFTConfig(
-                packing=True,
-                output_dir=tmp_dir,
-                report_to="none",
-            )
-
-            _ = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                peft_config=peft_config,
-            )
-
-    @require_peft
-    def test_peft_sft_trainer(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                packing=True,
-                report_to="none",
-            )
-
-            peft_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                lora_dropout=0.05,
-                task_type="CAUSAL_LM",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                peft_config=peft_config,
-            )
-
-            self.assertTrue(isinstance(trainer.model, PeftModel))
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-    @require_peft
-    def test_peft_and_gradient_checkpointing(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                gradient_checkpointing=True,
-                report_to="none",
-            )
-
-            peft_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                peft_config=peft_config,
-            )
-
-            self.assertIsInstance(trainer.model, PeftModel)
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-    @require_peft
-    def test_peft_neftune(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                neftune_noise_alpha=5,
-                packing=True,
-                report_to="none",
-            )
-
-            peft_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                lora_dropout=0.05,
-                task_type="CAUSAL_LM",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                peft_config=peft_config,
-            )
-
-            trainer.model = trainer._activate_neftune(trainer.model)
-
-            self.assertIsInstance(trainer.model, PeftModel)
-
-            device = trainer.model.get_input_embeddings().weight.device
-            trainer.model.train()
-
-            torch.random.manual_seed(42)
-            embeds_neftune = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
-
-            torch.random.manual_seed(24)
-            embeds_neftune_2 = trainer.model.get_input_embeddings()(torch.LongTensor([[1, 0, 1]]).to(device))
-
-            self.assertFalse(torch.allclose(embeds_neftune, embeds_neftune_2))
-            self.assertGreater(len(trainer.model.get_input_embeddings()._forward_hooks), 0)
-
-            trainer.neftune_hook_handle.remove()
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # Make sure forward pass works fine to check if embeddings forward is not broken.
-            trainer.model(torch.LongTensor([[1, 0, 1]]).to(device))
-            self.assertEqual(len(trainer.model.get_input_embeddings()._forward_hooks), 0)
-
-    @require_peft
-    def test_peft_tag(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                gradient_checkpointing=True,
-                packing=True,
-                report_to="none",
-            )
-
-            peft_config = LoraConfig(
-                r=16,
-                lora_alpha=32,
-                lora_dropout=0.05,
-                task_type="CAUSAL_LM",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                peft_config=peft_config,
-            )
-
-            for tag in ["sft", "trl"]:
-                self.assertIn(tag, trainer.model.model_tags)
-
-    @require_peft
-    def test_tag(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                gradient_checkpointing=True,
-                packing=True,
-                report_to="none",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-            )
-
-            for tag in ["sft", "trl"]:
-                self.assertIn(tag, trainer.model.model_tags)
 
     def test_only_train_packing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -1046,6 +707,46 @@ class SFTTrainerTester2(unittest.TestCase):
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
+    def test_train_with_peft_config(self):
+        # Get the base model parameter names
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+
+            trainer = SFTTrainer(
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the peft params have changed and the base model params have not changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if n in base_param_names:  # We expect the base model parameters to be the same
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                elif (
+                    "base_layer" not in n
+                ):  # We expect the peft parameters to be different (except for the base layer)
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @require_peft
     def test_train_peft_model(self):
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -1065,6 +766,46 @@ class SFTTrainerTester2(unittest.TestCase):
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
             trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the peft params have changed and the base model params have not changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if n in base_param_names:  # We expect the base model parameters to be the same
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                elif (
+                    "base_layer" not in n
+                ):  # We expect the peft parameters to be different (except for the base layer)
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @require_peft
+    def test_train_with_peft_config_gradient_checkpointing(self):
+        # Get the base model parameter names
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
+
+            trainer = SFTTrainer(
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(),
+            )
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -1368,6 +1109,126 @@ class SFTTrainerTester2(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_with_eval(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset["train"],
+                eval_dataset=dataset["test"],
+            )
+
+            # Train the model
+            trainer.train()
+
+            # Check that the eval loss is not None
+            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+
+    def test_train_with_multiple_eval_dataset(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset["train"],
+                eval_dataset={"data1": dataset["test"], "data2": dataset["test"]},
+            )
+            # Train the model
+            trainer.train()
+
+            # Check that the eval losses are not None
+            self.assertIsNotNone(trainer.state.log_history[-3]["eval_data1_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-2]["eval_data2_loss"])
+
+    def test_train_with_gradient_checkpointing(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_tag_added(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Initialize the trainer
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            train_dataset=dataset,
+        )
+
+        for tag in ["sft", "trl"]:
+            self.assertIn(tag, trainer.model.model_tags)
+
+    @require_peft
+    def test_tag_added_peft(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Initialize the trainer
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
+
+        for tag in ["sft", "trl"]:
+            self.assertIn(tag, trainer.model.model_tags)
+
+    def test_train_with_torch_dtype(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(
+                output_dir=tmp_dir, model_init_kwargs={"torch_dtype": torch.float16}, report_to="none"
+            )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
             )
