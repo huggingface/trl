@@ -359,6 +359,63 @@ def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold
     return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
 
+def truncate_with_protected_tokens(
+    ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Truncate tensors to target length while preserving protected tokens.
+
+    Args:
+        ids (`torch.Tensor`):
+            Input tensor of token IDs, shape (batch_size, sequence_length).
+        mask (`torch.Tensor`):
+            Input tensor of attention masks, shape (batch_size, sequence_length).
+        target_length (`int`):
+            Desired length of the output sequences.
+        protected_tokens (`list[int]`):
+            List of token IDs that should be preserved in the output.
+    """
+    protected_set = set(protected_tokens)
+
+    def process_sequence(ids, mask):
+        # Create boolean masks
+        is_protected = torch.tensor([x.item() in protected_set for x in ids])
+        is_non_protected = ~is_protected
+
+        # Count tokens
+        num_protected = is_protected.sum().item()
+        num_non_protected_needed = target_length - num_protected
+
+        if num_non_protected_needed < 0:
+            raise ValueError(
+                f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
+                f"Please increase target length to at least {num_protected} or disable truncation."
+            )
+
+        # Select which non-protected tokens to keep (rightmost ones)
+        non_protected_indices = torch.where(is_non_protected)[0]
+        keep_non_protected = torch.zeros_like(is_non_protected)
+        if num_non_protected_needed > 0:
+            keep_indices = non_protected_indices[-num_non_protected_needed:]
+            keep_non_protected[keep_indices] = True
+
+        # Final mask: protected OR selected non-protected
+        keep_mask = is_protected | keep_non_protected
+
+        return ids[keep_mask], mask[keep_mask]
+
+    # Process each sequence in the batch
+    truncated_seq = []
+    truncated_mask = []
+
+    for i in range(ids.shape[0]):
+        new_ids, new_mask = process_sequence(ids[i], mask[i])
+        truncated_seq.append(new_ids)
+        truncated_mask.append(new_mask)
+
+    return torch.stack(truncated_seq), torch.stack(truncated_mask)
+
+
 class GRPOTrainer(Trainer):
     """
     Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
@@ -549,6 +606,10 @@ class GRPOTrainer(Trainer):
         self.pad_token = tokenizer.pad_token
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
+        self.image_token = getattr(processing_class, "image_token", None)
+        self.image_token_id = getattr(processing_class, "image_token_id", None)
+        self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
+        self.vision_end_token_id = getattr(model.config, "vision_end_token_id", None)
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -1265,40 +1326,25 @@ class GRPOTrainer(Trainer):
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
             # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
             # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
-
-            if "pixel_values" in prompt_inputs or "image_grid_thw" in prompt_inputs:
-                # Get vision token configuration
-                image_token_id, vision_start_token_id, vision_end_token_id = self._get_vision_token_config()
-
-                batch_size = prompt_ids.size(0)
-                trimmed_prompt_ids = []
-                trimmed_prompt_mask = []
-
-                for i in range(batch_size):
-                    seq = prompt_ids[i].tolist()
-                    mask = prompt_mask[i].tolist()
-
-                    # Find vision token boundaries
-                    vision_start, vision_end = self._find_vision_token_boundaries(
-                        seq, image_token_id, vision_start_token_id, vision_end_token_id
-                    )
-
-                    # Truncate while preserving vision tokens
-                    truncated_seq, truncated_mask = self._truncate_vlm_sequence(seq, mask, vision_start, vision_end)
-
-                    trimmed_prompt_ids.append(truncated_seq)
-                    trimmed_prompt_mask.append(truncated_mask)
-
-                prompt_ids = torch.tensor(trimmed_prompt_ids, device=prompt_ids.device, dtype=prompt_ids.dtype)
-                prompt_mask = torch.tensor(trimmed_prompt_mask, device=prompt_mask.device, dtype=prompt_mask.dtype)
-            else:
-                prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-                prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+            protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
+            protected = [token for token in protected if token is not None]
+            prompt_ids, prompt_mask = truncate_with_protected_tokens(
+                prompt_ids, prompt_mask, self.max_prompt_length, protected
+            )
 
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
             prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
+
+            # The chat template inserts a single image token into the prompt text. However, when this text is later
+            # tokenized, the single image token string is expanded into multiple image token IDs, depending on the
+            # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
+            # collapse them back into a single token string to match the original template.
+            if self.image_token is not None:
+                prompts_text = [
+                    re.sub(rf"({re.escape(self.image_token)})+", self.image_token, text) for text in prompts_text
+                ]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1310,11 +1356,8 @@ class GRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
-
                 if has_images:
                     all_images = gather_object(images)
-                else:
-                    all_images = None
 
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
@@ -1322,25 +1365,25 @@ class GRPOTrainer(Trainer):
                     # prompt individually.
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
 
-                    generation_inputs = {
-                        "prompts": ordered_set_of_prompts,
-                        "n": self.num_generations,
-                        "repetition_penalty": self.repetition_penalty,
-                        "temperature": self.temperature,
-                        "top_p": self.top_p,
-                        "top_k": -1 if self.top_k is None else self.top_k,
-                        "min_p": 0.0 if self.min_p is None else self.min_p,
-                        "max_tokens": self.max_completion_length,
-                        "guided_decoding_regex": self.guided_decoding_regex,
-                        "generation_kwargs": self.args.generation_kwargs,
-                    }
-
-                    if has_images and all_images:
+                    if has_images:
                         ordered_set_of_images = all_images[:: self.num_generations]
-                        generation_inputs["images"] = ordered_set_of_images
+                    else:
+                        ordered_set_of_images = None
 
                     with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(**generation_inputs)
+                        completion_ids = self.vllm_client.generate(
+                            prompts=ordered_set_of_prompts,
+                            images=ordered_set_of_images,
+                            n=self.num_generations,
+                            repetition_penalty=self.repetition_penalty,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=-1 if self.top_k is None else self.top_k,
+                            min_p=0.0 if self.min_p is None else self.min_p,
+                            max_tokens=self.max_completion_length,
+                            guided_decoding_regex=self.guided_decoding_regex,
+                            generation_kwargs=self.args.generation_kwargs,
+                        )
                 else:
                     completion_ids = [None] * len(all_prompts_text)
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its
@@ -1930,94 +1973,3 @@ class GRPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
-
-    def _get_vision_token_config(self) -> tuple[Optional[int], Optional[int], Optional[int]]:
-        """Get vision token configuration from model config."""
-        image_token_id = None
-        vision_start_token_id = None
-        vision_end_token_id = None
-
-        if hasattr(self.model, "config"):
-            if hasattr(self.model.config, "image_token_id"):
-                image_token_id = self.model.config.image_token_id
-            if hasattr(self.model.config, "vision_start_token_id"):
-                vision_start_token_id = self.model.config.vision_start_token_id
-            if hasattr(self.model.config, "vision_end_token_id"):
-                vision_end_token_id = self.model.config.vision_end_token_id
-
-        return image_token_id, vision_start_token_id, vision_end_token_id
-
-    def _find_vision_token_boundaries(
-        self,
-        seq: list[int],
-        image_token_id: Optional[int],
-        vision_start_token_id: Optional[int],
-        vision_end_token_id: Optional[int],
-    ) -> tuple[int, int]:
-        """Find the start and end boundaries of vision tokens in a sequence."""
-        vision_start = 0
-        vision_end = 0
-
-        # Find vision start token
-        if vision_start_token_id is not None:
-            for j, token in enumerate(seq):
-                if token == vision_start_token_id:
-                    vision_start = j
-                    break
-
-        # Find vision end based on image tokens or vision end token
-        if image_token_id is not None:
-            # Find where image tokens start (first occurrence of image_token_id)
-            image_start = vision_start
-            while image_start < len(seq) and seq[image_start] != image_token_id:
-                image_start += 1
-
-            # If no image tokens found, return empty boundaries
-            if image_start >= len(seq):
-                return 0, 0
-
-            # Find where image tokens end (after last consecutive image_token_id)
-            vision_end = image_start
-            while vision_end < len(seq) and seq[vision_end] == image_token_id:
-                vision_end += 1
-        elif vision_end_token_id is not None:
-            # Find vision end token
-            for j in range(vision_start, len(seq)):
-                if seq[j] == vision_end_token_id:
-                    vision_end = j + 1
-                    break
-
-        return vision_start, vision_end
-
-    def _truncate_vlm_sequence(
-        self, seq: list[int], mask: list[int], vision_start: int, vision_end: int
-    ) -> tuple[list[int], list[int]]:
-        """Truncate a VLM sequence while preserving vision tokens."""
-        if len(seq) <= self.max_prompt_length:
-            return seq, mask
-
-        # Calculate the actual span of vision tokens (from vision_start to vision_end)
-        vision_span = vision_end - vision_start
-
-        if vision_span >= self.max_prompt_length:
-            # Edge case: vision tokens exceed max_prompt_length
-            raise ValueError(
-                f"max_prompt_length ({self.max_prompt_length}) is too small for the vision tokens "
-                f"({vision_span} tokens). This would break VLM functionality. "
-                f"Please increase max_prompt_length to at least {vision_span} or disable "
-                f"max_prompt_length for VLM training."
-            )
-
-        # Preserve vision tokens and trim text from left
-        # We keep: [vision_start:vision_end] + [text_after_vision]
-        text_start = vision_end
-        text_end = len(seq)
-        available_text_length = self.max_prompt_length - vision_span
-
-        if text_end - text_start > available_text_length:
-            text_start = text_end - available_text_length
-
-        truncated_seq = seq[vision_start:vision_end] + seq[text_start:text_end]
-        truncated_mask = mask[vision_start:vision_end] + mask[text_start:text_end]
-
-        return truncated_seq, truncated_mask
