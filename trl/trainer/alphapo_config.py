@@ -177,9 +177,8 @@ where pi_len_norm is the length-normalized probability of the sequence.
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
+    
     def __post_init__(self):
-        if self.model_init_kwargs is None:
-            self.model_init_kwargs = {}
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
         super().__post_init__()
-        if self.bf16 and self.fp16:
-            raise ValueError("fp16 and bf16 cannot be simultaneously enabled")
