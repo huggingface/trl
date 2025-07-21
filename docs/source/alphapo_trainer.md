@@ -2,7 +2,7 @@
 
 ## Overview
 
-AlphaPO was introduced in [AlphaPO: Reward Shape Matters for LLM Alignment](https://icml.cc/virtual/2025/poster/45569) by Aman Gupta, Shao Tang, et al.
+AlphaPO was introduced in [AlphaPO: Reward Shape Matters for LLM Alignment](https://arxiv.org/abs/2501.03884) by Aman Gupta, Shao Tang, et al.
 
 The abstract from the paper is the following:
 
@@ -10,7 +10,7 @@ The abstract from the paper is the following:
 
 It studies the crucial role of reward shape within the context of preference alignment. Altering the reward function shape to enhance the alignment performance of SimPO is a novel insight introduced and demonstrated in this paper. Since reward function (via the choice of divergence measure) occurs in other methods such as DPO and RLHF, whether it is possible that changing its shape can provide value for them too is a worthwhile future research direction
 
-This post-training method was contributed by [Qingquan Song], [Shao Tang] and [Aman Gupta].
+This post-training method was contributed by Qingquan Song, Shao Tang, Aman Gupta and Sirou Zhu.
 
 ## Quick start
 
