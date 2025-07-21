@@ -1642,43 +1642,6 @@ class DPOTrainer(Trainer):
 
         return output
 
-    def _compute_multi_loss(
-        self,
-        chosen_logps: torch.FloatTensor,
-        rejected_logps: torch.FloatTensor,
-        ref_chosen_logps: torch.FloatTensor,
-        ref_rejected_logps: torch.FloatTensor,
-        model_output: dict = None,
-    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
-        """
-        Compute combined loss for multiple loss types (e.g., ["sigmoid", "bco_pair", "sft"] for MPO).
-
-        This enables combining different loss formulations with individual weights.
-        For example, MPO uses DPO (sigmoid) as preference loss, BCO (bco_pair) as quality loss, and SFT (sft) as
-        generation loss.
-        """
-        # Initialize combined losses
-        combined_losses = 0
-        combined_chosen_rewards = 0
-        combined_rejected_rewards = 0
-
-        # Compute each loss type
-        for idx, loss_type in enumerate(self.loss_type):
-            # Get loss weight from dictionary configuration (defaults to 1.0 if not specified)
-            weight = self.loss_weights[idx] if self.loss_weights else 1.0
-
-            # Compute individual loss using standard DPO loss function
-            losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-                chosen_logps, rejected_logps, ref_chosen_logps, ref_rejected_logps, loss_type, model_output
-            )
-
-            # Add weighted contributions
-            combined_losses = combined_losses + losses * weight
-            combined_chosen_rewards = combined_chosen_rewards + chosen_rewards * weight
-            combined_rejected_rewards = combined_rejected_rewards + rejected_rewards * weight
-
-        return combined_losses, combined_chosen_rewards, combined_rejected_rewards
-
     def get_batch_loss_metrics(
         self,
         model: Union[PreTrainedModel, nn.Module],
