@@ -321,7 +321,6 @@ class DPOTrainerTester(unittest.TestCase):
                 self.assertIn("nll_loss", metrics)  # SFT loss should be computed
 
     def test_wrong_loss_weights_length(self):
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         with tempfile.TemporaryDirectory() as tmp_dir:
             with self.assertRaises(ValueError) as context:
                 DPOConfig(
