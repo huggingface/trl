@@ -1,7 +1,5 @@
 # AlphaPO Trainer
 
-[![](https://img.shields.io/badge/All_models-ORPO-blue)](https://huggingface.co/models?other=orpo,trl) [![](https://img.shields.io/badge/smol_course-Chapter_2-yellow)](https://github.com/huggingface/smol-course/tree/main/2_preference_alignment)
-
 ## Overview
 
 AlphaPO was introduced in [AlphaPO: Reward Shape Matters for LLM Alignment](https://icml.cc/virtual/2025/poster/45569) by Aman Gupta, Shao Tang, et al.
@@ -16,7 +14,7 @@ This post-training method was contributed by [Qingquan Song], [Shao Tang] and [A
 
 ## Quick start
 
-This example demonstrates how to train a model using the ORPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
+This example demonstrates how to train a model using the AlphaPO method. We use the [Qwen 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) as the base model. We use the preference data from the [UltraFeedback dataset](https://huggingface.co/datasets/openbmb/UltraFeedback). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized/embed/viewer/default/train?row=0"
@@ -28,37 +26,35 @@ This example demonstrates how to train a model using the ORPO method. We use the
 Below is the script to train the model:
 
 ```python
-# train_orpo.py
+# train_alphapo.py
 from datasets import load_dataset
-from trl import ORPOConfig, ORPOTrainer
+from trl import AlphaPOConfig, AlphaPOTrainer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-training_args = ORPOConfig(output_dir="Qwen2-0.5B-ORPO", logging_steps=10)
-trainer = ORPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
+training_args = AlphaPOConfig(output_dir="Qwen2-0.5B-AlphaPO", logging_steps=10)
+trainer = AlphaPOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
 
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_orpo.py
+accelerate launch train_alphapo.py
 ```
 
 Distributed across 8 GPUs, the training takes approximately 30 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/orpo-qwen2-reward-margin.png)
+To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-AlphaPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-ORPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
-
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-ORPO
+<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-AlphaPO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
-<strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-ORPO&gt;:</span></strong>
+<strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-AlphaPO&gt;:</span></strong>
 It's challenging to determine the best programming language as no one language is perfect, as the complexity of a task and the type of project are significant factors. Some popular languages include Java, Python, JavaScript, and
 C++. If you have specific needs or requirements for a specific project, it's important to choose the language that best suits those needs.                                                                                          
 
@@ -75,23 +71,23 @@ Here are some other factors to consider when choosing a programming language for
 
 ## Expected dataset type
 
-ORPO requires a [preference dataset](dataset_formats#preference). The [`ORPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+AlphaPO requires a [preference dataset](dataset_formats#preference). The [`AlphaPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
-Although the [`ORPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
+Although the [`AlphaPOTrainer`] supports both explicit and implicit prompts, we recommend using explicit prompts. If provided with an implicit prompt dataset, the trainer will automatically extract the prompt from the `"chosen"` and `"rejected"` columns. For more information, refer to the [preference style](dataset_formats#preference) section.
 
 ## Example script
 
-We provide an example script to train a model using the ORPO method. The script is available in [`examples/scripts/orpo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/orpo.py)
+We provide an example script to train a model using the AlphaPO method. The script is available in [`examples/scripts/alphapo.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/alphapo.py)
 
-To test the ORPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
+To test the AlphaPO script with the [Qwen2 0.5B model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) on the [UltraFeedback dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback_binarized), run the following command:
 
 ```bash
-accelerate launch examples/scripts/orpo.py \
+accelerate launch examples/scripts/alphapo.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback_binarized \
     --num_train_epochs 1 \
     --logging_steps 25 \
-    --output_dir Qwen2-0.5B-ORPO
+    --output_dir Qwen2-0.5B-AlphaPO
 ```
 
 ## Usage tips
