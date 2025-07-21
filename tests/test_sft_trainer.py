@@ -592,23 +592,6 @@ add_generation_prompt %}ASSISTANT: {% endif %}"""
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-    def test_torch_dtype(self):
-        # See https://github.com/huggingface/trl/issues/1751
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                model_init_kwargs={"torch_dtype": torch.float16},
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                formatting_func=formatting_prompts_func,
-            )
-            self.assertEqual(trainer.model.config.torch_dtype, torch.float16)
-
 
 # This new tester aims to replace the first one at some point
 class SFTTrainerTester2(unittest.TestCase):
