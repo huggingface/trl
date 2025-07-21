@@ -1110,10 +1110,7 @@ class DPOTrainerTester(unittest.TestCase):
             reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
             reference_rejected_logps = torch.FloatTensor([5.5, 0.5])
             losses, _, _ = trainer.dpo_loss(
-                policy_chosen_logps,
-                policy_rejected_logps,
-                reference_chosen_logps,
-                reference_rejected_logps,
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
             )
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
