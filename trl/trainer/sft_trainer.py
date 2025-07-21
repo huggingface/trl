@@ -738,17 +738,23 @@ class SFTTrainer(Trainer):
 
                 def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
                     if "prompt" in example:  # prompt-completion case
+                        output = {}
                         if is_conversational(example):
                             prompt_ids = processing_class.apply_chat_template(
                                 example["prompt"],
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
-                            prompt_completion_ids = processing_class.apply_chat_template(
+                            prompt_completion_processed = processing_class.apply_chat_template(
                                 example["prompt"] + example["completion"],
+                                return_dict=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
+                            prompt_completion_ids = prompt_completion_processed["input_ids"]
+                            if "assistant_masks" in prompt_completion_processed:
+                                output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
                         else:
                             prompt_ids = processing_class(text=example["prompt"])["input_ids"]
                             prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
@@ -765,7 +771,8 @@ class SFTTrainer(Trainer):
 
                         # Create a completion mask
                         completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        processed = {"input_ids": prompt_completion_ids, "completion_mask": completion_mask}
+                        output["input_ids"] = prompt_completion_ids
+                        output["completion_mask"] = completion_mask
 
                     else:  # language modeling case
                         if is_conversational(example):
@@ -784,10 +791,10 @@ class SFTTrainer(Trainer):
                                     "check the template and ensure it's correctly configured to support assistant "
                                     "masking."
                                 )
-                            processed = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
+                            output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
-                            processed = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
-                    return processed
+                            output = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
+                    return output
 
                 dataset = dataset.map(
                     tokenize,
@@ -809,8 +816,8 @@ class SFTTrainer(Trainer):
                 columns = ["input_ids"]
                 if "completion_mask" in dataset.column_names:
                     columns.append("completion_mask")
-                elif "assistant_mask" in dataset.column_names:
-                    columns.append("assistant_mask")
+                if "assistant_masks" in dataset.column_names:
+                    columns.append("assistant_masks")
 
                 dataset = dataset.select_columns(columns)
 
