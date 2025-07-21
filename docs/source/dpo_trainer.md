@@ -155,12 +155,6 @@ training_args = DPOConfig(
     loss_type=["sigmoid", "bco_pair"],
     loss_weights=[1.0, 0.5]  # Corresponding weights
 )
-
-# Or using comma-separated string format
-training_args = DPOConfig(
-    loss_type="sigmoid,bco_pair",
-    loss_weights=[1.0, 0.5]
-)
 ```
 
 If `loss_weights` is not provided, all loss types will have equal weights (1.0 by default).

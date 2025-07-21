@@ -41,11 +41,7 @@ class TestCLI(unittest.TestCase):
         from trl.cli import main
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            command = (
-                f"trl dpo --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 "
-                f"--dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none "
-                f"--loss_type sigmoid bco_pair --loss_weights 1.0 0.5"
-            )
+            command = f"trl dpo --output_dir {tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_preference --report_to none --loss_type sigmoid bco_pair --loss_weights 1.0 0.5"
             with patch("sys.argv", command.split(" ")):
                 main()
 
