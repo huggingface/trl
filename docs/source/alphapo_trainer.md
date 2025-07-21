@@ -48,6 +48,7 @@ accelerate launch train_alphapo.py
 
 Distributed across 8 GPUs, the training takes approximately 30 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.
 
+
 ## Expected dataset type
 
 AlphaPO requires a [preference dataset](dataset_formats#preference). The [`AlphaPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
@@ -69,28 +70,21 @@ accelerate launch examples/scripts/alphapo.py \
     --output_dir Qwen2-0.5B-AlphaPO
 ```
 
-## Usage tips
-
-### For Mixture of Experts Models: Enabling the auxiliary loss
-
-MOEs are the most efficient if the load is about equally distributed between experts.  
-To ensure that we train MOEs similarly during preference-tuning, it is beneficial to add the auxiliary loss from the load balancer to the final loss.
-
-This option is enabled by setting `output_router_logits=True` in the model config (e.g. [`~transformers.MixtralConfig`]).  
-To scale how much the auxiliary loss contributes to the total loss, use the hyperparameter `router_aux_loss_coef=...` (default: `0.001`) in the model config.
-
 ## Logged metrics
 
 While training and evaluating we record the following reward metrics:
 
-- `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
-- `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta
+- `rewards/chosen`: the mean reward of the policy model for the chosen responses scaled by beta
+- `rewards/rejected`: the mean reward of the policy model for the rejected responses scaled by beta
 - `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
 - `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
-- `log_odds_chosen`: the mean log odds ratio of the chosen responses over the rejected responses
-- `log_odds_ratio`: the mean of the `log(sigmoid(log_odds_chosen))`
+- `logps/chosen`: the mean log probabilities of the policy model for the chosen responses
+- `logps/rejected`: the mean log probabilities of the policy model for the rejected responses
+- `logits/chosen`: the mean logits of the policy model for the chosen responses
+- `logits/rejected`: the mean logits of the policy model for the rejected responses
 - `nll_loss`: the mean negative log likelihood loss from the SFT part of the loss over chosen responses
- 
+- `loss`: the mean loss from the AlphaPO part of the loss
+
 ## AlphaPOTrainer
 
 [[autodoc]] AlphaPOTrainer
