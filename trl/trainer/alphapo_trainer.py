@@ -650,6 +650,7 @@ class AlphaPOTrainer(Trainer):
             The losses tensor contains the AlphaPO loss for each example in the batch.
             The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
         """
+
         # Implementation of the AlphaPO loss, based on the AlphaPO paper, equation (4): https://arxiv.org/abs/2501.03884
         # The reward function is r(y, x) = beta * (1 - pi_len_norm(y|x)^(-alpha)) / alpha, where pi_len_norm is the length-normalized probability.
         # The loss is -log_sigmoid(r(y_w, x) - r(y_l, x) - gamma)
