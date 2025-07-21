@@ -79,10 +79,13 @@ While training and evaluating we record the following reward metrics:
 - `rewards/rejected`: the mean reward of the policy model for the rejected responses scaled by beta
 - `rewards/accuracies`: mean of how often the chosen rewards are > than the corresponding rejected rewards
 - `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
-- `log_odds_chosen`: the mean log odds ratio of the chosen responses over the rejected responses
-- `log_odds_ratio`: the mean of the `log(sigmoid(log_odds_chosen))`
+- `logps/chosen`: the mean log probabilities of the policy model for the chosen responses
+- `logps/rejected`: the mean log probabilities of the policy model for the rejected responses
+- `logits/chosen`: the mean logits of the policy model for the chosen responses
+- `logits/rejected`: the mean logits of the policy model for the rejected responses
 - `nll_loss`: the mean negative log likelihood loss from the SFT part of the loss over chosen responses
- 
+- `loss`: the mean loss from the AlphaPO part of the loss
+
 ## AlphaPOTrainer
 
 [[autodoc]] AlphaPOTrainer
