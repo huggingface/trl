@@ -1659,7 +1659,7 @@ class DPOTrainer(Trainer):
 
         # Compute each loss type
         for loss_type in loss_type_list:
-            self.loss_type = loss_type.strip()
+            self.loss_type = loss_type
 
             # Get loss weight from dictionary configuration (defaults to 1.0 if not specified)
             if hasattr(self.args, "loss_weights") and self.args.loss_weights is not None:
