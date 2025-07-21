@@ -1495,12 +1495,14 @@ class SFTTrainerTester2(unittest.TestCase):
             example["completion"].append(example["prompt"][0])
             example["completion"].append(example["completion"][0])
             return example
-        
+
         dataset = dataset.map(add_to_completion)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, assistant_only_loss=True, report_to="none")
+            training_args = SFTConfig(
+                output_dir=tmp_dir, assistant_only_loss=True, completion_only_loss=True, report_to="none"
+            )
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
             )
@@ -1518,7 +1520,6 @@ class SFTTrainerTester2(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
-
 
     def test_train_with_set_chat_template_from_model(self):
         # Get the dataset
