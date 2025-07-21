@@ -48,27 +48,6 @@ accelerate launch train_alphapo.py
 
 Distributed across 8 GPUs, the training takes approximately 30 minutes. You can verify the training progress by checking the reward graph. An increasing trend in the reward margin indicates that the model is improving and generating better responses over time.
 
-To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-AlphaPO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
-
-<pre><code>$ transformers-cli chat --model_name_or_path trl-lib/Qwen2-0.5B-AlphaPO
-<strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
-What is the best programming language?
-
-<strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-AlphaPO&gt;:</span></strong>
-It's challenging to determine the best programming language as no one language is perfect, as the complexity of a task and the type of project are significant factors. Some popular languages include Java, Python, JavaScript, and
-C++. If you have specific needs or requirements for a specific project, it's important to choose the language that best suits those needs.                                                                                          
-
-Here are some other factors to consider when choosing a programming language for a project:
-
- <strong><span style="color: green;">• Language proficiency:</span></strong> A good programming language is more likely to be easy to understand and use, and will allow developers to collaborate on projects more efficiently.                                     
- <strong><span style="color: green;">• Ease of use:</span></strong> There are tools and libraries available to make programming more accessible, so developers should choose a language that can help them get started easier.
- <strong><span style="color: green;">• Code readability:</span></strong> A clear and concise codebase should be easy to read and understand, especially when working with large projects.
- <strong><span style="color: green;">• Tool and framework support:</span></strong> There are numerous libraries available for Python, Java, and JavaScript, along with tools like IDEs and static code analysis tools.
- <strong><span style="color: green;">• Accessibility:</span></strong> Some languages and tools have features that make them more accessible to developers with disabilities, such as support for screen readers.
- <strong><span style="color: green;">• Version control:</span></strong> As your projects grow and complexity increases, version control tools can be beneficial for tracking changes.
-
-</code></pre>
-
 ## Expected dataset type
 
 AlphaPO requires a [preference dataset](dataset_formats#preference). The [`AlphaPOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
