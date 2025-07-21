@@ -124,6 +124,7 @@ class DPOConfig(TrainingArguments):
                   [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"sft"`: Negative log-likelihood loss (standard supervised fine-tuning loss).
 
             Multiple loss types can be combined using comma separation (e.g., `["sigmoid", "bco_pair"]` for
             [MPO](https://huggingface.co/papers/2411.10442)).
