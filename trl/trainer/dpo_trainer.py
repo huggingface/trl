@@ -1650,7 +1650,7 @@ class DPOTrainer(Trainer):
         """
         # Store original loss type
         original_loss_type = self.loss_type
-        loss_type_list = original_loss_type.split(",")
+        loss_type_list = [loss_type.strip() for loss_type in original_loss_type.split(",")]
 
         # Initialize combined losses
         combined_losses = 0
