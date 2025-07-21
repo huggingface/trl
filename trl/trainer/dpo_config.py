@@ -126,7 +126,7 @@ class DPOConfig(TrainingArguments):
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"sft"`: Negative log-likelihood loss (standard supervised fine-tuning loss).
 
-            Multiple loss types can be combined using comma separation (e.g., `["sigmoid", "bco_pair"]` for
+            Multiple loss types can be combined using comma separation (e.g., `["sigmoid", "bco_pair", "sft"]` for
             [MPO](https://huggingface.co/papers/2411.10442)).
 
         use_liger_loss (`bool`, *optional*, defaults to `False`):
@@ -322,27 +322,12 @@ class DPOConfig(TrainingArguments):
 
     # Parameters that control the training
     loss_type: list[str] = field(
-        default="sigmoid",
+        default_factory=lambda: ["sigmoid"],
         metadata={
-            "help": "Type of loss to use. Can be a single loss type (string) or multiple loss types (list of strings). "
-            "For multiple losses, use comma-separated string or list format. "
-            "Example: 'sigmoid,bco_pair' or ['sigmoid', 'bco_pair'].",
-            # "choices": [
-            #     "sigmoid",
-            #     "hinge",
-            #     "ipo",
-            #     "exo_pair",
-            #     "nca_pair",
-            #     "robust",
-            #     "bco_pair",
-            #     "sppo_hard",
-            #     "aot",
-            #     "aot_pair",
-            #     "discopop",
-            #     "apo_zero",
-            #     "apo_down",
-            #     "sft",
-            # ],
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
+            "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_pair'`, `'discopop'`, "
+            "`'apo_zero'`, `'apo_down'` and `'sft'`. Multiple loss types can be combined using comma separation "
+            "(e.g., `['sigmoid', 'bco_pair', 'sft']` for MPO).",
         },
     )
     use_liger_loss: bool = field(
