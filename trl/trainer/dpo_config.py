@@ -320,28 +320,28 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    loss_type: Union[str, list[str]] = field(
+    loss_type: list[str] = field(
         default="sigmoid",
         metadata={
             "help": "Type of loss to use. Can be a single loss type (string) or multiple loss types (list of strings). "
             "For multiple losses, use comma-separated string or list format. "
             "Example: 'sigmoid,bco_pair' or ['sigmoid', 'bco_pair'].",
-            "choices": [
-                "sigmoid",
-                "hinge",
-                "ipo",
-                "exo_pair",
-                "nca_pair",
-                "robust",
-                "bco_pair",
-                "sppo_hard",
-                "aot",
-                "aot_pair",
-                "discopop",
-                "apo_zero",
-                "apo_down",
-                "sft",
-            ],
+            # "choices": [
+            #     "sigmoid",
+            #     "hinge",
+            #     "ipo",
+            #     "exo_pair",
+            #     "nca_pair",
+            #     "robust",
+            #     "bco_pair",
+            #     "sppo_hard",
+            #     "aot",
+            #     "aot_pair",
+            #     "discopop",
+            #     "apo_zero",
+            #     "apo_down",
+            #     "sft",
+            # ],
         },
     )
     use_liger_loss: bool = field(
@@ -456,25 +456,18 @@ class DPOConfig(TrainingArguments):
     )
 
     def __post_init__(self):
-        if self.loss_type is None:
-            self.loss_type = "sigmoid"
-
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         # Normalize loss_type to string format for internal use
-        if isinstance(self.loss_type, list):
-            self.loss_type = ",".join(self.loss_type)
+        if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:
+            self.loss_type = self.loss_type[0]
 
-        # Handle loss_weights validation and conversion
+        # Validate loss_type
         if self.loss_weights is not None:
-            # Convert list format to dictionary format for internal use
-            loss_types = self.loss_type.split(",") if "," in self.loss_type else [self.loss_type]
+            loss_types = self.loss_type if isinstance(self.loss_type, list) else [self.loss_type]
             if len(self.loss_weights) != len(loss_types):
                 raise ValueError(
-                    f"Length of loss_weights list ({len(self.loss_weights)}) must match "
-                    f"number of loss types ({len(loss_types)}). "
-                    f"Loss types: {loss_types}, Loss weights: {self.loss_weights}"
+                    f"Length of loss_weights list ({self.loss_weights}) must match number of loss types "
+                    f"({loss_types})."
                 )
-            self.loss_weights = {loss_type.strip(): weight for loss_type, weight in zip(loss_types, self.loss_weights)}
-
         super().__post_init__()

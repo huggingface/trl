@@ -406,21 +406,10 @@ class DPOTrainer(Trainer):
         self._precomputed_train_ref_log_probs = False
         self._precomputed_eval_ref_log_probs = False
 
-        if (
-            args.loss_type in ["hinge", "ipo", "bco_pair", "sppo_hard", "nca_pair", "apo_zero", "apo_down"]
-            and args.label_smoothing > 0
-        ):
-            warnings.warn(
-                f"You are using the {args.loss_type} loss type that does not support label smoothing. The "
-                "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
-                UserWarning,
-            )
-        if args.loss_type == "kto_pair":
-            raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
-
         self.beta = args.beta
         self.label_smoothing = args.label_smoothing
-        self.loss_type = args.loss_type
+        self.loss_type = args.loss_type if isinstance(args.loss_type, list) else [args.loss_type]
+        self.loss_weights = args.loss_weights
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.use_weighting = args.use_weighting
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
@@ -432,6 +421,18 @@ class DPOTrainer(Trainer):
                 "loss.",
                 UserWarning,
             )
+        for loss_type in self.loss_type:
+            if (
+                loss_type in ["hinge", "ipo", "bco_pair", "sppo_hard", "nca_pair", "apo_zero", "apo_down"]
+                and args.label_smoothing > 0
+            ):
+                warnings.warn(
+                    f"You are using the {loss_type} loss type that does not support label smoothing. The "
+                    "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
+                    UserWarning,
+                )
+            if loss_type == "kto_pair":
+                raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
         self.f_divergence_type = args.f_divergence_type
@@ -995,6 +996,8 @@ class DPOTrainer(Trainer):
         rejected_logps: torch.FloatTensor,
         ref_chosen_logps: torch.FloatTensor,
         ref_rejected_logps: torch.FloatTensor,
+        loss_type: str,
+        model_output: dict[str, torch.FloatTensor],
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """
         Compute the DPO loss for a batch of policy and reference model log probabilities.
@@ -1054,19 +1057,19 @@ class DPOTrainer(Trainer):
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the
         # labels and calculates a conservative DPO loss.
-        if self.loss_type == "sigmoid":
+        if loss_type == "sigmoid":
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
                 - F.logsigmoid(-self.beta * logits) * self.label_smoothing
             )
 
-        elif self.loss_type == "robust":
+        elif loss_type == "robust":
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
                 + F.logsigmoid(-self.beta * logits) * self.label_smoothing
             ) / (1 - 2 * self.label_smoothing)
 
-        elif self.loss_type == "exo_pair":
+        elif loss_type == "exo_pair":
             # eqn (16) of the EXO paper: https://huggingface.co/papers/2402.00856
             import math
 
@@ -1076,14 +1079,14 @@ class DPOTrainer(Trainer):
                 F.logsigmoid(self.beta * logits) - math.log(1 - self.label_smoothing)
             ) + (-self.beta * logits).sigmoid() * (F.logsigmoid(-self.beta * logits) - math.log(self.label_smoothing))
 
-        elif self.loss_type == "hinge":
+        elif loss_type == "hinge":
             losses = torch.relu(1 - self.beta * logits)
 
-        elif self.loss_type == "ipo":
+        elif loss_type == "ipo":
             # eqn (17) of the paper where beta is the regularization parameter for the IPO loss, denoted by tau in the paper.
             losses = (logits - 1 / (2 * self.beta)) ** 2
 
-        elif self.loss_type == "bco_pair":
+        elif loss_type == "bco_pair":
             chosen_logratios = chosen_logps - ref_chosen_logps
             rejected_logratios = rejected_logps - ref_rejected_logps
             chosen_rewards = self.beta * chosen_logratios
@@ -1095,7 +1098,7 @@ class DPOTrainer(Trainer):
                 -(self.beta * rejected_logratios - delta)
             )
 
-        elif self.loss_type == "sppo_hard":
+        elif loss_type == "sppo_hard":
             # In the paper (https://huggingface.co/papers/2405.00675), SPPO employs a soft probability approach,
             # estimated using the PairRM score. The probability calculation is conducted outside of the trainer class.
             # The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is
@@ -1104,7 +1107,7 @@ class DPOTrainer(Trainer):
             b = rejected_logps - ref_rejected_logps
             losses = (a - 0.5 / self.beta) ** 2 + (b + 0.5 / self.beta) ** 2
 
-        elif self.loss_type == "nca_pair":
+        elif loss_type == "nca_pair":
             chosen_rewards = (chosen_logps - ref_chosen_logps) * self.beta
             rejected_rewards = (rejected_logps - ref_rejected_logps) * self.beta
             losses = (
@@ -1113,7 +1116,7 @@ class DPOTrainer(Trainer):
                 - 0.5 * F.logsigmoid(-rejected_rewards)
             )
 
-        elif self.loss_type == "aot_pair":
+        elif loss_type == "aot_pair":
             chosen_logratios = chosen_logps - ref_chosen_logps
             rejected_logratios = rejected_logps - ref_rejected_logps
             chosen_logratios_sorted, _ = torch.sort(chosen_logratios, dim=0)
@@ -1124,7 +1127,7 @@ class DPOTrainer(Trainer):
                 - F.logsigmoid(-self.beta * delta) * self.label_smoothing
             )
 
-        elif self.loss_type == "aot":
+        elif loss_type == "aot":
             logratios = chosen_logps - rejected_logps
             ref_logratios = ref_chosen_logps - ref_rejected_logps
             logratios_sorted, _ = torch.sort(logratios, dim=0)
@@ -1135,14 +1138,14 @@ class DPOTrainer(Trainer):
                 - F.logsigmoid(-self.beta * delta) * self.label_smoothing
             )
 
-        elif self.loss_type == "apo_zero":
+        elif loss_type == "apo_zero":
             # Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
             # Use this loss when you believe the chosen outputs are better than your model's default output
             losses_chosen = 1 - F.sigmoid(self.beta * chosen_logratios)  # Increase chosen likelihood
             losses_rejected = F.sigmoid(self.beta * rejected_logratios)  # Decrease rejected likelihood
             losses = losses_chosen + losses_rejected
 
-        elif self.loss_type == "apo_down":
+        elif loss_type == "apo_down":
             # Eqn (8) of the APO paper (https://huggingface.co/papers/2408.06266)
             # Use this loss when you believe the chosen outputs are worse than your model's default output.
             # Decrease chosen likelihood and decrease rejected likelihood more
@@ -1150,7 +1153,7 @@ class DPOTrainer(Trainer):
             losses_rejected = 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
             losses = losses_chosen + losses_rejected
 
-        elif self.loss_type == "discopop":
+        elif loss_type == "discopop":
             # Eqn (5) of the DiscoPOP paper (https://huggingface.co/papers/2406.08414)
             # This loss was discovered with LLM discovery
             logratios = chosen_logps - rejected_logps
@@ -1164,16 +1167,22 @@ class DPOTrainer(Trainer):
             # Blend between logistic and exponential component based on log ratio modulation
             losses = logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
 
-        elif self.loss_type == "sft":
-            # SFT (Supervised Fine-Tuning) loss on chosen responses
-            # This is the negative log likelihood loss, used as generation loss for preferred responses
-            # Returns a tensor of zeros for individual sample losses since SFT loss is computed globally
-            losses = torch.zeros_like(chosen_logps)
+        elif loss_type == "sft":
+            # SFT loss is the negative log likelihood loss on chosen responses
+            # This acts as the generation loss component in MPO
+            sft_loss = model_output["nll_loss"]
+            # Create losses tensor with same shape as other losses (per-sample)
+            batch_size = chosen_logps.shape[0]
+            losses = sft_loss.expand(batch_size)
+            # For SFT, we don't have preference rewards, so use zeros
+            chosen_rewards = torch.zeros_like(chosen_logps)
+            rejected_rewards = torch.zeros_like(rejected_logps)
 
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', 'apo_down', 'sft']"
+                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', "
+                "'apo_down', 'sft']"
             )
 
         chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
@@ -1642,60 +1651,31 @@ class DPOTrainer(Trainer):
         model_output: dict = None,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """
-        Compute combined loss for multiple loss types (e.g., "sigmoid,bco_pair,sft" for MPO).
+        Compute combined loss for multiple loss types (e.g., ["sigmoid", "bco_pair", "sft"] for MPO).
 
         This enables combining different loss formulations with individual weights.
-        For example, MPO uses DPO (sigmoid) as preference loss, BCO (bco_pair) as quality loss,
-        and SFT (sft) as generation loss.
+        For example, MPO uses DPO (sigmoid) as preference loss, BCO (bco_pair) as quality loss, and SFT (sft) as
+        generation loss.
         """
-        # Store original loss type
-        original_loss_type = self.loss_type
-        loss_type_list = [loss_type.strip() for loss_type in original_loss_type.split(",")]
-
         # Initialize combined losses
         combined_losses = 0
         combined_chosen_rewards = 0
         combined_rejected_rewards = 0
 
         # Compute each loss type
-        for loss_type in loss_type_list:
-            self.loss_type = loss_type
-
+        for idx, loss_type in enumerate(self.loss_type):
             # Get loss weight from dictionary configuration (defaults to 1.0 if not specified)
-            if hasattr(self.args, "loss_weights") and self.args.loss_weights is not None:
-                weight = self.args.loss_weights.get(self.loss_type, 1.0)
-            else:
-                weight = 1.0  # Default weight when no loss_weights dictionary is provided
+            weight = self.loss_weights[idx] if self.loss_weights else 1.0
 
-            # Handle SFT loss separately as it uses NLL loss from model output
-            if "sft" in self.loss_type:
-                # SFT loss is the negative log likelihood loss on chosen responses
-                # This acts as the generation loss component in MPO
-                if model_output is None or "nll_loss" not in model_output:
-                    raise ValueError("SFT loss requires model_output dict with 'nll_loss' key")
-
-                sft_loss = model_output["nll_loss"]
-
-                # Create losses tensor with same shape as other losses (per-sample)
-                batch_size = chosen_logps.shape[0]
-                losses = sft_loss.expand(batch_size)
-
-                # For SFT, we don't have preference rewards, so use zeros
-                chosen_rewards = torch.zeros_like(chosen_logps)
-                rejected_rewards = torch.zeros_like(rejected_logps)
-            else:
-                # Compute individual loss using standard DPO loss
-                losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-                    chosen_logps, rejected_logps, ref_chosen_logps, ref_rejected_logps
-                )
+            # Compute individual loss using standard DPO loss function
+            losses, chosen_rewards, rejected_rewards = self.dpo_loss(
+                chosen_logps, rejected_logps, ref_chosen_logps, ref_rejected_logps, loss_type, model_output
+            )
 
             # Add weighted contributions
             combined_losses = combined_losses + losses * weight
             combined_chosen_rewards = combined_chosen_rewards + chosen_rewards * weight
             combined_rejected_rewards = combined_rejected_rewards + rejected_rewards * weight
-
-        # Restore original loss type
-        self.loss_type = original_loss_type
 
         return combined_losses, combined_chosen_rewards, combined_rejected_rewards
 
@@ -1723,19 +1703,29 @@ class DPOTrainer(Trainer):
             else:
                 ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
 
-            # Support multi-loss combinations (e.g., "sigmoid,bco_pair" for MPO)
-            if "," in self.loss_type:
-                losses, chosen_rewards, rejected_rewards = self._compute_multi_loss(
+            # Initialize combined losses
+            losses = 0
+            chosen_rewards = 0
+            rejected_rewards = 0
+
+            # Compute losses for each loss type
+            for idx, loss_type in enumerate(self.loss_type):
+                # Compute individual loss using standard DPO loss function
+                _losses, _chosen_rewards, _rejected_rewards = self.dpo_loss(
                     model_output["chosen_logps"],
                     model_output["rejected_logps"],
                     ref_chosen_logps,
                     ref_rejected_logps,
+                    loss_type,
                     model_output,
                 )
-            else:
-                losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-                    model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
-                )
+
+                # Add weighted contributions
+                weight = self.loss_weights[idx] if self.loss_weights else 1.0
+                losses = losses + _losses * weight
+                chosen_rewards = chosen_rewards + _chosen_rewards * weight
+                rejected_rewards = rejected_rewards + _rejected_rewards * weight
+
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         if self.args.rpo_alpha is not None:
