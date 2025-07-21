@@ -659,7 +659,7 @@ class AlphaPOTrainer(Trainer):
         policy_chosen_ps = (-policy_chosen_ps / self.alpha).to(self.accelerator.device)
         policy_rejected_ps = (-policy_rejected_ps / self.alpha).to(self.accelerator.device)
         logits = policy_chosen_ps - policy_rejected_ps - self.gamma_beta_ratio
-        losses = -F.logsigmoid(self.beta * logits) - F.logsigmoid(-self.beta * logits)
+        losses = -F.logsigmoid(self.beta * logits)
         # Implementation based on the AlphaPO reward, equation (8) from AlphaPO - Reward shape matters for LLM alignment
         chosen_rewards = self.beta * (1 / self.alpha + policy_chosen_ps).to(self.accelerator.device).detach()
         rejected_rewards = self.beta * (1 / self.alpha + policy_rejected_ps).to(self.accelerator.device).detach()
