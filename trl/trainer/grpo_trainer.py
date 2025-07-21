@@ -774,7 +774,8 @@ class GRPOTrainer(Trainer):
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
-        self._textual_logs = {
+        self._logs = {
+            "image": deque(maxlen=args.generation_batch_size),
             "prompt": deque(maxlen=args.generation_batch_size),
             "completion": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
@@ -1398,7 +1399,6 @@ class GRPOTrainer(Trainer):
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
-                    # vLLM v1 no longer supports request-level backend selection, use default backend
                     guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
                 else:
                     guided_decoding = None
@@ -1466,10 +1466,6 @@ class GRPOTrainer(Trainer):
             # Re-process inputs for paged generation if needed
             # Note: images are already validated and preprocessed above
             paged_prompt_inputs = self.processing_class(text=prompts_text, **kwargs)
-
-            self.generation_config.max_batch_tokens = 512
-            self.generation_config.num_blocks = 1024
-            self.generation_config.block_size = 128
             previous_attn = self.model_wrapped.config._attn_implementation
 
             if is_flash_attn_2_available():
@@ -1664,22 +1660,14 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
-        self._textual_logs["prompt"].extend(gather_object(prompts_text))
-        self._textual_logs["completion"].extend(gather_object(completions_text))
+        self._logs["prompt"].extend(gather_object(prompts_text))
+        self._logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
-            self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
-        self._textual_logs["advantages"].extend(all_process_advantages.tolist())
+            self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
+        self._logs["advantages"].extend(all_process_advantages.tolist())
 
-        # if self.is_vision_model and has_images:
-        #     if "images" not in self._textual_logs:
-        #         # Use the same maxlen as other textual logs
-        #         maxlen = (
-        #             self.accelerator.num_processes
-        #             * self.args.per_device_train_batch_size
-        #             * self.args.steps_per_generation
-        #         )
-        #         self._textual_logs["images"] = deque(maxlen=maxlen)
-        #     self._textual_logs["images"].extend(gather_object(images))
+        if has_images:
+            self._logs["image"].extend(gather_object(images))
 
         output = {
             "prompt_ids": prompt_ids,
@@ -1861,10 +1849,10 @@ class GRPOTrainer(Trainer):
         if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():
                 print_prompt_completions_sample(
-                    self._textual_logs["prompt"],
-                    self._textual_logs["completion"],
-                    self._textual_logs["rewards"],
-                    self._textual_logs["advantages"],
+                    self._logs["prompt"],
+                    self._logs["completion"],
+                    self._logs["rewards"],
+                    self._logs["advantages"],
                     self.state.global_step,
                     self.num_completions_to_print,
                 )
@@ -1873,27 +1861,21 @@ class GRPOTrainer(Trainer):
                 import pandas as pd
 
                 table = {
-                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
-                    "prompt": self._textual_logs["prompt"],
-                    "completion": self._textual_logs["completion"],
-                    **self._textual_logs["rewards"],
-                    "advantage": self._textual_logs["advantages"],
+                    "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
+                    "prompt": self._logs["prompt"],
+                    "completion": self._logs["completion"],
+                    **self._logs["rewards"],
+                    "advantage": self._logs["advantages"],
                 }
 
-                if self.is_vision_model and "images" in self._textual_logs and len(self._textual_logs["images"]) > 0:
-                    # Convert images to wandb Image objects for proper visualization
-                    wandb_images = []
-                    for img in self._textual_logs["images"]:
+                if self._logs["image"]:
+                    table["image"] = []
+                    for img in self._logs["image"]:
                         if img is not None:
-                            try:
-                                # Handle different image formats (PIL, numpy, etc.)
-                                wandb_images.append(wandb.Image(img))
-                            except Exception:
-                                # If image conversion fails, append None
-                                wandb_images.append(None)
+                            # Convert images to wandb Image objects for proper visualization
+                            table["image"].append(wandb.Image(img))
                         else:
-                            wandb_images.append(None)
-                    table["image"] = wandb_images
+                            table["image"].append(None)
 
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
