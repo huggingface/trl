@@ -153,8 +153,8 @@ To combine multiple losses, specify the loss types and corresponding weights as 
 ```python
 # MPO: Combines DPO (sigmoid) for preference and BCO (bco_pair) for quality
 training_args = DPOConfig(
-    loss_type=["sigmoid", "bco_pair"],
-    loss_weights=[1.0, 0.5]  # Corresponding weights
+    loss_type=["sigmoid", "bco_pair", "sft"],  # Loss types to combine
+    loss_weights=[0.8, 0.2, 1.0]  # Corresponding weights, as used in the MPO paper
 )
 ```
 
