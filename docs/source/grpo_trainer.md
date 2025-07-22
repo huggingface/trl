@@ -553,9 +553,11 @@ accelerate launch \
   examples/scripts/grpo_vlm.py \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
+  --learning_rate 1e-5 \
   --gradient_checkpointing \
   --torch_dtype bfloat16 \
   --max_prompt_length 2048 \
+  --max_completion_length 1024 \
   --use_vllm \
   --vllm_mode colocate \
   --use_peft \

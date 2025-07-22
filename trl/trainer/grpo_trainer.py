@@ -1073,6 +1073,8 @@ class GRPOTrainer(Trainer):
                 start_pixel_idx = image_grid_thw[:start].prod(-1).sum().item()
                 end_pixel_idx = image_grid_thw[: start + batch_size].prod(-1).sum().item()
                 model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
+            elif pixel_values is not None:
+                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:

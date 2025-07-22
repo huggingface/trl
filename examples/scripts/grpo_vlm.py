@@ -20,17 +20,17 @@ accelerate launch \
   examples/scripts/grpo_vlm.py \
   --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
+  --learning_rate 1e-5 \
   --gradient_checkpointing \
   --torch_dtype bfloat16 \
   --max_prompt_length 2048 \
+  --max_completion_length 1024 \
   --use_vllm \
   --vllm_mode colocate \
   --use_peft \
   --lora_target_modules "q_proj", "v_proj" \
   --log_completions
 """
-
-import re
 
 import torch
 from datasets import load_dataset
@@ -47,6 +47,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.rewards import think_format_reward
 
 
 if __name__ == "__main__":
@@ -70,24 +71,31 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset("lmms-lab/multimodal-open-r1-8k-verified", split="train[:5%]")
-    dataset = dataset.train_test_split(test_size=0.2, seed=42)
+    dataset = load_dataset("lmms-lab/multimodal-open-r1-8k-verified", split="train")
+    dataset = dataset.train_test_split(test_size=100, seed=42)
 
     SYSTEM_PROMPT = (
-        "A conversation between User and Assistant. The user asks a question, and the Assistant solves it. The assistant "
-        "first thinks about the reasoning process in the mind and then provides the user with the answer. The reasoning "
-        "process and answer are enclosed within <think> </think> and <answer> </answer> tags, respectively, i.e., "
-        "<think> reasoning process here </think><answer> answer here </answer>"
+        "A conversation between user and assistant. The user asks a question, and the assistant solves it. The "
+        "assistant first thinks about the reasoning process in the mind and then provides the user with the answer. "
+        "The reasoning process and answer are enclosed within <think></think> tags, i.e., <think>\nThis is my "
+        "reasoning.\n</think>\nThis is my answer."
     )
 
     def make_conversation(example):
         prompt = [
-            # {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": example["problem"]},
         ]
         return {"prompt": prompt}
 
     dataset = dataset.map(make_conversation)
+
+    # Filter have big images
+    def filter_big_images(example):
+        image = example["image"]
+        return image.size[0] < 512 and image.size[1] < 512
+
+    dataset = dataset.filter(filter_big_images)
 
     train_dataset = dataset["train"]
     eval_dataset = dataset["test"] if training_args.eval_strategy != "no" else None
@@ -95,14 +103,6 @@ if __name__ == "__main__":
     ################
     # Reward Function for Training
     ################
-    def format_reward(completions, **kwargs):
-        """Reward function that checks if the completion has a specific format."""
-        contents = [completion[0]["content"] for completion in completions]
-        pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>$"
-        matches = [re.match(pattern, content, re.DOTALL | re.MULTILINE) for content in contents]
-        rewards = [1.0 if match else 0.0 for match in matches]
-        return rewards
-
     def accuracy_reward(completions, solution: list[str], **kwargs):
         """Reward function that checks if the completion matches the ground truth.
         - If both gold and prediction are parseable → use math verification.
@@ -154,7 +154,7 @@ if __name__ == "__main__":
     trainer = GRPOTrainer(
         model=model_args.model_name_or_path,
         args=training_args,
-        reward_funcs=[format_reward, accuracy_reward],
+        reward_funcs=[think_format_reward, accuracy_reward],
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         peft_config=get_peft_config(model_args),
