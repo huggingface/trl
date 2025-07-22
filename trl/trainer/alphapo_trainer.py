@@ -654,11 +654,16 @@ class AlphaPOTrainer(Trainer):
         # Implementation of the AlphaPO loss, based on the AlphaPO paper, equation (4): https://arxiv.org/abs/2501.03884
         # The reward function is r(y, x) = beta * (1 - pi_len_norm(y|x)^(-alpha)) / alpha, where pi_len_norm is the length-normalized probability.
         # The loss is -log_sigmoid(r(y_w, x) - r(y_l, x) - gamma)
-        policy_chosen_probs_pow_alpha = torch.exp(-self.alpha * policy_chosen_logps)
-        policy_rejected_probs_pow_alpha = torch.exp(-self.alpha * policy_rejected_logps)
+        # For alpha -> 0, the reward function becomes beta * log(pi_len_norm(y|x)).
+        if self.alpha == 0.0:
+            chosen_rewards_unscaled = policy_chosen_logps
+            rejected_rewards_unscaled = policy_rejected_logps
+        else:
+            policy_chosen_probs_pow_alpha = torch.exp(-self.alpha * policy_chosen_logps)
+            policy_rejected_probs_pow_alpha = torch.exp(-self.alpha * policy_rejected_logps)
 
-        chosen_rewards_unscaled = (1 - policy_chosen_probs_pow_alpha) / self.alpha
-        rejected_rewards_unscaled = (1 - policy_rejected_probs_pow_alpha) / self.alpha
+            chosen_rewards_unscaled = (1 - policy_chosen_probs_pow_alpha) / self.alpha
+            rejected_rewards_unscaled = (1 - policy_rejected_probs_pow_alpha) / self.alpha
 
         logits = chosen_rewards_unscaled - rejected_rewards_unscaled - self.gamma_beta_ratio
         losses = -F.logsigmoid(self.beta * logits)
