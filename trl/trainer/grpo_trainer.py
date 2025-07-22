@@ -37,8 +37,6 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoConfig,
-    AutoModelForCausalLM,
-    AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
     AutoProcessor,
     AutoTokenizer,
@@ -734,9 +732,9 @@ class GRPOTrainer(Trainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-                config = AutoConfig.from_pretrained(model_id)
-                architecture = getattr(transformers, config.architectures[0])
-                self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            config = AutoConfig.from_pretrained(model_id)
+            architecture = getattr(transformers, config.architectures[0])
+            self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
