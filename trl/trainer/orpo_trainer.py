@@ -1075,10 +1075,8 @@ class ORPOTrainer(Trainer):
 
         citation = textwrap.dedent("""\
         @article{hong2024orpo,
-            title        = {{ORPO: Monolithic Preference Optimization without Reference Model}},
-            author       = {Jiwoo Hong and Noah Lee and James Thorne},
-            year         = 2024,
-            eprint       = {arXiv:2403.07691}
+            title = {{ORPO: Monolithic Preference Optimization without Reference Model}}, author = {Jiwoo Hong and Noah
+            Lee and James Thorne}, year = 2024, eprint = {arXiv:2403.07691}
         }""")
 
         model_card = generate_model_card(

@@ -1713,10 +1713,8 @@ class KTOTrainer(Trainer):
 
         citation = textwrap.dedent("""\
         @article{ethayarajh2024kto,
-            title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
-            author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
-            year         = 2024,
-            eprint       = {arXiv:2402.01306},
+            title = {{KTO: Model Alignment as Prospect Theoretic Optimization}}, author = {Kawin Ethayarajh and Winnie
+            Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela}, year = 2024, eprint = {arXiv:2402.01306},
         }""")
 
         model_card = generate_model_card(
