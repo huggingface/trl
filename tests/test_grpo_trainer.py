@@ -1597,7 +1597,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 for i in range(8, 16):
                     assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
 
-    @require_vision
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
@@ -1605,6 +1604,7 @@ class GRPOTrainerTester(unittest.TestCase):
             ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
         ]
     )
+    @require_vision
     def test_training_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
