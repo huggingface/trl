@@ -25,7 +25,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
-from transformers.testing_utils import require_liger_kernel, require_peft
+from transformers.testing_utils import require_liger_kernel, require_peft, require_vision
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -1597,6 +1597,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 for i in range(8, 16):
                     assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
 
+    @require_vision
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
@@ -1638,6 +1639,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    @require_vision
     def test_training_vlm_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1669,6 +1671,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    @require_vision
     @require_peft
     def test_training_vlm_peft(self):
         model = AutoModelForImageTextToText.from_pretrained(
@@ -1708,6 +1711,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
+    @require_vision
     def test_training_vlm_and_importance_sampling(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1739,6 +1743,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    @require_vision
     @require_liger_kernel
     def test_training_vlm_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
@@ -1771,6 +1776,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    @require_vision
     def test_training_vlm_and_prompt_truncation(self):
         # If not handled properly, prompt truncation may truncate image token
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
