@@ -1301,6 +1301,9 @@ class GRPOTrainer(Trainer):
         # VLM chat template.
         original_prompts = copy.deepcopy(prompts)
 
+        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+        # [{"role": "user", "content": "What color is the sky?"}] to
+        # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
         kwargs = {}
         has_images = "image" in inputs[0]
         if has_images:
