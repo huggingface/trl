@@ -26,7 +26,6 @@ from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
-from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import is_vision_available
 
