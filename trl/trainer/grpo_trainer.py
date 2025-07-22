@@ -1307,8 +1307,12 @@ class GRPOTrainer(Trainer):
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
-                if isinstance(prompt, list) and len(prompt) > 0 and isinstance(prompt[0], dict):
-                    prompt[0]["content"] = [{"type": "image"}, {"type": "text", "text": prompt[0]["content"]}]
+                if isinstance(prompt, list):
+                    for message in prompt:
+                        if isinstance(message, dict) and message.get("role") == "user":
+                            if isinstance(message.get("content"), str):
+                                message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
+                            break
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
