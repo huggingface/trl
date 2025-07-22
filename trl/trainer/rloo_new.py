@@ -13,11 +13,14 @@
 # limitations under the License.
 
 import os
+import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
 from collections.abc import Sized
 from contextlib import nullcontext
+from functools import partial
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import datasets
@@ -43,17 +46,19 @@ from transformers import (
 )
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
+from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
-from ..models import create_reference_model, prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .rloo_new_config import RLOOConfig_NEW
 from .utils import (
     disable_dropout_in_model,
+    entropy_from_logits,
     generate_model_card,
     get_comet_experiment_url,
     pad,
@@ -171,7 +176,7 @@ class RepeatSampler(Sampler):
                         yield index
 
     def __len__(self) -> int:
-        return self.num_samples * self.mini_repeat_count * self.repeat_count
+        return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -200,15 +205,17 @@ def split_tensor_dict(
     Splits a dictionary of tensors along the first dimension into `num_chunks` equal parts.
 
     Example:
-        >>> x = torch.arange(12).reshape(6, 2)
-        >>> y = torch.arange(6).reshape(6, 1)
-        >>> tensor_dict = {"x": x, "y": y}
-        >>> split_tensor_dict(tensor_dict, 3)
-        [
-            {"x": tensor([[0, 1], [2, 3]]), "y": tensor([[0], [1]])},
-            {"x": tensor([[4, 5], [6, 7]]), "y": tensor([[2], [3]])},
-            {"x": tensor([[ 8,  9], [10, 11]]), "y": tensor([[4], [5]])}
-        ]
+    ```python
+    >>> x = torch.arange(12).reshape(6, 2)
+    >>> y = torch.arange(6).reshape(6, 1)
+    >>> tensor_dict = {"x": x, "y": y}
+    >>> split_tensor_dict(tensor_dict, 3)
+    [
+        {"x": tensor([[0, 1], [2, 3]]), "y": tensor([[0], [1]])},
+        {"x": tensor([[4, 5], [6, 7]]), "y": tensor([[2], [3]])},
+        {"x": tensor([[ 8,  9], [10, 11]]), "y": tensor([[4], [5]])}
+    ]
+    ```
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     chunk_size = first_tensor.shape[0] // num_chunks
@@ -226,16 +233,18 @@ def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[
     Shuffles a dictionary of tensors along the first dimension in unison.
 
     Example:
-        >>> x = torch.arange(6).reshape(3, 2)
-        >>> y = torch.arange(3).reshape(3, 1)
-        >>> tensor_dict = {"x": x, "y": y}
-        >>> shuffle_tensor_dict(tensor_dict)
-        {'x': tensor([[2, 3],
-                      [0, 1],
-                      [4, 5]]),
-         'y': tensor([[1],
-                      [0],
-                      [2]])}
+    ```python
+    >>> x = torch.arange(6).reshape(3, 2)
+    >>> y = torch.arange(3).reshape(3, 1)
+    >>> tensor_dict = {"x": x, "y": y}
+    >>> shuffle_tensor_dict(tensor_dict)
+    {'x': tensor([[2, 3],
+                    [0, 1],
+                    [4, 5]]),
+        'y': tensor([[1],
+                    [0],
+                    [2]])}
+    ```
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     batch_size = first_tensor.shape[0]
@@ -273,6 +282,37 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
     return torch.max(tensor[~torch.isnan(tensor)])
 
 
+def identity(x):
+    """Do we really need docs for this?"""
+    return x
+
+
+def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
+    """
+    Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
+
+    Args:
+        entropies (`torch.Tensor`):
+            Tensor of shape (batch_size, seq_len) with per-token entropy values.
+        mask (`torch.Tensor`):
+            Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
+        threshold (`float`):
+            Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
+
+    Returns:
+        `torch.Tensor`:
+            Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
+            `False` otherwise.
+    """
+    non_pad_entropies = entropies[mask.bool()].float()
+    if non_pad_entropies.numel() == 0:
+        return torch.zeros_like(entropies, dtype=torch.bool)
+    entropy_threshold = torch.quantile(non_pad_entropies, threshold)
+    masked_entropies = entropies * mask.float()
+    entropy_mask = masked_entropies >= entropy_threshold
+    return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
+
+
 class RLOOTrainer_NEW(Trainer):
     """
     Trainer for the REINFORCE Leave One-Out (RLOO) method. This algorithm was initially proposed in the
@@ -285,14 +325,16 @@ class RLOOTrainer_NEW(Trainer):
     from trl import RLOOTrainer
 
     dataset = load_dataset("trl-lib/tldr", split="train")
-    reward_model = AutoModelForSequenceClassification.from_pretrained(
-        "trl-lib/Qwen2-0.5B-Reward",
-    )
-    reward_tokenizer = AutoTokenizer.from_pretrained("trl-lib/Qwen2-0.5B-Reward")
 
-    trainer = RLOOTrainer(
+
+    def reward_func(completions, **kwargs):
+        # Dummy reward function that rewards completions with more unique letters.
+        return [float(len(set(completion))) for completion in completions]
+
+
+    trainer = GRPOTrainer(
         model="Qwen/Qwen2-0.5B-Instruct",
-        reward_model=reward_model,
+        reward_funcs=reward_func,
         train_dataset=dataset,
     )
 
@@ -303,11 +345,11 @@ class RLOOTrainer_NEW(Trainer):
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
 
-            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
-              a path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
-              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
-              in `args.model_init_kwargs`.
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
@@ -325,8 +367,13 @@ class RLOOTrainer_NEW(Trainer):
                   functions can also return None when the reward is not applicable to those samples. This is useful for
                   multi-task training where different reward functions apply to different types of samples. When a
                   reward function returns None for a sample, that reward function is excluded from the reward
-                  calculation for that sample. For more details, see
-                  [Using a custom reward function](#using-a-custom-reward-function).
+                  calculation for that sample. For more details, see [Using a custom reward
+                  function](#using-a-custom-reward-function).
+
+                  The trainer's state is also passed to the reward function. The trainer's state is an
+                  instance of [`transformers.TrainerState`](https://huggingface.co/docs/transformers/main/main_classes/callback#transformers.TrainerState)
+                  and can be accessed by accessing the `trainer_state` argument
+                  to the reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
 
@@ -352,9 +399,10 @@ class RLOOTrainer_NEW(Trainer):
             - A single processing class: Used when `reward_funcs` contains only one reward function.
             - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
             If set to `None`, or if an element of the list corresponding to a [`~transformers.PreTrainedModel`] is
-            `None`, the tokenizer for the model is automatically loaded using [`~transformers.AutoTokenizer.from_pretrained`].
-            For elements in `reward_funcs` that are custom reward functions (not [`~transformers.PreTrainedModel`]),
-            the corresponding entries in `reward_processing_classes` are ignored.
+            `None`, the tokenizer for the model is automatically loaded using
+            [`~transformers.AutoTokenizer.from_pretrained`]. For elements in `reward_funcs` that are custom reward
+            functions (not [`~transformers.PreTrainedModel`]), the corresponding entries in `reward_processing_classes`
+            are ignored.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks
             detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -498,6 +546,7 @@ class RLOOTrainer_NEW(Trainer):
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.top_entropy_quantile = args.top_entropy_quantile
         self.normalize_advantages = args.normalize_advantages
         self.normalize_rewards = args.normalize_rewards
         self.reward_clip_range = args.reward_clip_range
@@ -551,15 +600,13 @@ class RLOOTrainer_NEW(Trainer):
         if self.beta == 0.0:
             # If beta is 0.0, the reference model is not needed
             self.ref_model = None
-        elif is_deepspeed_zero3_enabled() or self.is_fsdp_enabled:
-            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         elif is_peft_model(model):
             # If PEFT is used, the reference model is not needed since the adapter can be disabled
             # to revert to the initial model.
             self.ref_model = None
         else:
-            # If PEFT configuration is not provided, create a reference model based on the initial model.
-            self.ref_model = create_reference_model(model)
+            # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
+            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
@@ -573,14 +620,12 @@ class RLOOTrainer_NEW(Trainer):
         self.log_completions = args.log_completions
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
-        # maxlen is set to the total number of forward passes per step. This value of `maxlen` ensures we log only the
-        # final optimization step.
-        maxlen = self.accelerator.num_processes * args.per_device_train_batch_size * args.steps_per_generation
+        # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._textual_logs = {
-            "prompt": deque(maxlen=maxlen),
-            "completion": deque(maxlen=maxlen),
-            "rewards": defaultdict(lambda: deque(maxlen=maxlen)),
-            "advantages": deque(maxlen=maxlen),
+            "prompt": deque(maxlen=args.generation_batch_size),
+            "completion": deque(maxlen=args.generation_batch_size),
+            "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
+            "advantages": deque(maxlen=args.generation_batch_size),
         }
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
@@ -622,17 +667,26 @@ class RLOOTrainer_NEW(Trainer):
                         ]
                     )
 
+                # vLLM requires the environment variables to be set for distributed training.
+                os.environ["RANK"] = str(self.accelerator.process_index)
+                os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
+                os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
+                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
                     gpu_memory_utilization=self.vllm_gpu_memory_utilization,
                     max_num_seqs=self.args.per_device_train_batch_size
                     * self.vllm_tensor_parallel_size
-                    * self.args.gradient_accumulation_steps,
+                    * self.args.steps_per_generation,
                     max_model_len=self.max_prompt_length + self.max_completion_length,
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
+                    # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
+                    max_num_batched_tokens=4096,
                 )
 
             # vLLM specific sampling arguments
@@ -645,19 +699,26 @@ class RLOOTrainer_NEW(Trainer):
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
         else:
-            self.generation_config = GenerationConfig(
-                max_new_tokens=self.max_completion_length,
-                do_sample=True,
-                pad_token_id=processing_class.pad_token_id,
-                bos_token_id=processing_class.bos_token_id,
-                eos_token_id=processing_class.eos_token_id,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                top_k=self.top_k,
-                min_p=self.min_p,
-                repetition_penalty=self.repetition_penalty,
-                cache_implementation=args.cache_implementation,
-            )
+            generation_kwargs = {
+                "max_new_tokens": self.max_completion_length,
+                "do_sample": True,
+                "pad_token_id": processing_class.pad_token_id,
+                "bos_token_id": processing_class.bos_token_id,
+                "eos_token_id": processing_class.eos_token_id,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": self.top_k,
+                "min_p": self.min_p,
+                "repetition_penalty": self.repetition_penalty,
+                "cache_implementation": args.cache_implementation,
+            }
+            if args.use_transformers_paged:
+                generation_kwargs["max_batch_tokens"] = 512
+                generation_kwargs["num_blocks"] = 1024
+                generation_kwargs["block_size"] = 128
+            if args.generation_kwargs is not None:
+                generation_kwargs.update(args.generation_kwargs)
+            self.generation_config = GenerationConfig(**generation_kwargs)
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -728,7 +789,13 @@ class RLOOTrainer_NEW(Trainer):
         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
             dataloader_params["sampler"] = self._get_train_sampler()
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            dataloader_params["worker_init_fn"] = seed_worker
+            if version.parse(transformers.__version__) >= version.parse("4.52.0"):
+                # from transformers 4.52.0, the `seed_worker` requires the `num_workers` and `rank` arguments
+                dataloader_params["worker_init_fn"] = partial(
+                    seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+                )
+            else:
+                dataloader_params["worker_init_fn"] = seed_worker
             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
@@ -811,28 +878,49 @@ class RLOOTrainer_NEW(Trainer):
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
-    def _get_per_token_logps(self, model, input_ids, attention_mask, logits_to_keep, batch_size=None) -> torch.Tensor:
+    def _get_per_token_logps_and_entropies(
+        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
+    ) -> dict[str, Optional[torch.Tensor]]:
+        """Compute log‐probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
-        for i in range(0, input_ids.size(0), batch_size):
-            input_ids_batch = input_ids[i : i + batch_size]
-            attention_mask_batch = attention_mask[i : i + batch_size]
+        all_entropies = []
+        for start in range(0, input_ids.size(0), batch_size):
+            input_ids_batch = input_ids[start : start + batch_size]
+            attention_mask_batch = attention_mask[start : start + batch_size]
 
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             logits = model(
-                input_ids=input_ids_batch, attention_mask=attention_mask_batch, logits_to_keep=logits_to_keep + 1
+                input_ids=input_ids_batch,
+                attention_mask=attention_mask_batch,
+                logits_to_keep=logits_to_keep + 1,
             ).logits
             logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
-            input_ids_batch = input_ids_batch[:, -logits_to_keep:]
             # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
             # See https://github.com/huggingface/trl/issues/2770
             logits = logits[:, -logits_to_keep:]
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-            logps = selective_log_softmax(logits, input_ids_batch)  # compute logprobs for the input tokens
+
+            completion_ids = input_ids_batch[:, -logits_to_keep:]
+            logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
-        return torch.cat(all_logps, dim=0)
+
+            if compute_entropy:
+                entropies = entropy_from_logits(logits)
+                all_entropies.append(entropies)
+
+        logps = torch.cat(all_logps, dim=0)
+        entropies = torch.cat(all_entropies, dim=0) if compute_entropy else None
+        return logps, entropies
+
+    def _fix_param_name_to_vllm(self, name, extra_prefixes: Optional[list[str]] = None):
+        extra_prefixes = extra_prefixes or []
+        prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
+        for prefix in prefixes:
+            name = name.replace(prefix, "")
+        return name
 
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
@@ -849,8 +937,7 @@ class RLOOTrainer_NEW(Trainer):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
-                    for extra in ("_fsdp_wrapped_module.", "_checkpoint_wrapped_module."):
-                        full_name = full_name.replace(extra, "")
+                    full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
 
                     if full_name in visited:
                         continue  # skip FSDP subtrees already traversed
@@ -896,7 +983,7 @@ class RLOOTrainer_NEW(Trainer):
                         # When module to save, remove its prefix and discard the original module
                         if "original_module" in name:
                             continue
-                        name = name.replace("modules_to_save.default.", "")
+                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
 
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
@@ -912,6 +999,7 @@ class RLOOTrainer_NEW(Trainer):
                 self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
             else:
                 for name, param in self.model.named_parameters():
+                    name = self._fix_param_name_to_vllm(name)
                     with gather_if_zero3([param]):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
                             self.vllm_client.update_named_param(name, param.data)
@@ -958,177 +1046,17 @@ class RLOOTrainer_NEW(Trainer):
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
-    def _generate_and_score_completions(
-        self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
-    ) -> dict[str, Union[torch.Tensor, Any]]:
+    @profiling_decorator
+    def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
-
-        prompts = [x["prompt"] for x in inputs]
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-        prompt_inputs = self.processing_class(
-            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
-        prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-        if self.max_prompt_length is not None:
-            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
-            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
-
-        # Generate completions using either vLLM or regular generation
-        if self.use_vllm:
-            # First, update the vLLM weights if needed
-            if self.state.global_step != self._last_loaded_step:
-                self._move_model_to_vllm()
-                self._last_loaded_step = self.state.global_step
-
-            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
-            if self.vllm_mode == "server":
-                all_prompts_text = gather_object(prompts_text)
-                if self.accelerator.is_main_process:
-                    # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
-                    # num_generations outputs for each one. This is faster than generating outputs for each duplicate
-                    # prompt individually.
-                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-                    with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
-                            prompts=ordered_set_of_prompts,
-                            n=self.num_generations,
-                            repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
-                            top_p=self.top_p,
-                            top_k=-1 if self.top_k is None else self.top_k,
-                            min_p=0.0 if self.min_p is None else self.min_p,
-                            max_tokens=self.max_completion_length,
-                            guided_decoding_regex=self.guided_decoding_regex,
-                        )
-                else:
-                    completion_ids = [None] * len(all_prompts_text)
-                # Broadcast the completions from the main process to all processes, ensuring each process receives its
-                # corresponding slice.
-                completion_ids = broadcast_object_list(completion_ids, from_process=0)
-                process_slice = slice(
-                    self.accelerator.process_index * len(prompts),
-                    (self.accelerator.process_index + 1) * len(prompts),
-                )
-                completion_ids = completion_ids[process_slice]
-
-            # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
-            elif self.vllm_mode == "colocate":
-                if self.guided_decoding_regex:
-                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
-                else:
-                    guided_decoding = None
-                sampling_params = SamplingParams(
-                    n=1,  # vLLM on each GPU generates only 1 in colocate mode
-                    repetition_penalty=self.repetition_penalty,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    top_k=-1 if self.top_k is None else self.top_k,
-                    min_p=0.0 if self.min_p is None else self.min_p,
-                    max_tokens=self.max_completion_length,
-                    guided_decoding=guided_decoding,
-                )
-
-                if self.vllm_tensor_parallel_size > 1:
-                    # Gather prompts from all ranks in the TP group and flatten.
-                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
-                    orig_size = len(prompts_text)
-                    gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
-                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
-                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
-                else:
-                    all_prompts_text = prompts_text
-
-                with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
-
-                completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-
-                if self.vllm_tensor_parallel_size > 1:
-                    # Slice completions for this rank within its TP group.
-                    # Each rank generates all outputs — we keep only our share.
-                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
-                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
-                    completion_ids = completion_ids[tp_slice]
-
-            # Pad the completions, and concatenate them with the prompts
-            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
-            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        else:
-            # Regular generation path
-            with unwrap_model_for_generation(
-                self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-            ) as unwrapped_model:
-                with (
-                    FSDP.summon_full_params(self.model_wrapped, recurse=False)
-                    if self.is_fsdp_enabled
-                    else nullcontext()
-                ):
-                    prompt_completion_ids = unwrapped_model.generate(
-                        prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
-                    )
-
-            # Compute prompt length and extract completion ids
-            prompt_length = prompt_ids.size(1)
-            prompt_ids = prompt_completion_ids[:, :prompt_length]
-            completion_ids = prompt_completion_ids[:, prompt_length:]
-
-        # Mask everything after the first EOS token
-        is_eos = completion_ids == self.processing_class.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
-
-        # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
-        # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [
-            [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
-        ]
-
-        # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
-        completion_lengths = completion_mask.sum(1)
-
-        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
-        if self.mask_truncated_completions:
-            truncated_completions = ~is_eos.any(dim=1)
-            completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
-
-        # Concatenate prompt_mask with completion_mask for logit computation
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
-
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
-
-        with torch.no_grad():
-            # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
-            # old_per_token_logps == per_token_logps, so we can skip it's computation here, and use
-            # per_token_logps.detach() instead.
-            if self.num_iterations > 1 or self.args.steps_per_generation > self.args.gradient_accumulation_steps:
-                old_per_token_logps = self._get_per_token_logps(
-                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
-                )
-            else:
-                old_per_token_logps = None
-
-        # Decode the generated completions
-        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
-        if is_conversational(inputs[0]):
-            completions = []
-            for prompt, completion in zip(prompts, completions_text):
-                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
-                completions.append([{"role": "assistant", "content": bootstrap + completion}])
-        else:
-            completions = completions_text
-
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
 
         # Repeat all input columns (but "prompt", "completion", and "completion_ids") to match the num of generations
         keys = [key for key in inputs[0] if key not in ["prompt", "completion", "completion_ids"]]
         reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
+
+        # This allows for dynamic reward shaping based on training progress.
+        reward_kwargs["trainer_state"] = self.state
 
         for i, (reward_func, reward_processing_class, reward_func_name) in enumerate(
             zip(self.reward_funcs, self.reward_processing_classes, self.reward_func_names)
@@ -1165,8 +1093,273 @@ class RLOOTrainer_NEW(Trainer):
                 f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
                 "Please ensure that at least one reward function returns a valid reward."
             )
+
+        # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
+        # completions may be distributed across processes
+        rewards_per_func = gather(rewards_per_func)
+        return rewards_per_func
+
+    def _generate_and_score_completions(
+        self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
+    ) -> dict[str, Union[torch.Tensor, Any]]:
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
+
+        prompts = [x["prompt"] for x in inputs]
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
+
+        prompt_inputs = self.processing_class(
+            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
+        )
+        prompt_inputs = super()._prepare_inputs(prompt_inputs)
+        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+        if self.max_prompt_length is not None:
+            # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
+            # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
+            # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
+            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+            prompts_text = self.processing_class.batch_decode(
+                prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+            )
+            prompts_text = [
+                re.sub(rf"^({re.escape(self.processing_class.pad_token)})+", "", text) for text in prompts_text
+            ]
+
+        # Generate completions using either vLLM or regular generation
+        if self.use_vllm:
+            # First, update the vLLM weights if needed
+            if self.state.global_step != self._last_loaded_step:
+                self._move_model_to_vllm()
+                self._last_loaded_step = self.state.global_step
+
+            # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
+            if self.vllm_mode == "server":
+                all_prompts_text = gather_object(prompts_text)
+                if self.accelerator.is_main_process:
+                    # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
+                    # num_generations outputs for each one. This is faster than generating outputs for each duplicate
+                    # prompt individually.
+                    ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+                    with profiling_context(self, "vLLM.generate"):
+                        completion_ids = self.vllm_client.generate(
+                            prompts=ordered_set_of_prompts,
+                            n=self.num_generations,
+                            repetition_penalty=self.repetition_penalty,
+                            temperature=self.temperature,
+                            top_p=self.top_p,
+                            top_k=-1 if self.top_k is None else self.top_k,
+                            min_p=0.0 if self.min_p is None else self.min_p,
+                            max_tokens=self.max_completion_length,
+                            guided_decoding_regex=self.guided_decoding_regex,
+                            generation_kwargs=self.args.generation_kwargs,
+                        )
+                else:
+                    completion_ids = [None] * len(all_prompts_text)
+                # Broadcast the completions from the main process to all processes, ensuring each process receives its
+                # corresponding slice.
+                completion_ids = broadcast_object_list(completion_ids, from_process=0)
+                process_slice = slice(
+                    self.accelerator.process_index * len(prompts),
+                    (self.accelerator.process_index + 1) * len(prompts),
+                )
+                completion_ids = completion_ids[process_slice]
+
+            # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
+            elif self.vllm_mode == "colocate":
+                if self.guided_decoding_regex:
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
+                else:
+                    guided_decoding = None
+
+                generation_kwargs = {
+                    "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
+                    "repetition_penalty": self.repetition_penalty,
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": -1 if self.top_k is None else self.top_k,
+                    "min_p": 0.0 if self.min_p is None else self.min_p,
+                    "max_tokens": self.max_completion_length,
+                    "guided_decoding": guided_decoding,
+                }
+                if self.args.generation_kwargs is not None:
+                    generation_kwargs.update(self.args.generation_kwargs)
+                sampling_params = SamplingParams(**generation_kwargs)
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Gather prompts from all ranks in the TP group and flatten.
+                    # Each rank starts with its own prompts; after gathering, all ranks see the full group set.
+                    orig_size = len(prompts_text)
+                    gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
+                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+                else:
+                    all_prompts_text = prompts_text
+
+                with profiling_context(self, "vLLM.generate"):
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
+
+                completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+
+                if self.vllm_tensor_parallel_size > 1:
+                    # Slice completions for this rank within its TP group.
+                    # Each rank generates all outputs — we keep only our share.
+                    local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    completion_ids = completion_ids[tp_slice]
+
+            # Pad the completions, and concatenate them with the prompts
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+
+        elif self.use_transformers_paged:
+            prompt_inputs = self.processing_class(text=prompts_text)
+            previous_attn = self.model_wrapped.config._attn_implementation
+
+            if is_flash_attn_2_available():
+                self.model_wrapped.config._attn_implementation = "paged_attention"
+            else:
+                self.model_wrapped.config._attn_implementation = "sdpa_paged"
+            with (
+                profiling_context(self, "transformers.generate_batch"),
+                unwrap_model_for_generation(
+                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model,
+                torch.no_grad(),
+                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+            ):
+                # Cast to the appropriate dtype based on training configuration
+                if self.args.bf16:
+                    unwrapped_model.to(torch.bfloat16)
+                elif self.args.fp16:
+                    unwrapped_model.to(torch.float16)
+                with torch.inference_mode():
+                    all_outputs = unwrapped_model.generate_batch(
+                        prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
+                    )
+            completion_ids = [output.generated_tokens for output in all_outputs.values()]
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(
+                completion_ids, padding_value=self.processing_class.pad_token_id, padding_side="right"
+            )
+            prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_inputs.input_ids]
+            prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id, padding_side="left")
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            # Restore the original attention implementation, training mode
+            self.model_wrapped.config._attn_implementation = previous_attn
+        else:
+            # Regular generation path
+            with (
+                profiling_context(self, "transformers.generate"),
+                unwrap_model_for_generation(
+                    self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model,
+                torch.no_grad(),
+                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+            ):
+                prompt_completion_ids = unwrapped_model.generate(
+                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
+                )
+
+            # Compute prompt length and extract completion ids
+            prompt_length = prompt_ids.size(1)
+            prompt_ids = prompt_completion_ids[:, :prompt_length]
+            completion_ids = prompt_completion_ids[:, prompt_length:]
+
+        # Mask everything after the first EOS token
+        is_eos = completion_ids == self.processing_class.eos_token_id
+        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+
+        # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
+        # to re-tokenize completions if the reward is computed from tokens.
+        completion_ids_list = [
+            [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
+        ]
+
+        # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
+        completion_lengths = completion_mask.sum(1)
+
+        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        if self.mask_truncated_completions:
+            truncated_completions = ~is_eos.any(dim=1)
+            completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
+
+        # Concatenate prompt_mask with completion_mask for logit computation
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
+
+        with torch.no_grad():
+            # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
+            # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
+            # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
+            # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
+            # old_per_token_logps to None.
+            generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
+            if self.args.gradient_accumulation_steps % generate_every != 0:
+                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                )
+            else:
+                old_per_token_logps = None
+
+            # Compute the per-token log probabilities for the reference model
+            if self.beta != 0.0:
+                if self.ref_model is not None:
+                    ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                    )
+                else:
+                    with self.accelerator.unwrap_model(self.model).disable_adapter():
+                        ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                            self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
+                        )
+            else:
+                ref_per_token_logps = None
+
+        # Decode the generated completions
+        completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        if is_conversational(inputs[0]):
+            completions = []
+            for prompt, completion in zip(prompts, completions_text):
+                bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
+                completions.append([{"role": "assistant", "content": bootstrap + completion}])
+        else:
+            completions = completions_text
+
+        # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
+        # important because rewards will be normalized per group, and completions are distributed. We will later slice
+        # rewards_per_func to extract each process's subset.
+        rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
+
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+
+        # Compute grouped-wise rewards
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
+
+        # Normalize the rewards to compute the advantages
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        advantages = rewards - mean_grouped_rewards
+        if self.scale_rewards:
+            advantages = advantages / (std_grouped_rewards + 1e-4)
+
+        # Slice to keep only the local part of the data
+        process_slice = slice(
+            self.accelerator.process_index * len(prompts),
+            (self.accelerator.process_index + 1) * len(prompts),
+        )
+        all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
+        advantages = advantages[process_slice]
 
         # Log the metrics
         if mode == "train":
@@ -1196,15 +1389,16 @@ class RLOOTrainer_NEW(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
-        # self._metrics[mode]["reward"].append(grouped_rewards.mean().item())
-        # self._metrics[mode]["reward_std"].append(grouped_rewards.std().item())
-        # self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
+        self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
         self._textual_logs["prompt"].extend(gather_object(prompts_text))
         self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
             self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
+        self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
         return {
             "prompt_ids": prompt_ids,
@@ -1230,96 +1424,60 @@ class RLOOTrainer_NEW(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
-
-        # for rloo loss, we need to compute the sequence-level logprobs
-        sequence_logps = (per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-
-        # for calculating the advantages, we need to gather the rewards
-        all_rewards = rewards.clone()
-        rewards = gather(rewards)
-
-        if self.normalize_rewards:
-            rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
-            rewards = torch.clamp(rewards, -self.reward_clip_range, self.reward_clip_range)
-
-        local = prompt_ids.size(0)
-        process_slice = slice(
-            self.accelerator.process_index * local,
-            (self.accelerator.process_index + 1) * local,
+                # Compute the per_token_logps and the entropy (if necessary) at each position in the completion
+        per_token_logps, entropies = self._get_per_token_logps_and_entropies(
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=self.top_entropy_quantile < 1.0
         )
+
+        if self.top_entropy_quantile < 1.0:
+            entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
+        else:
+            entropy_mask = None
 
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
-            with torch.no_grad():
-                if self.ref_model is not None:
-                    ref_per_token_logps = self._get_per_token_logps(
-                        self.ref_model, input_ids, attention_mask, logits_to_keep
-                    )
-                else:
-                    with self.accelerator.unwrap_model(self.model).disable_adapter():
-                        ref_per_token_logps = self._get_per_token_logps(
-                            self.model, input_ids, attention_mask, logits_to_keep
-                        )
-                # if we have a ref model, we need to compute the sequence-level logprobs for the ref model
-                ref_sequence_logps = (ref_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            ref_per_token_logps = inputs["ref_per_token_logps"]
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            )
 
-                # Compute sequence-level KL divergence between the model and the ref model
-                sequence_kl = sequence_logps - ref_sequence_logps #KL in original RLOO
-
-                if self.args.token_level_kl:
-                    pass
-                
-                # Sequence-level KL penalty: sequence_kl is already at sequence level, no need to sum
-                sequence_level_kl = sequence_kl
-                non_score_reward = -self.beta * sequence_level_kl
-                rewards_with_kl = non_score_reward + rewards
-                #OLD
-                # kl_penalty = -self.beta * sequence_kl
-                # rewards_with_kl = rewards + kl_penalty
-        else:
-            rewards_with_kl = rewards
-
-        # Reshape rewards back to (num_prompts, num_generations) for RLOO baseline calculation
-        rewards_with_kl = rewards_with_kl.reshape(self.num_generations, -1)
-        baseline = (rewards_with_kl.sum(0) - rewards_with_kl) / (self.num_generations - 1)
-
-        # Compute the advantages: rewards_with_kl - baseline
-        advantages = rewards_with_kl - baseline
-        advantages = advantages.flatten()
-
-        # keep the aggregated advantages for logging
-        all_advantages = advantages.clone() 
-        advantages = advantages[process_slice]
-
-        # Normalize advantages if arg is set
-        if self.normalize_advantages:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
+        # Compute the loss
+        advantages = inputs["advantages"]
         # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
         # old_per_token_logps == per_token_logps, so we can skip it's computation
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = (
             per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
         )
-        old_sequence_logps = (old_per_token_logps * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
-        coef_1 = torch.exp(sequence_logps - old_sequence_logps)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+        # Two-sided clipping
+        if self.args.delta is not None:
+            coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
-        # Apply advantages at sequence level
-        sequence_loss1 = coef_1 * advantages
-        sequence_loss2 = coef_2 * advantages
-        sequence_loss = -torch.min(sequence_loss1, sequence_loss2)
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        if entropy_mask is not None:
+            per_token_loss = per_token_loss * entropy_mask
+        if self.beta != 0.0:
+            per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        # Final loss is the mean across sequences
-        loss = sequence_loss.mean()
+        if self.loss_type == "grpo":
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
         if self.beta != 0.0:
-            mean_kl = sequence_kl.mean()
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         # Compute the clipped probability ratios (sequence-level, same as original RLOO)
@@ -1327,9 +1485,9 @@ class RLOOTrainer_NEW(Trainer):
         is_high_clipped = (coef_1 > 1 + self.epsilon) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
 
-        low_clip = is_low_clipped.float().mean()
-        high_clip = is_high_clipped.float().mean()
-        clip_ratio = is_region_clipped.float().mean()
+        low_clip = (is_low_clipped * completion_mask).sum() / completion_mask.sum()
+        high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
+        clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
@@ -1339,7 +1497,7 @@ class RLOOTrainer_NEW(Trainer):
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
         gathered_clip_ratio = self.accelerator.gather(clip_ratio)
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
-        self._textual_logs["advantages"].extend(all_advantages.tolist())
+
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
@@ -1360,10 +1518,7 @@ class RLOOTrainer_NEW(Trainer):
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
         logs = {**logs, **metrics}
-        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
-            super().log(logs, start_time)
-        else:  # transformers<=4.46
-            super().log(logs)
+        super().log(logs, start_time)
         self._metrics[mode].clear()
 
         if self.accelerator.is_main_process and self.log_completions:
@@ -1392,6 +1547,15 @@ class RLOOTrainer_NEW(Trainer):
                     df = df.drop_duplicates(subset=["prompt"])
                 wandb.log({"completions": wandb.Table(dataframe=df)})
 
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -1417,12 +1581,19 @@ class RLOOTrainer_NEW(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
+
         citation = textwrap.dedent(
             """\
             @inproceedings{ahmadian2024back,
