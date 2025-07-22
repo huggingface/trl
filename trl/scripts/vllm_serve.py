@@ -87,7 +87,7 @@ class WeightSyncWorkerExtension:
     pynccl_comm = None  # Communicator for weight updates
     client_rank = None  # Source rank for broadcasting updated weights
 
-    def init_communicator(self, host: str, port: int, world_size: int) -> None:
+    def init_communicator(self, host: str, port: int, world_size: int, client_device_uuid: str) -> None:
         """
         Initializes the weight update communicator using a stateless process group.
 
@@ -101,10 +101,19 @@ class WeightSyncWorkerExtension:
                 Port number to be used for communication.
             world_size (`int`):
                 Total number of participating processes in the update group.
+            client_device_uuid (`str`):
+                UUID of the device of client main process. Used to assert that devices are different from vllm workers devices.
         """
         if self.pynccl_comm is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
+        if client_device_uuid == str(torch.cuda.get_device_properties(self.device).uuid):
+            raise RuntimeError(
+                f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) "
+                f"for multiple distinct roles/ranks within the same communicator. "
+                f"This setup is unsupported and will likely lead to program hangs or incorrect behavior. "
+                f"Ensure that trainer is using different devices than vLLM server."
+            )
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
@@ -536,6 +545,7 @@ def main(script_args: ScriptArguments):
         host: str
         port: int
         world_size: int
+        client_device_uuid: str
 
     @app.post("/init_communicator/")
     async def init_communicator(request: InitCommunicatorRequest):
@@ -547,13 +557,17 @@ def main(script_args: ScriptArguments):
                 - `host` (`str`): Hostname or IP address of the master node.
                 - `port` (`int`): Port number to be used for communication.
                 - `world_size` (`int`): Total number of participating processes in the group.
+                - `client_device_uuid` (`str`): UUID of the device of client main process. Used to assert that devices are different from vllm workers devices.
         """
         world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
 
         # The function init_communicator is called this way: init_communicator(host, port, world_size)
         # So with collective_rpc we need to call it this way:
         # llm.collective_rpc(method="init_communicator", args=(host, port, world_size))
-        kwargs = {"method": "init_communicator", "args": (request.host, request.port, world_size)}
+        kwargs = {
+            "method": "init_communicator",
+            "args": (request.host, request.port, world_size, request.client_device_uuid),
+        }
         for connection in connections:
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 

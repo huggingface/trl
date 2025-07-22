@@ -6,21 +6,23 @@ This document will guide you through the process of using vLLM with TRL for fast
 
 💡 **Note**: Resources required for this specific example: a single node with 8 GPUs.
 
+🚨 **Important**: vLLM server and TRL trainer must use different CUDA devices to avoid conflicts.
+
 First, install vLLM using the following command:
 
 ```bash
 pip install "trl[vllm]"
 ```
 
-Then run the server:
+Then run the server on specific GPUs (e.g., GPUs 0-3):
 
 ```sh
-trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
 ```
 
 Once the server is running, you can use it to generate completions for training. In the example below, we are using the `GRPOTrainer` to train a model using the vLLM server for generation. The `--tensor-parallel-size` and `--data-parallel-size` arguments control how the model and data are sharded across GPUs.
 
-In this example, we are sharding two copies of the model across 4 GPUs. Increasing data parallelism increases throughput, while increasing tensor parallelism allows for serving larger models. Then, run the training script by passing `use_vllm=True` in the training arguments as follows:
+In this example, we are sharding two copies of the model across 4 GPUs. Increasing data parallelism increases throughput, while increasing tensor parallelism allows for serving larger models. Then, run the training script on different GPUs (e.g., GPUs 4-7) by passing `use_vllm=True` in the training arguments as follows:
 
 Sample of a simple `train.py` script:
 
@@ -51,7 +53,7 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-And the train command:
+And the train command on separate GPUs from the server:
 
 ```sh
 CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
@@ -70,7 +72,7 @@ If you've ever done autoregressive decoder training, you know all the input toke
 When you run for example
 
 ```sh
-trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 1 --data-parallel-size 4
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 1 --data-parallel-size 4
 ```
 
 the following happens:
@@ -95,15 +97,14 @@ Separately, the number of completions to generate per prompt is controlled by th
 * Based on the reward signal and the model’s output, the loss is computed, and the backward pass is performed to update the model’s weights.
 * **Note**: The server only handles completion generation — it doesn’t train the model. Therefore, the model’s weights aren’t updated on the server. Once the backward pass is complete, the client sends the updated weights to the server using `vllm_client.update_named_param(name, param.data)`.
 
-When using vLLM, ensure the GPUs assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation for training using `CUDA_VISIBLE_DEVICES`. See the example below:
+When using vLLM, ensure the GPUs assigned for training and generation are separate to avoid NCCL communication conflicts. If you do not set the `CUDA_VISIBLE_DEVICES` environment variable, the training script will use all available GPUs by default, which may lead to device conflicts. Starting from TRL next release after v0.19.1, the code automatically detects and prevents same-device usage, raising a error at the vllm server process:
 
-* **Set GPUs *0–3* for vLLM generation:** Assume `CUDA_VISIBLE_DEVICES=0,1,2,3` are allocated for vLLM generation.
-
-```sh
-trl vllm-serve --model <model_name> --tensor-parallel-size 1 --data-parallel-size 4
+```
+RuntimeError: Attempting to use the same CUDA device for multiple distinct roles/ranks within the same communicator. 
+Ensure that trainer is using different devices than vLLM server.
 ```
 
-* **And GPUs *4–7* for training:** If you do not set the `CUDA_VISIBLE_DEVICES` environment variable, the training script will use all available GPUs by default, which may lead to resource conflicts. To avoid this, you can specify which GPUs to use for training. For example, if you want to use GPUs 4–7 for training, set the environment variable as follows:
+For example, if you want to use GPUs 4–7 for training while the server runs on GPUs 0-3, set:
 
 ```sh
 CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
