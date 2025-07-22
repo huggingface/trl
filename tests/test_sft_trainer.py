@@ -1004,6 +1004,41 @@ class SFTTrainerTester2(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
+    def test_train_assistant_only_and_completion_only(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
+
+        # To test this case, we need to add user messages in the completion (they'll be masked in the loss)
+        def add_to_completion(example):
+            example["completion"].append(example["prompt"][0])
+            example["completion"].append(example["completion"][0])
+            return example
+
+        dataset = dataset.map(add_to_completion)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(
+                output_dir=tmp_dir, assistant_only_loss=True, completion_only_loss=True, report_to="none"
+            )
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
     def test_train_with_set_chat_template_from_model(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
