@@ -103,7 +103,7 @@ class DPOConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        loss_type (`str`, *optional*, defaults to `"sigmoid"`):
+        loss_type (`str` or `list[str]`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
@@ -124,6 +124,11 @@ class DPOConfig(TrainingArguments):
                   [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"sft"`: Negative log-likelihood loss (standard supervised fine-tuning loss).
+
+            Multiple loss types can be combined using comma separation (e.g., `["sigmoid", "bco_pair", "sft"]` for
+            [MPO](https://huggingface.co/papers/2411.10442)). The `loss_weights` parameter can be used to specify
+            corresponding weights for each loss type.
 
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Liger loss.
@@ -158,9 +163,13 @@ class DPOConfig(TrainingArguments):
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
+        loss_weights (`list[float]` or `None`, *optional*, defaults to `None`):
+            List of loss weights for multi-loss combinations. Used when combining multiple loss types.
+            Example: `[0.8, 0.2, 1.0]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults
+            to equal weights (`1.0`) for all loss types.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
-            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
@@ -189,19 +198,16 @@ class DPOConfig(TrainingArguments):
     logging_steps: float = field(
         default=10,
         metadata={
-            "help": (
-                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
-                "If smaller than 1, will be interpreted as ratio of total training steps."
-            )
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
         },
     )
-    bf16: bool = field(
-        default=True,
+    bf16: Optional[bool] = field(
+        default=None,
         metadata={
-            "help": (
-                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
-            )
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
         },
     )
 
@@ -316,25 +322,14 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    loss_type: str = field(
-        default="sigmoid",
+    loss_type: list[str] = field(
+        default_factory=lambda: ["sigmoid"],
         metadata={
-            "help": "Type of loss to use.",
-            "choices": [
-                "sigmoid",
-                "hinge",
-                "ipo",
-                "exo_pair",
-                "nca_pair",
-                "robust",
-                "bco_pair",
-                "sppo_hard",
-                "aot",
-                "aot_pair",
-                "discopop",
-                "apo_zero",
-                "apo_down",
-            ],
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
+            "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_pair'`, `'discopop'`, "
+            "`'apo_zero'`, `'apo_down'` and `'sft'`. Multiple loss types can be combined using comma separation "
+            "(e.g., `['sigmoid', 'bco_pair', 'sft']` for MPO). The `loss_weights` parameter can be used to specify "
+            "corresponding weights for each loss type."
         },
     )
     use_liger_loss: bool = field(
@@ -408,6 +403,14 @@ class DPOConfig(TrainingArguments):
             "loss. The paper recommends the default value `discopop_tau=0.05`."
         },
     )
+    loss_weights: Optional[list[float]] = field(
+        default=None,
+        metadata={
+            "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
+            "Example: `[0.8, 0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss "
+            "types."
+        },
+    )
     sync_ref_model: bool = field(
         default=False,
         metadata={
@@ -435,7 +438,24 @@ class DPOConfig(TrainingArguments):
     generate_during_eval: bool = field(
         default=False,
         metadata={
-            "help": "Whether to generate and log completions from both the model and the reference model to W&B or "
-            "Comet during evaluation."
+            "help": "Whether to generate and log completions from both the model and the reference model to W&B, MLFLow "
+            "or Comet during evaluation."
         },
     )
+
+    def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Normalize loss_type to string format for internal use
+        if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:
+            self.loss_type = self.loss_type[0]
+
+        # Validate loss_type
+        if self.loss_weights is not None:
+            loss_types = self.loss_type if isinstance(self.loss_type, list) else [self.loss_type]
+            if len(self.loss_weights) != len(loss_types):
+                raise ValueError(
+                    f"Length of loss_weights list ({self.loss_weights}) must match number of loss types "
+                    f"({loss_types})."
+                )
+        super().__post_init__()

@@ -174,6 +174,7 @@ class VLLMClient:
         min_p: float = 0.0,
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
+        generation_kwargs: Optional[dict] = None,
     ) -> list[list[int]]:
         """
         Generates model completions for the provided prompts.
@@ -197,6 +198,10 @@ class VLLMClient:
                 Maximum number of tokens to generate for each prompt.
             guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
                 Regular expression to guide the decoding process.
+            generation_kwargs (`dict` or `None`, *optional*, defaults to `None`):
+                Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
+                `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
+                will override them.
 
         Returns:
             `list[list[int]]`:
@@ -215,6 +220,7 @@ class VLLMClient:
                 "min_p": min_p,
                 "max_tokens": max_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
+                "generation_kwargs": generation_kwargs or {},
             },
         )
         if response.status_code == 200:

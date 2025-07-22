@@ -228,6 +228,21 @@ training_args = GRPOConfig(
 
 Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
 
+We provide a [small script](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
+
+<iframe
+	src="https://trl-lib-recommend-vllm-memory.hf.space"
+	frameborder="0"
+	width="850"
+	height="450"
+></iframe>
+
+If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
+
+</Tip>
+
+<Tip>
+By default, GRPO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, but you can override these values by setting the environment variables accordingly.
 </Tip>
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
@@ -314,6 +329,7 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
      - `completions_ids` (contains the tokenized completions),
+     - `trainer_state` ([`transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress. For more details on the available attributes, refer to the [`TrainerState`](https://huggingface.co/docs/transformers/main/en/main_classes/callback#transformers.TrainerState) documentation.
      - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
