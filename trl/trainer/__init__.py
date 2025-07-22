@@ -72,8 +72,6 @@ _import_structure = {
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "utils": [
-        "ConstantLengthDataset",
-        "DataCollatorForCompletionOnlyLM",
         "RunningMoments",
         "compute_accuracy",
         "disable_dropout_in_model",
@@ -145,8 +143,6 @@ if TYPE_CHECKING:
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .utils import (
-        ConstantLengthDataset,
-        DataCollatorForCompletionOnlyLM,
         RunningMoments,
         compute_accuracy,
         disable_dropout_in_model,
