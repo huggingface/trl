@@ -33,8 +33,10 @@ from trl.trainer.grpo_trainer import (
     RepeatSampler,
     get_high_entropy_mask,
     shuffle_sequence_dict,
+    split_pixel_values_by_grid,
     split_tensor_dict,
     truncate_with_protected_tokens,
+    unsplit_pixel_values_by_grid,
 )
 
 from .testing_utils import require_vllm
@@ -436,6 +438,60 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.5)
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
+
+
+class SplitPixelValuesByGridTester(unittest.TestCase):
+    def test_split_correctly_0(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 1, 4]]),  # Products: [4, 4]
+            "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        self.assertIsInstance(result["pixel_values"], list)
+        self.assertEqual(len(result["pixel_values"]), 2)
+        self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:4]))
+        self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][4:]))
+
+    def test_split_correctly_1(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 4]]),  # Products: [4, 8]
+            "pixel_values": torch.arange(12 * 3).reshape(12, 3),  # Shape: [12, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        self.assertIsInstance(result["pixel_values"], list)
+        self.assertEqual(len(result["pixel_values"]), 2)
+        self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:4]))
+        self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][4:12]))
+
+    def test_missing_keys(self):
+        batch = {"pixel_values": torch.tensor([1.0])}
+        result = split_pixel_values_by_grid(batch)
+        self.assertEqual(result, batch)
+
+    def test_mismatched_length(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[2, 1, 1], [2, 1, 1]]),  # Total = 4
+            "pixel_values": torch.randn(3, 5),  # Only 3 rows
+        }
+        with self.assertRaises(ValueError):
+            split_pixel_values_by_grid(batch)
+
+
+class UnsplitPixelValuesByGridTester(unittest.TestCase):
+    def test_unsplit_correctly(self):
+        split = [torch.randn(4, 5), torch.randn(2, 5)]
+        merged = torch.cat(split, dim=0)
+        batch = {"pixel_values": split, "other_key": torch.tensor([1])}
+        result = unsplit_pixel_values_by_grid(batch)
+        self.assertIsInstance(result["pixel_values"], torch.Tensor)
+        self.assertTrue(torch.allclose(result["pixel_values"], merged))
+        self.assertIn("other_key", result)
+
+    def test_no_op_if_not_list(self):
+        original = torch.randn(5, 3)
+        batch = {"pixel_values": original}
+        result = unsplit_pixel_values_by_grid(batch)
+        self.assertTrue(torch.equal(result["pixel_values"], original))
 
 
 class GRPOTrainerTester(unittest.TestCase):
