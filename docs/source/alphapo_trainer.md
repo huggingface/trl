@@ -82,7 +82,6 @@ While training and evaluating we record the following reward metrics:
 - `logps/rejected`: the mean log probabilities of the policy model for the rejected responses
 - `logits/chosen`: the mean logits of the policy model for the chosen responses
 - `logits/rejected`: the mean logits of the policy model for the rejected responses
-- `nll_loss`: the mean negative log likelihood loss from the SFT part of the loss over chosen responses
 - `loss`: the mean loss from the AlphaPO part of the loss
 
 ## AlphaPOTrainer
