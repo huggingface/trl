@@ -23,18 +23,31 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<iframe
-  src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
-  frameborder="0"
-  width="100%"
-  height="560px"
-></iframe>
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train/loss,train/mean_token_accuracy,train/num_tokens&sidebar=hidden" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0">
+
+## Expected dataset type and format
+
+SFT supports both [language modeling](dataset_formats#language-modeling) and [prompt-completion](dataset_formats#prompt-completion) datasets. The [`SFTTrainer`] is compatible with both [standard](dataset_formats#standard) and [conversational](dataset_formats#conversational) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+
+```python
+# Standard language modeling
+{"text": "The sky is blue."}
+
+# Conversational language modeling
+{"messages": [{"role": "user", "content": "What color is the sky?"}, {"role": "assistant", "content": "It is blue."}]}
+
+# Standard prompt-completion
+{"prompt": "The sky is", "completion": " blue."}
+
+# Conversational prompt-completion
+{"prompt": [{"role": "user", "content": "What color is the sky?"}], "completion": [{"role": "assistant", "content": "It is blue."}]}
+```
 
 ## Looking deeper into the SFT method
 
 Supervised Fine-Tuning (SFT) is the simplest and most commonly used method to adapt a language model to a target dataset. The model is trained in a fully supervised fashion using pairs of input and output sequences. The goal is to minimize the negative log-likelihood (NLL) of the target sequence, conditioning on the input.
 
-This section breaks down how SFT works in practice, covering the key steps: **preprocessing**, **tokenization**, **loss computation**, and **batch formatting**.
+This section breaks down how SFT works in practice, covering the key steps: **preprocessing**, **tokenization** and **loss computation**.
 
 ### Preprocessing and tokenization
 
@@ -57,7 +70,6 @@ where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is 
 
 During training, the loss is computed using a **one-token shift**: the model is trained to predict each token in the sequence based on all previous tokens. Specifically, the input sequence is shifted right by one position to form the target labels.
 Padding tokens (if present) are ignored in the loss computation by applying an ignore index (default: `-100`) to the corresponding positions. This ensures that the loss focuses only on meaningful, non-padding tokens.
-
 
 ## Logged metrics
 
