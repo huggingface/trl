@@ -1138,7 +1138,7 @@ class GRPOTrainerTester(unittest.TestCase):
             )
             lora_config = LoraConfig(
                 target_modules="all-linear",
-                # test with non-default modules as it add extra keys in state_dict that we need to handle
+                # test with non-default modules as it adds extra keys in state_dict that we need to handle
                 modules_to_save=["embed_tokens", "lm_head"],
             )
             trainer = GRPOTrainer(
