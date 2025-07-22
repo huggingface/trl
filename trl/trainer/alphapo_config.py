@@ -46,7 +46,7 @@ class AlphaPOConfig(TrainingArguments):
             sequence.
             - alpha = 1: inverse-linear reward
             - alpha = -1: linear reward
-            - alpha -> 0: SimPO's log reward.
+            - alpha -> 0: SimPO's log reward (SimPO: Simple Preference Optimization with a Reference-Free Reward, https://arxiv.org/abs/2405.14734)
         beta (`float`, *optional*, defaults to `0.1`):
             The beta parameter in the AlphaPO loss. This parameter controls the reward scaling.
         gamma_beta_ratio (`float`, *optional*, defaults to `0.25`):
@@ -114,14 +114,14 @@ class AlphaPOConfig(TrainingArguments):
         },
     )
     alpha: float = field(
-        default=-1.0,
+        default=0.25,
         metadata={
             "help": r"""Parameter controlling the reward shape in the AlphaPO loss.
 The reward is defined as: r(y, x) = (1 - pi_len_norm(y|x)^(-alpha)) / alpha,
 where pi_len_norm is the length-normalized probability of the sequence.
 - alpha = 1: inverse-linear reward
 - alpha = -1: linear reward
-- alpha -> 0: SimPO's log reward."""
+- alpha -> 0: SimPO's log reward (SimPO: Simple Preference Optimization with a Reference-Free Reward, https://arxiv.org/abs/2405.14734)"""
         },
     )
     beta: float = field(
