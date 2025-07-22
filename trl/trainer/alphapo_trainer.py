@@ -654,11 +654,16 @@ class AlphaPOTrainer(Trainer):
         # Implementation of the AlphaPO loss, based on the AlphaPO paper, equation (4): https://arxiv.org/abs/2501.03884
         # The reward function is r(y, x) = beta * (1 - pi_len_norm(y|x)^(-alpha)) / alpha, where pi_len_norm is the length-normalized probability.
         # The loss is -log_sigmoid(r(y_w, x) - r(y_l, x) - gamma)
-        policy_chosen_probs_pow_alpha = torch.exp(-self.alpha * policy_chosen_logps)
-        policy_rejected_probs_pow_alpha = torch.exp(-self.alpha * policy_rejected_logps)
+        # For alpha -> 0, the reward function becomes beta * log(pi_len_norm(y|x)).
+        if self.alpha == 0.0:
+            chosen_rewards_unscaled = policy_chosen_logps
+            rejected_rewards_unscaled = policy_rejected_logps
+        else:
+            policy_chosen_probs_pow_alpha = torch.exp(-self.alpha * policy_chosen_logps)
+            policy_rejected_probs_pow_alpha = torch.exp(-self.alpha * policy_rejected_logps)
 
-        chosen_rewards_unscaled = (1 - policy_chosen_probs_pow_alpha) / self.alpha
-        rejected_rewards_unscaled = (1 - policy_rejected_probs_pow_alpha) / self.alpha
+            chosen_rewards_unscaled = (1 - policy_chosen_probs_pow_alpha) / self.alpha
+            rejected_rewards_unscaled = (1 - policy_rejected_probs_pow_alpha) / self.alpha
 
         logits = chosen_rewards_unscaled - rejected_rewards_unscaled - self.gamma_beta_ratio
         losses = -F.logsigmoid(self.beta * logits)
@@ -741,29 +746,6 @@ class AlphaPOTrainer(Trainer):
         )
         all_logits = outputs.logits
 
-        def cross_entropy_loss(logits, labels):
-            if not self.is_encoder_decoder:
-                # Shift so that tokens < n predict n
-                logits = logits[..., :-1, :].contiguous()
-                labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
-            loss_fct = nn.CrossEntropyLoss()
-            logits = logits.view(-1, logits.shape[-1])
-            labels = labels.view(-1)
-            # Enable model parallelism
-            labels = labels.to(logits.device)
-            loss = loss_fct(logits, labels)
-            return loss
-
-        if self.is_encoder_decoder:
-            labels = concatenated_batch["concatenated_labels"].clone()
-        else:
-            labels = concatenated_batch["concatenated_input_ids"].clone()
-            attention_mask = concatenated_batch["concatenated_attention_mask"]
-            labels = torch.where(attention_mask == 1, labels, self.label_pad_token_id)
-        # alphapo chosen nll loss is computed over the full prompt and response
-        chosen_nll_loss = cross_entropy_loss(all_logits[:len_chosen], labels[:len_chosen])
-
         all_logps = self.get_batch_logps(
             all_logits,
             concatenated_batch["concatenated_labels"],
@@ -783,9 +765,9 @@ class AlphaPOTrainer(Trainer):
             rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss, outputs.aux_loss)
+            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, outputs.aux_loss)
 
-        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, chosen_nll_loss)
+        return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
     def get_batch_loss_metrics(
         self,
@@ -802,10 +784,9 @@ class AlphaPOTrainer(Trainer):
             policy_rejected_logps,
             policy_chosen_logits,
             policy_rejected_logits,
-            policy_nll_loss,
-        ) = forward_output[:5]
+        ) = forward_output[:4]
         if self.aux_loss_enabled:
-            aux_loss = forward_output[5]
+            aux_loss = forward_output[4]
 
         losses, chosen_rewards, rejected_rewards = self.alphapo_loss(
             policy_chosen_logps,
@@ -813,7 +794,7 @@ class AlphaPOTrainer(Trainer):
         )
 
         # full AlphaPO loss
-        loss = policy_nll_loss - losses.mean()
+        loss = losses.mean()
 
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
@@ -832,7 +813,6 @@ class AlphaPOTrainer(Trainer):
         metrics[f"{prefix}logits/chosen"] = self.accelerator.gather_for_metrics(
             policy_chosen_logits.detach().mean()
         ).mean()
-        metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean()
 
         if is_torch_xla_available():
             xm.mark_step()  # needed because .item() calls
