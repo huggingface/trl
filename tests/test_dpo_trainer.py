@@ -285,13 +285,53 @@ class DPOTrainerTester(unittest.TestCase):
                 if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
-    @parameterized.expand(
-        [
-            (None, "Test when rpo_alpha is set to None"),
-            (0.5, "Test when rpo_alpha is set to 0.5"),
-        ]
-    )
-    def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha, _):
+    def test_train_with_multiple_loss_types(self):
+        """
+        Tests multi-loss combinations, loss type inference, and weight configuration.
+        MPO combines DPO (sigmoid), BCO (bco_pair), and SFT (sft) losses.
+        """
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                learning_rate=9e-1,
+                loss_type=["sigmoid", "bco_pair", "sft"],
+                loss_weights=[0.8, 0.2, 1.0],
+                report_to="none",
+            )
+            trainer = DPOTrainer(
+                model=model_id,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dataset,
+            )
+
+            # Test that training works
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Verify SFT loss is computed in the first test too
+            with torch.no_grad():
+                batch = next(iter(trainer.get_train_dataloader()))
+                loss, metrics = trainer.get_batch_loss_metrics(trainer.model, batch)
+                self.assertIn("nll_loss", metrics)  # SFT loss should be computed
+
+    def test_wrong_loss_weights_length(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            with self.assertRaises(ValueError) as context:
+                DPOConfig(
+                    output_dir=tmp_dir,
+                    loss_type=["sigmoid", "bco_pair"],
+                    loss_weights=[1.0, 0.5, 0.1],  # Wrong length
+                )
+            self.assertIn("Length of loss_weights list", str(context.exception))
+
+    @parameterized.expand([(None,), (0.5,)])
+    def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 output_dir=tmp_dir,
@@ -561,8 +601,8 @@ class DPOTrainerTester(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 ValueError,
-                expected_regex="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
-                " Please install `wandb` or `comet-ml` to resolve.",
+                expected_regex="`generate_during_eval=True` requires Weights and Biases, MLFlow or Comet to be installed."
+                " Please install `wandb`, `mlflow` or `comet-ml` to resolve.",
             ):
                 DPOTrainer(
                     model=self.model,

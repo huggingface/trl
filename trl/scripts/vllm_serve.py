@@ -110,21 +110,22 @@ class WeightSyncWorkerExtension:
         # The client process that sends updated weights has the highest rank (world_size - 1).
         self.client_rank = world_size - 1
 
-    def update_named_param(self, name: str, dtype: torch.dtype, shape: Sequence[int]) -> None:
+    def update_named_param(self, name: str, dtype: str, shape: Sequence[int]) -> None:
         """
         Receives updated weights from the client process and updates the named parameter in the model.
 
         Args:
             name (`str`):
                 Name of the weight tensor being updated.
-            dtype (`torch.dtype`):
-                Data type of the weight tensor (e.g., `torch.float32`).
+            dtype (`str`):
+                Data type of the weight tensor as a string (e.g., `"torch.float32"`).
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
         if self.pynccl_comm is None:
             raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
 
+        dtype = getattr(torch, dtype.split(".")[-1])
         # Allocate memory for the incoming weight tensor on the correct device.
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
@@ -433,6 +434,7 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 16
         guided_decoding_regex: Optional[str] = None
+        generation_kwargs: dict = field(default_factory=dict)
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
@@ -445,6 +447,15 @@ def main(script_args: ScriptArguments):
         Args:
             request (`GenerateRequest`):
                 - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
+                - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
+                - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during generation.
+                - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead to more random outputs.
+                - `top_p` (`float`, *optional*, defaults to `1.0`): Top-p (nucleus) sampling parameter. It controls the diversity of the generated text.
+                - `top_k` (`int`, *optional*, defaults to `-1`): Top-k sampling parameter. If set to `-1`, it disables top-k sampling.
+                - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
+                - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each completion.
+                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the model will only generate tokens that match this regex pattern.
+                - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will override them.
 
         Returns:
             `GenerateResponse`:
@@ -467,17 +478,19 @@ def main(script_args: ScriptArguments):
         else:
             guided_decoding = None
 
-        # Sampling parameters
-        sampling_params = SamplingParams(
-            n=request.n,
-            repetition_penalty=request.repetition_penalty,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            top_k=request.top_k,
-            min_p=request.min_p,
-            max_tokens=request.max_tokens,
-            guided_decoding=guided_decoding,
-        )
+        generation_kwargs = {
+            "n": request.n,
+            "repetition_penalty": request.repetition_penalty,
+            "temperature": request.temperature,
+            "top_p": request.top_p,
+            "top_k": request.top_k,
+            "min_p": request.min_p,
+            "max_tokens": request.max_tokens,
+            "guided_decoding": guided_decoding,
+        }
+        generation_kwargs.update(request.generation_kwargs)
+        sampling_params = SamplingParams(**generation_kwargs)
+
         # Evenly distribute prompts across DP ranks
         chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
 
@@ -548,11 +561,10 @@ def main(script_args: ScriptArguments):
                 - `shape` (list of `int`): Shape of the weight
 
         """
-        # The function update_named_param is called this way: update_named_param("name", torch.float32, (10, 10))
+        # The function update_named_param is called this way: update_named_param("name", "torch.float32", (10, 10))
         # So with collective_rpc we need to call it this way:
-        # llm.collective_rpc("update_named_param", args=("name", torch.float32, (10, 10)))
-        dtype = torch.__getattribute__(request.dtype.split(".")[-1])
-        kwargs = {"method": "update_named_param", "args": (request.name, dtype, tuple(request.shape))}
+        # llm.collective_rpc("update_named_param", args=("name", "torch.float32", (10, 10)))
+        kwargs = {"method": "update_named_param", "args": (request.name, request.dtype, tuple(request.shape))}
         for connection in connections:
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 

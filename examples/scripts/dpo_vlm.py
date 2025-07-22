@@ -23,7 +23,6 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
-    --bf16 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
@@ -43,7 +42,6 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
-    --bf16 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
