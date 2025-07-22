@@ -36,6 +36,7 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
@@ -556,13 +557,9 @@ class GRPOTrainer(Trainer):
                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
-            model_init_kwargs["use_cache"] = (
-                False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
-            )
-            try:
-                model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
-            except ValueError:
-                model = AutoModelForImageTextToText.from_pretrained(model)
+            config = AutoConfig.from_pretrained(model_id)
+            architecture = getattr(transformers, config.architectures[0])
+            model = architecture.from_pretrained(model_id, **model_init_kwargs)
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
@@ -737,10 +734,9 @@ class GRPOTrainer(Trainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            try:
-                self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
-            except ValueError:
-                self.ref_model = AutoModelForImageTextToText.from_pretrained(model_id)
+                config = AutoConfig.from_pretrained(model_id)
+                architecture = getattr(transformers, config.architectures[0])
+                self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
@@ -828,6 +824,10 @@ class GRPOTrainer(Trainer):
                 os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
                 os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
 
+                if self.max_prompt_length is not None and self.max_completion_length is not None:
+                    max_model_len = self.max_prompt_length + self.max_completion_length
+                else:
+                    max_model_len = None
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
@@ -835,7 +835,7 @@ class GRPOTrainer(Trainer):
                     max_num_seqs=self.args.per_device_train_batch_size
                     * self.vllm_tensor_parallel_size
                     * self.args.steps_per_generation,
-                    max_model_len=self.max_prompt_length + self.max_completion_length,
+                    max_model_len=max_model_len,
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,

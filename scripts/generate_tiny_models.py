@@ -34,6 +34,8 @@ from transformers import (
     FalconMambaForCausalLM,
     Gemma2Config,
     Gemma2ForCausalLM,
+    Gemma3Config,
+    Gemma3ForConditionalGeneration,
     GemmaConfig,
     GemmaForCausalLM,
     GPT2Config,
@@ -234,6 +236,7 @@ for model_id, config_class, model_class, suffix in [
 
 # Vision Language Models
 for model_id, config_class, model_class in [
+    ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
     ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
     ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
     ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
