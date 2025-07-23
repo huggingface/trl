@@ -1020,7 +1020,14 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _get_last_hidden_state(
-        self, unwrapped_model, input_ids, attention_mask, logits_to_keep, pixel_values, image_grid_thw
+        self,
+        unwrapped_model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        pixel_values=None,
+        image_grid_thw=None,
+        pixel_attention_mask=None,
     ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
@@ -1032,6 +1039,8 @@ class GRPOTrainer(Trainer):
             model_inputs["image_grid_thw"] = image_grid_thw
         if pixel_values is not None:
             model_inputs["pixel_values"] = pixel_values
+        if pixel_attention_mask is not None:
+            model_inputs["pixel_attention_mask"] = pixel_attention_mask
 
         # Only add logits_to_keep if the model supports it
         if "logits_to_keep" in self.model_kwarg_keys:
@@ -1056,6 +1065,7 @@ class GRPOTrainer(Trainer):
         compute_entropy=False,
         pixel_values=None,
         image_grid_thw=None,
+        pixel_attention_mask=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log‐probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -1075,6 +1085,9 @@ class GRPOTrainer(Trainer):
                 model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
             elif pixel_values is not None:
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+            if pixel_attention_mask is not None:
+                # For standard batch-first models (e.g. SmolVLM2, Gemma)
+                model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1566,6 +1579,7 @@ class GRPOTrainer(Trainer):
                     batch_size,
                     pixel_values=prompt_inputs.get("pixel_values"),
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                    pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                 )
             else:
                 old_per_token_logps = None
@@ -1581,6 +1595,7 @@ class GRPOTrainer(Trainer):
                         batch_size=batch_size,
                         pixel_values=prompt_inputs.get("pixel_values"),
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                        pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -1592,6 +1607,7 @@ class GRPOTrainer(Trainer):
                             batch_size=batch_size,
                             pixel_values=prompt_inputs.get("pixel_values"),
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                            pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         )
             else:
                 ref_per_token_logps = None
@@ -1691,6 +1707,8 @@ class GRPOTrainer(Trainer):
             output["pixel_values"] = prompt_inputs["pixel_values"]
         if "image_grid_thw" in prompt_inputs:
             output["image_grid_thw"] = prompt_inputs["image_grid_thw"]
+        if "pixel_attention_mask" in prompt_inputs:
+            output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1709,6 +1727,7 @@ class GRPOTrainer(Trainer):
             logits_to_keep,
             inputs.get("pixel_values"),
             inputs.get("image_grid_thw"),
+            inputs.get("pixel_attention_mask"),
         )
 
         # compute loss and metrics using liger grpo loss
@@ -1761,6 +1780,7 @@ class GRPOTrainer(Trainer):
             compute_entropy=self.top_entropy_quantile < 1.0,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
+            pixel_attention_mask=inputs.get("pixel_attention_mask"),
         )
 
         if self.top_entropy_quantile < 1.0:
