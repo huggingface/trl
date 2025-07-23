@@ -1086,7 +1086,6 @@ class GRPOTrainer(Trainer):
             elif pixel_values is not None:
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
-                # For standard batch-first models (e.g. SmolVLM2, Gemma)
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
