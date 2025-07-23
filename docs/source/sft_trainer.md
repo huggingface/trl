@@ -46,6 +46,42 @@ SFT supports both [language modeling](dataset_formats#language-modeling) and [pr
  "completion": [{"role": "assistant", "content": "It is blue."}]}
 ```
 
+If your dataset is not in one of these formats, you can preprocess it to convert it into the expected format. Here is an example with the [FreedomIntelligence/medical-o1-reasoning-SFT](https://huggingface.co/datasets/FreedomIntelligence/medical-o1-reasoning-SFT) dataset:
+
+```python
+from datasets import load_dataset
+
+dataset = load_dataset("FreedomIntelligence/medical-o1-reasoning-SFT", "en")
+
+def preprocess_function(example):
+    return {
+        "prompt": [{"role": "user", "content": example["Question"]}],
+        "completion": [
+            {"role": "assistant", "content": f"<think>{example['Complex_CoT']}</think>{example['Response']}"}
+        ],
+    }
+
+dataset = dataset.map(preprocess_function, remove_columns=["Question", "Response", "Complex_CoT"])
+print(next(iter(dataset["train"])))
+```
+
+```json
+{
+    "prompt": [
+        {
+            "content": "Given the symptoms of sudden weakness in the left arm and leg, recent long-distance travel, and the presence of swollen and tender right lower leg, what specific cardiac abnormality is most likely to be found upon further evaluation that could explain these findings?",
+            "role": "user",
+        }
+    ],
+    "completion": [
+        {
+            "content": "<think>Okay, let's see what's going on here. We've got sudden weakness [...] clicks into place!</think>The specific cardiac abnormality most likely to be found in [...] the presence of a PFO facilitating a paradoxical embolism.",
+            "role": "assistant",
+        }
+    ],
+}
+```
+
 ## Looking deeper into the SFT method
 
 Supervised Fine-Tuning (SFT) is the simplest and most commonly used method to adapt a language model to a target dataset. The model is trained in a fully supervised fashion using pairs of input and output sequences. The goal is to minimize the negative log-likelihood (NLL) of the target sequence, conditioning on the input.
