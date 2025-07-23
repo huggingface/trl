@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import atexit
+import base64
 import logging
 import socket
 import time
+from io import BytesIO
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -166,6 +168,7 @@ class VLLMClient:
     def generate(
         self,
         prompts: list[str],
+        images: Optional[list] = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -182,6 +185,8 @@ class VLLMClient:
         Args:
             prompts (`list[str]`):
                 List of text prompts for which the model will generate completions.
+            images (`list[PIL.Image]` or `None`, *optional*, defaults to `None`):
+                List of PIL Images to send along with the prompts.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -208,10 +213,21 @@ class VLLMClient:
                 List of lists of token IDs representing the model-generated completions for each prompt.
         """
         url = f"{self.base_url}/generate/"
+
+        def pil_to_base64(image):
+            buffer = BytesIO()
+            image.save(buffer, format="PNG")
+            img_bytes = buffer.getvalue()
+            return base64.b64encode(img_bytes).decode("utf-8")
+
+        # Convert PIL images to base64 strings
+        images = [pil_to_base64(img) for img in images] if images else None
+
         response = self.session.post(
             url,
             json={
                 "prompts": prompts,
+                "images": images,
                 "n": n,
                 "repetition_penalty": repetition_penalty,
                 "temperature": temperature,
