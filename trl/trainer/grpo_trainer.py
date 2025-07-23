@@ -585,7 +585,9 @@ class GRPOTrainer(Trainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
+            processing_class = AutoProcessor.from_pretrained(
+                model.config._name_or_path, padding_side="left", use_fast=True
+            )
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -1348,7 +1350,7 @@ class GRPOTrainer(Trainer):
             padding_side="left",
             add_special_tokens=False,
             **kwargs,
-        )
+        ).to(self.model.dtype)
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
