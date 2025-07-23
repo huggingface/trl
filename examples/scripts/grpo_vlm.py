@@ -60,7 +60,7 @@ if __name__ == "__main__":
         model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
     )
     quantization_config = get_quantization_config(model_args)
-    model_kwargs = dict(
+    training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=torch_dtype,
