@@ -119,6 +119,50 @@ To train on completion only, use a [prompt-completion](dataset_formats#prompt-co
 Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
 </Tip>
 
+## Instruction tuning example
+
+**Instruction tuning** teaches a base language model to follow user instructions and engage in conversations. This requires:
+
+1. **Chat template**: Defines how to structure conversations into text sequences, including role markers (user/assistant), special tokens, and turn boundaries. Read more about chat templates in [Chat templates](https://huggingface.co/docs/transformers/chat_templating#templates).
+2. **Conversational dataset**: Contains instruction-response pairs
+
+This example shows how to transform the [Qwen 3 0.6B Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) model into an instruction-following model using the [Capybara dataset](https://huggingface.co/datasets/trl-lib/Capybara) and a chat template from [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B). The SFT Trainer automatically handles tokenizer updates and special token configuration.
+
+```python
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen3-0.6B-Base",
+    args=SFTConfig(
+        output_dir="Qwen3-0.6B-Instruct",
+        chat_template_path="HuggingFaceTB/SmolLM3-3B",
+    ),
+    train_dataset=load_dataset("trl-lib/Capybara", split="train"),
+)
+trainer.train()
+```
+
+Once trained, your model can now follow instructions and engage in conversations using its new chat template.
+
+```python
+>>> from transformers import pipeline
+>>> pipe = pipeline("text-generation", model="Qwen3-0.6B-Instruct/checkpoint-5000")
+>>> prompt = "<|im_start|>user\nWhat is the capital of France? Answer in one word.<|im_end|>\n<|im_start|>assistant\n"
+>>> response = pipe(prompt)
+>>> response[0]["generated_text"]
+'<|im_start|>user\nWhat is the capital of France? Answer in one word.<|im_end|>\n<|im_start|>assistant\nThe capital of France is Paris.'
+```
+
+Alternatively, use the structured conversation format (recommended):
+
+```python
+>>> prompt = [{"role": "user", "content": "What is the capital of France? Answer in one word."}]
+>>> response = pipe(prompt)
+>>> response[0]["generated_text"]
+[{'role': 'user', 'content': 'What is the capital of France? Answer in one word.'}, {'role': 'assistant', 'content': 'The capital of France is Paris.'}]
+```
+
 ## SFTTrainer
 
 [[autodoc]] SFTTrainer
