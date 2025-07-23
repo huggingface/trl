@@ -96,6 +96,29 @@ training_args = SFTConfig(packing=True)
 
 For more defails on packing, see [Packing](reducing_memory_usage#packing).
 
+### Train on assistant messages only
+
+To train on assistant messages only, use a [conversational](dataset_formats#conversational) dataset and set `assistant_only_loss=True` in the [`SFTConfig`]. This setting ensures that loss is computed **only** on the assistant responses, ignoring user and system and user messages.
+
+```python
+training_args = SFTConfig(assistant_only_loss=True)
+```
+
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_assistant.png)
+
+> [!WARNING]
+> This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% raw %}{% generation %}{% endraw %}` keyword. For an example of such an template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
+
+### Train on completion only
+
+To train on completion only, use a [prompt-completion](dataset_formats#prompt-completion) dataset. By default, the trainer computes the loss on the completion tokens only, ignoring the prompt tokens. If you want to train on the full sequence, set `completion_only_loss=False` in the [`SFTConfig`].
+
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
+
+<Tip>
+Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
+</Tip>
+
 ## SFTTrainer
 
 [[autodoc]] SFTTrainer
