@@ -1534,11 +1534,16 @@ class GRPOTrainer(Trainer):
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
+        num_tokens = completion_mask.sum().clamp(min=1.0)
+
+        def masked_batch_mean(x):
+            return (x * completion_mask).sum() / num_tokens
+
         if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
+            mean_kl = masked_batch_mean(per_token_kl)
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
-        mean_entropy = (entropies * completion_mask).sum() / completion_mask.sum()
+        mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
         # Compute the clipped probability ratios
@@ -1546,9 +1551,9 @@ class GRPOTrainer(Trainer):
         is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
 
-        low_clip = (is_low_clipped * completion_mask).sum() / completion_mask.sum()
-        high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
-        clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
+        low_clip = masked_batch_mean(is_low_clipped)
+        high_clip = masked_batch_mean(is_high_clipped)
+        clip_ratio = masked_batch_mean(is_region_clipped)
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
