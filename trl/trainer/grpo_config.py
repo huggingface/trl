@@ -193,12 +193,12 @@ class GRPOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-        token_entropy_percentile_threshold (`float`, *optional*, defaults to `0.0`):
-            τ parameter from the [Beyond the 80/20 Rule](https://huggingface/papers/2506.01939) paper, which finds that
-            masking out the bottom τ percentile of tokens based on the entropy of the probability distribution at a
-            given sequence position, in the policy loss term yields better results. The range of the parameter is
-            [0.0-1.0] a value of 0.0 means that none the tokens are filtered out and 1.0 means that all the tokens are
-            masked. Recommended value is `0.8`.
+        top_entropy_quantile (`float`, *optional*, defaults to `1.0`):
+            ρ parameter from [Beyond the 80/20 Rule](https://huggingface.co/papers/2506.01939). Keeps in the policy
+            loss term only the top-ρ quantile of tokens by entropy of the probability distribution at each sequence
+            position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
+            `1.0` keeps all tokens. The paper recommends a value of `0.2`.
+            If used with `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
 
@@ -520,12 +520,14 @@ class GRPOConfig(TrainingArguments):
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
     )
-    token_entropy_percentile_threshold: float = field(
-        default=0.0,
+    top_entropy_quantile: float = field(
+        default=1.0,
         metadata={
-            "help": "Percentile threshold for filtering out tokens in the policy loss based on entropy."
-            "Positions in the completion with entropy below this percentile are masked out."
-            "0.8 is the recommended value if you'd like to enable entropy based masking."
+            "help": "ρ parameter from Beyond the 80/20 Rule. Keeps in the policy loss term only the top-ρ quantile of "
+            "tokens by entropy of the probability distribution at each sequence position, improving results. Range: "
+            "[0.0-1.0]. A value of `1.0` masks all but the highest entropy token; `0.0` keeps all tokens. The paper "
+            "recommends a value of `0.2`. If used with `mask_truncated_completions=True`, only tokens from "
+            "non-truncated completions are considered."
         },
     )
     use_liger_loss: bool = field(
@@ -580,7 +582,14 @@ class GRPOConfig(TrainingArguments):
                 "'generation_batch_size' and 'steps_per_generation' can not be both configured at the same time"
             )
 
-        # Check if the effective batch size can be divided by the number of generations
+        # The generation batch must contain full prompt groups (no partials), so it must be divisible by
+        # num_generations.
+        if self.generation_batch_size % self.num_generations != 0:
+            raise ValueError(
+                f"generation_batch_size ({self.generation_batch_size}) must be divisible by num_generations "
+                f"({self.num_generations})."
+            )
+
         if self.num_generations < 2:
             raise ValueError(
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
