@@ -1028,6 +1028,7 @@ class GRPOTrainer(Trainer):
         pixel_values=None,
         image_grid_thw=None,
         pixel_attention_mask=None,
+        image_sizes=None,
     ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
@@ -1035,12 +1036,18 @@ class GRPOTrainer(Trainer):
         # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
         model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
 
+        # For Qwen models:
         if image_grid_thw is not None and pixel_values is not None:
             model_inputs["image_grid_thw"] = image_grid_thw
+        # For Gemma, SmolVLM2, LlavaNext etc.:
         if pixel_values is not None:
             model_inputs["pixel_values"] = pixel_values
+        # For SmolVLM2
         if pixel_attention_mask is not None:
             model_inputs["pixel_attention_mask"] = pixel_attention_mask
+        # For LlavaNext
+        if image_sizes is not None:
+            model_inputs["image_sizes"] = image_sizes
 
         # Only add logits_to_keep if the model supports it
         if "logits_to_keep" in self.model_kwarg_keys:
@@ -1066,6 +1073,7 @@ class GRPOTrainer(Trainer):
         pixel_values=None,
         image_grid_thw=None,
         pixel_attention_mask=None,
+        image_sizes=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log‐probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -1087,6 +1095,8 @@ class GRPOTrainer(Trainer):
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
+            if image_sizes is not None:
+                model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1579,6 +1589,7 @@ class GRPOTrainer(Trainer):
                     pixel_values=prompt_inputs.get("pixel_values"),
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
+                    image_sizes=prompt_inputs.get("image_sizes"),
                 )
             else:
                 old_per_token_logps = None
@@ -1595,6 +1606,7 @@ class GRPOTrainer(Trainer):
                         pixel_values=prompt_inputs.get("pixel_values"),
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
+                        image_sizes=prompt_inputs.get("image_sizes"),
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -1607,6 +1619,7 @@ class GRPOTrainer(Trainer):
                             pixel_values=prompt_inputs.get("pixel_values"),
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
+                            image_sizes=prompt_inputs.get("image_sizes"),
                         )
             else:
                 ref_per_token_logps = None
@@ -1708,6 +1721,8 @@ class GRPOTrainer(Trainer):
             output["image_grid_thw"] = prompt_inputs["image_grid_thw"]
         if "pixel_attention_mask" in prompt_inputs:
             output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
+        if "image_sizes" in prompt_inputs:
+            output["image_sizes"] = prompt_inputs["image_sizes"]
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1727,6 +1742,7 @@ class GRPOTrainer(Trainer):
             inputs.get("pixel_values"),
             inputs.get("image_grid_thw"),
             inputs.get("pixel_attention_mask"),
+            inputs.get("image_sizes"),
         )
 
         # compute loss and metrics using liger grpo loss
@@ -1780,6 +1796,7 @@ class GRPOTrainer(Trainer):
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
+            image_sizes=inputs.get("image_sizes"),
         )
 
         if self.top_entropy_quantile < 1.0:
