@@ -85,9 +85,17 @@ class RLOOConfig_NEW(TrainingArguments):
             Float that penalizes new tokens based on whether they appear in the prompt and the generated text so far.
             Values > `1.0` encourage the model to use new tokens, while values < `1.0` encourage the model to repeat
             tokens.
+        use_transformers_paged (`bool`, *optional*, defaults to `False`):
+            Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
+            paged implementation will be used for generation instead of the default padded implementation. This
+            parameter is only effective when `use_vllm` is set to `False`.
         cache_implementation (`str` or `None`, *optional*, defaults to `None`):
             Implementation of the cache method for faster generation when use_vllm is set to False.
-
+        generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
+            using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
+            as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
+            parameters (like `min_p`, `top_p`, etc.), they will override them.
         > Parameters that control generation acceleration powered by vLLM
 
         use_vllm (`bool`, *optional*, defaults to `False`):
@@ -156,6 +164,12 @@ class RLOOConfig_NEW(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
+        top_entropy_quantile (`float`, *optional*, defaults to `1.0`):
+            ρ parameter from [Beyond the 80/20 Rule](https://huggingface.co/papers/2506.01939). Keeps in the policy
+            loss term only the top-ρ quantile of tokens by entropy of the probability distribution at each sequence
+            position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
+            `1.0` keeps all tokens. The paper recommends a value of `0.2`.
+            If used with `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         normalize_rewards (`bool`, *optional*, defaults to `False`):
             Whether to normalize rewards.
         normalize_advantages (`bool`, *optional*, defaults to `False`):
@@ -295,12 +309,29 @@ class RLOOConfig_NEW(TrainingArguments):
             "must be a value between 0.0 and 1.0. Typical values are in the 0.01-0.2 range."
         },
     )
+    generation_kwargs: Optional[dict] = field(
+        default=None,
+        metadata={
+            "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
+            "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
+            "generation behavior, such as setting `supress_tokens`, `num_beams`, etc. If it contains keys that "
+            "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
+        },
+    )
     repetition_penalty: float = field(
         default=1.0,
         metadata={
             "help": "Float that penalizes new tokens based on whether they appear in the prompt and the generated "
             "text so far. Values > 1.0 encourage the model to use new tokens, while values < 1.0 encourage the model "
             "to repeat tokens."
+        },
+    )
+    use_transformers_paged: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use the `transformers` paged implementation for generation. If set to `True`, the "
+            "`transformers` paged implementation will be used for generation instead of the default padded "
+            "implementation. This parameter is only effective when `use_vllm` is set to `False`."
         },
     )
     cache_implementation: Optional[str] = field(
@@ -424,6 +455,16 @@ class RLOOConfig_NEW(TrainingArguments):
         metadata={
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
+        },
+    )
+    top_entropy_quantile: float = field(
+        default=1.0,
+        metadata={
+            "help": "ρ parameter from Beyond the 80/20 Rule. Keeps in the policy loss term only the top-ρ quantile of "
+            "tokens by entropy of the probability distribution at each sequence position, improving results. Range: "
+            "[0.0-1.0]. A value of `1.0` masks all but the highest entropy token; `0.0` keeps all tokens. The paper "
+            "recommends a value of `0.2`. If used with `mask_truncated_completions=True`, only tokens from "
+            "non-truncated completions are considered."
         },
     )
     normalize_rewards: bool = field(
