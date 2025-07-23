@@ -1,17 +1,3 @@
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -32,21 +18,22 @@ tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
 def tokenize_function(example):
     return dict(
-        input_ids=tokenizer.apply_chat_template(
+        input_ids=tokenizer(
             example["prompt"],
-            add_generation_prompt=True,
-        )
+            truncation=True,
+            padding=False,
+        )["input_ids"]
     )
 
 
-# dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+# Simple dataset with just two prompts
 dataset = Dataset.from_dict(
     {
         "prompt": ["The sky is", "The sun is"],
     }
 )
 dataset = dataset.map(tokenize_function, remove_columns=dataset.column_names)
-
+print(dataset)
 
 # Dummy reward function
 def reward_func(completions, **kwargs):
@@ -64,6 +51,7 @@ training_args = RLOOConfig(
     total_episodes=1,
     num_train_epochs=1,
     max_steps=2,
+    token_level_kl=True,
 )
 
 # Trainer
