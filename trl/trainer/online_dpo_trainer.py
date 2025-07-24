@@ -211,14 +211,13 @@ class OnlineDPOTrainer(Trainer):
             from transformers import AutoModelForCausalLM
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
-            self.is_encoder_decoder = model.config.is_encoder_decoder
         else:
             if args.model_init_kwargs is not None:
                 raise ValueError(
                     "You passed `model_init_kwargs` to the `OnlineDPOConfig`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
-            self.is_encoder_decoder = model.config.is_encoder_decoder
+        self.is_encoder_decoder = model.config.is_encoder_decoder
 
         # Convert to PEFT model if peft_config is provided
         if peft_config is not None:
