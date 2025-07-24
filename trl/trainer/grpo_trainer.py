@@ -1534,10 +1534,10 @@ class GRPOTrainer(Trainer):
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        num_tokens = completion_mask.sum().clamp(min=1.0)
+        completion_token_count = completion_mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):
-            return (x * completion_mask).sum() / num_tokens
+            return (x * completion_mask).sum() / completion_token_count
 
         if self.beta != 0.0:
             mean_kl = masked_batch_mean(per_token_kl)
