@@ -30,16 +30,16 @@ accelerate launch \
     --vllm_mode colocate \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \
-    --log_completions \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 2 \
+    --log_completions
 
 # For HuggingFaceTB/SmolVLM2-2.2B-Instruct
+pip install num2words
+
 accelerate launch \
     --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/grpo_vlm.py \
     --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
-    --output_dir grpo-Qwen2.5-VL-3B-Instruct \
+    --output_dir grpo-SmolVLM2-2.2B-Instruct \
     --learning_rate 1e-5 \
     --torch_dtype bfloat16 \
     --max_prompt_length 2048 \
@@ -118,6 +118,15 @@ if __name__ == "__main__":
         return image.size[0] < 512 and image.size[1] < 512
 
     dataset = dataset.filter(filter_big_images)
+
+    def convert_to_rgb(example):
+        image = example["image"]
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        example["image"] = image
+        return example
+
+    dataset = dataset.map(convert_to_rgb)
 
     train_dataset = dataset["train"]
     eval_dataset = dataset["test"] if training_args.eval_strategy != "no" else None

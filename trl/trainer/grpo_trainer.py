@@ -1336,10 +1336,15 @@ class GRPOTrainer(Trainer):
             for prompt in prompts:
                 if isinstance(prompt, list):
                     for message in prompt:
-                        if isinstance(message, dict) and message.get("role") == "user":
-                            if isinstance(message.get("content"), str):
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
-                            break
+                        if not isinstance(message, dict):
+                            continue
+                        content = message.get("content")
+                        role = message.get("role")
+                        if isinstance(content, str):
+                            if role == "user":
+                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
+                            elif role == "system":
+                                message["content"] = [{"type": "text", "text": content}]
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
