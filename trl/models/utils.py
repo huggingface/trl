@@ -149,7 +149,7 @@ def clone_chat_template(
     tokenizer: PreTrainedTokenizer,
     source_tokenizer_path: str,
     resize_to_multiple_of: Optional[int] = 64,
-) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[AddedToken]]:
+) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[int]]:
     """
     Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
 
@@ -177,7 +177,7 @@ def clone_chat_template(
             Updated model with resized token embeddings and EOS token configured.
         tokenizer (`~transformers.PreTrainedTokenizer`):
             Updated tokenizer with the chat template and special tokens applied.
-        added_tokens (`list[AddedToken]`):
+        added_tokens (`list[int]`):
             List of tokens that were added to the tokenizer from the source tokenizer.
 
     Example:
