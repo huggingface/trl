@@ -109,10 +109,9 @@ class WeightSyncWorkerExtension:
 
         if client_device_uuid == str(torch.cuda.get_device_properties(self.device).uuid):
             raise RuntimeError(
-                f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) "
-                f"for multiple distinct roles/ranks within the same communicator. "
-                f"This setup is unsupported and will likely lead to program hangs or incorrect behavior. "
-                f"Ensure that trainer is using different devices than vLLM server."
+                f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) for multiple distinct "
+                "roles/ranks within the same communicator. This setup is unsupported and will likely lead to program "
+                "hangs or incorrect behavior. Ensure that trainer is using different devices than vLLM server."
             )
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
@@ -557,7 +556,8 @@ def main(script_args: ScriptArguments):
                 - `host` (`str`): Hostname or IP address of the master node.
                 - `port` (`int`): Port number to be used for communication.
                 - `world_size` (`int`): Total number of participating processes in the group.
-                - `client_device_uuid` (`str`): UUID of the device of client main process. Used to assert that devices are different from vllm workers devices.
+                - `client_device_uuid` (`str`): UUID of the device of client main process. Used to assert that devices
+                  are different from vLLM workers devices.
         """
         world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
 
