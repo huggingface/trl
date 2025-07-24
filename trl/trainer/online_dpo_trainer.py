@@ -29,6 +29,7 @@ from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
+    AutoModelForCausalLM,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -204,11 +205,9 @@ class OnlineDPOTrainer(Trainer):
                 model_init_kwargs["torch_dtype"] = torch_dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `OnlineDPOConfig`. Expected either 'auto' or a string representing "
-                    f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                    "Invalid `torch_dtype` passed to `OnlineDPOConfig`. Expected either 'auto' or a string "
+                    f"representing a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
-
-            from transformers import AutoModelForCausalLM
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
         else:
