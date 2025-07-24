@@ -11,10 +11,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 import copy
-import inspect
 import os
+import inspect
 import re
 import textwrap
 import warnings
@@ -48,17 +47,18 @@ from transformers import (
     TrainerCallback,
     is_wandb_available,
 )
+from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_liger_kernel_available, is_vllm_available
+from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
-from .grpo_config import GRPOConfig
+from .rloo_new_config import RLOOConfig_NEW
 from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
@@ -72,9 +72,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
-
-if is_liger_kernel_available():
-    from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
@@ -108,14 +105,13 @@ class RepeatSampler(Sampler):
 
     Example:
     ```python
-    >>> sampler = RepeatSampler(
-    ...     ["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4
-    ... )
+    >>> sampler = RepeatRandomSampler(["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4)
     >>> list(sampler)
     [4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
+
      1, 1, 2, 2, 6, 6,
      1, 1, 2, 2, 6, 6,
      1, 1, 2, 2, 6, 6,
@@ -299,7 +295,6 @@ def identity(x):
     """Do we really need docs for this?"""
     return x
 
-
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
     """
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
@@ -357,7 +352,6 @@ def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold
     entropy_mask = masked_entropies >= entropy_threshold
     return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
-
 def truncate_with_protected_tokens(
     ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -414,18 +408,16 @@ def truncate_with_protected_tokens(
 
     return torch.stack(truncated_seq), torch.stack(truncated_mask)
 
-
-class GRPOTrainer(Trainer):
+class RLOOTrainer_NEW(Trainer):
     """
-    Trainer for the Group Relative Policy Optimization (GRPO) method. This algorithm was initially proposed in the
-    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language
-    Models](https://huggingface.co/papers/2402.03300).
+    Trainer for the REINFORCE Leave One-Out (RLOO) method. This algorithm was initially proposed in the
+    paper [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740).
 
     Example:
 
     ```python
     from datasets import load_dataset
-    from trl import GRPOTrainer
+    from trl import RLOOTrainer
 
     dataset = load_dataset("trl-lib/tldr", split="train")
 
@@ -467,18 +459,20 @@ class GRPOTrainer(Trainer):
                 - A [`~transformers.PreTrainedModel`] object: Only sequence classification models are supported.
                 - A custom reward function: The function is provided with the prompts and the generated completions,
                   plus any additional columns in the dataset. It should return a list of rewards. Custom reward
-                  functions can also return `None` when the reward is not applicable to those samples. This is useful
-                  for multi-task training where different reward functions apply to different types of samples. When a
-                  reward function returns `None` for a sample, that reward function is excluded from the reward
+                  functions can also return None when the reward is not applicable to those samples. This is useful for
+                  multi-task training where different reward functions apply to different types of samples. When a
+                  reward function returns None for a sample, that reward function is excluded from the reward
                   calculation for that sample. For more details, see [Using a custom reward
                   function](#using-a-custom-reward-function).
 
-                  The trainer's state is also passed to the reward function. The trainer's state is an instance of
-                  [`~transformers.TrainerState`] and can be accessed by accessing the `trainer_state` argument to the
-                  reward function's signature.
+                  The trainer's state is also passed to the reward function. The trainer's state is an
+                  instance of [`transformers.TrainerState`](https://huggingface.co/docs/transformers/main/main_classes/callback#transformers.TrainerState)
+                  and can be accessed by accessing the `trainer_state` argument
+                  to the reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
-        args ([`GRPOConfig`], *optional*, defaults to `None`):
+
+        args ([`RLOOConfig_NEW`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
@@ -489,11 +483,11 @@ class GRPOTrainer(Trainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
-            processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
-            padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
-            `tokenizer.eos_token` will be used as the default.
+            processing class is loaded from the model's name with [`~transformers.AutoTokenizer.from_pretrained`]. A
+            padding token, `processing_class.pad_token`, must be set. If the processing class has not set a padding
+            token, `processing_class.eos_token` will be used as the default.
         reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
@@ -505,8 +499,8 @@ class GRPOTrainer(Trainer):
             functions (not [`~transformers.PreTrainedModel`]), the corresponding entries in `reward_processing_classes`
             are ignored.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
-            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
-            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks
+            detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
@@ -517,13 +511,13 @@ class GRPOTrainer(Trainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
-    _tag_names = ["trl", "grpo"]
+    _tag_names = ["trl", "rloo"]
 
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: Optional[GRPOConfig] = None,
+        args: Optional[RLOOConfig_NEW] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
@@ -536,7 +530,7 @@ class GRPOTrainer(Trainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = GRPOConfig(f"{model_name}-GRPO")
+            args = RLOOConfig_NEW(f"{model_name}-RLOO")
 
         # Models
         # Trained model
@@ -551,7 +545,7 @@ class GRPOTrainer(Trainer):
                 model_init_kwargs["torch_dtype"] = torch_dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
+                    "Invalid `torch_dtype` passed to `RLOOConfig_NEW`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
@@ -562,7 +556,7 @@ class GRPOTrainer(Trainer):
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 raise ValueError(
-                    "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `RLOOConfig_NEW`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
 
@@ -653,10 +647,14 @@ class GRPOTrainer(Trainer):
                 reward_processing_classes[i] = reward_processing_class
         self.reward_processing_classes = reward_processing_classes
 
+        # Data collator
+        def data_collator(features):  # No data collation is needed in RLOO
+            return features
+
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
-        self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
-        self.num_generations = args.num_generations  # = G in the GRPO paper
+        self.max_completion_length = args.max_completion_length
+        self.num_generations = args.num_generations
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
@@ -667,15 +665,12 @@ class GRPOTrainer(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
-        self.use_liger_loss = args.use_liger_loss
-        self.loss_type = args.loss_type
-        self.scale_rewards = args.scale_rewards
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.use_liger_loss and self.top_entropy_quantile < 1.0:
-            raise NotImplementedError(
-                "Liger Kernels don't currently support masking token positions based on entropy."
-            )
+        self.normalize_advantages = args.normalize_advantages
+        self.normalize_rewards = args.normalize_rewards
+        self.reward_clip_range = args.reward_clip_range
+        self.token_level_kl = args.token_level_kl
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -689,13 +684,12 @@ class GRPOTrainer(Trainer):
         ):
             # See https://github.com/huggingface/trl/issues/3213
             raise NotImplementedError(
-                "Iterable datasets are not yet supported in GRPOTrainer. Please use a standard dataset instead."
+                "Iterable datasets are not yet supported in RLOOTrainer. Please use a standard dataset instead."
             )
 
         # Multi-step
-        self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
-        self.epsilon_low = args.epsilon
-        self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.num_iterations = args.num_iterations
+        self.epsilon = args.epsilon
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
@@ -703,7 +697,7 @@ class GRPOTrainer(Trainer):
         self._buffered_inputs = None
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
-        # input tensor associated with the key "input_ids". However, in GRPO, the sampled data does not include the
+        # input tensor associated with the key "input_ids". However, in RLOO, the sampled data does not include the
         # "input_ids" key. Instead, the available keys is "prompt". As a result, the trainer issues the warning:
         # "Could not estimate the number of tokens of the input, floating-point operations will not be computed." To
         # suppress this warning, we set the "estimate_tokens" key in the model's "warnings_issued" dictionary to True.
@@ -713,7 +707,7 @@ class GRPOTrainer(Trainer):
         super().__init__(
             model=model,
             args=args,
-            data_collator=identity,  # No data collation is needed in GRPO
+            data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
@@ -741,25 +735,6 @@ class GRPOTrainer(Trainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
-
-        # Liger loss
-        if self.use_liger_loss:
-            if not is_liger_kernel_available():
-                raise ImportError(
-                    "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
-                )
-            # redirect the model.module forward to the model forward to ensure pre-forward hooks are called
-            self._forward_redirection = _ForwardRedirection()
-
-            self.liger_grpo_loss = LigerFusedLinearGRPOLoss(
-                beta=self.beta,
-                epsilon_low=self.epsilon_low,
-                epsilon_high=self.epsilon_high,
-                temperature=self.temperature,
-                use_ref_model=self.beta != 0.0,
-                loss_type=self.loss_type,
-                max_completion_length=self.max_completion_length,
-            )
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -904,7 +879,7 @@ class GRPOTrainer(Trainer):
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
-        # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
+        # In RLOOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
             self._signature_columns = ["prompt", "image"]
@@ -917,7 +892,7 @@ class GRPOTrainer(Trainer):
     # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
     # splitting internally.
     # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification. As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
+    # modification. As a result, some parts of the method aren't relevant to RLOO, but we keep them to stay one line
     # apart from the super method, ensuring easier maintenance in the future.
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -996,7 +971,7 @@ class GRPOTrainer(Trainer):
             seed=self.args.seed,
         )
 
-    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
+    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: RLOOConfig_NEW) -> PreTrainedModel:
         """Enables gradient checkpointing for the model."""
         # Ensure use_cache is disabled
         model.config.use_cache = False
@@ -1045,6 +1020,7 @@ class GRPOTrainer(Trainer):
         last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
+    # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
         self,
@@ -1518,6 +1494,7 @@ class GRPOTrainer(Trainer):
                 prompt_completion_ids = unwrapped_model.generate(
                     **prompt_inputs, generation_config=self.generation_config
                 )
+
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
             prompt_ids = prompt_completion_ids[:, :prompt_length]
@@ -1612,19 +1589,49 @@ class GRPOTrainer(Trainer):
         rewards_per_func = self._calculate_rewards(inputs, original_prompts, completions, completion_ids_list)
 
         # Apply weights to each reward function's output and sum
-        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+        scores = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+
+        # Compute total reward including the KL penalty
+        # Here the KL is computed from the old_policy model to be consistent with the old RLOO/PPO/openRLHF implementation.
+        # However, by definition it has to be computed with respect to the updated_policy! We compute it this way since the 
+        # assumption here is that bc the updated_policy is only ahead by 1 step so it doesn't matter much!
+        if self.beta != 0.0:
+            kl = old_per_token_logps - ref_per_token_logps
+            if self.token_level_kl:
+                # Token-level KL penalty: apply KL penalty per token
+                kl_reward = -self.beta * kl
+
+                # Get the index of the last non-padded token for each sequence
+                eos_indices = (
+                    completion_mask.size(1) - 1 - completion_mask.long().fliplr().argmax(dim=1, keepdim=True)
+                )
+                last_reward = torch.zeros_like(kl)
+                # Ensure scores has correct shape and type
+                scores_shaped = scores.reshape(-1, 1).to(kl.dtype)
+                last_reward.scatter_(dim=1, index=eos_indices, src=scores_shaped)
+
+                # Combine KL reward and last reward
+                reward = last_reward + kl_reward
+                rewards = reward.sum(1)  # Sum across sequence length
+            else:
+                # Sequence-level KL penalty
+                sequence_kl = kl.sum(1)
+                rewards = scores - self.beta * sequence_kl
+        else:
+            rewards = scores
 
         # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        grouped_rewards = rewards.view(-1, self.num_generations)
+        mean_grouped_rewards = grouped_rewards.mean(dim=1)
+        std_grouped_rewards = grouped_rewards.std(dim=1)
         is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
 
-        # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = rewards - mean_grouped_rewards
-        if self.scale_rewards:
-            advantages = advantages / (std_grouped_rewards + 1e-4)
+        # Leave-one-out baseline calculation
+        baseline = (grouped_rewards.sum(dim=1, keepdim=True) - grouped_rewards) / (self.num_generations - 1)
+        advantages = (grouped_rewards - baseline).flatten()
+
+        if self.normalize_advantages:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1638,6 +1645,11 @@ class GRPOTrainer(Trainer):
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
+
+        # Log KL divergence if KL penalty is used
+        if self.beta != 0.0:
+            mean_kl = (kl * completion_mask).sum() / completion_mask.sum()
+            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         # Log completion lengths, mean, min, max
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
@@ -1681,68 +1693,17 @@ class GRPOTrainer(Trainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "rewards": rewards,
+            "old_per_token_logps": old_per_token_logps,
+            "ref_per_token_logps": ref_per_token_logps,
             "advantages": advantages,
         }
-        if old_per_token_logps is not None:
-            output["old_per_token_logps"] = old_per_token_logps
-        if ref_per_token_logps is not None:
-            output["ref_per_token_logps"] = ref_per_token_logps
-        if "pixel_values" in prompt_inputs:
-            output["pixel_values"] = prompt_inputs["pixel_values"]
-        if "image_grid_thw" in prompt_inputs:
-            output["image_grid_thw"] = prompt_inputs["image_grid_thw"]
-        return output
-
-    def compute_liger_loss(self, unwrapped_model, inputs):
-        # Compute the per-token log probabilities for the model
-        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
-        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
-        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-
-        # Get the last hidden state of the model
-        last_hidden_state = self._get_last_hidden_state(
-            unwrapped_model,
-            input_ids,
-            attention_mask,
-            logits_to_keep,
-            inputs.get("pixel_values"),
-            inputs.get("image_grid_thw"),
-        )
-
-        # compute loss and metrics using liger grpo loss
-        loss, metrics = self.liger_grpo_loss(
-            _input=last_hidden_state,
-            lin_weight=unwrapped_model.lm_head.weight,
-            selected_token_ids=completion_ids,
-            attention_mask=completion_mask,
-            advantages=inputs["advantages"],
-            bias=unwrapped_model.lm_head.bias,
-            old_per_token_logps=inputs.get("old_per_token_logps"),
-            ref_per_token_logps=inputs.get("ref_per_token_logps"),
-        )
-        # Extract metrics from the liger_grpo_loss output
-        # KL divergence is the first metric when beta is non-zero
-        mean_kl = metrics[0] if self.beta != 0.0 else None
-        clip_ratio = metrics[-1]
-
-        mode = "train" if self.model.training else "eval"
-        if self.beta != 0.0:
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
-        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        return loss
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
-            raise ValueError("The GRPOTrainer does not support returning outputs")
-        if self.use_liger_loss:
-            # Compute the loss using the liger grpo loss
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
-        else:
-            return self._compute_loss(model, inputs)
+            raise ValueError("The RLOOTrainer does not support returning outputs")
+        return self._compute_loss(model, inputs)
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
@@ -1768,59 +1729,33 @@ class GRPOTrainer(Trainer):
         else:
             entropy_mask = None
 
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
-            )
-
         # Compute the loss
         advantages = inputs["advantages"]
+        #Sequence-level log probabilities
+        logprobs = (per_token_logps * completion_mask).sum(-1)
         # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
         # old_per_token_logps == per_token_logps, so we can skip it's computation
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
-        old_per_token_logps = inputs.get("old_per_token_logps")
-        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
-        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-
-        # Two-sided clipping
-        if self.args.delta is not None:
-            coef_1 = torch.clamp(coef_1, max=self.args.delta)
-
-        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
-        if entropy_mask is not None:
-            per_token_loss = per_token_loss * entropy_mask
-        if self.beta != 0.0:
-            per_token_loss = per_token_loss + self.beta * per_token_kl
-
-        if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-        else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
-
+        old_per_token_logps = (
+            per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
+        )
+        old_logprobs = (old_per_token_logps * completion_mask).sum(-1)
+        coef_1 = torch.exp(logprobs - old_logprobs)
+        pg_losses = -advantages * coef_1
+        pg_losses2 = -advantages * torch.clamp(coef_1, 1.0 - self.epsilon, 1.0 + self.epsilon)
+        loss = torch.max(pg_losses, pg_losses2).mean()
+        
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        if self.beta != 0.0:
-            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
-
-        # Compute the clipped probability ratios
-        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
-        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+        # Compute the clipped probability ratios (sequence-level, same as original RLOO)
+        is_low_clipped = (coef_1 < 1 - self.epsilon) & (advantages < 0)
+        is_high_clipped = (coef_1 > 1 + self.epsilon) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
 
-        low_clip = (is_low_clipped * completion_mask).sum() / completion_mask.sum()
-        high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
-        clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
+        low_clip = is_low_clipped.float().mean()
+        high_clip = is_high_clipped.float().mean()
+        clip_ratio = is_region_clipped.float().mean()
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
@@ -1830,6 +1765,7 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
         gathered_clip_ratio = self.accelerator.gather(clip_ratio)
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
+
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
@@ -1938,11 +1874,14 @@ class GRPOTrainer(Trainer):
 
         citation = textwrap.dedent(
             """\
-            @article{zhihong2024deepseekmath,
-                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
-                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
+            @inproceedings{ahmadian2024back,
+                title        = {{Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs}},
+                author       = {Arash Ahmadian and Chris Cremer and Matthias Gall{\'{e}} and Marzieh Fadaee and Julia Kreutzer and Olivier Pietquin and Ahmet {\"{U}}st{\"{u}}n and Sara Hooker},
                 year         = 2024,
-                eprint       = {arXiv:2402.03300},
+                booktitle    = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), {ACL} 2024, Bangkok, Thailand, August 11-16, 2024},
+                publisher    = {Association for Computational Linguistics},
+                pages        = {12248--12267},
+                editor       = {Lun{-}Wei Ku and Andre Martins and Vivek Srikumar},
             }
             """
         )
@@ -1953,12 +1892,12 @@ class GRPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
-            trainer_name="GRPO",
+            trainer_name="RLOO",
             trainer_citation=citation,
-            paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
-            paper_id="2402.03300",
+            paper_title="Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",
+            paper_id="2402.14740",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
