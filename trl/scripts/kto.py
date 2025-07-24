@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+# ]
+# ///
+
 """
 Run the KTO training script with the commands below. In general, the optimal configuration for KTO will be similar to
 that of DPO.
