@@ -13,17 +13,20 @@
 # limitations under the License.
 
 import argparse
+import base64
 import logging
 import os
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from io import BytesIO
 from itertools import chain
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
+from transformers import is_vision_available
 
 from trl import TrlParser
 from trl.import_utils import (
@@ -45,6 +48,10 @@ if is_pydantic_available():
 
 if is_uvicorn_available():
     import uvicorn
+
+
+if is_vision_available():
+    from PIL import Image
 
 
 if is_vllm_available():
@@ -426,6 +433,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
+        images: Optional[list[str]] = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -447,6 +455,7 @@ def main(script_args: ScriptArguments):
         Args:
             request (`GenerateRequest`):
                 - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
+                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process along with prompts.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
                 - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during generation.
                 - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead to more random outputs.
@@ -471,6 +480,14 @@ def main(script_args: ScriptArguments):
         {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
         ```
         """
+        request.images = request.images or [None] * len(request.prompts)
+
+        prompts = []
+        for prompt, image in zip(request.prompts, request.images):
+            row = {"prompt": prompt}
+            if image is not None:
+                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+            prompts.append(row)
 
         # Guided decoding, if enabled
         if request.guided_decoding_regex is not None:
@@ -492,7 +509,7 @@ def main(script_args: ScriptArguments):
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
-        chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+        chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
 
         # Send the prompts to each worker
         for connection, prompts in zip(connections, chunked_prompts):

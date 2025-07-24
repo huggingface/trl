@@ -54,13 +54,7 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager
 from .sft_config import SFTConfig
-from .utils import (
-    ConstantLengthDataset,
-    generate_model_card,
-    get_comet_experiment_url,
-    pad,
-    peft_module_casting_to_bf16,
-)
+from .utils import generate_model_card, get_comet_experiment_url, pad, peft_module_casting_to_bf16
 
 
 if is_peft_available():
@@ -312,7 +306,7 @@ class SFTTrainer(Trainer):
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoTokenizer.from_pretrained`].
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
@@ -651,10 +645,6 @@ class SFTTrainer(Trainer):
         formatting_func: Optional[Callable[[dict], str]],
         dataset_name: str,
     ) -> Union[Dataset, IterableDataset]:
-        # Convert the dataset to an IterableDataset if it is a ConstantLengthDataset
-        if isinstance(dataset, ConstantLengthDataset):
-            return dataset
-
         # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
         # sampled data.
         if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
@@ -738,17 +728,23 @@ class SFTTrainer(Trainer):
 
                 def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
                     if "prompt" in example:  # prompt-completion case
+                        output = {}
                         if is_conversational(example):
                             prompt_ids = processing_class.apply_chat_template(
                                 example["prompt"],
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
-                            prompt_completion_ids = processing_class.apply_chat_template(
+                            prompt_completion_processed = processing_class.apply_chat_template(
                                 example["prompt"] + example["completion"],
+                                return_dict=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
+                            prompt_completion_ids = prompt_completion_processed["input_ids"]
+                            if "assistant_masks" in prompt_completion_processed:
+                                output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
                         else:
                             prompt_ids = processing_class(text=example["prompt"])["input_ids"]
                             prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
@@ -765,7 +761,8 @@ class SFTTrainer(Trainer):
 
                         # Create a completion mask
                         completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        processed = {"input_ids": prompt_completion_ids, "completion_mask": completion_mask}
+                        output["input_ids"] = prompt_completion_ids
+                        output["completion_mask"] = completion_mask
 
                     else:  # language modeling case
                         if is_conversational(example):
@@ -784,10 +781,10 @@ class SFTTrainer(Trainer):
                                     "check the template and ensure it's correctly configured to support assistant "
                                     "masking."
                                 )
-                            processed = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
+                            output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
-                            processed = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
-                    return processed
+                            output = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
+                    return output
 
                 dataset = dataset.map(
                     tokenize,
@@ -805,7 +802,15 @@ class SFTTrainer(Trainer):
                     raise ValueError("When packing is enabled, `max_length` can't be `None`.")
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
-                dataset = dataset.select_columns("input_ids")
+
+                columns = ["input_ids"]
+                if "completion_mask" in dataset.column_names:
+                    columns.append("completion_mask")
+                if "assistant_masks" in dataset.column_names:
+                    columns.append("assistant_masks")
+
+                dataset = dataset.select_columns(columns)
+
                 # Packing adds new column "seq_lengths" needed for document aware flash attention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:

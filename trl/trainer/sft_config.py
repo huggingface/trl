@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -116,6 +115,9 @@ class SFTConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
+    # Note: In transformers>=4.54.0, `average_tokens_across_devices` defaults to True. Overriding this setting is only
+    # needed for earlier versions. Once we require transformers>=4.54.0, this line can be safely removed.
+    # See https://github.com/huggingface/transformers/pull/39395
     average_tokens_across_devices: bool = field(
         default=True,
         metadata={
@@ -240,22 +242,6 @@ class SFTConfig(TrainingArguments):
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
-    # Deprecated parameters
-    max_seq_length: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.20.0. Use `max_length` instead."
-        },
-    )
-
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
-
         super().__post_init__()
-
-        if self.max_seq_length is not None:
-            warnings.warn(
-                "`max_seq_length` is deprecated and will be removed in version 0.20.0. Use `max_length` instead.",
-                DeprecationWarning,
-            )
-            self.max_length = self.max_seq_length

@@ -24,7 +24,6 @@ from transformers import (
     BartModel,
     BloomConfig,
     BloomForCausalLM,
-    CLIPVisionConfig,
     CohereConfig,
     CohereForCausalLM,
     DbrxConfig,
@@ -35,6 +34,8 @@ from transformers import (
     FalconMambaForCausalLM,
     Gemma2Config,
     Gemma2ForCausalLM,
+    Gemma3Config,
+    Gemma3ForConditionalGeneration,
     GemmaConfig,
     GemmaForCausalLM,
     GPT2Config,
@@ -58,19 +59,21 @@ from transformers import (
     PaliGemmaForConditionalGeneration,
     Phi3Config,
     Phi3ForCausalLM,
+    Qwen2_5_VLConfig,
+    Qwen2_5_VLForConditionalGeneration,
     Qwen2Config,
     Qwen2ForCausalLM,
     Qwen2ForSequenceClassification,
+    Qwen2VLConfig,
+    Qwen2VLForConditionalGeneration,
     Qwen3Config,
     Qwen3ForCausalLM,
     Qwen3ForSequenceClassification,
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
-    SiglipVisionConfig,
     T5Config,
     T5ForConditionalGeneration,
 )
-from transformers.models.idefics2.configuration_idefics2 import Idefics2VisionConfig
 
 
 ORGANIZATION = "trl-internal-testing"
@@ -211,8 +214,8 @@ for model_id, config_class, model_class, suffix in [
 
 # Encoder-decoder models
 for model_id, config_class, model_class, suffix in [
-    ("google/flan-t5-small", T5Config, T5ForConditionalGeneration, None),
     ("facebook/bart-base", BartConfig, BartModel, None),
+    ("google/flan-t5-small", T5Config, T5ForConditionalGeneration, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
@@ -232,35 +235,44 @@ for model_id, config_class, model_class, suffix in [
 
 
 # Vision Language Models
-# fmt: off
-for model_id, config_class, text_config_class, vision_config_class, model_class in [
-    ("HuggingFaceM4/idefics2-8b", Idefics2Config, MistralConfig, Idefics2VisionConfig, Idefics2ForConditionalGeneration),
-    ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlamaConfig, CLIPVisionConfig, LlavaForConditionalGeneration),
-    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, MistralConfig, CLIPVisionConfig, LlavaNextForConditionalGeneration),
-    ("google/paligemma-3b-pt-224", PaliGemmaConfig, GemmaConfig, SiglipVisionConfig, PaliGemmaForConditionalGeneration),
+for model_id, config_class, model_class in [
+    ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
+    ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
+    ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
+    ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
+    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
+    ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLConfig, Qwen2VLForConditionalGeneration),
+    ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLConfig, Qwen2_5_VLForConditionalGeneration),
 ]:
-# fmt: on
     processor = AutoProcessor.from_pretrained(model_id)
     kwargs = {}
+    text_kwargs = {}
+    vision_kwargs = {}
     if config_class == PaliGemmaConfig:
         kwargs["projection_dim"] = 8
-    vision_kwargs = {}
-    if vision_config_class in [CLIPVisionConfig, SiglipVisionConfig]:
+    if config_class in [LlavaConfig, LlavaNextConfig, PaliGemmaConfig]:
         vision_kwargs["projection_dim"] = 8
-    if vision_config_class == CLIPVisionConfig:
+    if config_class in [LlavaConfig, LlavaNextConfig]:
         vision_kwargs["image_size"] = 336
         vision_kwargs["patch_size"] = 14
+    if config_class in [Qwen2VLConfig, Qwen2_5_VLConfig]:
+        kwargs["vision_start_token_id"] = 151652
+        text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [1]}
+        vision_kwargs["depth"] = 4
+        vision_kwargs["embed_dim"] = 64
+
     config = config_class(
-        text_config=text_config_class(
+        text_config=dict(
             vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
             hidden_size=8,
             num_attention_heads=4,
             num_key_value_heads=2,
             num_hidden_layers=2,
             intermediate_size=32,
+            **text_kwargs,
         ),
-        vision_config=vision_config_class(
-            hidden_size=8,
+        vision_config=dict(
+            hidden_size=16,
             num_attention_heads=4,
             num_hidden_layers=2,
             intermediate_size=32,
