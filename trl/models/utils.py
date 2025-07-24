@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import torch.nn as nn
 from packaging import version
-from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
+from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
@@ -149,7 +149,7 @@ def clone_chat_template(
     tokenizer: PreTrainedTokenizer,
     source_tokenizer_path: str,
     resize_to_multiple_of: Optional[int] = 64,
-) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[AddedToken]]:
     """
     Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
 
@@ -158,7 +158,8 @@ def clone_chat_template(
     - Adds any new tokens from the source tokenizer to the target tokenizer.
     - Sets and synchronizes the EOS token across the tokenizer and model.
     - Resizes the model's token embeddings to match the new vocabulary size, optionally rounding it up to a multiple of
-      a specified value.
+      a specified value. In such cases, dummy tokens are added to the tokenizer to ensure the vocabulary size matches
+      the embedding dimensions.
 
     Args:
         model (`PreTrainedModel`):
@@ -176,6 +177,8 @@ def clone_chat_template(
             Updated model with resized token embeddings and EOS token configured.
         tokenizer (`~transformers.PreTrainedTokenizer`):
             Updated tokenizer with the chat template and special tokens applied.
+        added_tokens (`list[AddedToken]`):
+            List of tokens that were added to the tokenizer from the source tokenizer.
 
     Example:
     ```python
@@ -184,7 +187,7 @@ def clone_chat_template(
 
     model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
-    model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+    model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
     ```
     """
     # Load the source tokenizer containing the desired chat template
@@ -194,7 +197,10 @@ def clone_chat_template(
     tokenizer.chat_template = tokenizer_source.get_chat_template()
 
     # Ensure all added tokens from the source are available in the target tokenizer
-    tokenizer.add_tokens(list(tokenizer_source.added_tokens_decoder.values()))
+    added_tokens = [
+        token for token in tokenizer_source.added_tokens_decoder.values() if token.content not in tokenizer.vocab
+    ]
+    tokenizer.add_tokens(added_tokens)
 
     # Set the EOS token from the source tokenizer (important for generation)
     tokenizer.eos_token = tokenizer_source.eos_token
@@ -210,7 +216,27 @@ def clone_chat_template(
         pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
     )
 
-    return model, tokenizer
+    # After padding, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
+    # ensure vocabulary size matches the embedding matrix dimensions.
+    new_embedding_size = model.get_input_embeddings().weight.size(0)
+    vocab_size_before_padding = len(tokenizer.vocab)
+
+    if new_embedding_size > vocab_size_before_padding:
+        # Add dummy tokens to fill the gap created by padding
+        num_dummy_tokens = new_embedding_size - vocab_size_before_padding
+        dummy_tokens = [AddedToken(f"<extra_id_{idx}>") for idx in range(num_dummy_tokens)]
+        tokenizer.add_tokens(dummy_tokens)
+        added_tokens.extend(dummy_tokens)
+
+    # Verify that vocabulary size now matches embedding dimensions
+    if len(tokenizer.vocab) != new_embedding_size:
+        raise RuntimeError(
+            f"Vocabulary size mismatch after resizing: tokenizer vocab size is {len(tokenizer.vocab)}, but model "
+            f"embedding size is {new_embedding_size}. This indicates an internal error in the token alignment process."
+        )
+    added_tokens = [token.content for token in added_tokens]
+    added_tokens = tokenizer.convert_tokens_to_ids(added_tokens)
+    return model, tokenizer, added_tokens
 
 
 def remove_hooks(model: "DeepSpeedEngine") -> None:
