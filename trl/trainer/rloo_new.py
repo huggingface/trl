@@ -11,14 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import copy
+
 import os
-import inspect
 import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
-from collections.abc import Sequence, Sized
+from collections.abc import Sized
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
@@ -35,14 +34,12 @@ from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
-    AutoConfig,
+    AutoModelForCausalLM,
     AutoModelForSequenceClassification,
-    AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    ProcessorMixin,
     Trainer,
     TrainerCallback,
     is_wandb_available,
@@ -81,7 +78,7 @@ if is_wandb_available():
     import wandb
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
-# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
+# rewards. When its a string, its a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
@@ -231,34 +228,28 @@ def split_tensor_dict(
     ]
 
 
-def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
+def shuffle_tensor_dict(tensor_dict: dict[str, Optional[torch.Tensor]]) -> dict[str, Optional[torch.Tensor]]:
     """
-    Shuffles all sequence-like values in a dictionary along the first dimension in unison.
+    Shuffles a dictionary of tensors along the first dimension in unison.
 
     Example:
     ```python
     >>> x = torch.arange(6).reshape(3, 2)
-    >>> y = ["a", "b", "c"]
-    >>> seq_dict = {"x": x, "y": y}
-    >>> shuffle_sequence_dict(seq_dict)
+    >>> y = torch.arange(3).reshape(3, 1)
+    >>> tensor_dict = {"x": x, "y": y}
+    >>> shuffle_tensor_dict(tensor_dict)
     {'x': tensor([[2, 3],
-                  [0, 1],
-                  [4, 5]]),
-     'y': ['b', 'a', 'c']}
+                    [0, 1],
+                    [4, 5]]),
+        'y': tensor([[1],
+                    [0],
+                    [2]])}
     ```
     """
-    # Determine batch size from the first non-None sequence
-    batch_size = len(next(v for v in seq_dict.values() if v is not None))
+    first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
+    batch_size = first_tensor.shape[0]
     permutation = torch.randperm(batch_size)
-
-    def permute(v: Optional[Sequence]) -> Optional[Sequence]:
-        if v is None:
-            return None
-        if isinstance(v, torch.Tensor):
-            return v[permutation]
-        return [v[i] for i in permutation]
-
-    return {key: permute(val) for key, val in seq_dict.items()}
+    return {key: tensor[permutation] if tensor is not None else None for key, tensor in tensor_dict.items()}
 
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
@@ -295,37 +286,6 @@ def identity(x):
     """Do we really need docs for this?"""
     return x
 
-def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
-    """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
-    `batch["image_grid_thw"]`, while keeping other entries unchanged.
-    """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch:
-        return batch
-
-    lengths = batch["image_grid_thw"].prod(dim=1).tolist()  # [batch_size]
-    pixel_values = batch["pixel_values"]  # [total, feature_dim]
-
-    if sum(lengths) != pixel_values.size(0):
-        raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
-
-    split_values = list(torch.split(batch["pixel_values"], lengths, dim=0))
-    return {**batch, "pixel_values": split_values}
-
-
-def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
-    """
-    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]`
-    back into a single tensor along the first dimension.
-    """
-    pixel_values = batch.get("pixel_values")
-
-    if isinstance(pixel_values, list):
-        merged = torch.cat(pixel_values, dim=0)
-        return {**batch, "pixel_values": merged}
-    else:
-        return batch
-
 
 def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
     """
@@ -352,61 +312,6 @@ def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold
     entropy_mask = masked_entropies >= entropy_threshold
     return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
-def truncate_with_protected_tokens(
-    ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Truncate tensors to target length while preserving protected tokens.
-
-    Args:
-        ids (`torch.Tensor`):
-            Input tensor of token IDs, shape (batch_size, sequence_length).
-        mask (`torch.Tensor`):
-            Input tensor of attention masks, shape (batch_size, sequence_length).
-        target_length (`int`):
-            Desired length of the output sequences.
-        protected_tokens (`list[int]`):
-            List of token IDs that should be preserved in the output.
-    """
-    protected_set = set(protected_tokens)
-
-    def process_sequence(ids, mask):
-        # Create boolean masks
-        is_protected = torch.tensor([x.item() in protected_set for x in ids])
-        is_non_protected = ~is_protected
-
-        # Count tokens
-        num_protected = is_protected.sum().item()
-        num_non_protected_needed = target_length - num_protected
-
-        if num_non_protected_needed < 0:
-            raise ValueError(
-                f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-                f"Please increase target length to at least {num_protected} or disable truncation."
-            )
-
-        # Select which non-protected tokens to keep (rightmost ones)
-        non_protected_indices = torch.where(is_non_protected)[0]
-        keep_non_protected = torch.zeros_like(is_non_protected)
-        if num_non_protected_needed > 0:
-            keep_indices = non_protected_indices[-num_non_protected_needed:]
-            keep_non_protected[keep_indices] = True
-
-        # Final mask: protected OR selected non-protected
-        keep_mask = is_protected | keep_non_protected
-
-        return ids[keep_mask], mask[keep_mask]
-
-    # Process each sequence in the batch
-    truncated_seq = []
-    truncated_mask = []
-
-    for i in range(ids.shape[0]):
-        new_ids, new_mask = process_sequence(ids[i], mask[i])
-        truncated_seq.append(new_ids)
-        truncated_mask.append(new_mask)
-
-    return torch.stack(truncated_seq), torch.stack(truncated_mask)
 
 class RLOOTrainer_NEW(Trainer):
     """
@@ -516,11 +421,11 @@ class RLOOTrainer_NEW(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        reward_funcs: Union[RewardFunc, list[RewardFunc], None] = None,
         args: Optional[RLOOConfig_NEW] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
+        processing_class: Optional[PreTrainedTokenizerBase] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
@@ -549,9 +454,10 @@ class RLOOTrainer_NEW(Trainer):
                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            model_init_kwargs["use_cache"] = (
+                False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
+            )
+            model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
@@ -559,14 +465,6 @@ class RLOOTrainer_NEW(Trainer):
                     "You passed `model_init_kwargs` to the `RLOOConfig_NEW`, but your model is already instantiated. "
                     "This argument can only be used when the `model` argument is a string."
                 )
-
-        # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
-        # Inspect the forward method before we wrap the model with PEFT
-        self.model_kwarg_keys = (
-            inspect.signature(model.forward).parameters.keys()
-            if not hasattr(model, "get_base_model")
-            else inspect.signature(model.get_base_model().forward).parameters.keys()
-        )
 
         if peft_config is not None:
             if not is_peft_available():
@@ -579,28 +477,11 @@ class RLOOTrainer_NEW(Trainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
+            processing_class = AutoTokenizer.from_pretrained(model.config._name_or_path, padding_side="left")
+        if processing_class.pad_token is None:
+            processing_class.pad_token = processing_class.eos_token
 
-        # Handle pad token for processors or tokenizers
-        if isinstance(processing_class, ProcessorMixin):
-            tokenizer = processing_class.tokenizer
-        elif isinstance(processing_class, PreTrainedTokenizerBase):
-            tokenizer = processing_class
-        else:
-            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
-
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-
-        self.pad_token = tokenizer.pad_token
-        self.pad_token_id = tokenizer.pad_token_id
-        self.eos_token_id = tokenizer.eos_token_id
-        self.image_token = getattr(processing_class, "image_token", None)
-        self.image_token_id = getattr(processing_class, "image_token_id", None)
-        self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
-        self.vision_end_token_id = getattr(model.config, "vision_end_token_id", None)
-
-        # Reward functions
+        # Reward functions/models
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
         self.reward_func_names = []
@@ -660,7 +541,6 @@ class RLOOTrainer_NEW(Trainer):
         self.top_k = args.top_k
         self.min_p = args.min_p
         self.repetition_penalty = args.repetition_penalty
-        self.use_transformers_paged = args.use_transformers_paged
         self.use_vllm = args.use_vllm
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
@@ -726,9 +606,7 @@ class RLOOTrainer_NEW(Trainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            self.ref_model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
 
         # Disable dropout in the models
         if args.disable_dropout:
@@ -743,8 +621,7 @@ class RLOOTrainer_NEW(Trainer):
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
-        self._logs = {
-            "image": deque(maxlen=args.generation_batch_size),
+        self._textual_logs = {
             "prompt": deque(maxlen=args.generation_batch_size),
             "completion": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
@@ -769,7 +646,7 @@ class RLOOTrainer_NEW(Trainer):
                 else:
                     base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
                 self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                self.vllm_client.init_communicator(device=self.accelerator.device)
+                self.vllm_client.init_communicator()
 
             elif self.vllm_mode == "colocate":
                 # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have
@@ -797,10 +674,6 @@ class RLOOTrainer_NEW(Trainer):
                 os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
                 os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
 
-                if self.max_prompt_length is not None and self.max_completion_length is not None:
-                    max_model_len = self.max_prompt_length + self.max_completion_length
-                else:
-                    max_model_len = None
                 self.llm = LLM(
                     model=model.name_or_path,
                     tensor_parallel_size=args.vllm_tensor_parallel_size,
@@ -808,7 +681,7 @@ class RLOOTrainer_NEW(Trainer):
                     max_num_seqs=self.args.per_device_train_batch_size
                     * self.vllm_tensor_parallel_size
                     * self.args.steps_per_generation,
-                    max_model_len=max_model_len,
+                    max_model_len=self.max_prompt_length + self.max_completion_length,
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
@@ -829,9 +702,9 @@ class RLOOTrainer_NEW(Trainer):
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
                 "do_sample": True,
-                "pad_token_id": tokenizer.pad_token_id,
-                "bos_token_id": tokenizer.bos_token_id,
-                "eos_token_id": tokenizer.eos_token_id,
+                "pad_token_id": processing_class.pad_token_id,
+                "bos_token_id": processing_class.bos_token_id,
+                "eos_token_id": processing_class.eos_token_id,
                 "temperature": self.temperature,
                 "top_p": self.top_p,
                 "top_k": self.top_k,
@@ -882,7 +755,7 @@ class RLOOTrainer_NEW(Trainer):
         # In RLOOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image"]
+            self._signature_columns = ["prompt"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -994,44 +867,19 @@ class RLOOTrainer_NEW(Trainer):
         return model
 
     @profiling_decorator
-    def _get_last_hidden_state(
-        self, unwrapped_model, input_ids, attention_mask, logits_to_keep, pixel_values, image_grid_thw
-    ):
+    def _get_last_hidden_state(self, unwrapped_model, input_ids, attention_mask, logits_to_keep=None):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
-
-        # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
-
-        if image_grid_thw is not None and pixel_values is not None:
-            model_inputs["image_grid_thw"] = image_grid_thw
-        if pixel_values is not None:
-            model_inputs["pixel_values"] = pixel_values
-
-        # Only add logits_to_keep if the model supports it
-        if "logits_to_keep" in self.model_kwarg_keys:
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-        last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
-        # Exclude the last value: it corresponds to the next token pred
+        last_hidden_state = unwrapped_model.model(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
-        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-        last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+        if logits_to_keep is not None:
+            last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
     # Get the per-token log probabilities for the completions for the model and the reference model
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
-        self,
-        model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-        batch_size=None,
-        compute_entropy=False,
-        pixel_values=None,
-        image_grid_thw=None,
+        self, model, input_ids, attention_mask, logits_to_keep, batch_size=None, compute_entropy=False
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log‐probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -1041,27 +889,16 @@ class RLOOTrainer_NEW(Trainer):
             input_ids_batch = input_ids[start : start + batch_size]
             attention_mask_batch = attention_mask[start : start + batch_size]
 
-            # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
-            model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
-
-            if image_grid_thw is not None and pixel_values is not None:
-                model_inputs["image_grid_thw"] = image_grid_thw[start : start + batch_size]
-                start_pixel_idx = image_grid_thw[:start].prod(-1).sum().item()
-                end_pixel_idx = image_grid_thw[: start + batch_size].prod(-1).sum().item()
-                model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
-            elif pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
-
-            # Only add logits_to_keep if the model supports it
-            if "logits_to_keep" in self.model_kwarg_keys:
-                # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-                model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-            logits = model(**model_inputs).logits
-            # Exclude the last value: it corresponds to the next token pred
-            logits = logits[:, :-1, :]  # (B, L-1, H)
-            # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-            logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
+            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
+            logits = model(
+                input_ids=input_ids_batch,
+                attention_mask=attention_mask_batch,
+                logits_to_keep=logits_to_keep + 1,
+            ).logits
+            logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token pred
+            # For transformers<=4.48, logits_to_keep argument isn't supported, so here we drop logits ourselves.
+            # See https://github.com/huggingface/trl/issues/2770
+            logits = logits[:, -logits_to_keep:]
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
@@ -1199,10 +1036,8 @@ class RLOOTrainer_NEW(Trainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
-                generation_batch = split_pixel_values_by_grid(generation_batch)
-                generation_batch = shuffle_sequence_dict(generation_batch)
-                generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
-                self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
+                generation_batch = shuffle_tensor_dict(generation_batch)
+                self._buffered_inputs = split_tensor_dict(generation_batch, self.args.steps_per_generation)
             inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
             self._step += 1
         else:
@@ -1271,37 +1106,10 @@ class RLOOTrainer_NEW(Trainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
-
-        # We don't yet support visual reward models/function, so we keep a copy of the original text-only prompts for
-        # later use in the reward computation. If images are present, we insert {"type": "image"} as required by the
-        # VLM chat template.
-        original_prompts = copy.deepcopy(prompts)
-
-        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
-        # [{"role": "user", "content": "What color is the sky?"}] to
-        # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
-        kwargs = {}
-        has_images = "image" in inputs[0]
-        if has_images:
-            images = [example.get("image") for example in inputs]
-            kwargs = {"images": [[img] for img in images]}
-            for prompt in prompts:
-                if isinstance(prompt, list):
-                    for message in prompt:
-                        if isinstance(message, dict) and message.get("role") == "user":
-                            if isinstance(message.get("content"), str):
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
-                            break
-
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
         prompt_inputs = self.processing_class(
-            text=prompts_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            add_special_tokens=False,
-            **kwargs,
+            text=prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
@@ -1310,25 +1118,14 @@ class RLOOTrainer_NEW(Trainer):
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
             # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
             # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
-            protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
-            protected = [token for token in protected if token is not None]
-            prompt_ids, prompt_mask = truncate_with_protected_tokens(
-                prompt_ids, prompt_mask, self.max_prompt_length, protected
-            )
-
+            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
-
-            # The chat template inserts a single image token into the prompt text. However, when this text is later
-            # tokenized, the single image token string is expanded into multiple image token IDs, depending on the
-            # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
-            # collapse them back into a single token string to match the original template.
-            if self.image_token is not None:
-                prompts_text = [
-                    re.sub(rf"({re.escape(self.image_token)})+", self.image_token, text) for text in prompts_text
-                ]
+            prompts_text = [
+                re.sub(rf"^({re.escape(self.processing_class.pad_token)})+", "", text) for text in prompts_text
+            ]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1340,24 +1137,14 @@ class RLOOTrainer_NEW(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
-                if has_images:
-                    all_images = gather_object(images)
-
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
                     # prompt individually.
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-
-                    if has_images:
-                        ordered_set_of_images = all_images[:: self.num_generations]
-                    else:
-                        ordered_set_of_images = None
-
                     with profiling_context(self, "vLLM.generate"):
                         completion_ids = self.vllm_client.generate(
                             prompts=ordered_set_of_prompts,
-                            images=ordered_set_of_images,
                             n=self.num_generations,
                             repetition_penalty=self.repetition_penalty,
                             temperature=self.temperature,
@@ -1382,7 +1169,7 @@ class RLOOTrainer_NEW(Trainer):
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
-                    guided_decoding = GuidedDecodingParams(regex=self.guided_decoding_regex)
+                    guided_decoding = GuidedDecodingParams(backend="outlines", regex=self.guided_decoding_regex)
                 else:
                     guided_decoding = None
 
@@ -1407,29 +1194,11 @@ class RLOOTrainer_NEW(Trainer):
                     gathered_prompts = [None for _ in range(self.vllm_tensor_parallel_size)]
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
                     all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
-
-                    if has_images:
-                        gathered_images = [None for _ in range(self.vllm_tensor_parallel_size)]
-                        torch.distributed.all_gather_object(gathered_images, images, group=self.tp_group)
-                        all_images = [img for sublist in gathered_images for img in sublist]
-                    else:
-                        all_images = None
                 else:
                     all_prompts_text = prompts_text
-                    all_images = images if has_images else None
-
-                if has_images and all_images:
-                    vllm_inputs = []
-                    for prompt, image in zip(all_prompts_text, all_images):
-                        if image is not None:
-                            vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image}})
-                        else:
-                            vllm_inputs.append(prompt)
-                else:
-                    vllm_inputs = all_prompts_text
 
                 with profiling_context(self, "vLLM.generate"):
-                    all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
+                    all_outputs = self.llm.generate(all_prompts_text, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
@@ -1442,13 +1211,11 @@ class RLOOTrainer_NEW(Trainer):
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
+            completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
 
         elif self.use_transformers_paged:
-            # Re-process inputs for paged generation if needed
-            # Note: images are already validated and preprocessed above
-            paged_prompt_inputs = self.processing_class(text=prompts_text, **kwargs)
+            prompt_inputs = self.processing_class(text=prompts_text)
             previous_attn = self.model_wrapped.config._attn_implementation
 
             if is_flash_attn_2_available():
@@ -1470,13 +1237,15 @@ class RLOOTrainer_NEW(Trainer):
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
                     all_outputs = unwrapped_model.generate_batch(
-                        paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
+                        prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
                     )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
-            prompt_ids = [torch.tensor(ids, device=device) for ids in paged_prompt_inputs.input_ids]
-            prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+            completion_ids = pad(
+                completion_ids, padding_value=self.processing_class.pad_token_id, padding_side="right"
+            )
+            prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_inputs.input_ids]
+            prompt_ids = pad(prompt_ids, padding_value=self.processing_class.pad_token_id, padding_side="left")
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
             # Restore the original attention implementation, training mode
             self.model_wrapped.config._attn_implementation = previous_attn
@@ -1490,9 +1259,8 @@ class RLOOTrainer_NEW(Trainer):
                 torch.no_grad(),
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
-                prompt_inputs["input_ids"], prompt_inputs["attention_mask"] = prompt_ids, prompt_mask
                 prompt_completion_ids = unwrapped_model.generate(
-                    **prompt_inputs, generation_config=self.generation_config
+                    prompt_ids, attention_mask=prompt_mask, generation_config=self.generation_config
                 )
 
             # Compute prompt length and extract completion ids
@@ -1501,7 +1269,7 @@ class RLOOTrainer_NEW(Trainer):
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
         # Mask everything after the first EOS token
-        is_eos = completion_ids == self.eos_token_id
+        is_eos = completion_ids == self.processing_class.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
         eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
         sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
@@ -1536,13 +1304,7 @@ class RLOOTrainer_NEW(Trainer):
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
             if self.args.gradient_accumulation_steps % generate_every != 0:
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                    self.model,
-                    prompt_completion_ids,
-                    attention_mask,
-                    logits_to_keep,
-                    batch_size,
-                    pixel_values=prompt_inputs.get("pixel_values"),
-                    image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                    self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                 )
             else:
                 old_per_token_logps = None
@@ -1551,24 +1313,12 @@ class RLOOTrainer_NEW(Trainer):
             if self.beta != 0.0:
                 if self.ref_model is not None:
                     ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                        self.ref_model,
-                        prompt_completion_ids,
-                        attention_mask,
-                        logits_to_keep,
-                        batch_size=batch_size,
-                        pixel_values=prompt_inputs.get("pixel_values"),
-                        image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                        self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
                         ref_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                            self.model,
-                            prompt_completion_ids,
-                            attention_mask,
-                            logits_to_keep,
-                            batch_size=batch_size,
-                            pixel_values=prompt_inputs.get("pixel_values"),
-                            image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                            self.model, prompt_completion_ids, attention_mask, logits_to_keep, batch_size
                         )
             else:
                 ref_per_token_logps = None
@@ -1586,52 +1336,22 @@ class RLOOTrainer_NEW(Trainer):
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
-        rewards_per_func = self._calculate_rewards(inputs, original_prompts, completions, completion_ids_list)
+        rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
 
         # Apply weights to each reward function's output and sum
-        scores = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-
-        # Compute total reward including the KL penalty
-        # Here the KL is computed from the old_policy model to be consistent with the old RLOO/PPO/openRLHF implementation.
-        # However, by definition it has to be computed with respect to the updated_policy! We compute it this way since the 
-        # assumption here is that bc the updated_policy is only ahead by 1 step so it doesn't matter much!
-        if self.beta != 0.0:
-            kl = old_per_token_logps - ref_per_token_logps
-            if self.token_level_kl:
-                # Token-level KL penalty: apply KL penalty per token
-                kl_reward = -self.beta * kl
-
-                # Get the index of the last non-padded token for each sequence
-                eos_indices = (
-                    completion_mask.size(1) - 1 - completion_mask.long().fliplr().argmax(dim=1, keepdim=True)
-                )
-                last_reward = torch.zeros_like(kl)
-                # Ensure scores has correct shape and type
-                scores_shaped = scores.reshape(-1, 1).to(kl.dtype)
-                last_reward.scatter_(dim=1, index=eos_indices, src=scores_shaped)
-
-                # Combine KL reward and last reward
-                reward = last_reward + kl_reward
-                rewards = reward.sum(1)  # Sum across sequence length
-            else:
-                # Sequence-level KL penalty
-                sequence_kl = kl.sum(1)
-                rewards = scores - self.beta * sequence_kl
-        else:
-            rewards = scores
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
         # Compute grouped-wise rewards
-        grouped_rewards = rewards.view(-1, self.num_generations)
-        mean_grouped_rewards = grouped_rewards.mean(dim=1)
-        std_grouped_rewards = grouped_rewards.std(dim=1)
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
 
-        # Leave-one-out baseline calculation
-        baseline = (grouped_rewards.sum(dim=1, keepdim=True) - grouped_rewards) / (self.num_generations - 1)
-        advantages = (grouped_rewards - baseline).flatten()
-
-        if self.normalize_advantages:
-            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        # Normalize the rewards to compute the advantages
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        advantages = rewards - mean_grouped_rewards
+        if self.scale_rewards:
+            advantages = advantages / (std_grouped_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1645,11 +1365,6 @@ class RLOOTrainer_NEW(Trainer):
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
-
-        # Log KL divergence if KL penalty is used
-        if self.beta != 0.0:
-            mean_kl = (kl * completion_mask).sum() / completion_mask.sum()
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         # Log completion lengths, mean, min, max
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
@@ -1679,24 +1394,19 @@ class RLOOTrainer_NEW(Trainer):
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
-        self._logs["prompt"].extend(gather_object(prompts_text))
-        self._logs["completion"].extend(gather_object(completions_text))
+        self._textual_logs["prompt"].extend(gather_object(prompts_text))
+        self._textual_logs["completion"].extend(gather_object(completions_text))
         for i, name in enumerate(self.reward_func_names):
-            self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
-        self._logs["advantages"].extend(all_process_advantages.tolist())
+            self._textual_logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
+        self._textual_logs["advantages"].extend(all_process_advantages.tolist())
 
-        if has_images:
-            self._logs["image"].extend(gather_object(images))
-
-        output = {
+        return {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "rewards": rewards,
             "old_per_token_logps": old_per_token_logps,
-            "ref_per_token_logps": ref_per_token_logps,
-            "advantages": advantages,
         }
 
     @profiling_decorator
@@ -1709,19 +1419,14 @@ class RLOOTrainer_NEW(Trainer):
         # Compute the per-token log probabilities for the model
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
         completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        rewards = inputs["rewards"]
         input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        # Compute the per_token_logps and the entropy (if necessary) at each position in the completion
+                # Compute the per_token_logps and the entropy (if necessary) at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
-            model,
-            input_ids,
-            attention_mask,
-            logits_to_keep,
-            compute_entropy=self.top_entropy_quantile < 1.0,
-            pixel_values=inputs.get("pixel_values"),
-            image_grid_thw=inputs.get("image_grid_thw"),
+            model, input_ids, attention_mask, logits_to_keep, compute_entropy=self.top_entropy_quantile < 1.0
         )
 
         if self.top_entropy_quantile < 1.0:
@@ -1729,33 +1434,60 @@ class RLOOTrainer_NEW(Trainer):
         else:
             entropy_mask = None
 
+        # Compute the KL divergence between the model and the reference model
+        if self.beta != 0.0:
+            ref_per_token_logps = inputs["ref_per_token_logps"]
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            )
+
         # Compute the loss
         advantages = inputs["advantages"]
-        #Sequence-level log probabilities
-        logprobs = (per_token_logps * completion_mask).sum(-1)
         # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
         # old_per_token_logps == per_token_logps, so we can skip it's computation
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = (
             per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
         )
-        old_logprobs = (old_per_token_logps * completion_mask).sum(-1)
-        coef_1 = torch.exp(logprobs - old_logprobs)
-        pg_losses = -advantages * coef_1
-        pg_losses2 = -advantages * torch.clamp(coef_1, 1.0 - self.epsilon, 1.0 + self.epsilon)
-        loss = torch.max(pg_losses, pg_losses2).mean()
-        
+        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+
+        # Two-sided clipping
+        if self.args.delta is not None:
+            coef_1 = torch.clamp(coef_1, max=self.args.delta)
+
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        if entropy_mask is not None:
+            per_token_loss = per_token_loss * entropy_mask
+        if self.beta != 0.0:
+            per_token_loss = per_token_loss + self.beta * per_token_kl
+
+        if self.loss_type == "grpo":
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
+
         # Log the metrics
         mode = "train" if self.model.training else "eval"
+
+        if self.beta != 0.0:
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
+            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         # Compute the clipped probability ratios (sequence-level, same as original RLOO)
         is_low_clipped = (coef_1 < 1 - self.epsilon) & (advantages < 0)
         is_high_clipped = (coef_1 > 1 + self.epsilon) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
 
-        low_clip = is_low_clipped.float().mean()
-        high_clip = is_high_clipped.float().mean()
-        clip_ratio = is_region_clipped.float().mean()
+        low_clip = (is_low_clipped * completion_mask).sum() / completion_mask.sum()
+        high_clip = (is_high_clipped * completion_mask).sum() / completion_mask.sum()
+        clip_ratio = (is_region_clipped * completion_mask).sum() / completion_mask.sum()
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
@@ -1792,10 +1524,10 @@ class RLOOTrainer_NEW(Trainer):
         if self.accelerator.is_main_process and self.log_completions:
             if is_rich_available():
                 print_prompt_completions_sample(
-                    self._logs["prompt"],
-                    self._logs["completion"],
-                    self._logs["rewards"],
-                    self._logs["advantages"],
+                    self._textual_logs["prompt"],
+                    self._textual_logs["completion"],
+                    self._textual_logs["rewards"],
+                    self._textual_logs["advantages"],
                     self.state.global_step,
                     self.num_completions_to_print,
                 )
@@ -1804,22 +1536,12 @@ class RLOOTrainer_NEW(Trainer):
                 import pandas as pd
 
                 table = {
-                    "step": [str(self.state.global_step)] * len(self._logs["prompt"]),
-                    "prompt": self._logs["prompt"],
-                    "completion": self._logs["completion"],
-                    **self._logs["rewards"],
-                    "advantage": self._logs["advantages"],
+                    "step": [str(self.state.global_step)] * len(self._textual_logs["prompt"]),
+                    "prompt": self._textual_logs["prompt"],
+                    "completion": self._textual_logs["completion"],
+                    **self._textual_logs["rewards"],
+                    "advantage": self._textual_logs["advantages"],
                 }
-
-                if self._logs["image"]:
-                    table["image"] = []
-                    for img in self._logs["image"]:
-                        if img is not None:
-                            # Convert images to wandb Image objects for proper visualization
-                            table["image"].append(wandb.Image(img))
-                        else:
-                            table["image"].append(None)
-
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
                     df = df.drop_duplicates(subset=["prompt"])
