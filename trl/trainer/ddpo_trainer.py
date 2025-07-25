@@ -14,11 +14,11 @@
 
 import os
 import textwrap
+import warnings
 from collections import defaultdict
 from concurrent import futures
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
-from warnings import warn
 
 import torch
 from accelerate import Accelerator
@@ -64,8 +64,12 @@ class DDPOTrainer(PyTorchModelHubMixin):
         sd_pipeline: DDPOStableDiffusionPipeline,
         image_samples_hook: Optional[Callable[[Any, Any, Any], Any]] = None,
     ):
+        warnings.warn(
+            "DDPOTrainer is deprecated and will be removed in version 0.23.0.",
+            DeprecationWarning,
+        )
         if image_samples_hook is None:
-            warn("No image_samples_hook provided; no images will be logged")
+            warnings.warn("No image_samples_hook provided; no images will be logged")
 
         self.prompt_fn = prompt_function
         self.reward_fn = reward_function
