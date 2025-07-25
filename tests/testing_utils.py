@@ -101,7 +101,7 @@ def require_3_accelerators(test_case):
     """
     torch_accelerator_module = getattr(torch, torch_device, torch.cuda)
     return unittest.skipUnless(
-        torch_accelerator_module.device_count() > 3, f"test requires at least 3 {torch_device}s"
+        torch_accelerator_module.device_count() >= 3, f"test requires at least 3 {torch_device}s"
     )(test_case)
 
 
