@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow>=9.4.0",
+# ]
+# ///
+
 """
 Total Batch size = 128 = 4 (num_gpus) * 8 (per_device_batch) * 4 (accumulation steps)
 Feel free to reduce batch size or increasing truncated_rand_backprop_min to a higher value to reduce memory usage.
