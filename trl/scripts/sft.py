@@ -61,6 +61,7 @@ python trl/scripts/sft.py \
 """
 
 import argparse
+import os
 
 from datasets import load_dataset
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -119,7 +120,23 @@ def main(script_args, training_args, model_args):
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    
+    print("{0}, {1}".format(script_args.dataset_name, script_args.dataset_path))
+    
+    if script_args.dataset_path is not None:
+        print("loading dataset from local file")
+        if os.path.exists(script_args.dataset_path) == True:
+            if not os.path.isdir(script_args.dataset_path):
+                dataset = load_dataset(path=os.getcwd(), data_files=script_args.dataset_path)
+            else:
+                dataset = load_dataset("imagefolder", data_files=script_args.dataset_path)
+    else:
+        if script_args.dataset_name is not None:
+            print("loading dataset online")
+            dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+        else:
+            print("you must choose at least one argument between --dataset_path and dataset_name. Exiting.")
+        
 
     ################
     # Training
