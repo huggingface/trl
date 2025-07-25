@@ -161,6 +161,14 @@ class OnlineDPOConfig(TrainingArguments):
             "(`pip install vllm`)."
         },
     )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={
+            "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
+            "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
+            "model implementation."
+        },
+    )
     gpu_memory_utilization: Optional[float] = field(
         default=0.55,
         metadata={

@@ -284,6 +284,14 @@ class ScriptArguments:
             "'trace'."
         },
     )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={
+            "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
+            "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
+            "model implementation."
+        },
+    )
 
 
 def llm_worker(
@@ -310,6 +318,7 @@ def llm_worker(
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
+        model_impl=script_args.vllm_model_impl,
     )
 
     # Send ready signal to parent process

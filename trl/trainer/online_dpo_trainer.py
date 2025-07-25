@@ -272,6 +272,7 @@ class OnlineDPOTrainer(Trainer):
                 model=model.name_or_path,
                 gpu_memory_utilization=args.gpu_memory_utilization,
                 dtype=torch.float32,
+                model_impl=args.vllm_model_impl,  # Add this line
                 # When release by vLLM, we would be able to distribute the model on multiple GPUs
                 # See https://github.com/vllm-project/vllm/pull/12071
                 # tensor_parallel_size=torch.cuda.device_count(),
