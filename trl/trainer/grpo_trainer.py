@@ -721,14 +721,14 @@ class GRPOTrainer(Trainer):
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
         # Entropy loss weight
-        self.entropy_coef = args.entropy_coef
-        if args.entropy_coef < 0.0:
-            # Use adaptive entropy controller when args.entropy_coef is negative
+        self.ent_coef = max(args.ent_coef, 0.0)
+        if args.use_adapt_ent:
+            # Use adaptive entropy controller
             self.ent_ctrl = AdaptiveEntropyController(
                 min_ent_coef=args.min_ent_coef,
                 max_ent_coef=args.max_ent_coef,
                 delta_ent_coef=args.delta_ent_coef,
-                target_ent=args.target_entropy,
+                target_ent=args.target_ent,
             )
         else:
             self.ent_ctrl = None
@@ -1815,7 +1815,7 @@ class GRPOTrainer(Trainer):
             input_ids,
             attention_mask,
             logits_to_keep,
-            compute_entropy=self.top_entropy_quantile < 1.0 or self.entropy_coef != 0,
+            compute_entropy=True,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
         )
@@ -1861,12 +1861,11 @@ class GRPOTrainer(Trainer):
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        if self.entropy_coef != 0:
-            per_token_entropy = logps_and_entropies["entropies"]
+        if self.ent_coef > 0 or self.ent_ctrl is not None:
             entropy_loss = agg_loss(
-                per_token_entropy, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
+                entropies, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
             )
-            entropy_loss_coef = self.entropy_coef if self.entropy_coef >= 0 else self.ent_ctrl(entropy_loss.item())
+            entropy_loss_coef = self.ent_coef if self.ent_ctrl is None else self.ent_ctrl(entropy_loss.item())
             loss = loss - entropy_loss_coef * entropy_loss
             self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
             self._metrics[mode]["entropy_loss_coef"].append(entropy_loss_coef)
