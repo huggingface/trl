@@ -71,6 +71,32 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
+    def test_training_model_str(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+            trainer = OnlineDPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_model=self.reward_model,
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
+            )
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+
     def test_training_with_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
