@@ -1033,7 +1033,7 @@ class RLOOTrainer_NEW(Trainer):
         pixel_values=None,
         image_grid_thw=None,
     ) -> dict[str, Optional[torch.Tensor]]:
-        """Compute log‐probs and (optionally) entropies for each token."""
+        """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
         all_logps = []
         all_entropies = []
@@ -1071,7 +1071,8 @@ class RLOOTrainer_NEW(Trainer):
             all_logps.append(logps)
 
             if compute_entropy:
-                entropies = entropy_from_logits(logits)
+                with torch.no_grad():
+                    entropies = entropy_from_logits(logits)
                 all_entropies.append(entropies)
 
         logps = torch.cat(all_logps, dim=0)
@@ -1713,13 +1714,13 @@ class RLOOTrainer_NEW(Trainer):
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
 
-        # Compute the per_token_logps and the entropy (if necessary) at each position in the completion
+        # Compute the per_token_logps and the entropy at each position in the completion
         per_token_logps, entropies = self._get_per_token_logps_and_entropies(
             model,
             input_ids,
             attention_mask,
             logits_to_keep,
-            compute_entropy=self.top_entropy_quantile < 1.0,
+            compute_entropy=True,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
         )
@@ -1748,14 +1749,26 @@ class RLOOTrainer_NEW(Trainer):
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        # Compute the clipped probability ratios (sequence-level, same as original RLOO)
-        is_low_clipped = (coef_1 < 1 - self.epsilon) & (advantages < 0)
-        is_high_clipped = (coef_1 > 1 + self.epsilon) & (advantages > 0)
+        completion_token_count = completion_mask.sum().clamp(min=1.0)
+
+        def masked_batch_mean(x):
+            return (x * completion_mask).sum() / completion_token_count
+
+        if self.beta != 0.0:
+            mean_kl = masked_batch_mean(per_token_kl)
+            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+
+        mean_entropy = masked_batch_mean(entropies)
+        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+
+        # Compute the clipped probability ratios
+        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
+        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
 
-        low_clip = is_low_clipped.float().mean()
-        high_clip = is_high_clipped.float().mean()
-        clip_ratio = is_region_clipped.float().mean()
+        low_clip = masked_batch_mean(is_low_clipped)
+        high_clip = masked_batch_mean(is_high_clipped)
+        clip_ratio = masked_batch_mean(is_region_clipped)
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
