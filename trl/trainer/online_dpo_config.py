@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from transformers import TrainingArguments
 
@@ -71,6 +71,9 @@ class OnlineDPOConfig(TrainingArguments):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
             improving generation speed. However, disabling this option allows training models that exceed the VRAM
             capacity of a single GPU, albeit at the cost of slower generation.
+        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
+            string.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
@@ -173,6 +176,13 @@ class OnlineDPOConfig(TrainingArguments):
             "help": "This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for "
             "generation, improving generation speed. However, disabling this option allows training models that "
             "exceed the VRAM capacity of a single GPU, albeit at the cost of slower generation."
+        },
+    )
+    model_init_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model "
+            "from a string."
         },
     )
 
