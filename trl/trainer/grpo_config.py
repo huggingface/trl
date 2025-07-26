@@ -70,8 +70,9 @@ class GRPOConfig(TrainingArguments):
             `per_device_train_batch_size * num_processes * steps_per_generation`. In other words, there is one
             generation batch processed per optimization step. Mutually exclusive with `steps_per_generation`.
         steps_per_generation: (`int` or `None`, *optional*, defaults to `None`):
-            Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
-            with `generation_batch_size`.
+            Number of mini-steps per generation. generations will be split into `steps_per_generation` steps, for each step a forward pass will be performed on.
+            if `steps_per_generation` > gradient_accumulation_steps, we will have off-policy training.
+            If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive with `generation_batch_size`.
         temperature (`float`, defaults to `1.0`):
             Temperature for sampling. The higher the temperature, the more random the completions.
         top_p (`float`, *optional*, defaults to `1.0`):
@@ -145,7 +146,7 @@ class GRPOConfig(TrainingArguments):
             KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and improving
             training speed.
         num_iterations (`int`, *optional*, defaults to `1`):
-            Number of iterations per batch (denoted as μ in the algorithm).
+            Number of iterations/epochs per generation batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
         delta: (`float` or `None`, *optional*, defaults to `None`):
@@ -305,7 +306,9 @@ class GRPOConfig(TrainingArguments):
     )
     steps_per_generation: Optional[int] = field(
         default=None,
-        metadata={"help": "Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`."},
+        metadata={"help": "Number of mini-steps per generation. generations will be split into `steps_per_generation` steps, for each step a forward pass will be performed on."
+                          "if `steps_per_generation` > gradient_accumulation_steps, we will have off-policy training."
+                          "If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive with `generation_batch_size`."},
     )
     temperature: float = field(
         default=1.0,
@@ -437,7 +440,7 @@ class GRPOConfig(TrainingArguments):
     )
     num_iterations: int = field(
         default=1,
-        metadata={"help": "Number of iterations per batch (denoted as μ in the algorithm)."},
+        metadata={"help": "Number of iterations/epochs per generation batch (denoted as μ in the algorithm)."},
     )
     epsilon: float = field(
         default=0.2,
