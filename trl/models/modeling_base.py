@@ -678,6 +678,7 @@ class GeometricMixtureWrapper(GenerationMixin):
     main_input_name = "input_ids"
     _supports_cache_class = False
     _supports_static_cache = False
+    _is_stateful = False
 
     def __init__(self, model, ref_model, generation_config, mixture_coef=0.5, device=None):
         super().__init__()
@@ -688,6 +689,8 @@ class GeometricMixtureWrapper(GenerationMixin):
         self.generation_config = generation_config
         self.mixture_coef = mixture_coef
         self.device = device
+        if hasattr(self.model, "_is_stateful"):
+            self._is_stateful = self.model._is_stateful
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
