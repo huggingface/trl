@@ -85,7 +85,7 @@ model = AutoModelForCausalLM.from_pretrained("facebook/opt-350m")
 tokenizer = AutoTokenizer.from_pretrained("facebook/opt-350m")
 
 # Set up the chat format
-model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+model, tokenizer, _ = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
 ```
 
 > [!WARNING]
