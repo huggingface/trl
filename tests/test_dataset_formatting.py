@@ -180,7 +180,7 @@ class CloneChatTemplateTestCase(unittest.TestCase):
         self.assertEqual(self.model.get_input_embeddings().weight.size(0), len(modified_tokenizer.vocab))
 
     def test_apply_new_chat_template(self):
-        _, modified_tokenizer = clone_chat_template(self.model, self.tokenizer, self.source)
+        _, modified_tokenizer, _ = clone_chat_template(self.model, self.tokenizer, self.source)
         messages = [
             {"role": "system", "content": "You are helpful"},
             {"role": "user", "content": "Hello"},
