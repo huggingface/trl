@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 """
 Run the ORPO training script with the following command with some example arguments.
 In general, the optimal configuration for ORPO will be similar to that of DPO without the need for a reference model:
