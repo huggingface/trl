@@ -1,20 +1,22 @@
-# GRPO Trainer
+# RLOO Trainer
 
-[![](https://img.shields.io/badge/All_models-GRPO-blue)](https://huggingface.co/models?other=grpo,trl)
+[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
 
 ## Overview
 
-TRL supports the GRPO Trainer for training language models, as described in the paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300) by [Zhihong Shao](https://huggingface.co/syhia), [Peiyi Wang](https://huggingface.co/peiyiwang89), [Qihao Zhu](https://huggingface.co/zqh11), Runxin Xu, [Junxiao Song](https://huggingface.co/haha-point), Mingchuan Zhang, Y. K. Li, Y. Wu, [Daya Guo](https://huggingface.co/guoday).
+TRL supports the RLOO Trainer for training language models, as described in the paper [Back to Basics: Revisiting REINFORCE Style
+Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740) by [Arash Ahmadian](https://huggingface.co/ArashAhmadian) et all.
 
 The abstract from the paper is the following:
 
-> Mathematical reasoning poses a significant challenge for language models due to its complex and structured nature. In this paper, we introduce DeepSeekMath 7B, which continues pre-training DeepSeek-Coder-Base-v1.5 7B with 120B math-related tokens sourced from Common Crawl, together with natural language and code data. DeepSeekMath 7B has achieved an impressive score of 51.7% on the competition-level MATH benchmark without relying on external toolkits and voting techniques, approaching the performance level of Gemini-Ultra and GPT-4. Self-consistency over 64 samples from DeepSeekMath 7B achieves 60.9% on MATH. The mathematical reasoning capability of DeepSeekMath is attributed to two key factors: First, we harness the significant potential of publicly available web data through a meticulously engineered data selection pipeline. Second, we introduce Group Relative Policy Optimization (GRPO), a variant of Proximal Policy Optimization (PPO), that enhances mathematical reasoning abilities while concurrently optimizing the memory usage of PPO.
+> AI alignment in the shape of Reinforcement Learning from Human Feedback (RLHF) is increasingly treated as a crucial ingredient for high performance large language models. Proximal Policy Optimization (PPO) has been positioned by recent literature as the canonical method for the RL part of RLHF However, it involves both high computational cost and sensitive hyperparameter tuning. We posit that most of the motivational principles that led to the development of PPO are less of a practical concern in RLHF and advocate for a less computationally expensive method that preserves and even increases performance. We revisit the formulation of alignment from human preferences in the context of RL. Keeping simplicity as a guiding principle, we show that many components of PPO are unnecessary in an RLHF context and that far simpler REINFORCE-style optimization variants outperform both PPO and newly proposed “RL-free” methods such as DPO and RAFT. Our work suggests that careful adaptation to LLMs alignment characteristics enables benefiting from online RL optimization at low cost.
 
-This post-training method was contributed by [Quentin Gallouédec](https://huggingface.co/qgallouedec).
+
+This post-training method was contributed by [Shirin Yamani](https://huggingface.co/ShirinYamani).
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
+This example demonstrates how to train a model using the RLOO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
 
 <iframe
   src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
@@ -26,9 +28,9 @@ This example demonstrates how to train a model using the GRPO method. We train a
 Below is the script to train the model.
 
 ```python
-# train_grpo.py
+# train_rloo.py
 from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
+from trl import RLOOConfig, RLOOTrainer
 
 dataset = load_dataset("trl-lib/tldr", split="train")
 
@@ -36,8 +38,8 @@ dataset = load_dataset("trl-lib/tldr", split="train")
 def reward_len(completions, **kwargs):
     return [-abs(20 - len(completion)) for completion in completions]
 
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
-trainer = GRPOTrainer(
+training_args = RLOOConfig(output_dir="Qwen2-0.5B-RLOO")
+trainer = RLOOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
     reward_funcs=reward_len,
     args=training_args,
@@ -49,18 +51,14 @@ trainer.train()
 Execute the script using the following command:
 
 ```bash
-accelerate launch train_grpo.py
+accelerate launch train_rloo.py
 ```
 
-Distributed across 8 GPUs, the training takes approximately 1 day.
+## Looking deeper into the RLOO method
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/grpo_curves.png)
+RLOO is an online learning algorithm, meaning it improves iteratively by using the data generated by the trained model itself during training. The intuition behind RLOO objective is to maximize the advantage of the generated completions, while ensuring that the model remains close to the reference policy. To understand how RLOO works, it can be broken down into four main steps: **Generating completions**, **computing the advantage**, **estimating the KL divergence**, and **computing the loss**.
 
-## Looking deeper into the GRPO method
-
-GRPO is an online learning algorithm, meaning it improves iteratively by using the data generated by the trained model itself during training. The intuition behind GRPO objective is to maximize the advantage of the generated completions, while ensuring that the model remains close to the reference policy. To understand how GRPO works, it can be broken down into four main steps: **Generating completions**, **computing the advantage**, **estimating the KL divergence**, and **computing the loss**.
-
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/grpo_visual.png)
+### TODO
 
 ### Generating completions
 
@@ -68,84 +66,81 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 
 ### Computing the advantage
 
-For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
+For each of the  \\( G \\) sequences, we compute the reward using a reward model or reward function. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. 
+Once we have the rewards for each completion, we compute a **baseline** as the average reward of all other samples in the same batch, excluding the current sample. It is used to reduce the variance of the policy gradient estimate in reinforcement learning.  
 
-$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
+$$b_i = \frac{1}{N-1} \sum_{j \neq i} R_j$$
 
-This approach gives the method its name: **Group Relative Policy Optimization (GRPO)**.
 
-<Tip>
+This approach gives the method its name: **Leave One Out**.
 
-It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
-
-</Tip>
 
 ### Estimating the KL divergence
 
-KL divergence is estimated using the approximator introduced by [Schulman et al. (2020)](http://joschu.net/blog/kl-approx.html). The approximator is defined as follows:
 
-$$\mathbb{D}_{\text{KL}}\left[\pi_\theta \|\pi_{\text{ref}}\right] = \frac{\pi_{\text{ref}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} - \log \frac{\pi_{\text{ref}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} - 1,
-$$
+The **KL (Kullback-Leibler) divergence** measures how much the output token distribution of the current policy $ \pi_\theta $ differs from that of a fixed **reference model** $ \pi_{\text{ref}} $ (usually the initial fine-tuned model). It acts as a **penalty term** in the reward to discourage excessive manipulation of the output for reward hacking. The formula for KL divergence is:
+
+For a sequence of tokens, the total KL divergence is:
+
+$$\text{KL} = \sum_{t=1}^T \left[ \log \pi_\theta(a_t|s) - \log \pi_{\text{ref}}(a_t|s) \right]$$
+
+
+This is the **expected difference in log probabilities** between the current policy and the reference model over the generated sequence.
+
+> 🔍 Note: This is the **KL** and is commonly used in practice because it's easy to compute via log-prob ratios and in original RLOO implementation this is computated as the diff between the old policy model and the reference model (**old_policy - ref_policy**). 
 
 ### Computing the loss
 
-The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:
+RLOO is a variant of the REINFORCE algorithm that uses a **batch-wise leave-one-out baseline** and often includes a **KL penalty** to prevent the policy from deviating too far from a reference model. The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:
 
 $$
-\mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} \left[ \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
-$$
-
-where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.
-
-<Tip>
-
-Note that compared to the original formulation in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300), we don't scale by  \\( \frac{1}{|o_i|} \\) because it was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that this introduces a response-level length bias. More details in [loss types](#loss-types).
-
-</Tip>
-
-<Tip>
-
-Note that compared to the original formulation in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300), we use  \\( \beta = 0.0 \\) by default, meaning that the KL divergence term is not used. This choice is motivated by several recent studies (e.g., [Open-Reasoner-Zero: An Open Source Approach to Scaling Up Reinforcement Learning on the Base Model](https://huggingface.co/papers/2503.24290)) which have shown that the KL divergence term is not essential for training with GRPO. As a result, it has become common practice to exclude it (e.g. [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783), [DAPO: An Open-Source LLM Reinforcement Learning System at Scale](https://huggingface.co/papers/2503.14476)). If you wish to include the KL divergence term, you can set `beta` in [`GRPOConfig`] to a non-zero value.
-
-</Tip>
-
-In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:
-
-$$
-\mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
-$$
-
-where  \\(\text{clip}(\cdot, 1 - \epsilon, 1 + \epsilon) \\) ensures that updates do not deviate excessively from the reference policy by bounding the policy ratio between  \\( 1 - \epsilon \\) and  \\( 1 + \epsilon \\).
-When  \\( \mu = 1 \\) (default in TRL), the clipped surrogate objective simplifies to the original objective.
-
-#### Loss Types
-
-Several formulations of the objective have been proposed in the literature. Initially, the objective of GRPO was defined as follows:
-
-$$
-\mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} l_{i,t},
-$$
-
-where
-
-$$
-l_{i,t} = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right].
-$$
-
-The [DAPO paper](https://huggingface.co/papers/2503.14476) highlights the limitations of the GRPO algorithm’s sample-level loss in long-CoT scenarios, where longer responses are under-penalized, leading to poorer quality outputs. The proposed solution is a token-level normalization, which better handles longer sequences by assigning more balanced rewards to individual tokens, regardless of response length:
-
-$$
-\mathcal{L}_{\text{DAPO}}(\theta) = - \frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
+\mathcal{L} = -\mathbb{E}\left[ \nabla_\theta \log \pi_\theta(a|s) \cdot A \right]
 $$
 
 
-Furthermore, it was demonstrated in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that the initial GRPO formulation introduces a response length bias. They show that while the DAPO formulation reduces this bias, it does not eliminate it completely. To fully remove this bias, they propose dividing by a constant instead of the sequence length, resulting in the following formulation:
+# What does REINFORCE suggests?
+The REINFORCE algorithm is a classic policy gradient method in reinforcement learning. It suggests using a "baseline" to reduce the variance of the policy gradient estimates. The baseline is typically the average reward observed so far (or a running average over a window of recent rewards). By subtracting this baseline from the actual reward, the algorithm focuses updates on actions that perform better or worse than average, rather than being influenced by the absolute scale of the rewards.
 
-$$
-\mathcal{L}_{\text{Dr. GRPO}}(\theta) = - \frac{1}{LG} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
-$$
 
-This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
+In practice, for each step or episode, the policy is updated using the difference between the received reward and the baseline:
+
+$$b_{MA} = \frac{1}{S}\sum_{s} R(x_s, y_s)$$
+
+# What RLOO do inspired from REINFORCE?
+
+Inspired by REINFORCE's baseline approach, RLOO (Reinforcement Learning with Leave-One-Out) uses a different but related strategy for variance reduction. Instead of using a moving average, RLOO uses additional generations from the policy/language model as a mean to reduce the varience. Therefore:
+
+For a given prompt RLOO generates k samples, lets say k=2; (note that you examine each sample individually) so one time you take first sample and then you get the reward for current sample then you take the other as baseline. Let's break this down step by step:
+
+1. First, generate two samples $x_1$ and $x_2$ from the policy for prompt $y$
+
+2. For the first sample $x_1$:
+   - Calculate its reward $R(x_1, y)$
+   - Use $x_2$ as the baseline
+   - Compute the gradient:
+   $$\nabla \mathcal{L}_1 = (R(x_1, y) - R(x_2, y)) \nabla \log p_\theta(x_1)$$
+
+3. For the second sample $x_2$:
+   - Calculate its reward $R(x_2, y)$
+   - Use $x_1$ as the baseline
+   - Compute the gradient:
+   $$\nabla \mathcal{L}_2 = (R(x_2, y) - R(x_1, y)) \nabla \log p_\theta(x_2)$$
+
+4. The final policy update combines both gradients:
+   $$\nabla \mathcal{L} = \nabla \mathcal{L}_1 + \nabla \mathcal{L}_2$$
+
+This approach is particularly elegant because:
+- Both samples are generated from the current policy state
+- Each sample serves as a natural baseline for the other
+- The comparison is between samples from the same policy distribution
+- No historical information or previous gradient updates are needed for the baseline
+
+This approach thechnicaly ensures that:
+- Each sample is evaluated independently
+- The baseline for each sample comes from the other sample
+- The policy is updated based on relative performance between the samples
+- The variance reduction is achieved through direct comparison between samples from the same policy
+
 
 ## Logged metrics
 
@@ -162,11 +157,8 @@ This constant is recommended to be the maximum completion length. To use this fo
 - `reward`: The overall average reward after applying reward weights.
 - `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
-- `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero. 
-- `clip_ratio/region_mean`: The ratio of token probabilities where the GRPO objective is clipped to stay within the trust region:
-$$
-\text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
-$$
+- `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
+- `clip_ratio/region_mean`: The ratio of token probabilities where the RLOO objective is clipped to stay within the trust region
 A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
 - `clip_ratio/low_min`: The minimum ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
@@ -195,9 +187,9 @@ In this mode, vLLM runs in a separate process (and using separate GPUs) and comm
 
 2. **Enable server mode in your training script**:
    ```python
-   from trl import GRPOConfig
+   from trl import RLOOConfig
 
-   training_args = GRPOConfig(
+   training_args = RLOOConfig(
        ...,
        use_vllm=True,
        vllm_mode="server",  # default value, can be omitted
@@ -215,9 +207,9 @@ Make sure that the server is using different GPUs than the trainer, otherwise yo
 In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
 
 ```python
-from trl import GRPOConfig
+from trl import RLOOConfig
 
-training_args = GRPOConfig(
+training_args = RLOOConfig(
     ...,
     use_vllm=True,
     vllm_mode="colocate",
@@ -226,7 +218,7 @@ training_args = GRPOConfig(
 
 <Tip>
 
-Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
+Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`RLOOConfig`] to avoid underutilization or out-of-memory errors.
 
 We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
 
@@ -243,13 +235,13 @@ If the recommended value does not work in your environment, we suggest adding a 
 
 <Tip>
 
-By default, GRPO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, but you can override these values by setting the environment variables accordingly.
+By default, RLOO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, but you can override these values by setting the environment variables accordingly.
 
 </Tip>
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
-### GRPO at scale: train a 70B+ Model on multiple nodes
+### RLOO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
 
@@ -257,7 +249,7 @@ When training large models like **Qwen2.5-72B**, you need several key optimizati
 - **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
 - **vLLM**: See the previous section on how to use vLLM to speed up generation.
 
-Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
+Below is an example SLURM script to train a 70B model with RLOO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
 
 ```sh
 #!/bin/bash
@@ -279,7 +271,7 @@ srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
      --main_process_ip ${NODELIST[0]} \
      --machine_rank $SLURM_PROCID \
      --rdzv_backend c10d \
-     train_grpo.py \
+     train_rloo.py \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
@@ -292,7 +284,7 @@ wait
 import argparse
 
 from datasets import load_dataset
-from trl import GRPOTrainer, GRPOConfig
+from trl import RLOOTrainer, RLOOConfig
 
 def main():
     parser = argparse.ArgumentParser()
@@ -306,8 +298,8 @@ def main():
     def reward_num_unique_chars(completions, **kwargs):
         return [len(set(c)) for c in completions]
 
-    training_args = GRPOConfig(
-        output_dir="Qwen2.5-72B-GRPO",
+    training_args = RLOOConfig(
+        output_dir="Qwen2.5-72B-RLOO",
         per_device_train_batch_size=4,
         bf16=True,
         gradient_checkpointing=True,
@@ -315,7 +307,7 @@ def main():
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
     )
 
-    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer = RLOOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
     trainer.train()
 
 if __name__=="__main__":
@@ -324,7 +316,7 @@ if __name__=="__main__":
 
 ### Using a custom reward function
 
-The [`GRPOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
+The [`RLOOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
 
 1. **Input arguments**:
    - The function must accept the following as keyword arguments:
@@ -439,11 +431,11 @@ You can test this function as follows:
 ```
 #### Example 4: Multi-task reward functions
 
-Below is an example of using multiple reward functions in the [`GRPOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
+Below is an example of using multiple reward functions in the [`RLOOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
 
 ```python
 from datasets import Dataset
-from trl import GRPOTrainer
+from trl import RLOOTrainer
 
 # Define a dataset that contains both math and coding problems
 dataset = Dataset.from_list(
@@ -484,7 +476,7 @@ def coding_reward_func(prompts, completions, task, **kwargs):
     return rewards
 
 # Use both task-specific reward functions
-trainer = GRPOTrainer(
+trainer = RLOOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
     reward_funcs=[math_reward_func, coding_reward_func],
     train_dataset=dataset,
@@ -493,20 +485,20 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None` and the [`GRPOTrainer`] will continue with the valid functions and tasks. This allows the [`GRPOTrainer`] to handle multiple reward functions with different applicability.
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None` and the [`RLOOTrainer`] will continue with the valid functions and tasks. This allows the [`RLOOTrainer`] to handle multiple reward functions with different applicability.
 
-Note that the [`GRPOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
+Note that the [`RLOOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
 
 
 
 #### Passing the reward function to the trainer
 
-To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
+To use your custom reward function, pass it to the [`RLOOTrainer`] as follows:
 
 ```python
-from trl import GRPOTrainer
+from trl import RLOOTrainer
 
-trainer = GRPOTrainer(
+trainer = RLOOTrainer(
     reward_funcs=reward_func,
     ...,
 )
@@ -515,9 +507,9 @@ trainer = GRPOTrainer(
 If you have multiple reward functions, you can pass them as a list:
 
 ```python
-from trl import GRPOTrainer
+from trl import RLOOTrainer
 
-trainer = GRPOTrainer(
+trainer = RLOOTrainer(
     reward_funcs=[reward_func1, reward_func2],
     ...,
 )
@@ -525,67 +517,22 @@ trainer = GRPOTrainer(
 
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
-Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
-## Vision-Language Model (VLM) Training
 
-GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
+## RLOOTrainer
 
-### Supported Models
+[[autodoc]] RLOOTrainer
 
-Tested with:
+## RLOOConfig
 
-- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
-- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
-- **Gemma3** — e.g., `google/gemma-3-4b-it`
-  
-<Tip>
-Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
-</Tip>
+[[autodoc]] RLOOConfig
 
-### Quick Start
 
-Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
-
-```bash
-accelerate launch \
-  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
-  examples/scripts/grpo_vlm.py \
-  --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
-  --output_dir grpo-Qwen2.5-VL-3B-Instruct \
-  --learning_rate 1e-5 \
-  --gradient_checkpointing \
-  --torch_dtype bfloat16 \
-  --max_prompt_length 2048 \
-  --max_completion_length 1024 \
-  --use_vllm \
-  --vllm_mode colocate \
-  --use_peft \
-  --lora_target_modules "q_proj", "v_proj" \
-  --log_completions
-```
-
-### Configuration Tips
-
-- Use LoRA on vision-language projection layers
-- VLM may require a lot of image tokens, which cannot be truncated. Set `max_prompt_length` to a higher value (e.g., 2048 in the above example) to accommodate longer prompts.
-- Enable 4-bit quantization to reduce memory usage
-- VLMs are memory-intensive — start with smaller batch sizes
-- Most models are compatible with vLLM (`server` and `colocate` modes)
-
-### Dataset Format
-
-Each training sample should include:
-
-- `prompt`: Text formatted via the processor's chat template
-- `image`: A single image (PIL or NumPy array)
-
-The trainer automatically handles image-to-tensor conversion via the model’s image processor.
-
-## GRPOTrainer
-
-[[autodoc]] GRPOTrainer
-
-## GRPOConfig
-
-[[autodoc]] GRPOConfig
+## References;
+1. [RLOO Paper](https://openreview.net/pdf?id=r1lgTGL5DE)
+2. [back to basics Paper](https://arxiv.org/pdf/2402.14740)
+3. [REINFORCE++ Paper](https://arxiv.org/html/2501.03262v1)
+4. [RLOO Blog on HF](https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo)
+5. [RLOO OPENRLHF](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05)
+6. [Youtube RLOO](https://www.youtube.com/watch?v=86asXGPK6RU&ab_channel=BuzzRobot)
