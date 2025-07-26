@@ -52,6 +52,7 @@ training_args = RLOOConfig(
     num_train_epochs=1,
     max_steps=2,
     token_level_kl=True,
+    num_ppo_epochs=8,
 )
 
 # Trainer
