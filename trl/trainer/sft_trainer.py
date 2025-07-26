@@ -432,9 +432,9 @@ class SFTTrainer(Trainer):
                     "to at least 2."
                 )
 
+        dataset_sample = next(iter(train_dataset))
         if args.completion_only_loss is None:
-            first_example = next(iter(train_dataset))
-            self.completion_only_loss = "prompt" in first_example
+            self.completion_only_loss = "prompt" in dataset_sample
         else:
             self.completion_only_loss = args.completion_only_loss
 
@@ -470,7 +470,7 @@ class SFTTrainer(Trainer):
                 "between batches. To avoid this, either disable packing by setting `packing=False`, or set "
                 "`attn_implementation='flash_attention_2'` in the model configuration."
             )
-        if args.assistant_only_loss and not is_conversational(train_dataset[0]):
+        if args.assistant_only_loss and not is_conversational(dataset_sample):
             raise ValueError(
                 "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
                 "supported for conversational datasets."
