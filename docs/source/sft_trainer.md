@@ -122,6 +122,26 @@ Padding tokens (if present) are ignored in the loss computation by applying an i
 
 ## Customization
 
+### Model initialization
+
+You can directly pass the kwargs of the [`~transformers.AutoModelForCausalLM.from_pretrained()`] method to the [`SFTConfig`]. For example, if you want to load a model in a different precision, analogous to
+
+```python
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", torch_dtype=torch.bfloat16)
+```
+
+you can do so by passing the `model_init_kwargs={"torch_dtype": torch.bfloat16}` argument to the [`SFTConfig`].
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    model_init_kwargs={"torch_dtype": torch.bfloat16},
+)
+```
+
+Note that all keyword arguments of `from_pretrained()` are supported.
+
 ### Packing
 
 [`SFTTrainer`] supports _example packing_, where multiple examples are packed in the same input sequence to increase training efficiency. To enable packing, simply pass `packing=True` to the [`SFTConfig`] constructor.
@@ -154,6 +174,14 @@ To train on completion only, use a [prompt-completion](dataset_formats#prompt-co
 <Tip>
 Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
 </Tip>
+
+### Train with Liger Kernel
+
+Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like Flash Attention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
+
+### Train with Unsloth
+
+Unsloth is an open‑source framework for fine‑tuning and reinforcement learning that trains LLMs (like Llama, Mistral, Gemma, DeepSeek, and more) up to 2× faster with up to 70% less VRAM, while providing a streamlined, Hugging Face–compatible workflow for training, evaluation, and deployment. Fo more information, see [Unsloth Integration](unsloth_integration).
 
 ## Instruction tuning example
 
@@ -198,6 +226,15 @@ Alternatively, use the structured conversation format (recommended):
 >>> response[0]["generated_text"]
 [{'role': 'user', 'content': 'What is the capital of France? Answer in one word.'}, {'role': 'assistant', 'content': 'The capital of France is Paris.'}]
 ```
+
+## Tool Calling with SFT
+
+The SFT trainer fully supports fine-tuning models with *tool calling* capabilities. In this case, each dataset example should include:
+
+* The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
+* The list of available tools in the `tools` column, typically provided as JSON schemas
+
+For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
 ## SFTTrainer
 
