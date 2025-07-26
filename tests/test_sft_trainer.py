@@ -1047,7 +1047,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, assistant_only_loss=True, max_steps=3, report_to="none")
+            training_args = SFTConfig(output_dir=tmp_dir, assistant_only_loss=True, report_to="none")
             trainer = SFTTrainer(
                 model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
             )
