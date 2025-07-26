@@ -19,6 +19,7 @@ training_args = GRPOConfig(
     importance_sampling_level="sequence",
     loss_type="grpo",
     steps_per_generation=...,
+    beta=0.04,  # not explicitly specified in the paper, but they likely used the same value as in the GRPO paper
 )
 ```
 
