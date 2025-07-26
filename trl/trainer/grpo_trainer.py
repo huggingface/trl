@@ -670,6 +670,7 @@ class GRPOTrainer(Trainer):
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
+        self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_loss and self.top_entropy_quantile < 1.0:
@@ -1785,11 +1786,13 @@ class GRPOTrainer(Trainer):
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         log_ratio = per_token_logps - old_per_token_logps
-        if my_arg:
+        if self.importance_sampling_level == "sequence":
             mean_log_ratio = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
             importance_weights = torch.exp(mean_log_ratio)
-        else:
+        elif self.importance_sampling_level == "token":
             importance_weights = log_ratio
+        else:
+            raise ValueError(f"Unknown importance sampling level: {self.importance_sampling_level}")
 
         coef_1 = torch.exp(importance_weights)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
