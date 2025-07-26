@@ -63,7 +63,6 @@ from .utils import (
     selective_log_softmax,
 )
 
-
 if is_peft_available():
     from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
 
@@ -123,19 +122,31 @@ class AlphaPOTrainer(Trainer):
         train_dataset: Optional[Dataset] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+            Union[
+                PreTrainedTokenizerBase,
+                BaseImageProcessor,
+                FeatureExtractionMixin,
+                ProcessorMixin,
+            ]
         ] = None,
         model_init: Optional[Callable[[], PreTrainedModel]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+            None,
+            None,
+        ),
+        preprocess_logits_for_metrics: Optional[
+            Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+        ] = None,
         peft_config: Optional[dict] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
     ):
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
-            raise ValueError("You passed model_kwargs to the AlphaPOTrainer. But your model is already instantiated.")
+            raise ValueError(
+                "You passed model_kwargs to the AlphaPOTrainer. But your model is already instantiated."
+            )
         else:
             model_init_kwargs = args.model_init_kwargs
             torch_dtype = model_init_kwargs.get("torch_dtype")
@@ -165,17 +176,23 @@ class AlphaPOTrainer(Trainer):
             if isinstance(model, PeftModel):
                 model = model.merge_and_unload()
 
-            if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_loaded_in_4bit", False):
+            if getattr(model, "is_loaded_in_8bit", False) or getattr(
+                model, "is_loaded_in_4bit", False
+            ):
                 _support_gc_kwargs = hasattr(
                     args, "gradient_checkpointing_kwargs"
                 ) and "gradient_checkpointing_kwargs" in list(
                     inspect.signature(prepare_model_for_kbit_training).parameters
                 )
 
-                prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
+                prepare_model_kwargs = {
+                    "use_gradient_checkpointing": args.gradient_checkpointing
+                }
 
                 if _support_gc_kwargs:
-                    prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
+                    prepare_model_kwargs["gradient_checkpointing_kwargs"] = (
+                        args.gradient_checkpointing_kwargs
+                    )
 
                 model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
             elif args.gradient_checkpointing:
@@ -187,7 +204,9 @@ class AlphaPOTrainer(Trainer):
                     def make_inputs_require_grad(module, input, output):
                         output.requires_grad_(True)
 
-                    model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+                    model.get_input_embeddings().register_forward_hook(
+                        make_inputs_require_grad
+                    )
 
             # get peft model with the given config
             model = get_peft_model(model, peft_config)
@@ -208,9 +227,13 @@ class AlphaPOTrainer(Trainer):
                 def make_inputs_require_grad(module, input, output):
                     output.requires_grad_(True)
 
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+                model.get_input_embeddings().register_forward_hook(
+                    make_inputs_require_grad
+                )
 
-        if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
+        if args.generate_during_eval and not (
+            is_wandb_available() or is_comet_available()
+        ):
             raise ValueError(
                 "`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
                 " Please install `wandb` or `comet-ml` to resolve."
@@ -219,7 +242,9 @@ class AlphaPOTrainer(Trainer):
         if model is not None:
             self.is_encoder_decoder = model.config.is_encoder_decoder
         elif args.is_encoder_decoder is None:
-            raise ValueError("When no model is provided, you need to pass the parameter is_encoder_decoder.")
+            raise ValueError(
+                "When no model is provided, you need to pass the parameter is_encoder_decoder."
+            )
         else:
             self.is_encoder_decoder = args.is_encoder_decoder
 
@@ -228,7 +253,9 @@ class AlphaPOTrainer(Trainer):
             self.pad_token_id = model.config.pad_token_id
 
         if processing_class is None:
-            raise ValueError("processing_class must be specified to tokenize a AlphaPO dataset.")
+            raise ValueError(
+                "processing_class must be specified to tokenize a AlphaPO dataset."
+            )
         if args.max_length is None:
             warnings.warn(
                 "`max_length` is not set in the AlphaPOConfig's init"
@@ -285,7 +312,11 @@ class AlphaPOTrainer(Trainer):
         self.max_length = max_length
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
-        self.padding_value = args.padding_value if args.padding_value is not None else processing_class.pad_token_id
+        self.padding_value = (
+            args.padding_value
+            if args.padding_value is not None
+            else processing_class.pad_token_id
+        )
         self.max_prompt_length = max_prompt_length
         self.truncation_mode = args.truncation_mode
         self.processing_class = processing_class
@@ -319,19 +350,29 @@ class AlphaPOTrainer(Trainer):
         # see: https://github.com/huggingface/trl/pull/1255
         with PartialState().main_process_first():
             # Extract the prompt if needed, and apply the chat template if needed
-            train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(
-                maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
+                maybe_extract_prompt, num_proc=args.dataset_num_proc
             )
-            train_dataset = train_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+            train_dataset = train_dataset.map(
+                maybe_apply_chat_template,
+                fn_kwargs={"tokenizer": processing_class},
+                num_proc=args.dataset_num_proc,
+            )
+            train_dataset = train_dataset.map(
+                self.tokenize_row, num_proc=args.dataset_num_proc
+            )
             if eval_dataset is not None:
-                eval_dataset = eval_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    maybe_extract_prompt, num_proc=args.dataset_num_proc
+                )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
                     fn_kwargs={"tokenizer": processing_class},
                     num_proc=args.dataset_num_proc,
                 )
-                eval_dataset = eval_dataset.map(self.tokenize_row, num_proc=args.dataset_num_proc)
+                eval_dataset = eval_dataset.map(
+                    self.tokenize_row, num_proc=args.dataset_num_proc
+                )
 
         super().__init__(
             model=model,
@@ -346,7 +387,6 @@ class AlphaPOTrainer(Trainer):
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
@@ -369,11 +409,17 @@ class AlphaPOTrainer(Trainer):
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
 
-        full_tokenized = self.processing_class(prompt + answer, add_special_tokens=False)
-        prompt_input_ids = self.processing_class(prompt, add_special_tokens=False)["input_ids"]
+        full_tokenized = self.processing_class(
+            prompt + answer, add_special_tokens=False
+        )
+        prompt_input_ids = self.processing_class(prompt, add_special_tokens=False)[
+            "input_ids"
+        ]
 
         answer_input_ids = full_tokenized["input_ids"][len(prompt_input_ids) :]
-        answer_attention_mask = full_tokenized["attention_mask"][len(prompt_input_ids) :]
+        answer_attention_mask = full_tokenized["attention_mask"][
+            len(prompt_input_ids) :
+        ]
 
         # Concat tokens to form `enc(a) + enc(a + b)[len(enc(a)):]`
         full_concat_input_ids = np.concatenate([prompt_input_ids, answer_input_ids])
@@ -382,7 +428,9 @@ class AlphaPOTrainer(Trainer):
         full_input_ids = np.array(full_tokenized["input_ids"])
 
         if len(full_input_ids) != len(full_concat_input_ids):
-            raise ValueError("Prompt input ids and answer input ids should have the same length.")
+            raise ValueError(
+                "Prompt input ids and answer input ids should have the same length."
+            )
 
         # On some tokenizers, like Llama-2 tokenizer, there are occasions where tokens
         # can be merged together when tokenizing prompt+answer. This could result
@@ -392,17 +440,26 @@ class AlphaPOTrainer(Trainer):
 
         # If tokenized prompt is different than both prompt+answer, then it means the
         # last token has changed due to merging.
-        if prompt_input_ids != full_tokenized["input_ids"][:response_token_ids_start_idx]:
+        if (
+            prompt_input_ids
+            != full_tokenized["input_ids"][:response_token_ids_start_idx]
+        ):
             response_token_ids_start_idx -= 1
 
         prompt_input_ids = full_tokenized["input_ids"][:response_token_ids_start_idx]
-        prompt_attention_mask = full_tokenized["attention_mask"][:response_token_ids_start_idx]
+        prompt_attention_mask = full_tokenized["attention_mask"][
+            :response_token_ids_start_idx
+        ]
 
         if len(prompt_input_ids) != len(prompt_attention_mask):
-            raise ValueError("Prompt input ids and attention mask should have the same length.")
+            raise ValueError(
+                "Prompt input ids and attention mask should have the same length."
+            )
 
         answer_input_ids = full_tokenized["input_ids"][response_token_ids_start_idx:]
-        answer_attention_mask = full_tokenized["attention_mask"][response_token_ids_start_idx:]
+        answer_attention_mask = full_tokenized["attention_mask"][
+            response_token_ids_start_idx:
+        ]
 
         return dict(
             prompt_input_ids=prompt_input_ids,
@@ -411,7 +468,9 @@ class AlphaPOTrainer(Trainer):
             attention_mask=answer_attention_mask,
         )
 
-    def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> dict:
+    def tokenize_row(
+        self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None
+    ) -> dict:
         """Tokenize a single row from a ORPO specific dataset.
 
         At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation in case the prompt +
@@ -451,7 +510,9 @@ class AlphaPOTrainer(Trainer):
 
             chosen_prompt_len_input_ids = len(chosen_tokens["prompt_input_ids"])
             rejected_prompt_len_input_ids = len(rejected_tokens["prompt_input_ids"])
-            prompt_len_input_ids = min(chosen_prompt_len_input_ids, rejected_prompt_len_input_ids)
+            prompt_len_input_ids = min(
+                chosen_prompt_len_input_ids, rejected_prompt_len_input_ids
+            )
 
             for k, v in prompt_tokens.items():
                 prompt_tokens[k] = v[:prompt_len_input_ids]
@@ -459,9 +520,17 @@ class AlphaPOTrainer(Trainer):
             # Make sure prompts only have one different token at most an
             # and length only differs by 1 at most
             num_diff_tokens = sum(
-                [a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])]
+                [
+                    a != b
+                    for a, b in zip(
+                        chosen_tokens["prompt_input_ids"],
+                        rejected_tokens["prompt_input_ids"],
+                    )
+                ]
             )
-            num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
+            num_diff_len = abs(
+                chosen_prompt_len_input_ids - rejected_prompt_len_input_ids
+            )
             if num_diff_tokens > 1 or num_diff_len > 1:
                 raise ValueError(
                     "Chosen and rejected prompt_input_ids might only differ on the "
@@ -484,41 +553,61 @@ class AlphaPOTrainer(Trainer):
                 self.processing_class.eos_token_id, chosen_tokens, rejected_tokens
             )
 
-            longer_response_length = max(len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"]))
+            longer_response_length = max(
+                len(chosen_tokens["input_ids"]), len(rejected_tokens["input_ids"])
+            )
 
             # if combined sequence is too long, truncate the prompt
             for answer_tokens in [chosen_tokens, rejected_tokens, prompt_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                if (
+                    len(answer_tokens["prompt_input_ids"]) + longer_response_length
+                    > self.max_length
+                ):
                     if self.truncation_mode == "keep_start":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][: self.max_prompt_length]
+                            answer_tokens[k] = answer_tokens[k][
+                                : self.max_prompt_length
+                            ]
                     elif self.truncation_mode == "keep_end":
                         for k in ["prompt_input_ids", "prompt_attention_mask"]:
-                            answer_tokens[k] = answer_tokens[k][-self.max_prompt_length :]
+                            answer_tokens[k] = answer_tokens[k][
+                                -self.max_prompt_length :
+                            ]
                     else:
-                        raise ValueError(f"Unknown truncation mode: {self.truncation_mode}")
+                        raise ValueError(
+                            f"Unknown truncation mode: {self.truncation_mode}"
+                        )
 
             # if that's still too long, truncate the response
             for answer_tokens in [chosen_tokens, rejected_tokens]:
-                if len(answer_tokens["prompt_input_ids"]) + longer_response_length > self.max_length:
+                if (
+                    len(answer_tokens["prompt_input_ids"]) + longer_response_length
+                    > self.max_length
+                ):
                     for k in ["input_ids", "attention_mask"]:
-                        answer_tokens[k] = answer_tokens[k][: self.max_length - self.max_prompt_length]
+                        answer_tokens[k] = answer_tokens[k][
+                            : self.max_length - self.max_prompt_length
+                        ]
 
             # Create labels
             chosen_sequence_tokens = {
-                k: chosen_tokens[f"prompt_{k}"] + chosen_tokens[k] for k in ["input_ids", "attention_mask"]
+                k: chosen_tokens[f"prompt_{k}"] + chosen_tokens[k]
+                for k in ["input_ids", "attention_mask"]
             }
             rejected_sequence_tokens = {
-                k: rejected_tokens[f"prompt_{k}"] + rejected_tokens[k] for k in ["input_ids", "attention_mask"]
+                k: rejected_tokens[f"prompt_{k}"] + rejected_tokens[k]
+                for k in ["input_ids", "attention_mask"]
             }
             chosen_sequence_tokens["labels"] = chosen_sequence_tokens["input_ids"][:]
-            chosen_sequence_tokens["labels"][: len(chosen_tokens["prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(chosen_tokens["prompt_input_ids"])
-            rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][:]
-            rejected_sequence_tokens["labels"][: len(rejected_tokens["prompt_input_ids"])] = [
-                self.label_pad_token_id
-            ] * len(rejected_tokens["prompt_input_ids"])
+            chosen_sequence_tokens["labels"][
+                : len(chosen_tokens["prompt_input_ids"])
+            ] = [self.label_pad_token_id] * len(chosen_tokens["prompt_input_ids"])
+            rejected_sequence_tokens["labels"] = rejected_sequence_tokens["input_ids"][
+                :
+            ]
+            rejected_sequence_tokens["labels"][
+                : len(rejected_tokens["prompt_input_ids"])
+            ] = [self.label_pad_token_id] * len(rejected_tokens["prompt_input_ids"])
 
             for k, toks in {
                 "chosen_": chosen_sequence_tokens,
@@ -532,13 +621,22 @@ class AlphaPOTrainer(Trainer):
 
         else:
             chosen_tokens = self.processing_class(
-                chosen, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
+                chosen,
+                truncation=True,
+                max_length=self.max_completion_length,
+                add_special_tokens=True,
             )
             rejected_tokens = self.processing_class(
-                rejected, truncation=True, max_length=self.max_completion_length, add_special_tokens=True
+                rejected,
+                truncation=True,
+                max_length=self.max_completion_length,
+                add_special_tokens=True,
             )
             prompt_tokens = self.processing_class(
-                prompt, truncation=True, max_length=self.max_prompt_length, add_special_tokens=True
+                prompt,
+                truncation=True,
+                max_length=self.max_prompt_length,
+                add_special_tokens=True,
             )
 
             batch["chosen_labels"] = chosen_tokens["input_ids"]
@@ -546,12 +644,18 @@ class AlphaPOTrainer(Trainer):
             batch["prompt_input_ids"] = prompt_tokens["input_ids"]
             batch["prompt_attention_mask"] = prompt_tokens["attention_mask"]
 
-            if model is not None and hasattr(model, "prepare_decoder_input_ids_from_labels"):
-                batch["rejected_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=torch.tensor(batch["rejected_labels"])
+            if model is not None and hasattr(
+                model, "prepare_decoder_input_ids_from_labels"
+            ):
+                batch["rejected_decoder_input_ids"] = (
+                    model.prepare_decoder_input_ids_from_labels(
+                        labels=torch.tensor(batch["rejected_labels"])
+                    )
                 )
-                batch["chosen_decoder_input_ids"] = model.prepare_decoder_input_ids_from_labels(
-                    labels=torch.tensor(batch["chosen_labels"])
+                batch["chosen_decoder_input_ids"] = (
+                    model.prepare_decoder_input_ids_from_labels(
+                        labels=torch.tensor(batch["chosen_labels"])
+                    )
                 )
 
         if is_torch_xla_available():
@@ -595,9 +699,13 @@ class AlphaPOTrainer(Trainer):
         concatenated_batch = {}
 
         if is_encoder_decoder:
-            max_length = max(batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1])
+            max_length = max(
+                batch["chosen_labels"].shape[1], batch["rejected_labels"].shape[1]
+            )
         else:
-            max_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
+            max_length = max(
+                batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1]
+            )
 
         for k in batch:
             if k.startswith("chosen") and isinstance(batch[k], torch.Tensor):
@@ -608,7 +716,9 @@ class AlphaPOTrainer(Trainer):
                 elif k.endswith("_attention_mask"):
                     pad_value = 0
                 concatenated_key = k.replace("chosen", "concatenated")
-                concatenated_batch[concatenated_key] = pad_to_length(batch[k], max_length, pad_value=pad_value)
+                concatenated_batch[concatenated_key] = pad_to_length(
+                    batch[k], max_length, pad_value=pad_value
+                )
         for k in batch:
             if k.startswith("rejected") and isinstance(batch[k], torch.Tensor):
                 if "labels" in k or is_encoder_decoder:
@@ -627,7 +737,9 @@ class AlphaPOTrainer(Trainer):
                 ).to(device=device)
 
         if is_encoder_decoder:
-            concatenated_batch["concatenated_input_ids"] = batch["prompt_input_ids"].repeat(2, 1).to(device=device)
+            concatenated_batch["concatenated_input_ids"] = (
+                batch["prompt_input_ids"].repeat(2, 1).to(device=device)
+            )
             concatenated_batch["concatenated_attention_mask"] = (
                 batch["prompt_attention_mask"].repeat(2, 1).to(device=device)
             )
@@ -660,16 +772,26 @@ class AlphaPOTrainer(Trainer):
             rejected_rewards_unscaled = policy_rejected_logps
         else:
             policy_chosen_probs_pow_alpha = torch.exp(-self.alpha * policy_chosen_logps)
-            policy_rejected_probs_pow_alpha = torch.exp(-self.alpha * policy_rejected_logps)
+            policy_rejected_probs_pow_alpha = torch.exp(
+                -self.alpha * policy_rejected_logps
+            )
 
             chosen_rewards_unscaled = (1 - policy_chosen_probs_pow_alpha) / self.alpha
-            rejected_rewards_unscaled = (1 - policy_rejected_probs_pow_alpha) / self.alpha
+            rejected_rewards_unscaled = (
+                1 - policy_rejected_probs_pow_alpha
+            ) / self.alpha
 
-        logits = chosen_rewards_unscaled - rejected_rewards_unscaled - self.gamma_beta_ratio
+        logits = (
+            chosen_rewards_unscaled - rejected_rewards_unscaled - self.gamma_beta_ratio
+        )
         losses = -F.logsigmoid(self.beta * logits)
 
-        chosen_rewards = self.beta * chosen_rewards_unscaled.to(self.accelerator.device).detach()
-        rejected_rewards = self.beta * rejected_rewards_unscaled.to(self.accelerator.device).detach()
+        chosen_rewards = (
+            self.beta * chosen_rewards_unscaled.to(self.accelerator.device).detach()
+        )
+        rejected_rewards = (
+            self.beta * rejected_rewards_unscaled.to(self.accelerator.device).detach()
+        )
 
         return losses, chosen_rewards, rejected_rewards
 
@@ -692,7 +814,9 @@ class AlphaPOTrainer(Trainer):
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
         """
         if logits.shape[:-1] != labels.shape:
-            raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
+            raise ValueError(
+                "Logits (batch and sequence length dim) and labels must have the same shape."
+            )
 
         if not is_encoder_decoder:
             labels = labels[:, 1:].clone()
@@ -708,7 +832,9 @@ class AlphaPOTrainer(Trainer):
 
     def concatenated_forward(
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
-    ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
+    ) -> tuple[
+        torch.FloatTensor, torch.FloatTensor, torch.FloatTensor, torch.FloatTensor
+    ]:
         """Run the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
         We do this to avoid doing two forward passes, because it's faster for FSDP.
@@ -724,7 +850,9 @@ class AlphaPOTrainer(Trainer):
 
         model_kwargs = (
             {
-                "decoder_input_ids": self._shift_right(concatenated_batch["concatenated_labels"]),
+                "decoder_input_ids": self._shift_right(
+                    concatenated_batch["concatenated_labels"]
+                ),
             }
             if self.is_encoder_decoder
             else {}
@@ -759,7 +887,13 @@ class AlphaPOTrainer(Trainer):
             rejected_logits = all_logits[len_chosen:]
 
         if self.aux_loss_enabled:
-            return (chosen_logps, rejected_logps, chosen_logits, rejected_logits, outputs.aux_loss)
+            return (
+                chosen_logps,
+                rejected_logps,
+                chosen_logits,
+                rejected_logits,
+                outputs.aux_loss,
+            )
 
         return (chosen_logps, rejected_logps, chosen_logits, rejected_logits)
 
@@ -793,14 +927,24 @@ class AlphaPOTrainer(Trainer):
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         prefix = "eval_" if train_eval == "eval" else ""
-        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather_for_metrics(chosen_rewards).mean()
-        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather_for_metrics(rejected_rewards).mean()
-        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather_for_metrics(reward_accuracies).mean()
+        metrics[f"{prefix}rewards/chosen"] = self.accelerator.gather_for_metrics(
+            chosen_rewards
+        ).mean()
+        metrics[f"{prefix}rewards/rejected"] = self.accelerator.gather_for_metrics(
+            rejected_rewards
+        ).mean()
+        metrics[f"{prefix}rewards/accuracies"] = self.accelerator.gather_for_metrics(
+            reward_accuracies
+        ).mean()
         metrics[f"{prefix}rewards/margins"] = self.accelerator.gather_for_metrics(
             chosen_rewards - rejected_rewards
         ).mean()
-        metrics[f"{prefix}logps/rejected"] = self.accelerator.gather_for_metrics(policy_rejected_logps).detach().mean()
-        metrics[f"{prefix}logps/chosen"] = self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean()
+        metrics[f"{prefix}logps/rejected"] = (
+            self.accelerator.gather_for_metrics(policy_rejected_logps).detach().mean()
+        )
+        metrics[f"{prefix}logps/chosen"] = (
+            self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean()
+        )
         metrics[f"{prefix}logits/rejected"] = self.accelerator.gather_for_metrics(
             policy_rejected_logits.detach().mean()
         ).mean()
@@ -825,11 +969,15 @@ class AlphaPOTrainer(Trainer):
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
         compute_loss_context_manager = (
-            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+            autocast(self.accelerator.device.type)
+            if self._peft_has_been_casted_to_bf16
+            else nullcontext()
         )
 
         with compute_loss_context_manager:
-            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
+            loss, metrics = self.get_batch_loss_metrics(
+                model, inputs, train_eval="train"
+            )
 
         # Make sure to move the loss to the device the original accumulating loss is at back in the `Trainer` class:
         loss = loss.to(self.args.device)
@@ -847,7 +995,9 @@ class AlphaPOTrainer(Trainer):
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
         # the torch amp context manager as some hidden states are silently casted to full precision.
         generate_context_manager = (
-            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+            autocast(self.accelerator.device.type)
+            if self._peft_has_been_casted_to_bf16
+            else nullcontext()
         )
         with generate_context_manager:
             policy_output = model.generate(
@@ -858,8 +1008,12 @@ class AlphaPOTrainer(Trainer):
                 pad_token_id=self.processing_class.pad_token_id,
             )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.processing_class.pad_token_id)
-        policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
+        policy_output = pad_to_length(
+            policy_output, self.max_length, self.processing_class.pad_token_id
+        )
+        policy_output_decoded = self.processing_class.batch_decode(
+            policy_output, skip_special_tokens=True
+        )
 
         return policy_output_decoded
 
@@ -882,11 +1036,15 @@ class AlphaPOTrainer(Trainer):
                 ignore_keys = []
 
         prediction_context_manager = (
-            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+            autocast(self.accelerator.device.type)
+            if self._peft_has_been_casted_to_bf16
+            else nullcontext()
         )
 
         with torch.no_grad(), prediction_context_manager:
-            loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
+            loss, metrics = self.get_batch_loss_metrics(
+                model, inputs, train_eval="eval"
+            )
 
         # force log the metrics
         self.store_metrics(metrics, train_eval="eval")
@@ -905,7 +1063,9 @@ class AlphaPOTrainer(Trainer):
 
         return (loss.detach(), logits, labels)
 
-    def store_metrics(self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train") -> None:
+    def store_metrics(
+        self, metrics: dict[str, float], train_eval: Literal["train", "eval"] = "train"
+    ) -> None:
         for key, value in metrics.items():
             self._stored_metrics[train_eval][key].append(value)
 
@@ -928,7 +1088,9 @@ class AlphaPOTrainer(Trainer):
         if self.generate_during_eval:
             # Generate random indices within the range of the total number of samples
             num_samples = len(dataloader.dataset)
-            random_indices = random.sample(range(num_samples), k=self.args.eval_batch_size)
+            random_indices = random.sample(
+                range(num_samples), k=self.args.eval_batch_size
+            )
 
             # Use dataloader.dataset.select to get the random batch without iterating over the DataLoader
             random_batch_dataset = dataloader.dataset.select(random_indices)
@@ -940,7 +1102,10 @@ class AlphaPOTrainer(Trainer):
             table = pd.DataFrame(
                 columns=["Prompt", "Policy"],
                 data=[
-                    [prompt, pol[len(prompt) :]] for prompt, pol in zip(random_batch["prompt"], policy_output_decoded)
+                    [prompt, pol[len(prompt) :]]
+                    for prompt, pol in zip(
+                        random_batch["prompt"], policy_output_decoded
+                    )
                 ],
             )
             if "wandb" in self.args.report_to:
@@ -954,7 +1119,11 @@ class AlphaPOTrainer(Trainer):
 
         # Base evaluation
         initial_output = super().evaluation_loop(
-            dataloader, description, prediction_loss_only, ignore_keys, metric_key_prefix
+            dataloader,
+            description,
+            prediction_loss_only,
+            ignore_keys,
+            metric_key_prefix,
         )
 
         return initial_output
@@ -986,8 +1155,12 @@ class AlphaPOTrainer(Trainer):
         # shift inputs to the right
         if is_torch_fx_proxy(input_ids):
             # Item assignment is not supported natively for proxies.
-            shifted_input_ids = torch.full(input_ids.shape[:-1] + (1,), self.decoder_start_token_id)
-            shifted_input_ids = torch.cat([shifted_input_ids, input_ids[..., :-1]], dim=-1)
+            shifted_input_ids = torch.full(
+                input_ids.shape[:-1] + (1,), self.decoder_start_token_id
+            )
+            shifted_input_ids = torch.cat(
+                [shifted_input_ids, input_ids[..., :-1]], dim=-1
+            )
         else:
             shifted_input_ids = input_ids.new_zeros(input_ids.shape)
             shifted_input_ids[..., 1:] = input_ids[..., :-1].clone()
@@ -1029,7 +1202,9 @@ class AlphaPOTrainer(Trainer):
         if not self.is_world_process_zero():
             return
 
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(
+            self.model.config._name_or_path
+        ):
             base_model = self.model.config._name_or_path
         else:
             base_model = None
@@ -1047,7 +1222,8 @@ class AlphaPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
-        citation = textwrap.dedent("""\
+        citation = textwrap.dedent(
+            """\
         @inproceedings{
         gupta2025alphapo,
         title={Alpha{PO}: Reward Shape Matters for {LLM} Alignment},
@@ -1055,7 +1231,8 @@ class AlphaPOTrainer(Trainer):
         booktitle={Forty-second International Conference on Machine Learning},
         year={2025},
         url={https://openreview.net/forum?id=LmdZ0pSWtG}
-        }""")
+        }"""
+        )
 
         model_card = generate_model_card(
             base_model=base_model,
@@ -1063,7 +1240,11 @@ class AlphaPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=(
+                wandb.run.url
+                if is_wandb_available() and wandb.run is not None
+                else None
+            ),
             comet_url=get_comet_experiment_url(),
             trainer_name="AlphaPO",
             trainer_citation=citation,

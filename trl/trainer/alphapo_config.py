@@ -97,7 +97,9 @@ class AlphaPOConfig(TrainingArguments):
 
     max_length: Optional[int] = field(
         default=1024,
-        metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
+        metadata={
+            "help": "Maximum length of the sequences (prompt + completion) in the batch."
+        },
     )
     max_prompt_length: Optional[int] = field(
         default=512,
@@ -146,7 +148,9 @@ where pi_len_norm is the length-normalized probability of the sequence.
     )
     padding_value: Optional[int] = field(
         default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
+        metadata={
+            "help": "Padding value to use. If `None`, the padding value of the tokenizer is used."
+        },
     )
     truncation_mode: str = field(
         default="keep_end",
@@ -157,7 +161,9 @@ where pi_len_norm is the length-normalized probability of the sequence.
     )
     generate_during_eval: bool = field(
         default=False,
-        metadata={"help": "If `True`, generates and logs completions from the model to W&B during evaluation."},
+        metadata={
+            "help": "If `True`, generates and logs completions from the model to W&B during evaluation."
+        },
     )
     is_encoder_decoder: Optional[bool] = field(
         default=None,
@@ -177,7 +183,7 @@ where pi_len_norm is the length-normalized probability of the sequence.
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    
+
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 

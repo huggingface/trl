@@ -17,7 +17,11 @@ import unittest
 
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
 
 from trl import (
     AlphaPOConfig,
@@ -52,7 +56,9 @@ class TrainerArgTester(unittest.TestCase):
     def test_bco(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_unpaired_preference", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
                 tmp_dir,
@@ -90,8 +96,12 @@ class TrainerArgTester(unittest.TestCase):
             # self.assertEqual(trainer.args.generate_during_eval, True)
             self.assertEqual(trainer.args.is_encoder_decoder, True)
             self.assertEqual(trainer.args.precompute_ref_log_probs, True)
-            self.assertEqual(trainer.args.model_init_kwargs, {"trust_remote_code": True})
-            self.assertEqual(trainer.args.ref_model_init_kwargs, {"trust_remote_code": True})
+            self.assertEqual(
+                trainer.args.model_init_kwargs, {"trust_remote_code": True}
+            )
+            self.assertEqual(
+                trainer.args.ref_model_init_kwargs, {"trust_remote_code": True}
+            )
             self.assertEqual(trainer.args.dataset_num_proc, 4)
             self.assertEqual(trainer.args.prompt_sample_size, 512)
             self.assertEqual(trainer.args.min_density_ratio, 0.2)
@@ -100,7 +110,9 @@ class TrainerArgTester(unittest.TestCase):
     def test_cpo(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_preference", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = CPOConfig(
                 tmp_dir,
@@ -121,7 +133,12 @@ class TrainerArgTester(unittest.TestCase):
                 model_init_kwargs={"trust_remote_code": True},
                 dataset_num_proc=4,
             )
-            trainer = CPOTrainer(model=model_id, args=training_args, train_dataset=dataset, processing_class=tokenizer)
+            trainer = CPOTrainer(
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                processing_class=tokenizer,
+            )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
             self.assertEqual(trainer.args.max_completion_length, 64)
@@ -136,13 +153,17 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.truncation_mode, "keep_start")
             # self.assertEqual(trainer.args.generate_during_eval, True)
             self.assertEqual(trainer.args.is_encoder_decoder, True)
-            self.assertEqual(trainer.args.model_init_kwargs, {"trust_remote_code": True})
+            self.assertEqual(
+                trainer.args.model_init_kwargs, {"trust_remote_code": True}
+            )
             self.assertEqual(trainer.args.dataset_num_proc, 4)
 
     def test_dpo(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_preference", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
                 tmp_dir,
@@ -193,8 +214,12 @@ class TrainerArgTester(unittest.TestCase):
             # self.assertEqual(trainer.args.generate_during_eval, True)
             self.assertEqual(trainer.args.precompute_ref_log_probs, True)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
-            self.assertEqual(trainer.args.model_init_kwargs, {"trust_remote_code": True})
-            self.assertEqual(trainer.args.ref_model_init_kwargs, {"trust_remote_code": True})
+            self.assertEqual(
+                trainer.args.model_init_kwargs, {"trust_remote_code": True}
+            )
+            self.assertEqual(
+                trainer.args.ref_model_init_kwargs, {"trust_remote_code": True}
+            )
             self.assertEqual(trainer.args.model_adapter_name, "dummy_adapter")
             self.assertEqual(trainer.args.ref_adapter_name, "dummy_adapter")
             self.assertEqual(trainer.args.reference_free, True)
@@ -210,7 +235,9 @@ class TrainerArgTester(unittest.TestCase):
     def test_kto(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_unpaired_preference", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
                 tmp_dir,
@@ -249,8 +276,12 @@ class TrainerArgTester(unittest.TestCase):
             # self.assertEqual(trainer.args.generate_during_eval, True)
             self.assertEqual(trainer.args.is_encoder_decoder, True)
             self.assertEqual(trainer.args.precompute_ref_log_probs, True)
-            self.assertEqual(trainer.args.model_init_kwargs, {"trust_remote_code": True})
-            self.assertEqual(trainer.args.ref_model_init_kwargs, {"trust_remote_code": True})
+            self.assertEqual(
+                trainer.args.model_init_kwargs, {"trust_remote_code": True}
+            )
+            self.assertEqual(
+                trainer.args.ref_model_init_kwargs, {"trust_remote_code": True}
+            )
             self.assertEqual(trainer.args.dataset_num_proc, 4)
 
     @parameterized.expand([(False,), (True,)])
@@ -259,8 +290,12 @@ class TrainerArgTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
-        reward_model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            model_id, num_labels=1
+        )
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
                 tmp_dir,
@@ -274,7 +309,9 @@ class TrainerArgTester(unittest.TestCase):
                 reward_model=reward_model,
                 train_dataset=dataset,
             )
-            self.assertEqual(trainer.args.mixture_coef, 0.5 if not mixtures_coef_list else [0.5, 0.6])
+            self.assertEqual(
+                trainer.args.mixture_coef, 0.5 if not mixtures_coef_list else [0.5, 0.6]
+            )
 
     @parameterized.expand([(False,), (True,)])
     def test_online_dpo(self, beta_list):
@@ -282,8 +319,12 @@ class TrainerArgTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
-        reward_model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            model_id, num_labels=1
+        )
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
                 tmp_dir,
@@ -313,7 +354,9 @@ class TrainerArgTester(unittest.TestCase):
     def test_orpo(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_preference", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = ORPOConfig(
                 tmp_dir,
@@ -331,7 +374,10 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
             trainer = ORPOTrainer(
-                model=model_id, args=training_args, train_dataset=dataset, processing_class=tokenizer
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                processing_class=tokenizer,
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
@@ -343,7 +389,9 @@ class TrainerArgTester(unittest.TestCase):
     def test_alphapo(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_preference", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = AlphaPOConfig(
                 tmp_dir,
@@ -361,7 +409,10 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
             )
             trainer = AlphaPOTrainer(
-                model=model_id, args=training_args, train_dataset=dataset, processing_class=tokenizer
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                processing_class=tokenizer,
             )
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.max_prompt_length, 64)
@@ -374,7 +425,9 @@ class TrainerArgTester(unittest.TestCase):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_preference", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = RewardConfig(
                 tmp_dir,
@@ -394,7 +447,9 @@ class TrainerArgTester(unittest.TestCase):
 
     def test_sft(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_language_modeling", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
                 tmp_dir,
@@ -404,7 +459,10 @@ class TrainerArgTester(unittest.TestCase):
                 dataset_num_proc=4,
                 neftune_noise_alpha=0.1,
                 model_init_kwargs={"trust_remote_code": True},
-                dataset_kwargs={"append_concat_token": True, "skip_prepare_dataset": True},
+                dataset_kwargs={
+                    "append_concat_token": True,
+                    "skip_prepare_dataset": True,
+                },
                 eval_packing=True,
             )
             trainer = SFTTrainer(model_id, args=training_args, train_dataset=dataset)
@@ -413,7 +471,9 @@ class TrainerArgTester(unittest.TestCase):
             self.assertEqual(trainer.args.max_length, 256)
             self.assertEqual(trainer.args.dataset_num_proc, 4)
             self.assertEqual(trainer.args.neftune_noise_alpha, 0.1)
-            self.assertEqual(trainer.args.model_init_kwargs, {"trust_remote_code": True})
+            self.assertEqual(
+                trainer.args.model_init_kwargs, {"trust_remote_code": True}
+            )
             self.assertIn("append_concat_token", trainer.args.dataset_kwargs)
             self.assertEqual(trainer.args.dataset_kwargs["append_concat_token"], True)
             self.assertEqual(trainer.args.eval_packing, True)
@@ -424,8 +484,12 @@ class TrainerArgTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(model_id)
         ref_model = AutoModelForCausalLM.from_pretrained(model_id)
-        reward_model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1)
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            model_id, num_labels=1
+        )
+        dataset = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_only", split="train"
+        )
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = XPOConfig(
                 tmp_dir,

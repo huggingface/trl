@@ -78,7 +78,9 @@ class AlphaPOTrainerTester(unittest.TestCase):
                 eval_dataset=dummy_dataset["test"],
             )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            previous_trainable_params = {
+                n: param.clone() for n, param in trainer.model.named_parameters()
+            }
 
             trainer.train()
 
@@ -134,7 +136,9 @@ class AlphaPOTrainerTester(unittest.TestCase):
                 peft_config=lora_config,
             )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            previous_trainable_params = {
+                n: param.clone() for n, param in trainer.model.named_parameters()
+            }
 
             trainer.train()
 
@@ -148,8 +152,12 @@ class AlphaPOTrainerTester(unittest.TestCase):
                         self.assertFalse(torch.equal(param, new_param))
 
     def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = AutoModelForCausalLM.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        )
+        tokenizer = AutoTokenizer.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        )
         tokenizer.pad_token = tokenizer.eos_token
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
