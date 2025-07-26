@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow>=9.4.0",
+# ]
+# ///
+
 """
 pip install pillow
 
@@ -92,7 +99,7 @@ if __name__ == "__main__":
             images = [image[0] for image in images]
 
         # Tokenize the texts and process the images
-        batch = processor(text=texts, images=images, return_tensors="pt", padding=True)
+        batch = processor(images=images, text=texts, return_tensors="pt", padding=True)
 
         # The labels are the input_ids, and we mask the padding tokens in the loss computation
         labels = batch["input_ids"].clone()

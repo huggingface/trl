@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+#     "math-verify",
+#     "latex2sympy2_extended",
+# ]
+# ///
+
 """
 pip install math_verify
 
