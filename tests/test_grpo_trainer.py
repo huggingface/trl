@@ -1819,7 +1819,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
-                num_iteration=2,  # the importance sampling weights won't be 0 in this case
+                num_iterations=2,  # the importance sampling weights won't be 0 in this case
                 importance_sampling_level="sequence",
                 report_to="none",
             )
