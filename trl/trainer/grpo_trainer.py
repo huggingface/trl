@@ -1783,7 +1783,15 @@ class GRPOTrainer(Trainer):
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
-        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+
+        log_ratio = per_token_logps - old_per_token_logps
+        if my_arg:
+            mean_log_ratio = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            importance_weights = torch.exp(mean_log_ratio)
+        else:
+            importance_weights = log_ratio
+
+        coef_1 = torch.exp(importance_weights)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
         # Two-sided clipping
