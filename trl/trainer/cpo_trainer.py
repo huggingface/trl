@@ -319,6 +319,9 @@ class CPOTrainer(Trainer):
         if args.loss_type == "simpo":
             self.simpo_gamma = args.simpo_gamma
 
+        # AlphaPO parameters work with all loss types
+        self.alpha = args.alpha
+
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
@@ -659,7 +662,20 @@ class CPOTrainer(Trainer):
             loss for each example in the batch. The chosen_rewards and rejected_rewards tensors contain the rewards for
             the chosen and rejected responses, respectively.
         """
-        logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
+        # Apply AlphaPO transformation if alpha != 0
+        if self.alpha != 0.0:
+            # Compute probabilities
+            chosen_probs = torch.exp(policy_chosen_logps)
+            rejected_probs = torch.exp(policy_rejected_logps)
+
+            # Apply AlphaPO transformation: r = (1 - p^(-alpha)) / alpha
+            policy_chosen_rewards = (1 - chosen_probs.pow(-self.alpha)) / self.alpha
+            policy_rejected_rewards = (1 - rejected_probs.pow(-self.alpha)) / self.alpha
+
+            logits = (policy_chosen_rewards - policy_rejected_rewards).to(self.accelerator.device)
+        else:
+            # Standard log probability rewards when alpha = 0
+            logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
 
         # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
@@ -689,8 +705,15 @@ class CPOTrainer(Trainer):
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'simpo']"
             )
 
-        chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
-        rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
+        # Calculate rewards for logging
+        if self.alpha != 0.0:
+            # When using AlphaPO transformation, use the transformed rewards
+            chosen_rewards = self.beta * policy_chosen_rewards.to(self.accelerator.device).detach()
+            rejected_rewards = self.beta * policy_rejected_rewards.to(self.accelerator.device).detach()
+        else:
+            # Standard log probability rewards
+            chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
+            rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
 
         return losses, chosen_rewards, rejected_rewards
 

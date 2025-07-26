@@ -61,6 +61,10 @@ class CPOConfig(TrainingArguments):
             Weight of the BC regularizer in CPO training.
         simpo_gamma (`float`, *optional*, defaults to `0.5`):
             Target reward margin for the SimPO loss, used only when the `loss_type="simpo"`.
+        alpha (`float`, *optional*, defaults to `0.0`):
+            Alpha parameter that controls reward function shape across all loss types. When alpha=0 (default),
+            uses standard log probability rewards. When alpha!=0, applies AlphaPO transformation:
+            r = (1 - p^(-alpha)) / alpha. This parameter works with all loss types.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int` or `None`, *optional*, defaults to `None`):
@@ -150,6 +154,15 @@ class CPOConfig(TrainingArguments):
     simpo_gamma: float = field(
         default=0.5,
         metadata={"help": "Target reward margin for the SimPO loss, used only when the `loss_type='simpo'`."},
+    )
+    alpha: float = field(
+        default=0.0,
+        metadata={
+            "help": "Alpha parameter that controls the reward function shape. "
+            "When alpha=0 (default), uses standard log probability rewards. "
+            "When alpha!=0, applies AlphaPO transformation: r = (1 - p^(-alpha)) / alpha "
+            "from the [AlphaPO paper](https://huggingface.co/papers/2501.03884)."
+        },
     )
     label_pad_token_id: int = field(
         default=-100,
