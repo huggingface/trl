@@ -12,6 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+#     "Pillow>=9.4.0",
+# ]
+# ///
+
 """
 Without dataset streaming:
 
@@ -23,7 +31,6 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
-    --bf16 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
@@ -43,7 +50,6 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
-    --bf16 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \

@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 import argparse
 import importlib
 import os
@@ -100,7 +107,7 @@ def main(script_args, training_args, model_args):
     # Initialize the GRPO trainer
     trainer = GRPOTrainer(
         model=model,
-        reward_funcs=reward_model,
+        reward_funcs=reward_funcs,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

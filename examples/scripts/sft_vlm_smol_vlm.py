@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow>=9.4.0",
+# ]
+# ///
+
 """
 pip install pillow
 
@@ -99,7 +106,7 @@ if __name__ == "__main__":
             images = [image[0] for image in images]
 
         # Tokenize the texts and process the images
-        batch = processor(text=texts, images=images, return_tensors="pt", padding=True)
+        batch = processor(images=images, text=texts, return_tensors="pt", padding=True)
 
         # The labels are the input_ids, and we mask the padding tokens in the loss computation
         labels = batch["input_ids"].clone()
@@ -130,7 +137,7 @@ if __name__ == "__main__":
         data_collator=collate_fn,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=processor.tokenizer,
+        processing_class=processor,
         peft_config=get_peft_config(model_args),
     )
 
