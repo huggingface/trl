@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow>=9.4.0",
+# ]
+# ///
+
 """
 Train Gemma-3 on the HuggingFaceH4/llava-instruct-mix-vsft dataset (single-image).
 
@@ -172,7 +179,7 @@ def main():
 
         # Tokenize the texts and process the images
         batch = processor(
-            text=texts, images=images, return_tensors="pt", padding=True
+            images=images, text=texts, return_tensors="pt", padding=True
         )  # Encode texts and images into tensors
 
         # The labels are the input_ids, and we mask the padding tokens in the loss computation
