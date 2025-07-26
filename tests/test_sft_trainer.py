@@ -572,7 +572,7 @@ add_generation_prompt %}ASSISTANT: {% endif %}"""
                 images = [example["images"][0] for example in examples]
 
                 # Tokenize the texts and process the images
-                batch = processor(texts, images, return_tensors="pt", padding=True)
+                batch = processor(images=images, text=texts, return_tensors="pt", padding=True)
 
                 # The labels are the input_ids, and we mask the padding tokens in the loss computation
                 labels = batch["input_ids"].clone()
