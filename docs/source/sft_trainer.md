@@ -150,7 +150,7 @@ Note that all keyword arguments of `from_pretrained()` are supported.
 training_args = SFTConfig(packing=True)
 ```
 
-For more defails on packing, see [Packing](reducing_memory_usage#packing).
+For more details on packing, see [Packing](reducing_memory_usage#packing).
 
 ### Train on assistant messages only
 
