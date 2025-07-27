@@ -179,9 +179,10 @@ class RewardTrainer(Trainer):
                     "A processing_class must be specified when using the default RewardDataCollatorWithPadding"
                 )
 
-            max_length = args.max_length
-
-            data_collator = RewardDataCollatorWithPadding(processing_class)
+            data_collator = RewardDataCollatorWithPadding(
+                tokenizer=processing_class,
+                pad_to_multiple_of=args.pad_to_multiple_of,
+            )
 
             if args.remove_unused_columns:
                 try:  # for bc before https://github.com/huggingface/transformers/pull/25435
@@ -222,7 +223,8 @@ class RewardTrainer(Trainer):
                 # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
                 # user might get surprised if N samples are missing from training.
                 train_dataset = train_dataset.filter(
-                    lambda x: len(x["input_ids_chosen"]) <= max_length and len(x["input_ids_rejected"]) <= max_length,
+                    lambda x: len(x["input_ids_chosen"]) <= args.max_length
+                    and len(x["input_ids_rejected"]) <= args.max_length,
                     num_proc=args.dataset_num_proc,
                 )
                 if eval_dataset is not None:
@@ -239,8 +241,8 @@ class RewardTrainer(Trainer):
                     # get truncated => noisy signal the chosen/rejected label gets lost. The downside is that the
                     # user might get surprised if N samples are missing from training.
                     eval_dataset = eval_dataset.filter(
-                        lambda x: len(x["input_ids_chosen"]) <= max_length
-                        and len(x["input_ids_rejected"]) <= max_length,
+                        lambda x: len(x["input_ids_chosen"]) <= args.max_length
+                        and len(x["input_ids_rejected"]) <= args.max_length,
                         num_proc=args.dataset_num_proc,
                     )
 
@@ -279,6 +281,32 @@ class RewardTrainer(Trainer):
             attention_mask=inputs["attention_mask_rejected"],
             return_dict=True,
         )["logits"]
+
+        if self.state.global_step == 0:
+            # Only runs on the first training step as a check
+            if len(rewards_chosen.shape) != 2 or len(rewards_rejected.shape) != 2:
+                # Make sure that the rewards are defined at the sequence level
+                warnings.warn(
+                    message="The output of the model is of unexpected shape. "
+                    f"Chosen rewards: {rewards_chosen.shape}. "
+                    f"Rejected rewards: {rewards_rejected.shape}. "
+                    "The expected output does not have a sequence length. "
+                    "This can happen if the model is not setup for sequence classification. "
+                    "Please check your model configuration.",
+                    category=RuntimeWarning,
+                )
+
+        if rewards_chosen.shape != rewards_rejected.shape:
+            raise RuntimeError(
+                "The output of the model is incompatible. "
+                f"Chosen rewards: {rewards_chosen.shape}. "
+                f"Rejected rewards: {rewards_rejected.shape}. "
+                "The shapes of the rewards should match exactly. "
+                "This will raise a RuntimeError when computing the loss. "
+                "This can happen if the model is not setup for sequence classification. "
+                "Please check your model configuration.",
+            )
+
         # calculate loss, optionally modulate with margin
         if "margin" in inputs:
             loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
