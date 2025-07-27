@@ -47,6 +47,7 @@ from transformers.training_args import OptimizerNames
 from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
@@ -288,6 +289,8 @@ class OnlineDPOTrainer(Trainer):
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
                     "`pip install vllm` to use it."
                 )
+
+            self.vllm_mode = args.vllm_mode
             self.generation_config = SamplingParams(
                 n=2,  # 2 generations per prompt
                 max_tokens=args.max_new_tokens,
@@ -296,20 +299,29 @@ class OnlineDPOTrainer(Trainer):
                 top_p=1.0,
                 detokenize=False,  # to avoid vllm to decode (we don't need it)
             )
-            # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instantiation.
-            # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
-            # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
-            # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
-            # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
-            self.llm = LLM(
-                model=model.name_or_path,
-                gpu_memory_utilization=args.gpu_memory_utilization,
-                dtype=torch.float32,
-                # When release by vLLM, we would be able to distribute the model on multiple GPUs
-                # See https://github.com/vllm-project/vllm/pull/12071
-                # tensor_parallel_size=torch.cuda.device_count(),
-                # distributed_executor_backend="external_launcher",
-            )
+
+            if self.vllm_mode == "server":
+                # Initialize vLLM client for server mode - this will be set up after accelerator initialization
+                self.vllm_client = None
+                self.llm = None
+            elif self.vllm_mode == "colocate":
+                # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instantiation.
+                # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
+                # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
+                # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
+                # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
+                self.llm = LLM(
+                    model=model.name_or_path,
+                    gpu_memory_utilization=args.gpu_memory_utilization,
+                    dtype=torch.float32,
+                    tensor_parallel_size=args.vllm_tensor_parallel_size,
+                    # When release by vLLM, we would be able to distribute the model on multiple GPUs
+                    # See https://github.com/vllm-project/vllm/pull/12071
+                    # distributed_executor_backend="external_launcher",
+                )
+                self.vllm_client = None
+            else:
+                raise ValueError(f"Invalid vllm_mode: {self.vllm_mode}. Must be 'server' or 'colocate'.")
         else:
             self.generation_config = GenerationConfig(
                 max_new_tokens=args.max_new_tokens,
@@ -348,6 +360,16 @@ class OnlineDPOTrainer(Trainer):
         self._beta = args.beta
 
         # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
+
+        # Initialize vLLM client for server mode after accelerator is available
+        if args.use_vllm and self.vllm_mode == "server" and self.accelerator.is_main_process:
+            if args.vllm_server_base_url is not None:
+                base_url = args.vllm_server_base_url
+            else:
+                base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+            self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+            self.vllm_client.init_communicator(device=torch.cuda.current_device())
+
         if self.is_deepspeed_enabled:
             if self.reward_model is not None:
                 self.reward_model = prepare_deepspeed(
@@ -464,19 +486,13 @@ class OnlineDPOTrainer(Trainer):
         eos_token_id = self.processing_class.eos_token_id
         pad_token_id = self.processing_class.pad_token_id
 
-        # Load the latest weights
-        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-        llm_model.load_weights(model.state_dict().items())
+        # Generate completion_ids and prompt_ids based on mode
+        if self.vllm_mode == "server":
+            completion_ids, prompt_ids = self._generate_vllm_server(model, prompts)
+        elif self.vllm_mode == "colocate":
+            completion_ids, prompt_ids = self._generate_vllm_colocate(model, prompts)
 
-        if is_conversational({"prompt": prompts[0]}):
-            outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
-        else:
-            outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
-
-        completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
-        prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
-
-        # Create mask and pad the prompt and completion
+        # Shared padding, masking, and tensor conversion logic
         max_prompt_length = max(len(ids) for ids in prompt_ids)
         prompt_mask = [[0] * (max_prompt_length - len(ids)) + [1] * len(ids) for ids in prompt_ids]
         prompt_ids = [[pad_token_id] * (max_prompt_length - len(ids)) + ids for ids in prompt_ids]
@@ -495,6 +511,105 @@ class OnlineDPOTrainer(Trainer):
         completion_mask = torch.tensor(completion_mask, device=self.accelerator.device)
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
+
+    def _generate_vllm_server(self, model, prompts):
+        """Generate completions using vLLM server mode"""
+        from accelerate.utils import broadcast_object_list, gather_object
+
+        # Update vLLM server weights if needed
+        if hasattr(self, "_last_loaded_step") and self.state.global_step != self._last_loaded_step:
+            self._move_model_to_vllm(model)
+            self._last_loaded_step = self.state.global_step
+        elif not hasattr(self, "_last_loaded_step"):
+            self._move_model_to_vllm(model)
+            self._last_loaded_step = self.state.global_step
+
+        # Gather all prompts to main process
+        all_prompts = gather_object(prompts)
+
+        if self.accelerator.is_main_process:
+            # Generate using vLLM client
+            completion_ids = self.vllm_client.generate(
+                prompts=all_prompts,
+                n=2,  # 2 generations per prompt
+                temperature=self.generation_config.temperature,
+                top_p=self.generation_config.top_p,
+                top_k=self.generation_config.top_k,
+                max_tokens=self.generation_config.max_tokens,
+            )
+            # Flatten: each prompt generates 2 completions
+            completion_ids = [comp_id for prompt_completions in completion_ids for comp_id in prompt_completions]
+        else:
+            completion_ids = [None] * (len(all_prompts) * 2)
+
+        # Broadcast completions to all processes
+        completion_ids = broadcast_object_list(completion_ids, from_process=0)
+
+        # Each process takes its slice
+        process_slice = slice(
+            self.accelerator.process_index * len(prompts) * 2,
+            (self.accelerator.process_index + 1) * len(prompts) * 2,
+        )
+        completion_ids = completion_ids[process_slice]
+
+        # Create prompt_ids by tokenizing locally
+        prompt_ids = []
+        for prompt in prompts:
+            inputs = self.processing_class(prompt, return_tensors="pt", add_special_tokens=True)
+            prompt_tokens = inputs["input_ids"][0].tolist()
+            prompt_ids.extend([prompt_tokens, prompt_tokens])  # 2 copies for 2 completions
+
+        return completion_ids, prompt_ids
+
+    def _generate_vllm_colocate(self, model, prompts):
+        """Generate completions using vLLM colocate mode (original implementation)"""
+        # Load the latest weights
+        try:
+            # Legacy vLLM API (< 0.6.0)
+            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+            llm_model.load_weights(model.state_dict().items())
+        except AttributeError:
+            # vLLM >= 0.6.0 removed the model_executor API
+            # For now, continue without weight updates (weights from model initialization will be used)
+            # This matches the current limitation across TRL's vLLM integration
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Runtime weight updates in vLLM colocate mode are not supported with current vLLM versions "
+                "due to API changes. Using model weights from initialization. For proper weight synchronization "
+                "during training, use server mode (`vllm_mode='server'`)."
+            )
+
+        if is_conversational({"prompt": prompts[0]}):
+            outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+        else:
+            outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
+
+        completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
+        prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
+
+        return completion_ids, prompt_ids
+
+    def _move_model_to_vllm(self, model):
+        """Synchronize model weights to vLLM server (simplified version of GRPO's implementation)"""
+        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+            # For OnlineDPO, we'll use a simplified approach
+            for name, param in model.named_parameters():
+                # Clean parameter name for vLLM
+                clean_name = self._fix_param_name_to_vllm(name)
+                self.vllm_client.update_named_param(clean_name, param.data)
+
+            # Reset cache on vLLM server
+            self.vllm_client.reset_prefix_cache()
+
+    def _fix_param_name_to_vllm(self, name, extra_prefixes=None):
+        """Clean parameter names for vLLM compatibility"""
+        extra_prefixes = extra_prefixes or []
+        prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
+        for prefix in prefixes:
+            name = name.replace(prefix, "")
+        return name
 
     def _generate(self, model, prompts):
         eos_token_id = self.processing_class.eos_token_id

@@ -298,3 +298,74 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    def test_vllm_config_validation(self):
+        """Test vLLM configuration validation"""
+        # Test valid vllm_mode values
+        config = OnlineDPOConfig(vllm_mode="server")
+        self.assertEqual(config.vllm_mode, "server")
+
+        config = OnlineDPOConfig(vllm_mode="colocate")
+        self.assertEqual(config.vllm_mode, "colocate")
+
+        # Test default values
+        config = OnlineDPOConfig()
+        self.assertEqual(config.vllm_mode, "colocate")
+        self.assertIsNone(config.vllm_server_base_url)
+        self.assertEqual(config.vllm_server_host, "0.0.0.0")
+        self.assertEqual(config.vllm_server_port, 8000)
+        self.assertEqual(config.vllm_server_timeout, 240.0)
+        self.assertEqual(config.vllm_tensor_parallel_size, 1)
+
+    def test_vllm_server_mode_init(self):
+        """Test that vLLM server mode initializes correctly"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                use_vllm=True,
+                vllm_mode="server",
+                vllm_server_host="localhost",
+                vllm_server_port=9999,
+                vllm_server_timeout=300.0,
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+            # This should not raise an error during initialization
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                reward_model=self.reward_model,
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
+            )
+
+            # Check that server mode is correctly set
+            self.assertEqual(trainer.vllm_mode, "server")
+            self.assertIsNone(trainer.llm)  # No colocated vLLM instance
+
+    def test_vllm_server_base_url_config(self):
+        """Test that vLLM server base URL is properly configured"""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                use_vllm=True,
+                vllm_mode="server",
+                vllm_server_base_url="http://custom-server:8080",
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                reward_model=self.reward_model,
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
+            )
+
+            # Check that server mode configuration is preserved
+            self.assertEqual(trainer.vllm_mode, "server")
+            self.assertEqual(trainer.args.vllm_server_base_url, "http://custom-server:8080")
