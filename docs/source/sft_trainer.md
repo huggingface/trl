@@ -154,7 +154,7 @@ For more details on packing, see [Packing](reducing_memory_usage#packing).
 
 ### Train on assistant messages only
 
-To train on assistant messages only, use a [conversational](dataset_formats#conversational) dataset and set `assistant_only_loss=True` in the [`SFTConfig`]. This setting ensures that loss is computed **only** on the assistant responses, ignoring user and system and user messages.
+To train on assistant messages only, use a [conversational](dataset_formats#conversational) dataset and set `assistant_only_loss=True` in the [`SFTConfig`]. This setting ensures that loss is computed **only** on the assistant responses, ignoring user or system messages.
 
 ```python
 training_args = SFTConfig(assistant_only_loss=True)
