@@ -665,12 +665,18 @@ class RLOOTrainer_NEW(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
+        self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         self.normalize_advantages = args.normalize_advantages
         self.normalize_rewards = args.normalize_rewards
         self.reward_clip_range = args.reward_clip_range
         self.token_level_kl = args.token_level_kl
+        if self.use_liger_loss and not self.importance_sampling_level == "token":
+            raise NotImplementedError(
+                "Liger Kernels currently only support token-level importance sampling. Please set"
+                "`importance_sampling_level` to 'token'."
+            )
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1737,22 +1743,57 @@ class RLOOTrainer_NEW(Trainer):
         # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
         # old_per_token_logps == per_token_logps, so we can skip it's computation
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
-        old_per_token_logps = (
-            per_token_logps.detach() if inputs["old_per_token_logps"] is None else inputs["old_per_token_logps"]
-        )
-        old_logprobs = (old_per_token_logps * completion_mask).sum(-1)
-        coef_1 = torch.exp(logprobs - old_logprobs)
-        pg_losses = -advantages * coef_1
-        pg_losses2 = -advantages * torch.clamp(coef_1, 1.0 - self.epsilon, 1.0 + self.epsilon)
-        loss = torch.max(pg_losses, pg_losses2).mean()
-        
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+
+        log_ratio = per_token_logps - old_per_token_logps
+        if self.importance_sampling_level == "token":
+            log_importance_weights = log_ratio
+        elif self.importance_sampling_level == "sequence":
+            log_importance_weights = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            log_importance_weights = log_importance_weights.unsqueeze(-1)
+        else:
+            raise ValueError(
+                f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token' "
+                "and 'sequence'."
+            )
+        # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
+        # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
+
+        coef_1 = torch.exp(log_importance_weights)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+
+        # Two-sided clipping
+        if self.args.delta is not None:
+            coef_1 = torch.clamp(coef_1, max=self.args.delta)
+
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        if entropy_mask is not None:
+            per_token_loss = per_token_loss * entropy_mask
+        if self.beta != 0.0:
+            per_token_loss = per_token_loss + self.beta * per_token_kl
+
+        if self.loss_type == "grpo":
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
+
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
         completion_token_count = completion_mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):
-            return (x * completion_mask).sum() / completion_token_count
+            if x.shape[1] == 1:  # when importance_sampling_level == "sequence"
+                return x.mean()
+            else:
+                return (x * completion_mask).sum() / completion_token_count
 
         if self.beta != 0.0:
             mean_kl = masked_batch_mean(per_token_kl)
@@ -1766,9 +1807,9 @@ class RLOOTrainer_NEW(Trainer):
         is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
 
-        low_clip = masked_batch_mean(is_low_clipped)
-        high_clip = masked_batch_mean(is_high_clipped)
-        clip_ratio = masked_batch_mean(is_region_clipped)
+        low_clip = masked_batch_mean(is_low_clipped.float())
+        high_clip = masked_batch_mean(is_high_clipped.float())
+        clip_ratio = masked_batch_mean(is_region_clipped.float())
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())

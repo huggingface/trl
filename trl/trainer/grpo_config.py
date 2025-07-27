@@ -146,6 +146,19 @@ class RLOOConfig_NEW(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
+        delta: (`float` or `None`, *optional*, defaults to `None`):
+            Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
+            GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
+            the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
+        epsilon_high (`float` or `None`, *optional*, defaults to `None`):
+            Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
+            specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
+        importance_sampling_level (`str`, *optional*, defaults to `"token"`):
+            Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
+            keeps the raw per-token log-probability ratios (one weight per token).  `"sequence"` averages the
+            log-probability ratios across valid tokens to produce a single ratio per sequence. The
+            [GSPO paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
+            stable training and better alignment with  sequence-level rewards.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -420,6 +433,31 @@ class RLOOConfig_NEW(TrainingArguments):
     epsilon: float = field(
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
+    )
+    delta: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` "
+            "(default), standard GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This "
+            "method is introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291)."
+        },
+    )
+    epsilon_high: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
+            "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
+        },
+    )
+    importance_sampling_level: str = field(
+        default="token",
+        metadata={
+            "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
+            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
+            "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
+            "shows that sequence-level sampling often yields more stable training and better alignment with "
+            "sequence-level rewards."
+        },
     )
     reward_weights: Optional[list[float]] = field(
         default=None,
