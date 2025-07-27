@@ -201,6 +201,11 @@ class GRPOConfig(TrainingArguments):
             If used with `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
+        use_dynamic_sampling (`bool`, *optional*, defaults to `False`):
+            Whether to use dynamic sampling. See the [DAPO paper](https://huggingface.co/papers/2503.14476) for more.
+        max_num_samplings (`int`, *optional*, defaults to `None`):
+            The maximum number of samplings to perform. If `None`, the number of samplings is set to one. Only
+            applicable when `use_dynamic_sampling=True`.
 
         > Parameters that control the logging
 
@@ -216,6 +221,16 @@ class GRPOConfig(TrainingArguments):
 
     if version.parse(transformers.__version__) >= version.parse("4.51.0"):
         _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    use_dynamic_sampling: bool = field(
+        default=False,
+        metadata={"help": "Whether to use dynamic sampling."},
+    )
+    
+    max_num_samplings: Optional[int] = field(
+        default=None,
+        metadata={"help": "Whether to use dynamic sampling."},
+    )
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -554,6 +569,8 @@ class GRPOConfig(TrainingArguments):
             "all prompts are logged."
         },
     )
+
+    
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
