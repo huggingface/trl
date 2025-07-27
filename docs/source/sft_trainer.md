@@ -163,7 +163,7 @@ training_args = SFTConfig(assistant_only_loss=True)
 ![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_assistant.png)
 
 > [!WARNING]
-> This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% raw %}{% generation %}{% endraw %}` keyword. For an example of such an template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
+> This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% raw %}{% generation %}{% endraw %}` keyword. For an example of such a template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
 
 ### Train on completion only
 
