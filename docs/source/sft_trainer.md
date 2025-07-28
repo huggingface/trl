@@ -256,6 +256,9 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
+> [!WARNING]
+> Some base models, like those from Qwen, have a predefined chat template in the model's tokenizer. In these cases, it is not necessary to apply [`clone_chat_template()`], as the tokenizer already handles the formatting. However, it is necessary to align the EOS token with the chat template to ensure the model's responses terminate correctly. In these cases, specify `eos_token` in [`SFTConfig`]; for example, for `Qwen/Qwen2.5-1.5B`, one should set `eos_token="<|im_end|>"`.
+
 Once trained, your model can now follow instructions and engage in conversations using its new chat template.
 
 ```python
