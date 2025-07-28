@@ -1045,13 +1045,13 @@ class GRPOTrainer(Trainer):
         # For Qwen models:
         if image_grid_thw is not None and pixel_values is not None:
             model_inputs["image_grid_thw"] = image_grid_thw
-        # For Gemma, SmolVLM2, LlavaNext etc.:
+        # For Gemma, SmolVLM2, LLaVa-Next etc.:
         if pixel_values is not None:
             model_inputs["pixel_values"] = pixel_values
         # For SmolVLM2
         if pixel_attention_mask is not None:
             model_inputs["pixel_attention_mask"] = pixel_attention_mask
-        # For LlavaNext
+        # For LLaVa-Next
         if image_sizes is not None:
             model_inputs["image_sizes"] = image_sizes
 
