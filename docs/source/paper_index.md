@@ -20,6 +20,7 @@ training_args = GRPOConfig(
     loss_type="grpo",
     steps_per_generation=...,
     beta=0.04,  # not explicitly specified in the paper, but they likely used the same value as in the GRPO paper
+    epsilon=3e-4,  # https://x.com/ChujieZheng/status/1948933507696525392
 )
 ```
 
