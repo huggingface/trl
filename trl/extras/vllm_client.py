@@ -18,7 +18,7 @@ import logging
 import socket
 import time
 from io import BytesIO
-from typing import Optional
+from typing import Optional, Union
 from urllib.parse import urlparse
 
 import torch
@@ -87,7 +87,7 @@ class VLLMClient:
         >>> from transformers import AutoModelForCausalLM
 
         >>> model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B", device_map="cuda")
-        >>> client.init_communicator()
+        >>> client.init_communicator(device="cuda")
         >>> client.update_model_params(model)
         ```
 
@@ -244,9 +244,14 @@ class VLLMClient:
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-    def init_communicator(self):
+    def init_communicator(self, device: Union[torch.device, str, int] = 0):
         """
         Initializes the weight update group in a distributed setup for model synchronization.
+
+        Args:
+            device (`torch.device`, `str`, or `int`, *optional*, defaults to `0`):
+                Device of trainer main process. It's the device that will be used for the weights synchronization.
+                Can be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
         # Get the world size from the server
         url = f"{self.base_url}/get_world_size/"
@@ -261,8 +266,18 @@ class VLLMClient:
 
         # Initialize weight update group
         url = f"{self.base_url}/init_communicator/"
+        client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
+
         # In the server side, the host is set to 0.0.0.0
-        response = self.session.post(url, json={"host": "0.0.0.0", "port": self.group_port, "world_size": world_size})
+        response = self.session.post(
+            url,
+            json={
+                "host": "0.0.0.0",
+                "port": self.group_port,
+                "world_size": world_size,
+                "client_device_uuid": client_device_uuid,
+            },
+        )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -273,7 +288,7 @@ class VLLMClient:
 
         # Set up the communication group for weight broadcasting
         pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device=0)
+        self.pynccl_comm = PyNcclCommunicator(pg, device=device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -340,7 +355,7 @@ if __name__ == "__main__":
     from vllm import SamplingParams
 
     client = VLLMClient()
-    client.init_communicator()
+    client.init_communicator(device="cuda")
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())

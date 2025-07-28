@@ -59,7 +59,7 @@ The above snippets will use the default training arguments from the [`SFTConfig`
 To train on assistant messages only, use a [conversational](dataset_formats#conversational) [language modeling](dataset_formats#language_modeling) dataset and set `assistant_only_loss=True` in the [`SFTConfig`]. This setting ensures that loss is computed **only** on the assistant responses, ignoring user and system and user messages.
 
 > [!WARNING]
-> This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% raw %}{% generation %}{% endraw %}` keyword. For an example of such an template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
+> This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% generation %}` and `{% endgeneration %}` keywords. For an example of such an template, see [HugggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B/blob/main/chat_template.jinja#L76-L82).
 
 ### Train on completions only
 
@@ -628,7 +628,7 @@ def collate_fn(examples):
     images = [example["images"][0] for example in examples]
 
     # Tokenize the texts and process the images
-    batch = processor(texts, images, return_tensors="pt", padding=True)
+    batch = processor(images=images, text=texts, return_tensors="pt", padding=True)
 
     # The labels are the input_ids, and we mask the padding tokens in the loss computation
     labels = batch["input_ids"].clone()
