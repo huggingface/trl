@@ -218,7 +218,7 @@ trainer.train()
 When training adapters, you typically use a **higher learning rate (≈1e‑4)** since only new parameters are being learned.
 
 ```python
-SFTconfig(learning_rate=1e-4)
+SFTconfig(learning_rate=1e-4, ...)
 ```
 
 </Tip>
