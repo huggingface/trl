@@ -213,6 +213,16 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
+<Tip>
+
+When training adapters, you typically use a **higher learning rate (≈1e‑4)** since only new parameters are being learned.
+
+```python
+SFTconfig(learning_rate=1e-4)
+```
+
+</Tip>
+
 ### Train with Liger Kernel
 
 Liger Kernel is a collection of Triton kernels for LLM training that boosts multi-GPU throughput by 20%, cuts memory use by 60% (enabling up to 4× longer context), and works seamlessly with tools like Flash Attention, PyTorch FSDP, and DeepSpeed. For more information, see [Liger Kernel Integration](liger_kernel_integration).
