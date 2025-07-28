@@ -178,7 +178,7 @@ Training on completion only is compatible with training on assistant messages on
 
 ### Train adapters with PEFT
 
-We support tight integration with 🤗 PEFT library so that any user can conveniently train adapters and share them on the Hub instead of training the entire model.
+We support tight integration with 🤗 PEFT library, allowing any user to conveniently train adapters and share them on the Hub, rather than training the entire model.
 
 ```python
 from datasets import load_dataset
