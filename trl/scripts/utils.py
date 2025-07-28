@@ -73,13 +73,13 @@ class ScriptArguments:
             Format:
             dataset_mixture:
                 datasets:
-                - id: dataset_id1
+                - id: dataset_id_1
                     config: config_name
                     columns:
                     - col1
                     - col2
                     weight: 0.5
-                - id: dataset_id2
+                - id: dataset_id_2
                     config: config_name
                     columns:
                     - col1
@@ -129,6 +129,9 @@ class ScriptArguments:
     def __post_init__(self):
         if self.dataset_name is None and self.dataset_mixture is None:
             raise ValueError("Either `dataset_name` or `dataset_mixture` must be provided")
+
+        if self.dataset_name is not None and self.dataset_mixture is not None:
+            raise ValueError("Cannot provide both `dataset_name` and `dataset_mixture`. Please specify only one.")
 
         if self.dataset_mixture is not None:
             if not isinstance(self.dataset_mixture, dict) or "datasets" not in self.dataset_mixture:

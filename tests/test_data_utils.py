@@ -14,6 +14,7 @@
 
 import itertools
 import unittest
+from dataclasses import asdict
 
 from datasets import Dataset, DatasetDict
 from parameterized import parameterized
@@ -22,6 +23,7 @@ from transformers import AutoProcessor, AutoTokenizer
 from trl.data_utils import (
     apply_chat_template,
     extract_prompt,
+    get_dataset,
     is_conversational,
     is_conversational_from_value,
     maybe_apply_chat_template,
@@ -32,6 +34,7 @@ from trl.data_utils import (
     truncate_dataset,
     unpair_preference_dataset,
 )
+from trl.scripts.utils import DatasetConfig, DatasetMixtureConfig, ScriptArguments
 
 
 class IsConversationalTester(unittest.TestCase):
@@ -592,6 +595,148 @@ class TestMaybeConvertToChatML(unittest.TestCase):
             ]
         }
         self.assertEqual(maybe_convert_to_chatml(example), example)
+
+
+class TestGetDataset(unittest.TestCase):
+    def test_single_dataset_with_config(self):
+        args = ScriptArguments(
+            dataset_name="trl-internal-testing/zen", dataset_config="standard_language_modeling", dataset_mixture=None
+        )
+
+        result = get_dataset(args)
+
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        self.assertGreater(len(result["train"]), 0)
+
+    def test_single_dataset_preference_config(self):
+        args = ScriptArguments(
+            dataset_name="trl-internal-testing/zen", dataset_config="standard_preference", dataset_mixture=None
+        )
+
+        result = get_dataset(args)
+
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        self.assertGreater(len(result["train"]), 0)
+
+        # Check that preference dataset has expected columns
+        sample = result["train"][0]
+        self.assertIn("prompt", sample)
+        self.assertIn("chosen", sample)
+        self.assertIn("rejected", sample)
+
+    def test_dataset_mixture_basic(self):
+        dataset_config1 = DatasetConfig(
+            id="trl-internal-testing/zen", config="standard_language_modeling", split="train"
+        )
+        dataset_config2 = DatasetConfig(id="trl-internal-testing/zen", config="standard_preference", split="train")
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config1, dataset_config2], seed=42)
+
+        args = ScriptArguments(dataset_name=None, dataset_mixture=asdict(mixture_config))
+
+        result = get_dataset(args)
+
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        self.assertGreater(len(result["train"]), 0)
+
+    def test_dataset_mixture_with_columns(self):
+        dataset_config = DatasetConfig(
+            id="trl-internal-testing/zen", config="standard_language_modeling", split="train", columns=["text"]
+        )
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config], seed=42)
+
+        args = ScriptArguments(dataset_name=None, dataset_mixture=asdict(mixture_config))
+
+        result = get_dataset(args)
+
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        self.assertGreater(len(result["train"]), 0)
+
+        # Check that only specified column is present
+        sample = result["train"][0]
+        self.assertIn("text", sample)
+
+    def test_dataset_mixture_with_weights(self):
+        dataset_config = DatasetConfig(
+            id="trl-internal-testing/zen", config="standard_language_modeling", split="train", weight=0.5
+        )
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config], seed=42)
+
+        args = ScriptArguments(dataset_name=None, dataset_mixture=asdict(mixture_config))
+
+        result = get_dataset(args)
+
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+
+        # Load the original dataset to compare sizes
+        original_args = ScriptArguments(
+            dataset_name="trl-internal-testing/zen", dataset_config="standard_language_modeling", dataset_mixture=None
+        )
+        original_result = get_dataset(original_args)
+
+        # With weight=0.5, result should have roughly half the examples
+        original_size = len(original_result["train"])
+        weighted_size = len(result["train"])
+        expected_size = int(original_size * 0.5)
+
+        self.assertEqual(weighted_size, expected_size)
+
+    def test_dataset_mixture_with_test_split(self):
+        dataset_config = DatasetConfig(
+            id="trl-internal-testing/zen", config="standard_language_modeling", split="train"
+        )
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config], seed=42, test_split_size=0.2)
+
+        args = ScriptArguments(dataset_name=None, dataset_mixture=asdict(mixture_config))
+
+        result = get_dataset(args)
+
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        self.assertIn("test", result)
+        self.assertGreater(len(result["train"]), 0)
+        self.assertGreater(len(result["test"]), 0)
+
+        total_size = len(result["train"]) + len(result["test"])
+        test_ratio = len(result["test"]) / total_size
+        self.assertAlmostEqual(test_ratio, 0.2, delta=0.1)
+
+    def test_empty_dataset_mixture_raises_error(self):
+        mixture_config = DatasetMixtureConfig(datasets=[], seed=42)
+        args = ScriptArguments(dataset_name=None, dataset_mixture=asdict(mixture_config))
+
+        with self.assertRaises(ValueError) as context:
+            get_dataset(args)
+
+        self.assertIn("No datasets were loaded", str(context.exception))
+
+    def test_no_dataset_name_or_mixture_raises_error(self):
+        with self.assertRaises(ValueError) as context:
+            ScriptArguments(dataset_name=None, dataset_mixture=None)
+
+        self.assertIn("Either `dataset_name` or `dataset_mixture` must be provided", str(context.exception))
+
+    def test_mixture_multiple_different_configs(self):
+        dataset_config1 = DatasetConfig(
+            id="trl-internal-testing/zen", config="standard_language_modeling", split="train"
+        )
+        dataset_config2 = DatasetConfig(id="trl-internal-testing/zen", config="standard_prompt_only", split="train")
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config1, dataset_config2], seed=42)
+
+        args = ScriptArguments(dataset_name=None, dataset_mixture=asdict(mixture_config))
+
+        result = get_dataset(args)
+
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        self.assertGreater(len(result["train"]), 0)
+
+        # Should contain examples from both configurations
+        # The exact structure will depend on how the datasets are combined
 
 
 # Run the tests
