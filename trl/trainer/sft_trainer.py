@@ -401,7 +401,7 @@ class SFTTrainer(Trainer):
                 model, processing_class = clone_chat_template(model, processing_class, args.chat_template_path)
 
         # PEFT configuration and model wrapping
-        if peft_config is not None:
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = self._prepare_peft_model(model, peft_config, args)
 
         # Data collator
@@ -564,15 +564,6 @@ class SFTTrainer(Trainer):
         if not is_peft_available():
             raise ImportError("To use PeftModel, you need to install the `peft` library.")
 
-        if not isinstance(peft_config, PeftConfig):
-            raise ValueError(
-                f"Expected PeftConfig object but got {type(peft_config)}. If you want to use the PeftModel, you need "
-                "to pass a PeftConfig object to the SFTTrainer."
-            )
-
-        if isinstance(model, PeftModel):
-            return model
-
         # Handle quantized models (QLoRA)
         is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
@@ -593,14 +584,15 @@ class SFTTrainer(Trainer):
             model = self._enable_gradient_checkpointing(model, args)
 
         # Create PEFT model
-        if (
-            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
-            and getattr(model, "is_loaded_in_4bit", False)
-            and is_sharded_qlora
-        ):
-            model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
-        else:
-            model = get_peft_model(model, peft_config)
+        if peft_config is not None:
+            if (
+                version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
+                and getattr(model, "is_loaded_in_4bit", False)
+                and is_sharded_qlora
+            ):
+                model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
+            else:
+                model = get_peft_model(model, peft_config)
 
         # Handle bf16 casting for 4-bit models
         if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
