@@ -814,7 +814,7 @@ class SFTTrainerTester2(unittest.TestCase):
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
 
-            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+            trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
