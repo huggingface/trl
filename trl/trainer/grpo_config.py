@@ -201,7 +201,7 @@ class GRPOConfig(TrainingArguments):
             If used with `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
-        ent_coef (`float`, *optional*, defaults to `0.0`):
+        entropy_coef (`float`, *optional*, defaults to `0.0`):
             Static weight of the entropy regularization term in the loss.
             A positive coefficient adds an entropy bonus to encourage exploration.
             A zero or negative coefficient disables the entropy regularization term.
