@@ -1,6 +1,6 @@
 # SFT Trainer
 
-[![](https://img.shields.io/badge/All_models-SFT-blue)](https://huggingface.co/models?other=sft,trl) [![](https://img.shields.io/badge/smol_course-Chapter_1-yellow)](https://github.com/huggingface/smol-course/tree/main/1_instruction_tuning)
+[![All_models-SFT-blue](https://img.shields.io/badge/All_models-SFT-blue)](https://huggingface.co/models?other=sft,trl) [![smol_course-Chapter_1-yellow](https://img.shields.io/badge/smol_course-Chapter_1-yellow)](https://github.com/huggingface/smol-course/tree/main/1_instruction_tuning)
 
 ## Overview
 
@@ -23,7 +23,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train/loss,train/mean_token_accuracy,train/num_tokens&sidebar=hidden" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"/>
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train/loss,train/mean_token_accuracy,train/num_tokens&sidebar=hidden" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
 
 ## Expected dataset type and format
 
@@ -95,7 +95,7 @@ The `SFTTrainer` tokenizes each input using the model's tokenizer. If both promp
 
 ### Computing the loss
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_figure.png)
+![sft_figure](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/sft_figure.png)
 
 The loss used in SFT is the **token-level cross-entropy loss**, defined as:
 
@@ -160,7 +160,7 @@ To train on assistant messages only, use a [conversational](dataset_formats#conv
 training_args = SFTConfig(assistant_only_loss=True)
 ```
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_assistant.png)
+![train_on_assistant](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_assistant.png)
 
 > [!WARNING]
 > This functionality is only available for chat templates that support returning the assistant tokens mask via the `{% raw %}{% generation %}{% endraw %}` keyword. For an example of such a template, see [Qwen/Qwen3-8B/discussions/14](https://huggingface.co/Qwen/Qwen3-8B/discussions/14).
@@ -169,11 +169,49 @@ training_args = SFTConfig(assistant_only_loss=True)
 
 To train on completion only, use a [prompt-completion](dataset_formats#prompt-completion) dataset. By default, the trainer computes the loss on the completion tokens only, ignoring the prompt tokens. If you want to train on the full sequence, set `completion_only_loss=False` in the [`SFTConfig`].
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
+![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
 
 <Tip>
 Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
 </Tip>
+
+### Train adapters with PEFT
+
+We support tight integration with 🤗 PEFT library so that any user can conveniently train adapters and share them on the Hub instead of training the entire model.
+
+```python
+from datasets import load_dataset
+from trl import SFTTrainer
+from peft import LoraConfig
+
+dataset = load_dataset("trl-lib/Capybara", split="train")
+
+trainer = SFTTrainer(
+    "Qwen/Qwen3-0.6B",
+    train_dataset=dataset,
+    peft_config=LoraConfig()
+)
+
+trainer.train()
+```
+
+You can also continue training your [`peft.PeftModel`]. For that, first load a `PeftModel` outside [`SFTTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
+
+```python
+from datasets import load_dataset
+from trl import SFTTrainer
+from peft import AutoPeftModelForCausalLM
+
+model = AutoPeftModelForCausalLM.from_pretrained("trl-lib/Qwen3-4B-LoRA", is_trainable=True)
+dataset = load_dataset("trl-lib/Capybara", split="train")
+
+trainer = SFTTrainer(
+    model=model,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
 
 ### Train with Liger Kernel
 
@@ -229,7 +267,7 @@ Alternatively, use the structured conversation format (recommended):
 
 ## Tool Calling with SFT
 
-The SFT trainer fully supports fine-tuning models with *tool calling* capabilities. In this case, each dataset example should include:
+The SFT trainer fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
 * The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
 * The list of available tools in the `tools` column, typically provided as JSON schemas
@@ -343,8 +381,8 @@ trainer = SFTTrainer(
 
 A full example of training LLaVa 1.5 on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset can be found in the script [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm.py).
 
-- [Experiment tracking](https://wandb.ai/huggingface/trl/runs/2b2c5l7s)
-- [Trained model](https://huggingface.co/HuggingFaceH4/sft-llava-1.5-7b-hf)
+* [Experiment tracking](https://wandb.ai/huggingface/trl/runs/2b2c5l7s)
+* [Trained model](https://huggingface.co/HuggingFaceH4/sft-llava-1.5-7b-hf)
 
 ## SFTTrainer
 
