@@ -340,7 +340,7 @@ class AdaptiveEntropyController:
         else:
             self.value -= self.delta_ent_coef
 
-        self.value = float(np.clip(self.value, self.min_ent_coef, self.max_ent_coef))
+        self.value = float(max(self.min_ent_coef, min(self.value, self.max_ent_coef)))
 
         return self.value * (ent < self.target_ent)
 
