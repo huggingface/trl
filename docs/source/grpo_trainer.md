@@ -536,9 +536,10 @@ GRPO supports training Vision-Language Models (VLMs) on multimodal datasets cont
 
 Tested with:
 
-- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
-- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Gemma3** — e.g., `google/gemma-3-4b-it`
+- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
+- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
+- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
   
 <Tip>
