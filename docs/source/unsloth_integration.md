@@ -7,7 +7,7 @@ Section under construction. Feel free to contribute!
 </Tip>
 
 Unsloth is an open‑source framework for fine‑tuning and reinforcement learning that trains LLMs (like Llama, Mistral, Gemma, DeepSeek, and more) up to 2× faster with up to 70% less VRAM, while providing a streamlined, Hugging Face–compatible workflow for training, evaluation, and deployment.
-Unsloth library that is fully compatible with [`SFTTrainer`]. Some benchmarks on 1x A100 listed below:
+Unsloth library that is fully compatible with [`SFTTrainer`]. Some benchmarks on 1 x A100 listed below:
 
 | 1 A100 40GB     | Dataset   | 🤗   | 🤗 + Flash Attention 2 | 🦥 Unsloth | 🦥 VRAM saved |
 | --------------- | --------- | --- | --------------------- | --------- | ------------ |
