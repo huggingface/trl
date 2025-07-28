@@ -206,9 +206,8 @@ class GRPOConfig(TrainingArguments):
             A positive coefficient adds an entropy bonus to encourage exploration.
         use_adapt_ent (`bool`, *optional*, defaults to `False`):
             Whether to apply adaptive entropy control. Override ent_coef if set to True.
-        min_ent_coef (`float`, *optional*, defaults to `0.0`):
-            Minimum weight of the entropy regularization term.
-            Used to cap the minimum entropy term weight in adaptive entropy control.
+        entropy_coef_min (`float`, *optional*, defaults to `0.0`):
+            Lower bound for entropy coefficient when using adaptive entropy control.
         max_ent_coef (`float`, *optional*, defaults to `1.0`):
             Maximum weight of the entropy regularization term.
             Used to cap the minimum entropy term weight in adaptive entropy control.
