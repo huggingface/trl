@@ -213,9 +213,8 @@ class GRPOConfig(TrainingArguments):
             Used to cap the minimum entropy term weight in adaptive entropy control.
         entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
             Step size for adjusting entropy coefficient during adaptive entropy control.
-        target_ent (`float`, *optional*, defaults to `0.2`):
-            Target entropy value as the upper bound of entropy loss.
-            The entropy we aim to maintain in adaptive entropy control.
+        entropy_target (`float`, *optional*, defaults to `0.2`):
+            Desired target entropy value maintained through adaptive entropy control.
 
         > Parameters that control the logging
 
