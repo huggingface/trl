@@ -815,6 +815,9 @@ class SFTTrainerTester2(unittest.TestCase):
             training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
 
             trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+            
+            # Verify model is a PeftModel
+            self.assertIsInstance(trainer.model, PeftModel)
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
