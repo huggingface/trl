@@ -134,6 +134,81 @@ preference_example = {
 
 Conversational datasets are useful for training chat models, but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
+## Tool Calling
+
+Some chat templates support *tool calling*, which allows the model to interact with external functions—referred to as **tools**—during generation. This extends the conversational capabilities of the model by enabling it to output a `"tool_calls"` field instead of a standard `"content"` message whenever it decides to invoke a tool.
+
+After the assistant initiates a tool call, the tool executes and returns its output. The assistant can then process this output and continue the conversation accordingly.
+
+Here’s a simple example of a tool-calling interaction:
+
+```python
+messages = [
+    {"role": "user", "content": "Turn on the living room lights."},
+    {"role": "assistant", "tool_calls": [
+        {"type": "function", "function": {
+            "name": "control_light",
+            "arguments": {"room": "living room", "state": "on"}
+        }}]
+    },
+    {"role": "tool", "name": "control_light", "content": "The lights in the living room are now on."},
+    {"role": "assistant", "content": "Done!"}
+]
+```
+
+When preparing datasets for Supervised Fine-Tuning (SFT) with tool calling, it is important that your dataset includes an additional column named `tools`. This column contains the list of available tools for the model, which is usually used by the chat template to construct the system prompt.
+
+The tools must be specified in a codified JSON schema format. You can automatically generate this schema from Python function signatures using the [`~transformers.utils.get_json_schema`] utility:
+
+```python
+from transformers.utils import get_json_schema
+
+def control_light(room: str, state: str) -> str:
+    """
+    Controls the lights in a room.
+
+    Args:
+        room: The name of the room.
+        state: The desired state of the light ("on" or "off").
+
+    Returns:
+        str: A message indicating the new state of the lights.
+    """
+    return f"The lights in {room} are now {state}."
+
+# Generate JSON schema
+json_schema = get_json_schema(control_light)
+```
+
+The generated schema would look like:
+
+```python
+{
+    "type": "function",
+    "function": {
+        "name": "control_light",
+        "description": "Controls the lights in a room.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "room": {"type": "string", "description": "The name of the room."},
+                "state": {"type": "string", "description": 'The desired state of the light ("on" or "off").'},
+            },
+            "required": ["room", "state"],
+        },
+        "return": {"type": "string", "description": "str: A message indicating the new state of the lights."},
+    },
+}
+```
+
+A complete dataset entry for SFT might look like:
+
+```python
+{"messages": messages, "tools": [json_schema]}
+```
+
+For more detailed information on tool calling, refer to the [Tool Calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the blog post [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use).
+
 ### Types
 
 #### Language modeling
@@ -152,7 +227,7 @@ language_modeling_example = {"messages": [
 
 #### Prompt-only
 
-In a prompt-only dataset, only the initial prompt (the question or partial sentence) is provided under the key `"prompt"`. The training typically involves generating the completion based on this prompt, where the model learns to continue or complete the given input.
+In a prompt-only dataset, only the initial prompt (the question or partial sentence) is provided under the key `"prompt"`. The training typically involves generating completion based on this prompt, where the model learns to continue or complete the given input.
 
 ```python
 # Standard format
@@ -206,7 +281,7 @@ For examples of prompt-completion datasets, refer to the [Prompt-completion data
 #### Preference
 
 A preference dataset is used for tasks where the model is trained to choose between two or more possible completions to the same prompt. This dataset includes a `"prompt"`, a `"chosen"` completion, and a `"rejected"` completion. The model is trained to select the `"chosen"` response over the `"rejected"` response.
-Some dataset may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
+Some datasets may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
 
 ```python
 # Standard format

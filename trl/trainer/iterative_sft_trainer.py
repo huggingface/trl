@@ -59,11 +59,11 @@ class IterativeSFTTrainer(Trainer):
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
 
-            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
-              a path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
-              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
-              in `args.model_init_kwargs`.
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         args ([`IterativeSFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
@@ -74,7 +74,7 @@ class IterativeSFTTrainer(Trainer):
             tokenizer.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoTokenizer.from_pretrained`].
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -82,7 +82,8 @@ class IterativeSFTTrainer(Trainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         max_length (`int`, *optional*, deprecated):
             Maximum length of the tokenized sequence. Use `args.max_length` instead.
         truncation_mode (`str`, *optional*, deprecated):
@@ -108,35 +109,7 @@ class IterativeSFTTrainer(Trainer):
         ),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
-        # Deprecated parameters
-        max_length: Optional[int] = None,
-        truncation_mode: Optional[str] = None,
-        optimize_device_cache: Optional[bool] = None,
     ):
-        # Handle deprecated parameters
-        deprecated_params = {}
-        if max_length is not None:
-            deprecated_params["max_length"] = max_length
-            warnings.warn(
-                "The `max_length` parameter is deprecated and will be removed in version 0.20. "
-                "Pass it through the `args` parameter using `IterativeSFTConfig(max_length=...)` instead.",
-                DeprecationWarning,
-            )
-        if truncation_mode is not None:
-            deprecated_params["truncation_mode"] = truncation_mode
-            warnings.warn(
-                "The `truncation_mode` parameter is deprecated and will be removed in version 0.20. "
-                "Pass it through the `args` parameter using `IterativeSFTConfig(truncation_mode=...)` instead.",
-                DeprecationWarning,
-            )
-        if optimize_device_cache is not None:
-            deprecated_params["optimize_device_cache"] = optimize_device_cache
-            warnings.warn(
-                "The `optimize_device_cache` parameter is deprecated and will be removed in version 0.20  "
-                "Pass it through the `args` parameter using `IterativeSFTConfig(optimize_device_cache=...)` instead.",
-                DeprecationWarning,
-            )
-
         # Args
         model_id = model if isinstance(model, str) else model.config._name_or_path
         if args is None:
@@ -147,11 +120,6 @@ class IterativeSFTTrainer(Trainer):
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
             dict_args.pop("push_to_hub_token")
             args = IterativeSFTConfig(**dict_args)
-
-        # Update args with deprecated parameters if provided
-        if deprecated_params:
-            for key, value in deprecated_params.items():
-                setattr(args, key, value)
 
         # Handle the tokenizer
         if processing_class is None:
@@ -321,7 +289,9 @@ class IterativeSFTTrainer(Trainer):
         texts_labels: Optional[list[str]] = None,
     ):
         """
-        Run an optimisation step given a list of input_ids, attention_mask, and labels or a list of text and text_labels.
+        Run an optimisation step given a list of input_ids, attention_mask, and labels or a list of text and
+        text_labels.
+
         Args:
             input_ids (list[`torch.LongTensor`]):
                 List of tensors containing the input_ids (if not provided, text will be used)
@@ -356,6 +326,13 @@ class IterativeSFTTrainer(Trainer):
             raise ValueError(
                 "No 'labels' or 'text_labels' are provided. When using an encoder-decoder architecture, 'labels' or 'text_labels' must be passed."
             )
+
+        # Convert Column to list if not already
+        input_ids = input_ids[:] if input_ids is not None else None
+        attention_mask = attention_mask[:] if attention_mask is not None else None
+        labels = labels[:] if labels is not None else None
+        texts = texts[:] if texts is not None else None
+        texts_labels = texts_labels[:] if texts_labels is not None else None
 
         input_ids, attention_mask, labels, texts, texts_labels = self._step_safety_checker(
             input_ids, attention_mask, labels, texts, texts_labels
@@ -487,9 +464,13 @@ class IterativeSFTTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or set()
-        if isinstance(tags, str):
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
             tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
@@ -502,7 +483,7 @@ class IterativeSFTTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="Iterative SFT",
         )

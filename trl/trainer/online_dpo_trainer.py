@@ -29,6 +29,7 @@ from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
+    AutoModelForCausalLM,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -94,11 +95,18 @@ class OnlineDPOTrainer(Trainer):
     Initialize OnlineDPOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel` or `torch.nn.Module`):
-            The model to train, preferably an `AutoModelForCausalLM`.
+        model (`Union[str, nn.Module, PreTrainedModel]`):
+            Model to be trained. Can be either:
+
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         ref_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
-            The reference model to use for training. If None is specified, the reference model will be created from
-            the model.
+            The reference model to use for training. If None is specified, the reference model will be created from the
+            model.
         reward_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
@@ -106,21 +114,22 @@ class OnlineDPOTrainer(Trainer):
         args (`OnlineDPOConfig`):
             The online DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
         peft_config (`dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -133,7 +142,7 @@ class OnlineDPOTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[PreTrainedModel, nn.Module],
+        model: Union[PreTrainedModel, nn.Module, str],
         ref_model: Union[PreTrainedModel, nn.Module, None] = None,
         reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
@@ -172,7 +181,6 @@ class OnlineDPOTrainer(Trainer):
         self.reward_model = reward_model
         self.reward_processing_class = reward_processing_class
         self.judge = judge
-        self.is_encoder_decoder = model.config.is_encoder_decoder
 
         if args.missing_eos_penalty is not None and judge is not None:
             raise ValueError("`missing_eos_penalty` is not supported when `judge` is provided.")
@@ -183,6 +191,32 @@ class OnlineDPOTrainer(Trainer):
         # Check that the processing_class is provided
         if processing_class is None:
             raise ValueError("`processing_class` must be provided.")
+
+        model_init_kwargs = args.model_init_kwargs or {}
+        if isinstance(model, str):
+            model_id = model
+
+            # Handle torch_dtype in model_init_kwargs
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
+                pass
+            elif isinstance(torch_dtype, str):
+                torch_dtype = getattr(torch, torch_dtype)
+                model_init_kwargs["torch_dtype"] = torch_dtype
+            else:
+                raise ValueError(
+                    "Invalid `torch_dtype` passed to `OnlineDPOConfig`. Expected either 'auto' or a string "
+                    f"representing a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                )
+
+            model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
+        else:
+            if args.model_init_kwargs is not None:
+                raise ValueError(
+                    "You passed `model_init_kwargs` to the `OnlineDPOConfig`, but your model is already instantiated. "
+                    "This argument can only be used when the `model` argument is a string."
+                )
+        self.is_encoder_decoder = model.config.is_encoder_decoder
 
         # Convert to PEFT model if peft_config is provided
         if peft_config is not None:
@@ -507,7 +541,9 @@ class OnlineDPOTrainer(Trainer):
         output = model(prompt_completion_ids, attention_mask=prompt_completion_mask)
 
         # There is 1 offset, because the model predict the next token
-        logits = output.logits[:, prompt_ids.size(1) - 1 : -1]
+        prompt_len = prompt_ids.size(1)
+        start_idx = prompt_len - 1 if prompt_len > 0 else 0
+        logits = output.logits[:, start_idx:-1]
 
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
@@ -678,7 +714,7 @@ class OnlineDPOTrainer(Trainer):
 
         kwargs = {}
 
-        # For LOMO optimizers you need to explicitly use the learnign rate
+        # For LOMO optimizers you need to explicitly use the learning rate
         if self.args.optim in [OptimizerNames.LOMO, OptimizerNames.ADALOMO]:
             kwargs["learning_rate"] = self._get_learning_rate()
 
@@ -770,9 +806,13 @@ class OnlineDPOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or set()
-        if isinstance(tags, str):
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
             tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
@@ -793,7 +833,7 @@ class OnlineDPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="Online DPO",
             trainer_citation=citation,

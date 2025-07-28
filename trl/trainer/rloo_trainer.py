@@ -675,9 +675,13 @@ class RLOOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or set()
-        if isinstance(tags, str):
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
             tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
@@ -701,7 +705,7 @@ class RLOOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="RLOO",
             trainer_citation=citation,

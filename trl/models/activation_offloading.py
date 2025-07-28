@@ -59,10 +59,12 @@ class OffloadActivations(saved_tensors_hooks):
         ValueError: if `max_fwd_stash_size` is not at least `1`.
 
     Example:
-        >>> with OffloadActivations():
-        >>>     outputs = model(inputs, labels=labels)
-        >>> loss = outputs.loss
-        >>> loss.backward()
+    ```python
+    >>> with OffloadActivations():
+    ...     outputs = model(inputs, labels=labels)
+    >>> loss = outputs.loss
+    >>> loss.backward()
+    ```
     """
 
     def __init__(
@@ -352,8 +354,8 @@ def get_act_offloading_ctx_manager(
     Returns the activation offloading context manager for the model. All but the last output Linear in every step will
     be offloaded.
 
-    If activation offloading is enabled, we return the OffloadActivations context manager.
-    If activation offloading is disabled, we return a NoOpManager context manager.
+    If activation offloading is enabled, we return the OffloadActivations context manager. If activation offloading is
+    disabled, we return a NoOpManager context manager.
 
     Args:
         model (`nn.Module`):

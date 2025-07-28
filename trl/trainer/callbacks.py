@@ -250,8 +250,8 @@ class WinRateCallback(TrainerCallback):
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*, defaults to `None`):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples
-            in the evaluation dataset.
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
+            the evaluation dataset.
         shuffle_order (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the order of the completions before judging.
         use_soft_judge (`bool`, *optional*, defaults to `False`):
@@ -435,7 +435,8 @@ class LogCompletionsCallback(TrainerCallback):
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples in the evaluation dataset.
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
+            the evaluation dataset.
         freq (`int` or `None`, *optional*):
             The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
@@ -510,7 +511,8 @@ class LogCompletionsCallback(TrainerCallback):
 
 class MergeModelCallback(TrainerCallback):
     r"""
-    A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based on a merge configuration.
+    A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based
+    on a merge configuration.
 
     Args:
         merge_config ([`MergeConfig`], *optional*, defaults to `None`):
@@ -523,7 +525,7 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
-    !pip install mergekit
+    # pip install mergekit
 
     from trl.mergekit_utils import MergeConfig
     from trl import MergeModelCallback

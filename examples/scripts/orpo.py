@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 """
 Run the ORPO training script with the following command with some example arguments.
 In general, the optimal configuration for ORPO will be similar to that of DPO without the need for a reference model:
@@ -24,7 +31,6 @@ python examples/scripts/orpo.py \
     --max_steps 1000 \
     --learning_rate 8e-6 \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="gpt2-aligned-orpo" \
     --warmup_steps 150 \
@@ -41,7 +47,6 @@ python examples/scripts/orpo.py \
     --max_steps 1000 \
     --learning_rate 8e-5 \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
     --output_dir="gpt2-lora-aligned-orpo" \
     --optim rmsprop \

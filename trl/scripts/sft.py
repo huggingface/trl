@@ -12,8 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 """
 # Full training
+```
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
@@ -24,13 +32,14 @@ python trl/scripts/sft.py \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eos_token '<|im_end|>' \
-    --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 100 \
     --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
+```
 
 # LoRA
+```
 python trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
@@ -41,7 +50,6 @@ python trl/scripts/sft.py \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eos_token '<|im_end|>' \
-    --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 100 \
     --use_peft \
@@ -49,6 +57,7 @@ python trl/scripts/sft.py \
     --lora_alpha 16 \
     --output_dir Qwen2-0.5B-SFT \
     --push_to_hub
+```
 """
 
 import argparse
@@ -63,10 +72,10 @@ from trl import (
     SFTConfig,
     SFTTrainer,
     TrlParser,
+    clone_chat_template,
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    setup_chat_format,
 )
 
 
@@ -104,7 +113,8 @@ def main(script_args, training_args, model_args):
 
     # Set default chat template if needed
     if tokenizer.chat_template is None:
-        model, tokenizer = setup_chat_format(model, tokenizer, format="chatml")
+        # TODO: source should be passed as an argument
+        model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
 
     ################
     # Dataset

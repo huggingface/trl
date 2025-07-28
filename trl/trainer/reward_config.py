@@ -43,16 +43,16 @@ class RewardConfig(TrainingArguments):
             Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
             https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
-            Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if
-            the dataset is pretokenized.
+            Whether to remove the columns that are not used by the model's forward pass. Can be `True` only if the
+            dataset is pretokenized.
     """
 
     # Parameters whose default values are overridden from TrainingArguments
     logging_steps: float = field(
         default=10,
         metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
-            "If smaller than 1, will be interpreted as ratio of total training steps."
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
         },
     )
     gradient_checkpointing: bool = field(
@@ -61,15 +61,17 @@ class RewardConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: bool = field(
-        default=True,
+    bf16: Optional[bool] = field(
+        default=None,
         metadata={
-            "help": (
-                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
-            )
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
         },
     )
+    # Note: In transformers>=4.54.0, `average_tokens_across_devices` defaults to True. Overriding this setting is only
+    # needed for earlier versions. Once we require transformers>=4.54.0, this line can be safely removed.
+    # See https://github.com/huggingface/transformers/pull/39395
     average_tokens_across_devices: bool = field(
         default=True,
         metadata={
@@ -107,3 +109,8 @@ class RewardConfig(TrainingArguments):
             "if the dataset is pretokenized."
         },
     )
+
+    def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        super().__post_init__()

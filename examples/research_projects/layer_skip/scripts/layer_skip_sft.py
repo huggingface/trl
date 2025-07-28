@@ -75,7 +75,6 @@ if __name__ == "__main__":
         push_to_hub=True,
         hub_model_id=config.hub_model_id,
         output_dir=config.output_dir,
-        logging_steps=500,
         save_steps=1000,
         save_total_limit=2,
     )

@@ -42,10 +42,13 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     Trainer,
-    is_comet_available,
-    is_wandb_available,
 )
 from transformers.data.data_collator import DataCollatorMixin
+from transformers.integrations import (
+    is_comet_available,
+    is_mlflow_available,
+    is_wandb_available,
+)
 from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
@@ -74,7 +77,12 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import (
+        PeftConfig,
+        PeftModel,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearDPOLoss
@@ -82,6 +90,9 @@ if is_liger_kernel_available():
 
 if is_wandb_available():
     import wandb
+
+if is_mlflow_available():
+    import mlflow
 
 
 def shift_tokens_right(input_ids: torch.Tensor, decoder_start_token_id: int) -> torch.Tensor:
@@ -94,8 +105,8 @@ def shift_tokens_right(input_ids: torch.Tensor, decoder_start_token_id: int) -> 
 @dataclass
 class DataCollatorForPreference(DataCollatorMixin):
     """
-    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they
-    are not all of the same length.
+    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch if they are
+    not all of the same length.
 
     Args:
         pad_token_id (`int`):
@@ -106,10 +117,11 @@ class DataCollatorForPreference(DataCollatorMixin):
     Examples:
     ```python
     >>> from trl import DataCollatorForPreference
+
     >>> collator = DataCollatorForPreference(pad_token_id=0)
     >>> examples = [
     ...     {"prompt_input_ids": [1, 2, 3], "chosen_input_ids": [4, 5], "rejected_input_ids": [6]},
-    ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]}
+    ...     {"prompt_input_ids": [7, 8], "chosen_input_ids": [9, 10], "rejected_input_ids": [11, 12, 13]},
     ... ]
     >>> collator(examples)
     {'prompt_input_ids': tensor([[1, 2, 3],
@@ -178,15 +190,16 @@ class DPOTrainer(Trainer):
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
 
-            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or
-              a path to a *directory* containing model weights saved using
-              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is
-              loaded using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keywork arguments
-              in `args.model_init_kwargs`.
+            - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
+              path to a *directory* containing model weights saved using
+              [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
+              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
+              `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
         ref_model (`PreTrainedModelWrapper`):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation and loss. If no
-            reference model is provided, the trainer will create a reference model with the same architecture as the model to be optimized.
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
         args ([`DPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator (`DataCollator`, *optional*):
@@ -201,7 +214,7 @@ class DPOTrainer(Trainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoTokenizer.from_pretrained`].
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -211,8 +224,8 @@ class DPOTrainer(Trainer):
             after the last eval batch to signal that the function needs to calculate and return the global summary
             statistics rather than accumulating the batch-level statistics.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
-            List of callbacks to customize the training loop. Will add those to the list of default callbacks
-            detailed in [here](https://huggingface.co/docs/transformers/main_classes/callback).
+            List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
+            in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
@@ -220,8 +233,8 @@ class DPOTrainer(Trainer):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
-            A tuple containing the optimizer class and keyword arguments to use.
-            Overrides `optim` and `optim_args` in `args`. Incompatible with the `optimizers` argument.
+            A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
+            `args`. Incompatible with the `optimizers` argument.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
@@ -303,10 +316,10 @@ class DPOTrainer(Trainer):
         # PEFT configuration and model wrapping
         model = self._prepare_peft_model(model, ref_model, peft_config, args)
 
-        if args.generate_during_eval and not (is_wandb_available() or is_comet_available()):
+        if args.generate_during_eval and not (is_wandb_available() or is_comet_available() or is_mlflow_available()):
             raise ValueError(
-                "`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
-                " Please install `wandb` or `comet-ml` to resolve."
+                "`generate_during_eval=True` requires Weights and Biases, MLFlow or Comet to be installed."
+                " Please install `wandb`, `mlflow` or `comet-ml` to resolve."
             )
 
         self.is_encoder_decoder = model.config.is_encoder_decoder
@@ -393,21 +406,10 @@ class DPOTrainer(Trainer):
         self._precomputed_train_ref_log_probs = False
         self._precomputed_eval_ref_log_probs = False
 
-        if (
-            args.loss_type in ["hinge", "ipo", "bco_pair", "sppo_hard", "nca_pair", "apo_zero", "apo_down"]
-            and args.label_smoothing > 0
-        ):
-            warnings.warn(
-                f"You are using the {args.loss_type} loss type that does not support label smoothing. The "
-                "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
-                UserWarning,
-            )
-        if args.loss_type == "kto_pair":
-            raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
-
         self.beta = args.beta
         self.label_smoothing = args.label_smoothing
-        self.loss_type = args.loss_type
+        self.loss_type = args.loss_type if isinstance(args.loss_type, list) else [args.loss_type]
+        self.loss_weights = args.loss_weights
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.use_weighting = args.use_weighting
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
@@ -419,6 +421,18 @@ class DPOTrainer(Trainer):
                 "loss.",
                 UserWarning,
             )
+        for loss_type in self.loss_type:
+            if (
+                loss_type in ["hinge", "ipo", "bco_pair", "sppo_hard", "nca_pair", "apo_zero", "apo_down"]
+                and args.label_smoothing > 0
+            ):
+                warnings.warn(
+                    f"You are using the {loss_type} loss type that does not support label smoothing. The "
+                    "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
+                    UserWarning,
+                )
+            if loss_type == "kto_pair":
+                raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
         self.f_divergence_type = args.f_divergence_type
@@ -496,7 +510,7 @@ class DPOTrainer(Trainer):
 
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
-        if self.loss_type == "bco_pair":
+        if "bco_pair" in self.loss_type:
             self.running = RunningMoments(self.accelerator)
 
     def _create_model_from_path(self, model_path: str, args: DPOConfig, is_ref: bool = False) -> PreTrainedModel:
@@ -643,7 +657,13 @@ class DPOTrainer(Trainer):
         return dataset
 
     @staticmethod
-    def tokenize_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+    def tokenize_row(
+        features: dict[str, str],
+        processing_class: PreTrainedTokenizerBase,
+        max_prompt_length: Optional[int] = None,
+        max_completion_length: Optional[int] = None,
+        add_special_tokens: bool = True,
+    ) -> dict[str, list[int]]:
         """
         Tokenize a row of the dataset.
 
@@ -669,6 +689,7 @@ class DPOTrainer(Trainer):
         Example:
         ```python
         >>> from transformers import GPT2Tokenizer
+
         >>> tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         >>> features = {"prompt": "The sky is", "chosen": " blue", "rejected": " green"}
         >>> DPOTrainer.tokenize_row(
@@ -705,7 +726,13 @@ class DPOTrainer(Trainer):
         }
 
     @staticmethod
-    def process_row(features, processing_class, max_prompt_length, max_completion_length, add_special_tokens):
+    def process_row(
+        features: dict[str, str],
+        processing_class: PreTrainedTokenizerBase,
+        max_prompt_length: Optional[int] = None,
+        max_completion_length: Optional[int] = None,
+        add_special_tokens: bool = True,
+    ) -> dict[str, list[int]]:
         """
         Same as `tokenize_row` but for vision models. Please refer to `tokenize_row` for more information.
         """
@@ -873,7 +900,7 @@ class DPOTrainer(Trainer):
             if self.ref_adapter_name:
                 self.model.set_adapter(self.model_adapter_name or "default")
 
-    def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> dict:
+    def compute_ref_log_probs(self, batch: dict[str, torch.LongTensor]) -> tuple[torch.Tensor, torch.Tensor]:
         """Computes log probabilities of the reference model for a single padded batch of a DPO specific dataset."""
         compte_ref_context_manager = (
             autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
@@ -891,16 +918,19 @@ class DPOTrainer(Trainer):
         batch: dict[str, Union[list, torch.LongTensor]], padding_value: int
     ) -> dict[str, torch.LongTensor]:
         """
-        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt
-        and completion sequences.
+        Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt and
+        completion sequences.
 
         Args:
             batch (`dict[str, Union[list, torch.LongTensor]]`):
                 A batch of input data. The batch must contain the following keys:
 
-                - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input IDs.
-                - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen completion input IDs.
-                - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected completion input IDs.
+                - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input
+                  IDs.
+                - `"chosen_input_ids"`: Tensor of shape `(batch_size, chosen_length)` representing the chosen
+                  completion input IDs.
+                - `"rejected_input_ids"`: Tensor of shape `(batch_size, rejected_length)` representing the rejected
+                  completion input IDs.
                 - `"prompt_pixel_values"` (optional): Tensor for pixel values, if available.
                 - `"prompt_pixel_attention_mask"` (optional): Tensor for pixel attention masks, if available.
 
@@ -912,15 +942,19 @@ class DPOTrainer(Trainer):
             `dict[str, torch.LongTensor]`: A dictionary containing:
 
                 - `"prompt_input_ids"`: Concatenated prompt input IDs of shape `(2 * batch_size, prompt_length)`.
-                - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 * batch_size, max_completion_length)`.
-                - `"prompt_attention_mask"`: Concatenated prompt attention masks of shape `(2 * batch_size, prompt_length)`.
-                - `"completion_attention_mask"`: Concatenated chosen and rejected attention masks of shape `(2 * batch_size, max_completion_length)`.
+                - `"completion_input_ids"`: Concatenated chosen and rejected completion input IDs of shape `(2 *
+                  batch_size, max_completion_length)`.
+                - `"prompt_attention_mask"`: Concatenated prompt attention masks of shape `(2 * batch_size,
+                  prompt_length)`.
+                - `"completion_attention_mask"`: Concatenated chosen and rejected attention masks of shape `(2 *
+                  batch_size, max_completion_length)`.
                 - `"pixel_values"` (optional): Concatenated pixel values if `"prompt_pixel_values"` are present.
-                - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if `"prompt_pixel_attention_mask"` are present.
+                - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if
+                  `"prompt_pixel_attention_mask"` are present.
 
         Notes:
-            The completion input IDs and attention masks are padded to the maximum completion length of the chosen
-            or rejected sequences.
+            The completion input IDs and attention masks are padded to the maximum completion length of the chosen or
+            rejected sequences.
         """
         output = {}
 
@@ -962,6 +996,8 @@ class DPOTrainer(Trainer):
         rejected_logps: torch.FloatTensor,
         ref_chosen_logps: torch.FloatTensor,
         ref_rejected_logps: torch.FloatTensor,
+        loss_type: str = "sigmoid",
+        model_output: dict[str, torch.FloatTensor] = None,
     ) -> tuple[torch.FloatTensor, torch.FloatTensor, torch.FloatTensor]:
         """
         Compute the DPO loss for a batch of policy and reference model log probabilities.
@@ -977,10 +1013,9 @@ class DPOTrainer(Trainer):
                 Log probabilities of the reference model for the rejected responses. Shape: `(batch_size,)`.
 
         Returns:
-            A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`.
-            The losses tensor contains the DPO loss for each example in the batch.
-            The `chosen_rewards` and `rejected_rewards` tensors contain the rewards for the chosen and rejected
-            responses, respectively.
+            A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`. The losses tensor contains the DPO
+            loss for each example in the batch. The `chosen_rewards` and `rejected_rewards` tensors contain the rewards
+            for the chosen and rejected responses, respectively.
         """
         device = self.accelerator.device
 
@@ -1022,19 +1057,19 @@ class DPOTrainer(Trainer):
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the
         # labels and calculates a conservative DPO loss.
-        if self.loss_type == "sigmoid":
+        if loss_type == "sigmoid":
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
                 - F.logsigmoid(-self.beta * logits) * self.label_smoothing
             )
 
-        elif self.loss_type == "robust":
+        elif loss_type == "robust":
             losses = (
                 -F.logsigmoid(self.beta * logits) * (1 - self.label_smoothing)
                 + F.logsigmoid(-self.beta * logits) * self.label_smoothing
             ) / (1 - 2 * self.label_smoothing)
 
-        elif self.loss_type == "exo_pair":
+        elif loss_type == "exo_pair":
             # eqn (16) of the EXO paper: https://huggingface.co/papers/2402.00856
             import math
 
@@ -1044,14 +1079,14 @@ class DPOTrainer(Trainer):
                 F.logsigmoid(self.beta * logits) - math.log(1 - self.label_smoothing)
             ) + (-self.beta * logits).sigmoid() * (F.logsigmoid(-self.beta * logits) - math.log(self.label_smoothing))
 
-        elif self.loss_type == "hinge":
+        elif loss_type == "hinge":
             losses = torch.relu(1 - self.beta * logits)
 
-        elif self.loss_type == "ipo":
+        elif loss_type == "ipo":
             # eqn (17) of the paper where beta is the regularization parameter for the IPO loss, denoted by tau in the paper.
             losses = (logits - 1 / (2 * self.beta)) ** 2
 
-        elif self.loss_type == "bco_pair":
+        elif loss_type == "bco_pair":
             chosen_logratios = chosen_logps - ref_chosen_logps
             rejected_logratios = rejected_logps - ref_rejected_logps
             chosen_rewards = self.beta * chosen_logratios
@@ -1063,7 +1098,7 @@ class DPOTrainer(Trainer):
                 -(self.beta * rejected_logratios - delta)
             )
 
-        elif self.loss_type == "sppo_hard":
+        elif loss_type == "sppo_hard":
             # In the paper (https://huggingface.co/papers/2405.00675), SPPO employs a soft probability approach,
             # estimated using the PairRM score. The probability calculation is conducted outside of the trainer class.
             # The version described here is the hard probability version, where P in Equation (4.7) of Algorithm 1 is
@@ -1072,7 +1107,7 @@ class DPOTrainer(Trainer):
             b = rejected_logps - ref_rejected_logps
             losses = (a - 0.5 / self.beta) ** 2 + (b + 0.5 / self.beta) ** 2
 
-        elif self.loss_type == "nca_pair":
+        elif loss_type == "nca_pair":
             chosen_rewards = (chosen_logps - ref_chosen_logps) * self.beta
             rejected_rewards = (rejected_logps - ref_rejected_logps) * self.beta
             losses = (
@@ -1081,7 +1116,7 @@ class DPOTrainer(Trainer):
                 - 0.5 * F.logsigmoid(-rejected_rewards)
             )
 
-        elif self.loss_type == "aot_pair":
+        elif loss_type == "aot_pair":
             chosen_logratios = chosen_logps - ref_chosen_logps
             rejected_logratios = rejected_logps - ref_rejected_logps
             chosen_logratios_sorted, _ = torch.sort(chosen_logratios, dim=0)
@@ -1092,7 +1127,7 @@ class DPOTrainer(Trainer):
                 - F.logsigmoid(-self.beta * delta) * self.label_smoothing
             )
 
-        elif self.loss_type == "aot":
+        elif loss_type == "aot":
             logratios = chosen_logps - rejected_logps
             ref_logratios = ref_chosen_logps - ref_rejected_logps
             logratios_sorted, _ = torch.sort(logratios, dim=0)
@@ -1103,14 +1138,14 @@ class DPOTrainer(Trainer):
                 - F.logsigmoid(-self.beta * delta) * self.label_smoothing
             )
 
-        elif self.loss_type == "apo_zero":
+        elif loss_type == "apo_zero":
             # Eqn (7) of the APO paper (https://huggingface.co/papers/2408.06266)
             # Use this loss when you believe the chosen outputs are better than your model's default output
             losses_chosen = 1 - F.sigmoid(self.beta * chosen_logratios)  # Increase chosen likelihood
             losses_rejected = F.sigmoid(self.beta * rejected_logratios)  # Decrease rejected likelihood
             losses = losses_chosen + losses_rejected
 
-        elif self.loss_type == "apo_down":
+        elif loss_type == "apo_down":
             # Eqn (8) of the APO paper (https://huggingface.co/papers/2408.06266)
             # Use this loss when you believe the chosen outputs are worse than your model's default output.
             # Decrease chosen likelihood and decrease rejected likelihood more
@@ -1118,7 +1153,7 @@ class DPOTrainer(Trainer):
             losses_rejected = 1 - F.sigmoid(self.beta * (chosen_logratios - rejected_logratios))
             losses = losses_chosen + losses_rejected
 
-        elif self.loss_type == "discopop":
+        elif loss_type == "discopop":
             # Eqn (5) of the DiscoPOP paper (https://huggingface.co/papers/2406.08414)
             # This loss was discovered with LLM discovery
             logratios = chosen_logps - rejected_logps
@@ -1132,10 +1167,22 @@ class DPOTrainer(Trainer):
             # Blend between logistic and exponential component based on log ratio modulation
             losses = logistic_component * (1 - log_ratio_modulation) + exp_component * log_ratio_modulation
 
+        elif loss_type == "sft":
+            # SFT loss is the negative log likelihood loss on chosen responses
+            # This acts as the generation loss component in MPO
+            sft_loss = model_output["nll_loss"]
+            # Create losses tensor with same shape as other losses (per-sample)
+            batch_size = chosen_logps.shape[0]
+            losses = sft_loss.expand(batch_size)
+            # For SFT, we don't have preference rewards, so use zeros
+            chosen_rewards = torch.zeros_like(chosen_logps)
+            rejected_rewards = torch.zeros_like(rejected_logps)
+
         else:
             raise ValueError(
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'exo_pair', "
-                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', 'apo_down']"
+                "'nca_pair', 'robust', 'bco_pair', 'sppo_hard', 'aot', 'aot_pair', 'discopop', 'apo_zero', "
+                "'apo_down', 'sft']"
             )
 
         chosen_rewards = self.beta * (chosen_logps.to(device) - ref_chosen_logps.to(device)).detach()
@@ -1143,7 +1190,9 @@ class DPOTrainer(Trainer):
 
         return losses, chosen_rewards, rejected_rewards
 
-    def _compute_loss_liger(self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]):
+    def _compute_loss_liger(
+        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
+    ) -> dict[str, torch.Tensor]:
         unwrapped_model = self.accelerator.unwrap_model(model)
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
 
@@ -1318,7 +1367,6 @@ class DPOTrainer(Trainer):
                 with self.null_ref_context():
                     ref_outputs = ref_base_model(
                         input_ids,
-                        attention_mask=attention_mask,
                         use_cache=False,
                         **model_kwargs,
                     )
@@ -1375,7 +1423,7 @@ class DPOTrainer(Trainer):
 
     def concatenated_forward(
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]], is_ref_model: bool = False
-    ):
+    ) -> dict[str, torch.Tensor]:
         """
         Runs the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
 
@@ -1535,8 +1583,8 @@ class DPOTrainer(Trainer):
                 rejected_weights = all_weights[num_examples:]
                 output["policy_weights"] = torch.clamp(torch.exp(chosen_weights + rejected_weights), max=1)
 
-        if self.args.rpo_alpha is not None:
-            # Only use the chosen logits for the RPO loss
+        if self.args.rpo_alpha is not None or "sft" in self.loss_type:
+            # Only use the chosen logits for the RPO loss or SFT loss
             chosen_logits = logits[:num_examples, :-1] if not self.is_encoder_decoder else logits[:num_examples]
             chosen_labels = labels[:num_examples, :-1] if not self.is_encoder_decoder else labels[:num_examples]
 
@@ -1545,7 +1593,7 @@ class DPOTrainer(Trainer):
                 torch.flatten(chosen_logits, end_dim=1), torch.flatten(chosen_labels, end_dim=1), ignore_index=0
             )
 
-        if self.loss_type == "ipo":
+        if "ipo" in self.loss_type:
             all_logps = all_logps / loss_mask.sum(-1)
 
         if self.args.ld_alpha is not None and not is_ref_model:
@@ -1596,10 +1644,10 @@ class DPOTrainer(Trainer):
 
     def get_batch_loss_metrics(
         self,
-        model,
+        model: Union[PreTrainedModel, nn.Module],
         batch: dict[str, Union[list, torch.LongTensor]],
         train_eval: Literal["train", "eval"] = "train",
-    ):
+    ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
         metrics = {}
 
@@ -1618,9 +1666,29 @@ class DPOTrainer(Trainer):
             else:
                 ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
 
-            losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-                model_output["chosen_logps"], model_output["rejected_logps"], ref_chosen_logps, ref_rejected_logps
-            )
+            # Initialize combined losses
+            losses = 0
+            chosen_rewards = 0
+            rejected_rewards = 0
+
+            # Compute losses for each loss type
+            for idx, loss_type in enumerate(self.loss_type):
+                # Compute individual loss using standard DPO loss function
+                _losses, _chosen_rewards, _rejected_rewards = self.dpo_loss(
+                    model_output["chosen_logps"],
+                    model_output["rejected_logps"],
+                    ref_chosen_logps,
+                    ref_rejected_logps,
+                    loss_type,
+                    model_output,
+                )
+
+                # Add weighted contributions
+                weight = self.loss_weights[idx] if self.loss_weights else 1.0
+                losses = losses + _losses * weight
+                chosen_rewards = chosen_rewards + _chosen_rewards * weight
+                rejected_rewards = rejected_rewards + _rejected_rewards * weight
+
         reward_accuracies = (chosen_rewards > rejected_rewards).float()
 
         if self.args.rpo_alpha is not None:
@@ -1651,7 +1719,7 @@ class DPOTrainer(Trainer):
         metrics[f"{prefix}logits/rejected"] = (
             self.accelerator.gather_for_metrics(model_output["mean_rejected_logits"]).detach().mean().item()
         )
-        if self.args.rpo_alpha is not None:
+        if self.args.rpo_alpha is not None or "sft" in self.loss_type:
             metrics[f"{prefix}nll_loss"] = (
                 self.accelerator.gather_for_metrics(model_output["nll_loss"]).detach().mean().item()
             )
@@ -1668,7 +1736,7 @@ class DPOTrainer(Trainer):
         inputs: dict[str, Union[torch.Tensor, Any]],
         return_outputs=False,
         num_items_in_batch=None,
-    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
+    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, float]]]:
         compute_loss_context_manager = (
             autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         )
@@ -1739,7 +1807,7 @@ class DPOTrainer(Trainer):
         inputs: dict[str, Union[torch.Tensor, Any]],
         prediction_loss_only: bool,
         ignore_keys: Optional[list[str]] = None,
-    ):
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
         if ignore_keys is None:
             if hasattr(model, "config"):
                 ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
@@ -1783,8 +1851,8 @@ class DPOTrainer(Trainer):
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
-        Overriding built-in evaluation loop to store metrics for each batch.
-        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
+        Overriding built-in evaluation loop to store metrics for each batch. Prediction/evaluation loop, shared by
+        `Trainer.evaluate()` and `Trainer.predict()`.
 
         Works both with or without labels.
         """
@@ -1819,6 +1887,9 @@ class DPOTrainer(Trainer):
                     name="game_log.csv",
                     table=table,
                 )
+
+            if "mlflow" in self.args.report_to and self.accelerator.is_main_process:
+                mlflow.log_table(data=table, artifact_file="game_log.json")
 
         # Base evaluation
         initial_output = super().evaluation_loop(
@@ -1879,9 +1950,13 @@ class DPOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or set()
-        if isinstance(tags, str):
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
             tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
@@ -1906,7 +1981,7 @@ class DPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="DPO",
             trainer_citation=citation,

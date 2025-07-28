@@ -63,8 +63,8 @@ class DPOConfig(TrainingArguments):
             Whether to disable dropout in the model and reference model.
         use_logits_to_keep (`bool`, *optional*, defaults to `False`):
             If `True`, only a specified number of logits are computed in the forward pass. This can be useful for
-            saving memory and speeding up training by not computing the logits for all tokens, especially in
-            scenarios when working with very long prompts where labels are ignored (-100).
+            saving memory and speeding up training by not computing the logits for all tokens, especially in scenarios
+            when working with very long prompts where labels are ignored (-100).
 
         > Parameters that control the data preprocessing
 
@@ -98,27 +98,37 @@ class DPOConfig(TrainingArguments):
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
         tools (`Optional[list[Union[dict, Callable]]]`, *optional*, defaults to `None`):
-            List of tools (callable functions) that will be accessible to the model.
-            If the template does not support function calling, this argument will have no effect.
+            List of tools (callable functions) that will be accessible to the model. If the template does not support
+            function calling, this argument will have no effect.
 
         > Parameters that control the training
 
-        loss_type (`str`, *optional*, defaults to `"sigmoid"`):
+        loss_type (`str` or `list[str]`, *optional*, defaults to `"sigmoid"`):
             Type of loss to use. Possible values are:
 
                 - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
-                - `"hinge"`: hinge loss on the normalized likelihood from the [SLiC](https://huggingface.co/papers/2305.10425) paper.
+                - `"hinge"`: hinge loss on the normalized likelihood from the
+                  [SLiC](https://huggingface.co/papers/2305.10425) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
                 - `"exo_pair"`: pairwise EXO loss from the [EXO](https://huggingface.co/papers/2402.00856) paper.
                 - `"nca_pair"`: pairwise NCA loss from the [NCA](https://huggingface.co/papers/2402.05369) paper.
-                - `"robust"`: unbiased estimate of the DPO loss that is robust to preference noise from the [Robust DPO](https://huggingface.co/papers/2403.00409) paper.
+                - `"robust"`: unbiased estimate of the DPO loss that is robust to preference noise from the [Robust
+                  DPO](https://huggingface.co/papers/2403.00409) paper.
                 - `"bco_pair"`: pairwise BCO loss from the [BCO](https://huggingface.co/papers/2404.04656) paper.
-                - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675) paper.
+                - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
+                  paper.
                 - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
-                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
+                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
+                  paper.
+                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
+                  [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
                 - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
                 - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"sft"`: Negative log-likelihood loss (standard supervised fine-tuning loss).
+
+            Multiple loss types can be combined using comma separation (e.g., `["sigmoid", "bco_pair", "sft"]` for
+            [MPO](https://huggingface.co/papers/2411.10442)). The `loss_weights` parameter can be used to specify
+            corresponding weights for each loss type.
 
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Liger loss.
@@ -137,8 +147,8 @@ class DPOConfig(TrainingArguments):
             Whether to ignore the provided reference model and implicitly use a reference model that assigns equal
             probability to all responses.
         label_smoothing (`float`, *optional*, defaults to `0.0`):
-            Robust DPO label smoothing parameter from the [cDPO report](https://ericmitchell.ai/cdpo.pdf) and
-            [Robust DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
+            Robust DPO label smoothing parameter from the [cDPO report](https://ericmitchell.ai/cdpo.pdf) and [Robust
+            DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
         use_weighting (`bool`, *optional*, defaults to `False`):
             Whether to weight the loss as done in the [WPO paper](https://huggingface.co/papers/2406.11827).
         rpo_alpha (`float`, *optional*, defaults to `None`):
@@ -153,9 +163,13 @@ class DPOConfig(TrainingArguments):
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
+        loss_weights (`list[float]` or `None`, *optional*, defaults to `None`):
+            List of loss weights for multi-loss combinations. Used when combining multiple loss types.
+            Example: `[0.8, 0.2, 1.0]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults
+            to equal weights (`1.0`) for all loss types.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
-            the `ref_model_mixup_alpha` parameter. This synchronization originites from the
+            the `ref_model_mixup_alpha` parameter. This synchronization originates from the
             [TR-DPO](https://huggingface.co/papers/2404.09656) paper.
         ref_model_mixup_alpha (`float`, *optional*, defaults to `0.6`):
             α parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which controls the mix
@@ -184,8 +198,8 @@ class DPOConfig(TrainingArguments):
     logging_steps: float = field(
         default=10,
         metadata={
-            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
-            "If smaller than 1, will be interpreted as ratio of total training steps."
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
         },
     )
     gradient_checkpointing: bool = field(
@@ -194,13 +208,12 @@ class DPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: bool = field(
-        default=True,
+    bf16: Optional[bool] = field(
+        default=None,
         metadata={
-            "help": (
-                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
-            )
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
         },
     )
 
@@ -315,25 +328,14 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    loss_type: str = field(
-        default="sigmoid",
+    loss_type: list[str] = field(
+        default_factory=lambda: ["sigmoid"],
         metadata={
-            "help": "Type of loss to use.",
-            "choices": [
-                "sigmoid",
-                "hinge",
-                "ipo",
-                "exo_pair",
-                "nca_pair",
-                "robust",
-                "bco_pair",
-                "sppo_hard",
-                "aot",
-                "aot_pair",
-                "discopop",
-                "apo_zero",
-                "apo_down",
-            ],
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`, `'ipo'`, `'exo_pair'`, "
+            "`'nca_pair'`, `'robust'`, `'bco_pair'`, `'sppo_hard'`, `'aot'`, `'aot_pair'`, `'discopop'`, "
+            "`'apo_zero'`, `'apo_down'` and `'sft'`. Multiple loss types can be combined using comma separation "
+            "(e.g., `['sigmoid', 'bco_pair', 'sft']` for MPO). The `loss_weights` parameter can be used to specify "
+            "corresponding weights for each loss type."
         },
     )
     use_liger_loss: bool = field(
@@ -407,6 +409,14 @@ class DPOConfig(TrainingArguments):
             "loss. The paper recommends the default value `discopop_tau=0.05`."
         },
     )
+    loss_weights: Optional[list[float]] = field(
+        default=None,
+        metadata={
+            "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
+            "Example: `[0.8, 0.2, 1.0]` for MPO. If not provided, defaults to equal weights (`1.0`) for all loss "
+            "types."
+        },
+    )
     sync_ref_model: bool = field(
         default=False,
         metadata={
@@ -434,7 +444,24 @@ class DPOConfig(TrainingArguments):
     generate_during_eval: bool = field(
         default=False,
         metadata={
-            "help": "Whether to generate and log completions from both the model and the reference model to W&B or "
-            "Comet during evaluation."
+            "help": "Whether to generate and log completions from both the model and the reference model to W&B, MLFLow "
+            "or Comet during evaluation."
         },
     )
+
+    def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Normalize loss_type to string format for internal use
+        if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:
+            self.loss_type = self.loss_type[0]
+
+        # Validate loss_type
+        if self.loss_weights is not None:
+            loss_types = self.loss_type if isinstance(self.loss_type, list) else [self.loss_type]
+            if len(self.loss_weights) != len(loss_types):
+                raise ValueError(
+                    f"Length of loss_weights list ({self.loss_weights}) must match number of loss types "
+                    f"({loss_types})."
+                )
+        super().__post_init__()

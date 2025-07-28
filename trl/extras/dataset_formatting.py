@@ -13,26 +13,34 @@
 # limitations under the License.
 
 import logging
-from typing import Callable, Literal, Optional, Union
+from typing import Callable, Literal, Optional
 
+import datasets
 from datasets import Dataset, Value
+from packaging import version
 from transformers import AutoTokenizer
 
-from ..trainer.utils import ConstantLengthDataset
 
+if version.parse(datasets.__version__) >= version.parse("4.0.0"):
+    from datasets import List
 
-FORMAT_MAPPING = {
-    "chatml": [{"content": Value(dtype="string", id=None), "role": Value(dtype="string", id=None)}],
-    "instruction": {"completion": Value(dtype="string", id=None), "prompt": Value(dtype="string", id=None)},
-}
+    FORMAT_MAPPING = {
+        "chatml": List({"content": Value(dtype="string", id=None), "role": Value(dtype="string", id=None)}),
+        "instruction": {"completion": Value(dtype="string", id=None), "prompt": Value(dtype="string", id=None)},
+    }
+else:
+    FORMAT_MAPPING = {
+        "chatml": [{"content": Value(dtype="string", id=None), "role": Value(dtype="string", id=None)}],
+        "instruction": {"completion": Value(dtype="string", id=None), "prompt": Value(dtype="string", id=None)},
+    }
 
 
 def conversations_formatting_function(
     tokenizer: AutoTokenizer, messages_field: Literal["messages", "conversations"], tools: Optional[list] = None
 ):
     r"""
-    return a callable function that takes in a "messages" dataset and returns a formatted dataset, based on the tokenizer
-    apply chat template to the dataset along with the schema of the list of functions in the tools list.
+    return a callable function that takes in a "messages" dataset and returns a formatted dataset, based on the
+    tokenizer apply chat template to the dataset along with the schema of the list of functions in the tools list.
     """
 
     def format_dataset(examples):
@@ -51,8 +59,8 @@ def conversations_formatting_function(
 
 def instructions_formatting_function(tokenizer: AutoTokenizer):
     r"""
-    return a callable function that takes in an "instructions" dataset and returns a formatted dataset, based on the tokenizer
-    apply chat template to the dataset
+    return a callable function that takes in an "instructions" dataset and returns a formatted dataset, based on the
+    tokenizer apply chat template to the dataset
     """
 
     def format_dataset(examples):
@@ -76,7 +84,7 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
 
 
 def get_formatting_func_from_dataset(
-    dataset: Union[Dataset, ConstantLengthDataset], tokenizer: AutoTokenizer, tools: Optional[list] = None
+    dataset: Dataset, tokenizer: AutoTokenizer, tools: Optional[list] = None
 ) -> Optional[Callable]:
     r"""
     Finds the correct formatting function based on the dataset structure. Currently supported datasets are:

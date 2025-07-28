@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+#     "wandb",
+#     "qwen-vl-utils",
+# ]
+# ///
+
 """
 Example usage:
 accelerate launch \
@@ -27,7 +36,6 @@ accelerate launch \
     --gradient_accumulation_steps=4 \
     --num_train_epochs=4 \
     --optim="adamw_torch_fused" \
-    --logging_steps=1 \
     --log_level="debug" \
     --log_level_replica="debug" \
     --save_strategy="steps" \
@@ -233,7 +241,7 @@ if __name__ == "__main__":
         train_dataset=prepared_dataset,
         data_collator=collate_fn,
         peft_config=peft_config,
-        tokenizer=processor.tokenizer,
+        processing_class=processor,
     )
 
     # Train model

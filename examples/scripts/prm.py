@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+# ]
+# ///
+
 """
 Full training:
 python examples/scripts/prm.py \
@@ -22,7 +28,6 @@ python examples/scripts/prm.py \
     --num_train_epochs 1 \
     --gradient_checkpointing True \
     --learning_rate 1.0e-5 \
-    --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 50
 
@@ -35,7 +40,6 @@ python examples/scripts/prm.py \
     --num_train_epochs 1 \
     --gradient_checkpointing True \
     --learning_rate 1.0e-4 \
-    --logging_steps 25 \
     --eval_strategy steps \
     --eval_steps 50
     --use_peft \

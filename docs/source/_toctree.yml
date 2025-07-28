@@ -9,6 +9,8 @@
 - sections:
   - local: dataset_formats
     title: Dataset Formats
+  - local: paper_index
+    title: Paper Index
   - local: how_to_train
     title: Training FAQ
   - local: logging

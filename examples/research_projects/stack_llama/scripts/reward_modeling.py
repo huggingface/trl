@@ -148,7 +148,6 @@ training_args = TrainingArguments(
     label_names=[],
     bf16=script_args.bf16,
     logging_strategy="steps",
-    logging_steps=10,
     optim=script_args.optim,
     lr_scheduler_type=script_args.lr_scheduler_type,
     seed=script_args.seed,

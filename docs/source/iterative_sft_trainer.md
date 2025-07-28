@@ -85,7 +85,6 @@ config = IterativeSFTConfig(
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     max_steps=1000,
-    logging_steps=10,
     save_steps=100,
     optim="adamw_torch",
     report_to="wandb",

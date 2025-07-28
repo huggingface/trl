@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 """
 Run the KTO training script with the commands below. In general, the optimal configuration for KTO will be similar to that of DPO.
 
@@ -24,7 +31,6 @@ python trl/scripts/kto.py \
     --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
     --output_dir=kto-aligned-model \
     --warmup_ratio 0.1 \
@@ -41,7 +47,6 @@ python trl/scripts/kto.py \
     --learning_rate 5e-7 \
     --lr_scheduler_type=cosine \
     --gradient_accumulation_steps 1 \
-    --logging_steps 10 \
     --eval_steps 500 \
     --output_dir=kto-aligned-model-lora \
     --warmup_ratio 0.1 \

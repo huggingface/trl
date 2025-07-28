@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 """
 Run the BCO training script with the commands below. In general, the optimal configuration for BCO will be similar to that of KTO.
 
@@ -26,7 +33,6 @@ python examples/scripts/bco.py \
     --learning_rate 1e-6 \
     --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
-    --logging_steps 0.01 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir=bco-aligned-model \
@@ -48,7 +54,6 @@ python examples/scripts/bco.py \
     --learning_rate 1e-6 \
     --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
-    --logging_steps 0.01 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir=bco-aligned-model-lora \

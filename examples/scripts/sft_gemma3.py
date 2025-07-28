@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+# ]
+# ///
+
 """
 Train Gemma-3 on the Codeforces COTS dataset.
 
@@ -36,7 +42,6 @@ def main():
     # Train model
     training_args = SFTConfig(
         output_dir=f"{model_id}-codeforces-SFT",
-        logging_steps=10,
         bf16=True,
         use_liger_kernel=True,
         gradient_checkpointing=True,

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from itertools import takewhile
@@ -35,8 +34,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
     Args:
         example (`dict[str, Any]`):
-            A single data entry of a dataset. The example can have different keys depending on the
-            dataset type.
+            A single data entry of a dataset. The example can have different keys depending on the dataset type.
 
     Returns:
         `bool`:
@@ -48,7 +46,8 @@ def is_conversational(example: dict[str, Any]) -> bool:
     >>> example = {"prompt": [{"role": "user", "content": "What color is the sky?"}]}
     >>> is_conversational(example)
     True
-    >>> example = {"prompt": "The sky is"})
+
+    >>> example = {"prompt": "The sky is"}
     >>> is_conversational(example)
     False
     ```
@@ -60,7 +59,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
     if example_keys:
         key = example_keys.pop()  # take the first supported key
         maybe_messages = example[key]
-        # It must be a list of messages,
+        # It must be a list of messages
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
             # Each message must a list of dictionaries with keys "role" and "content"
@@ -191,8 +190,8 @@ def maybe_apply_chat_template(
         tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer to apply the chat template with.
         tools (`list[Union[dict, Callable]]` or `None`, *optional*, defaults to `None`):
-            A list of tools (callable functions) that will be accessible to the model.
-            If the template does not support function calling, this argument will have no effect
+            A list of tools (callable functions) that will be accessible to the model. If the template does not support
+            function calling, this argument will have no effect
 
     Returns:
         `dict[str, str]`:
@@ -209,10 +208,11 @@ def maybe_apply_chat_template(
 
     ```python
     >>> from transformers import AutoTokenizer
+
     >>> tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3-mini-128k-instruct")
     >>> example = {
     ...     "prompt": [{"role": "user", "content": "What color is the sky?"}],
-    ...     "completion": [{"role": "assistant", "content": "It is blue."}]
+    ...     "completion": [{"role": "assistant", "content": "It is blue."}],
     ... }
     >>> apply_chat_template(example, tokenizer)
     {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
@@ -257,10 +257,11 @@ def unpair_preference_dataset(
 
     ```python
     >>> from datasets import Dataset
+
     >>> dataset_dict = {
-    ...     "prompt": ["The sky is", "The sun is"]
+    ...     "prompt": ["The sky is", "The sun is"],
     ...     "chosen": [" blue.", "in the sky."],
-    ...     "rejected": [" green.", " in the sea."]
+    ...     "rejected": [" green.", " in the sea."],
     ... }
     >>> dataset = Dataset.from_dict(dataset_dict)
     >>> dataset = unpair_preference_dataset(dataset)
@@ -269,6 +270,7 @@ def unpair_preference_dataset(
         features: ['prompt', 'completion', 'label'],
         num_rows: 4
     })
+
     >>> dataset[0]
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
@@ -298,10 +300,11 @@ def maybe_unpair_preference_dataset(
 
     ```python
     >>> from datasets import Dataset
+
     >>> dataset_dict = {
-    ...     "prompt": ["The sky is", "The sun is"]
+    ...     "prompt": ["The sky is", "The sun is"],
     ...     "chosen": [" blue.", "in the sky."],
-    ...     "rejected": [" green.", " in the sea."]
+    ...     "rejected": [" green.", " in the sea."],
     ... }
     >>> dataset = Dataset.from_dict(dataset_dict)
     >>> dataset = unpair_preference_dataset(dataset)
@@ -310,6 +313,7 @@ def maybe_unpair_preference_dataset(
         features: ['prompt', 'completion', 'label'],
         num_rows: 4
     })
+
     >>> dataset[0]
     {'prompt': 'The sky is', 'completion': ' blue.', 'label': True}
     ```
@@ -326,8 +330,8 @@ def maybe_unpair_preference_dataset(
 
 def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
     r"""
-    Extracts the shared prompt from a preference data example, where the prompt is implicit within both
-    the chosen and rejected completions.
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
+    rejected completions.
 
     For more details, see [`maybe_extract_prompt`].
     """
@@ -345,8 +349,8 @@ def extract_prompt(example: dict[str, Sequence]) -> dict[str, Sequence]:
 
 def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     r"""
-    Extracts the shared prompt from a preference data example, where the prompt is implicit within both
-    the chosen and rejected completions.
+    Extracts the shared prompt from a preference data example, where the prompt is implicit within both the chosen and
+    rejected completions.
 
     If the example already contains a `"prompt"` key, the function returns the example as is. Else, the function
     identifies the longest common sequence (prefix) of conversation turns between the "chosen" and "rejected"
@@ -370,12 +374,12 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     >>> example = {
     ...     "chosen": [
     ...         {"role": "user", "content": "What color is the sky?"},
-    ...         {"role": "assistant", "content": "It is blue."}
+    ...         {"role": "assistant", "content": "It is blue."},
     ...     ],
     ...     "rejected": [
     ...         {"role": "user", "content": "What color is the sky?"},
-    ...         {"role": "assistant", "content": "It is green."}
-    ...     ]
+    ...         {"role": "assistant", "content": "It is green."},
+    ...     ],
     ... }
     >>> extract_prompt(example)
     {'prompt': [{'role': 'user', 'content': 'What color is the sky?'}],
@@ -388,6 +392,7 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     ```python
     >>> from trl import extract_prompt
     >>> from datasets import Dataset
+
     >>> dataset_dict = {
     ...     "chosen": [
     ...         [
@@ -435,49 +440,10 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
 
 
-def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str, list[list]]:
-    """
-    Pack examples into chunks of size `seq_length`.
-
-    Args:
-        examples (`dict[str, list[list]]`):
-            Dictionary of examples with keys as strings and values as lists of lists.
-        seq_length (`int`):
-            Maximum sequence length.
-
-    Returns:
-        `dict[str, list[list]]`: Dictionary of examples with keys as strings and values as lists of lists.
-
-    Example:
-
-    ```python
-    >>> from trl import pack_examples
-    >>> examples = {
-    ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-    ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-    ... }
-    >>> pack_examples(examples, seq_length=5)
-    {'input_ids': [[1, 2, 3, 4, 5], [6, 7, 8]], 'attention_mask': [[0, 1, 1, 0, 0], [1, 1, 1]]}
-    >>> pack_examples(examples, seq_length=2)
-    {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
-    ```
-    """
-    warnings.warn(
-        "`pack_examples` is deprecated and will be removed in version 0.20.0. Use `pack_dataset` with a dataset "
-        "instead.",
-        DeprecationWarning,
-    )
-    # Join  all the values into a single list
-    examples = {k: sum(v, []) for k, v in examples.items()}
-    # Split the values into chunks of size seq_length
-    examples = {k: [v[i : i + seq_length] for i in range(0, len(v), seq_length)] for k, v in examples.items()}
-    return examples
-
-
 class _SegmentTree:
     """
-    A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger value
-    for a given input within the range [1, maxval].
+    A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger
+    value for a given input within the range [1, maxval].
 
     See [Fewer Truncations Improve Language Modeling](https://arxiv.org/abs/2404.10830) for more details.
     """
@@ -517,14 +483,8 @@ class _SegmentTree:
         return self.tree[i]
 
 
-def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
-    """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
-    # Add position_ids to the examples
-    input_ids = examples["input_ids"]
-    position_ids_python = [list(range(len(sequence))) for sequence in input_ids.to_pylist()]
-    position_ids_array = pa.array(position_ids_python, type=examples["input_ids"].type)
-    examples = examples.append_column("position_ids", position_ids_array)
-
+def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
@@ -537,7 +497,9 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
 
     ids = np.arange(len(examples))
     assert list_column_idx is not None
-    lengths = pc.make_struct(pc.list_value_length(examples[list_column_idx]).combine_chunks(), ids)
+    lengths = pc.list_value_length(examples[list_column_idx]).combine_chunks()
+    examples = examples.append_column("seq_lengths", lengths)  # Allows us to later construct `position_ids`
+    lengths = pc.make_struct(lengths, ids)
     lengths = lengths.sort("descending", by=0)
 
     segment_tree = _SegmentTree(seq_length)
@@ -569,15 +531,22 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     offsets = np.array([0] + [bin["length"] for bin in bins])
     offsets = np.cumsum(offsets)
 
+    assert all(
+        column.num_chunks == 1 for column in examples.columns
+    )  # `pc.take` returns a ChunkedArray with a single chunk
+
+    lengths = examples["seq_lengths"].chunks[0]
+    examples = examples.drop_columns("seq_lengths")
+    lengths = pa.ListArray.from_arrays(np.cumsum([0] + [len(bin["ids"]) for bin in bins], dtype=np.int32), lengths)
+
     columns = []
     for column in examples.columns:
-        assert len(column.chunks) == 1  # `pc.take` returns a ChunkedArray with a single chunk
         column = column.chunks[0]
         if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
             dtype = column.offsets.type.to_pandas_dtype()
             column = type(column).from_arrays(offsets.astype(dtype), column.values)
         columns.append(column)
-    return pa.Table.from_arrays(columns, names=examples.column_names)
+    return pa.Table.from_arrays(columns + [lengths], names=examples.column_names + ["seq_lengths"])
 
 
 def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
@@ -599,7 +568,7 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
 
 
 def pack_dataset(
-    dataset: DatasetType, seq_length: int, strategy: str = "ffd", map_kwargs: Optional[dict[str, Any]] = None
+    dataset: DatasetType, seq_length: int, strategy: str = "bfd", map_kwargs: Optional[dict[str, Any]] = None
 ) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
@@ -609,10 +578,10 @@ def pack_dataset(
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
-        strategy (`str`, *optional*, defaults to `"ffd"`):
+        strategy (`str`, *optional*, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
-            - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
+            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
                 middle.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
@@ -620,19 +589,20 @@ def pack_dataset(
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The dataset with packed sequences. The number of examples may
-        decrease as sequences are combined.
+        `Dataset` or `DatasetDict`: The dataset with packed sequences. The number of examples may decrease as sequences
+        are combined.
 
     Example:
     ```python
     >>> from datasets import Dataset
     >>> from trl import pack_dataset
+
     >>> examples = {
     ...     "input_ids": [[1, 2, 3], [4, 5], [6, 7, 8], [9]],
-    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]]
+    ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
-    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="ffd")
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
      'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
@@ -642,12 +612,12 @@ def pack_dataset(
         map_kwargs = {}
     # Fast packing with pyarrow
     dataset = dataset.with_format("arrow")
-    if strategy == "ffd":
-        dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    if strategy == "bfd":
+        dataset = dataset.map(_pack_bfd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'wrapped'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd' or 'wrapped'.")
     dataset = dataset.with_format(None)
     return dataset
 
@@ -672,6 +642,7 @@ def truncate_dataset(
     Example:
     ```python
     >>> from datasets import Dataset
+
     >>> examples = {
     ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
     ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -716,6 +687,44 @@ def truncate_dataset(
     return dataset
 
 
+def is_conversational_from_value(example: dict[str, Any]) -> bool:
+    r"""
+    Check if the example is in a conversational format (from/value). Note that this format isn't recommended. Prefer
+    the ChatML format (role/content)
+
+    Args:
+        example (`dict[str, Any]`):
+            A single data entry of a dataset. The example can have different keys depending on the dataset type.
+
+    Returns:
+        `bool`:
+            `True` if the data is in a conversational Chatformat, `False` otherwise.
+
+    Examples:
+
+    ```python
+    >>> example = {"conversations": [{"from": "user", "value": "What color is the sky?"}]}
+    >>> is_conversational_from_value(example)
+    True
+    >>> example = {"conversations": [{"role": "user", "content": "What color is the sky?"}]}
+    >>> is_conversational_from_value(example)
+    False
+    >>> example = {"conversations": "The sky is"})
+    >>> is_conversational_from_value(example)
+    False
+    ```
+    """
+    maybe_messages = example.get("conversations")
+    # It must be a list of messages
+    if isinstance(maybe_messages, list):
+        maybe_message = maybe_messages[0]
+        # Each message must a list of dictionaries with keys "from" and "value"
+        if isinstance(maybe_message, dict) and "from" in maybe_message and "value" in maybe_message:
+            return True
+
+    return False
+
+
 def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
     """
     Convert a conversational dataset with fields `from` and `value` to ChatML format.
@@ -736,10 +745,11 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
     Example:
     ```python
     >>> from trl import maybe_convert_to_chatml
+
     >>> example = {
     ...     "conversations": [
     ...         {"from": "user", "value": "What color is the sky?"},
-    ...         {"from": "assistant", "value": "It is blue."}
+    ...         {"from": "assistant", "value": "It is blue."},
     ...     ]
     ... }
     >>> maybe_convert_to_chatml(example)
