@@ -41,7 +41,6 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForMasked
 
 # Import DNA processing components with proper error handling
 DNA_LLM_AVAILABLE = False
-PROTEIN_LLM_AVAILABLE = False
 
 _MAIN_TEXT_TOKENIZER = None
 
@@ -55,10 +54,10 @@ def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenize
     if _MAIN_TEXT_TOKENIZER is None:
         print(f"📝 Loading main-process tokenizer for template formatting …")
         tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        if CHAT_TEMPLATE:
-            print("chat template found, applying to tokenizer:", CHAT_TEMPLATE)
-            tok.chat_template = CHAT_TEMPLATE
-        tok.pad_token = tok.eos_token
+        if PROTEIN_CHAT_TEMPLATE:
+            print("chat template found, applying to tokenizer:", PROTEIN_CHAT_TEMPLATE)
+            tok.chat_template = PROTEIN_CHAT_TEMPLATE
+        tok.pad_token = tok.bos_token
         _MAIN_TEXT_TOKENIZER = tok
     return _MAIN_TEXT_TOKENIZER
 
@@ -107,10 +106,7 @@ def load_dna_components():
 
 def load_protein_components():
     """Load protein components only when needed."""
-    global PROTEIN_LLM_AVAILABLE, ProteinInput, PLProcessor, PROTEIN_CHAT_TEMPLATE
-    
-    if PROTEIN_LLM_AVAILABLE:
-        return  # Already loaded
+    global ProteinInput, PLProcessor, PROTEIN_CHAT_TEMPLATE
         
     try:
         from bioreason2.models.protein_llm import ProteinLLMModel
@@ -128,7 +124,6 @@ def load_protein_components():
         PLProcessor = RealPLProcessor
         PROTEIN_CHAT_TEMPLATE = RealProteinCHAT_TEMPLATE
         
-        PROTEIN_LLM_AVAILABLE = True
         print("✅ Protein-LLM components loaded successfully")
         
     except ImportError as e:
@@ -271,6 +266,7 @@ class ScriptArguments:
     enforce_eager: Optional[bool] = field(default=False, metadata={"help": "Whether to enforce eager execution."})
     kv_cache_dtype: str = field(default="auto", metadata={"help": "Data type to use for KV cache."})
     trust_remote_code: bool = field(default=False, metadata={"help": "Whether to trust remote code when loading models."})
+    batch_inference: bool = field(default=False, metadata={"help": "Whether to enable batch inference."})
     # Optional custom tokenizer path or name.  If provided, vLLM will load
     # this tokenizer instead of the one bundled with the model.  Use this to
     # point to a folder that contains `tokenizer.json` created with
@@ -360,7 +356,7 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
     
     # Check for conflicting biological sequence processing requests
     dna_requested = script_args.use_dna_llm and script_args.dna_model_name
-    protein_requested = script_args.use_protein_llm and PROTEIN_LLM_AVAILABLE and script_args.protein_model_name
+    protein_requested = script_args.use_protein_llm and script_args.protein_model_name
     
     if dna_requested and protein_requested:
         print("⚠️  WARNING: Both DNA and protein processing requested!")
@@ -399,6 +395,7 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
                 device=device,
             )
             print("✅ Protein processor initialized successfully")
+            protein_processor.batch_inference = script_args.batch_inference
         except Exception as e:
             print(f"❌ Failed to initialize protein processor: {e}")
             protein_processor = None
@@ -526,7 +523,7 @@ class DNAEmbeddingProcessor:
         # Use the same chat template as DNALLMModel (EXACT match)
         if CHAT_TEMPLATE:
             self.text_tokenizer.chat_template = CHAT_TEMPLATE
-        self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
+        # self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
 
         # Add DNA tokens exactly like DNALLMModel
         new_tokens = ["<|dna_start|>", "<|dna_pad|>", "<|dna_end|>"]
@@ -831,8 +828,6 @@ class ProteinEmbeddingProcessor:
         max_length_protein: int = 2048,
         device: str = "cpu",
     ):
-        if not PROTEIN_LLM_AVAILABLE:
-            raise RuntimeError("Protein-LLM components not available. Please install bioreason2 package.")
         
         self.device = device
         print(f"🧬 Initializing ProteinEmbeddingProcessor on device {self.device}...")
@@ -860,7 +855,7 @@ class ProteinEmbeddingProcessor:
         # Use the same chat template as ProteinLLMModel (EXACT match)
         if PROTEIN_CHAT_TEMPLATE:
             self.text_tokenizer.chat_template = PROTEIN_CHAT_TEMPLATE
-        self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
+        # self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
 
         # Add protein tokens exactly like ProteinLLMModel
         new_tokens = ["<|protein_start|>", "<|protein_pad|>", "<|protein_end|>"]
@@ -1137,6 +1132,7 @@ class ProteinEmbeddingProcessor:
                     dtype=self.protein_projection.weight.dtype,
                 )
 
+
         return result
 
 
@@ -1171,10 +1167,11 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         processed = protein_processor.processor(
             text=batch_text,
             batch_protein_sequences=batch_protein_sequences,
-            max_length_text=4096,
+            max_length_text=2048,
             max_length_protein=2048,
             return_tensors="pt"
         )
+        
         
         # Get input_ids and attention_mask
         input_ids = processed["input_ids"].to(device)
@@ -1182,7 +1179,16 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         
         print(f"🧬 Input IDs shape: {input_ids.shape}")
         print(f"🧬 Attention mask shape: {attention_mask.shape}")
-        
+        for b in range(input_ids.shape[0]):
+            decoded = protein_processor.text_tokenizer.decode(
+                input_ids[b][attention_mask[b].bool()],
+                skip_special_tokens=False
+            )
+            print(f"[{b}] endswith assistant? ",
+                decoded.strip().endswith("<|im_start|>assistant"))
+            print(decoded[-200:])
+            print("length of decoded: ", len(decoded))
+            
         # Check if we have protein data
         protein_sequences_batch = processed.get("protein_sequences")
         batch_idx_map = processed.get("batch_idx_map")
@@ -1227,6 +1233,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             text_embeddings[mask] = protein_embeds_flat
             print(f"🧬 After protein replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
             print(f"🧬 Protein successfully integrated into text embeddings!")
+           
             
             # STEP 6: Generate using prompt embeddings with vLLM (EXACT same as ProteinLLMModel.generate)
             
@@ -1244,19 +1251,81 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             print(f"🧬 Input batch_size: {batch_size}")
             
             # EXACT same logic as ProteinLLMModel.generate - handle 3D vs 2D tensors
-            if text_embeddings.dim() == 3:
+            if text_embeddings.dim() == 3 and not protein_processor.batch_inference:
                 print(f"🧬 3D tensor detected - processing each batch item separately")
                 
                 for batch_idx in range(text_embeddings.shape[0]):
                     single_embeddings = text_embeddings[batch_idx]  # (seq_len, hidden_size)
+    
                     print(f"🧬 Generating for batch {batch_idx} with embeddings shape: {single_embeddings.shape}")
+                    sampling_params = kwargs.get(
+                        "sampling_params",
+                        SamplingParams(temperature=0.7, top_p=1.0, max_tokens=5120)
+                    )
+
+                    sparams = deepcopy(base_sampling_params)
+
                     
                     with torch.no_grad():
                         batch_outputs = llm.generate(
                             {"prompt_embeds": single_embeddings},
-                            sampling_params
+                            sparams
                         )
                     all_outputs.extend(batch_outputs)
+            elif text_embeddings.dim() == 3 and protein_processor.batch_inference:
+                print(f"🧬 3D tensor detected - processing batch inference")
+                #make it a list of length batch_size
+                sparams = deepcopy(base_sampling_params)
+                text_embeddings = [text_embeddings[i] for i in range(batch_size)]
+                with torch.no_grad():
+                    sparams = deepcopy(base_sampling_params)
+                    padded_embeddings_list = [text_embeddings[i] for i in range(batch_size)]
+                    print(f"   [DEBUG] Converted 3D tensor to a list of {len(padded_embeddings_list)} padded tensors.")
+
+                    print("🧬 Trimming each tensor in the list...")
+                    
+                    # 2. Create a NEW list to hold the correctly-sized, trimmed tensors.
+                    trimmed_embeddings_list = []
+                    
+                    # 3. Loop through each PADDED tensor in the list.
+                    for i in range(batch_size):
+                        # 4. Get the true, un-padded length from the attention_mask for this item.
+                        actual_length = attention_mask[i].sum().item()
+                        
+                        # 5. Get the padded tensor from the list.
+                        padded_tensor = padded_embeddings_list[i]
+                        
+                        # 6. Slice THIS 2D TENSOR to its actual length.
+                        trimmed_tensor = padded_tensor[:actual_length]
+                        
+                        # 7. Add the trimmed tensor to our new list.
+                        trimmed_embeddings_list.append(trimmed_tensor)
+
+                        print(f"   [Batch {i}] Padded shape: {padded_tensor.shape}, Trimmed shape: {trimmed_tensor.shape}")
+                    with torch.no_grad():
+                        print("*"*20)
+                        print(f"sparams: {sparams}")
+                        
+                        # 4. Pass the list of *trimmed* embedding tensors to vLLM
+                        all_outputs = llm.generate(
+                            [{"prompt_embeds": emb} for emb in trimmed_embeddings_list],
+                            sparams
+                        )
+                    print("*"*20)
+                    print(f"sparams: {sparams}")
+                    # for i in range(batch_size):
+                    #     print(f"text_embeddings[{i}]: {text_embeddings[i].shape}")
+                    # #save the text embeddings to a txt file
+                    # with open("text_embeddings.txt", "w") as f:
+                    #     for i in range(batch_size):
+                    #         f.write(f"text_embeddings[{i}]: {text_embeddings[i].shape}\n")
+                    #         f.write(f"text_embeddings[{i}]: {text_embeddings[i]}\n")
+                    #         f.write("\n")
+                    
+                    # all_outputs = llm.generate(
+                    #     [{"prompt_embeds": text_embeddings[i]} for i in range(batch_size)],
+                    #     sparams
+                    # )
             elif text_embeddings.dim() == 2:
                 # Single item format
                 print(f"🧬 2D tensor detected - single item format")
@@ -1267,7 +1336,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
                     )
             else:
                 raise ValueError(f"Unexpected embedding dimensions: {text_embeddings.dim()}D")
-            
+            torch.cuda.empty_cache()
             return all_outputs
         else:
             print(f"🧬 No protein data provided - using text-only generation")
@@ -1413,6 +1482,7 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
                     single_embeddings = text_embeddings[batch_idx]  # (seq_len, hidden_size)
                     print(f"🧬 Generating for batch {batch_idx} with embeddings shape: {single_embeddings.shape}")
                     sparams = deepcopy(base_sampling_params)
+                    print(f"🧬 sparams: {sparams}")
                     with torch.no_grad():
                         batch_outputs = llm.generate(
                             {"prompt_embeds": single_embeddings},
@@ -1429,7 +1499,7 @@ def generate_with_dna_embeddings(llm, dna_processor, kwargs, device):
                     )
             else:
                 raise ValueError(f"Unexpected embedding dimensions: {text_embeddings.dim()}D")
-            
+            torch.cuda.empty_cache()
             return all_outputs
         else:
             print(f"🧬 No DNA data provided - using text-only generation")
@@ -1521,7 +1591,7 @@ def main(script_args: ScriptArguments):
 
     # CRITICAL: Set multiprocessing start method BEFORE any CUDA operations
     import multiprocessing
-    will_use_protein_processing = script_args.use_protein_llm and PROTEIN_LLM_AVAILABLE and script_args.protein_model_name
+    will_use_protein_processing = script_args.use_protein_llm and script_args.protein_model_name
     
     if will_use_protein_processing:
         # When using CUDA in main process (for protein processing), we need spawn method
@@ -1573,8 +1643,8 @@ def main(script_args: ScriptArguments):
             "dna_llm_available": DNA_LLM_AVAILABLE,
             "dna_processing_enabled": script_args.use_dna_llm and script_args.dna_model_name,
             "dna_model": script_args.dna_model_name if script_args.dna_model_name else None,
-            "protein_llm_available": PROTEIN_LLM_AVAILABLE,
-            "protein_processing_enabled": script_args.use_protein_llm and PROTEIN_LLM_AVAILABLE and script_args.protein_model_name,
+            "protein_llm_available": True,
+            "protein_processing_enabled": script_args.use_protein_llm and script_args.protein_model_name,
             "protein_model": script_args.protein_model_name if script_args.protein_model_name else None,
             "text_model": script_args.model,
             "evo2_available": EVO2_AVAILABLE
@@ -1595,7 +1665,7 @@ def main(script_args: ScriptArguments):
         top_p: float = 1.0
         top_k: int = -1
         min_p: float = 0.0
-        max_tokens: int = 16
+        max_tokens: int = 5120
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: Dict = field(default_factory=dict)
         
@@ -1663,7 +1733,7 @@ def main(script_args: ScriptArguments):
             print(f"🧬 Using DNA processing mode")
             result = await generate_with_dna_processing(request)
         # Check if we're using protein processing
-        elif request.protein_sequences and script_args.use_protein_llm and PROTEIN_LLM_AVAILABLE and script_args.protein_model_name:
+        elif request.protein_sequences and script_args.use_protein_llm and script_args.protein_model_name:
             print(f"🧬 Using protein processing mode")
             result = await generate_with_protein_processing(request)
         else:
@@ -1768,6 +1838,13 @@ def main(script_args: ScriptArguments):
                         }
                         # Use the processor's text tokenizer apply_chat_template method
                         tok = get_main_text_tokenizer(script_args.model)
+                        msg = {
+                            "role": "user",
+                            "content": (
+                                [{"type": "dna"} for _ in dna_seqs]      # one stub per sequence
+                                + [{"type": "text", "text": prompt}]     # the human question
+                            ),
+                        }
 
                         formatted_text = tok.apply_chat_template(
                             [msg],
@@ -1890,9 +1967,21 @@ def main(script_args: ScriptArguments):
                     # If not already formatted, format as a chat conversation
                     messages = [{"role": "user", "content": prompt}]
                     try:
-                        # Use a simple chat template format since we don't have access to processor here
-                        # The worker will handle the proper tokenization
-                        formatted_text = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+                        
+                        msg = {
+                            "role": "user",
+                            "content": (
+                                [{"type": "protein"} for _ in protein_seqs]      # one stub per sequence
+                                + [{"type": "text", "text": prompt}]     # the human question
+                            ),
+                        }
+                        tok = get_main_text_tokenizer(script_args.model)
+
+                        formatted_text = tok.apply_chat_template(
+                            [msg],
+                            tokenize=False,
+                            add_generation_prompt=True,             
+                        )
                     except Exception as e:
                         print(f"⚠️ Warning: Failed to apply chat template: {e}")
                         # Fallback to simple format
@@ -2039,7 +2128,7 @@ def main(script_args: ScriptArguments):
         top_p: float = 1.0
         top_k: int = -1
         min_p: float = 0.0
-        max_tokens: int = 16
+        max_tokens: int = 5120
         repetition_penalty: float = 1.0
         generation_kwargs: Dict = field(default_factory=dict)
 

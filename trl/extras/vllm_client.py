@@ -311,9 +311,9 @@ class VLLMClient:
             "generation_kwargs": generation_kwargs or {},
         }
 
-        print(f"prompts: {prompts}")
+        # print(f"prompts: {prompts}")
         
-        print(f"dna_sequences: {dna_sequences}")
+        # print(f"dna_sequences: {dna_sequences}")
 
         response = self.session.post(url, json=payload)
         
@@ -438,12 +438,15 @@ class VLLMClient:
             weights (`torch.Tensor`):
                 Tensor containing the updated weights.
         """
-
-        if not name.startswith("text_model."):
-            return                  # skip dna_projection, etc.
         print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
-        name = name[len("text_model."):]
-        print(f"Updated parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
+        if not name.startswith("text_model.") and not name.startswith("base_model.") and not name.startswith("model."):
+            return
+
+        print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
+        
+        # print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
+        name = name[len("text_model."):] if name.startswith("text_model.") else name
+        # print(f"Updated parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
         dtype, shape = str(weights.dtype), tuple(weights.shape)
         url = f"{self.base_url}/update_named_param/"
         response = self.session.post(url, json={"name": name, "dtype": dtype, "shape": shape})
