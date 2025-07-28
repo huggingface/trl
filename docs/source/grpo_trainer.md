@@ -539,6 +539,7 @@ Tested with:
 - **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
 - **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Gemma3** — e.g., `google/gemma-3-4b-it`
+- **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
   
 <Tip>
 Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
@@ -568,8 +569,11 @@ accelerate launch \
 
 ### Configuration Tips
 
+<Tip warning={true}>
+VLM training may fail if image tokens are truncated. We highly recommend to disable truncation by setting `max_prompt_length` to `None`.
+</Tip>
+
 - Use LoRA on vision-language projection layers
-- VLM may require a lot of image tokens, which cannot be truncated. Set `max_prompt_length` to a higher value (e.g., 2048 in the above example) to accommodate longer prompts.
 - Enable 4-bit quantization to reduce memory usage
 - VLMs are memory-intensive — start with smaller batch sizes
 - Most models are compatible with vLLM (`server` and `colocate` modes)
