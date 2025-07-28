@@ -204,8 +204,8 @@ class GRPOConfig(TrainingArguments):
         entropy_coef (`float`, *optional*, defaults to `0.0`):
             Weight of the entropy regularization term in the loss.
             A positive coefficient adds an entropy bonus to encourage exploration.
-        use_adapt_ent (`bool`, *optional*, defaults to `False`):
-            Whether to apply adaptive entropy control. Override ent_coef if set to True.
+        use_adapt_entropy (`bool`, *optional*, defaults to `False`):
+            Whether to apply adaptive entropy control. Overrides `entropy_coef`.
         entropy_coef_min (`float`, *optional*, defaults to `0.0`):
             Lower bound for entropy coefficient when using adaptive entropy control.
         entropy_coef_max (`float`, *optional*, defaults to `1.0`):
