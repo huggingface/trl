@@ -82,7 +82,11 @@ We also offer the combined use of CPO and SimPO, which enables more stable train
 
 ### AlphaPO
 
-The [AlphaPO](https://huggingface.co/papers/2501.03884) method is also implemented in the [`CPOTrainer`]. AlphaPO is an alternative loss that applies an AlphaPO transformation to the rewards. To use this loss as described in the paper, we can set the `loss_type="simpo"` and `alpha` and `simpo_gamma` to recommended values in the [`CPOConfig`]. Other variants of this loss are also possible, such as setting `loss_type="ipo"` and `alpha` to any non-zero value.
+The [AlphaPO](https://huggingface.co/papers/2501.03884) method is also implemented in the [`CPOTrainer`]. AlphaPO is an alternative method that applies an AlphaPO transformation to the rewards in the context of SimPO loss. The abstract from the paper is the following:
+
+> Reinforcement Learning with Human Feedback (RLHF) and its variants have made huge strides toward the effective alignment of large language models (LLMs) to follow instructions and reflect human values. More recently, Direct Alignment Algorithms (DAAs) have emerged in which the reward modeling stage of RLHF is skipped by characterizing the reward directly as a function of the policy being learned. Some popular examples of DAAs include Direct Preference Optimization (DPO) and Simple Preference Optimization (SimPO). These methods often suffer from likelihood displacement, a phenomenon by which the probabilities of preferred responses are often reduced undesirably. In this paper, we argue that, for DAAs the reward (function) shape matters. We introduce AlphaPO, a new DAA method that leverages an α-parameter to help change the shape of the reward function beyond the standard log reward. AlphaPO helps maintain fine-grained control over likelihood displacement and overoptimization. Compared to SimPO, one of the best performing DAAs, AlphaPO leads to about 7% to 10% relative improvement in alignment performance for the instruct versions of Mistral-7B and Llama3-8B while achieving 15% to 50% relative improvement over DPO on the same models. The analysis and results presented highlight the importance of the reward shape and how one can systematically change it to affect training dynamics, as well as improve alignment performance.
+
+To use this loss as described in the paper, we can set the `loss_type="simpo"` and `alpha` and `simpo_gamma` to recommended values in the [`CPOConfig`]. Other variants of this method are also possible, such as setting `loss_type="ipo"` and `alpha` to any non-zero value.
 
 ## Loss functions
 
