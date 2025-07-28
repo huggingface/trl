@@ -45,7 +45,7 @@ accelerate launch \
 pip install num2words
 
 accelerate launch \
-    --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/grpo_vlm.py \
     --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --output_dir grpo-SmolVLM2-2.2B-Instruct \
