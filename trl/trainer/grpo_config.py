@@ -202,9 +202,8 @@ class GRPOConfig(TrainingArguments):
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
         entropy_coef (`float`, *optional*, defaults to `0.0`):
-            Static weight of the entropy regularization term in the loss.
+            Weight of the entropy regularization term in the loss.
             A positive coefficient adds an entropy bonus to encourage exploration.
-            A zero or negative coefficient disables the entropy regularization term.
         use_adapt_ent (`bool`, *optional*, defaults to `False`):
             Whether to apply adaptive entropy control. Override ent_coef if set to True.
         min_ent_coef (`float`, *optional*, defaults to `0.0`):
