@@ -33,6 +33,7 @@ from accelerate.utils import broadcast_object_list, gather, gather_object, is_pe
 from datasets import Dataset, IterableDataset
 from packaging import version
 from torch import nn
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoConfig,
@@ -1121,7 +1122,7 @@ class GRPOTrainer(Trainer):
             if param.is_cpu:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
-            
+
             if self.vllm_mode == "server" and self.accelerator.is_main_process:
                 self.vllm_client.update_named_param(name, param)
             elif self.vllm_mode == "colocate":
