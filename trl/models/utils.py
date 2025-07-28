@@ -216,7 +216,7 @@ def clone_chat_template(
         pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
     )
 
-    # After padding, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
+    # After resizing, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
     # ensure vocabulary size matches the embedding matrix dimensions.
     new_embedding_size = model.vocab_size
     vocab_size_before_padding = len(tokenizer.vocab)
