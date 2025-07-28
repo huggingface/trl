@@ -26,7 +26,7 @@ pip install math_verify
 
 # For Qwen/Qwen2.5-VL-3B-Instruct
 accelerate launch \
-    --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/grpo_vlm.py \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir grpo-Qwen2.5-VL-3B-Instruct \
