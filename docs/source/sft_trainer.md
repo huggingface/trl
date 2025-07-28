@@ -140,7 +140,7 @@ training_args = SFTConfig(
 )
 ```
 
-Note that all keyword arguments of `from_pretrained()` are supported.
+Note that all keyword arguments of [`~transformers.AutoModelForCausalLM.from_pretrained()`] are supported.
 
 ### Packing
 
@@ -218,7 +218,7 @@ trainer.train()
 When training adapters, you typically use a higher learning rate (≈1e‑4) since only new parameters are being learned.
 
 ```python
-SFTconfig(learning_rate=1e-4, ...)
+SFTConfig(learning_rate=1e-4, ...)
 ```
 
 </Tip>
