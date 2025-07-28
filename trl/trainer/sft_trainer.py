@@ -432,11 +432,11 @@ class SFTTrainer(Trainer):
                     "to at least 2."
                 )
 
-        dataset_sample = next(iter(train_dataset))
-        if args.completion_only_loss is None:
-            self.completion_only_loss = "prompt" in dataset_sample
-        else:
+        if args.completion_only_loss is not None:
             self.completion_only_loss = args.completion_only_loss
+        else:
+            dataset_sample = next(iter(train_dataset))
+            self.completion_only_loss = "prompt" in dataset_sample
 
         if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
@@ -470,11 +470,14 @@ class SFTTrainer(Trainer):
                 "between batches. To avoid this, either disable packing by setting `packing=False`, or set "
                 "`attn_implementation='flash_attention_2'` in the model configuration."
             )
-        if args.assistant_only_loss and not is_conversational(dataset_sample):
-            raise ValueError(
-                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
-                "supported for conversational datasets."
-            )
+
+        if args.assistant_only_loss and train_dataset is not None:
+            dataset_sample = next(iter(train_dataset))
+            if is_conversational(dataset_sample):
+                raise ValueError(
+                    "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
+                    "supported for conversational datasets."
+                )
 
         # Dataset
         preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
