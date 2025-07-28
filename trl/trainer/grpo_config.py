@@ -208,8 +208,9 @@ class GRPOConfig(TrainingArguments):
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
         entropy_coef (`float`, *optional*, defaults to `0.0`):
-            Weight of the entropy regularization term in the loss.
+            Static coefficient of the entropy regularization term in the loss.
             A positive coefficient adds an entropy bonus to encourage exploration.
+            It is also used as the initial entropy coefficient when using adaptive entropy control.
         use_adapt_entropy (`bool`, *optional*, defaults to `False`):
             Whether to apply adaptive entropy control. Overrides `entropy_coef`.
         entropy_coef_min (`float`, *optional*, defaults to `0.0`):
@@ -563,45 +564,33 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
     )
-    ent_coef: float = field(
+    entropy_coef: float = field(
         default=0.0,
         metadata={
-            "help": "Static weight of the entropy regularization term in the loss. "
+            "help": "Static coefficient of the entropy regularization term in the loss."
             "A positive coefficient adds an entropy bonus to encourage exploration."
-            "Zero or negative coefficient disables the entropy regularization."
+            "It is also used as the initial entropy coefficient when using adaptive entropy control."
         },
     )
-    use_adapt_ent: bool = field(
+    use_adapt_entropy: bool = field(
         default=False,
-        metadata={"help": "Whether to apply adaptive entropy control. Override ent_coef if set to True."},
+        metadata={"help": "Whether to apply adaptive entropy control. Overrides `entropy_coef`."},
     )
-    min_ent_coef: float = field(
+    entropy_coef_min: float = field(
         default=0.0,
-        metadata={
-            "help": "Minimum weight of the entropy regularization term. "
-            "Used to cap minimum entropy term weight in adaptive entropy control."
-        },
+        metadata={"help": "Lower bound for entropy coefficient when using adaptive entropy control."},
     )
-    max_ent_coef: float = field(
+    entropy_coef_max: float = field(
         default=1.0,
-        metadata={
-            "help": "Maximum weight of the entropy regularization term. "
-            "Used to cap maximum entropy term weight in adaptive entropy control."
-        },
+        metadata={"help": "Upper bound for entropy coefficient when using adaptive entropy control."},
     )
-    delta_ent_coef: float = field(
+    entropy_coef_delta: float = field(
         default=0.005,
-        metadata={
-            "help": "Per step delta weight of the entropy regularization term. "
-            "Used to adjust entropy term based on current entropy in adaptive entropy control."
-        },
+        metadata={"help": "Step size for adjusting entropy coefficient during adaptive entropy control."},
     )
-    target_ent: float = field(
+    entropy_target: float = field(
         default=0.2,
-        metadata={
-            "help": "Target entropy value as the upper bound of entropy loss. "
-            "The entropy we aim to maintain in adaptive entropy control."
-        },
+        metadata={"help": "Desired target entropy value maintained through adaptive entropy control."},
     )
 
     # Parameters that control the logging

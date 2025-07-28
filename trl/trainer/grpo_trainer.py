@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import datasets
-import numpy as np
 import torch
 import torch.utils.data
 import transformers
@@ -314,20 +313,29 @@ def agg_loss(per_token_loss: torch.Tensor, loss_mask: torch.Tensor, loss_type: s
     return loss
 
 
-class AdaptiveEntropyController:
-    def __init__(self, min_ent_coef, max_ent_coef, delta_ent_coef, target_ent):
-        self.value = min_ent_coef
+class EntropyController:
+    def __init__(
+        self, use_adapt_ent=False, ent_coef=0.0, min_ent_coef=0.0, max_ent_coef=0.0, delta_ent_coef=0.0, target_ent=0.0
+    ):
+        self.use_adapt_ent = use_adapt_ent
+        self.ent_coef = ent_coef
         self.min_ent_coef = min_ent_coef
         self.max_ent_coef = max_ent_coef
         self.delta_ent_coef = delta_ent_coef
         self.target_ent = target_ent
+        # Use ent_coef as the initial value when using adaptive entropy control
+        self.value = ent_coef
 
     def __call__(self, ent):
         """
-        Adjusts the entropy coefficient based on the current entropy.
+        If self.use_adapt_ent is True,
+        this method adjusts the entropy coefficient based on the current entropy.
         Following https://github.com/SkyworkAI/Skywork-OR1/tree/main
         Related post:
         https://capricious-hydrogen-41c.notion.site/Skywork-Open-Reasoner-Series-1d0bc9ae823a80459b46c149e4f51680?pvs=25#1d1bc9ae823a801592a0c3891ea5328f
+
+        If self.use_adapt_ent is False,
+        this method returns self.ent_coef
 
         Args:
             ent (`float`): Current entropy value.
@@ -335,6 +343,9 @@ class AdaptiveEntropyController:
         Returns:
             `float`: Adjusted entropy coefficient.
         """
+        if not self.use_adapt_ent:
+            return self.ent_coef
+
         if ent < self.target_ent:
             self.value += self.delta_ent_coef
         else:
@@ -343,6 +354,7 @@ class AdaptiveEntropyController:
         self.value = float(max(self.min_ent_coef, min(self.value, self.max_ent_coef)))
 
         return self.value * (ent < self.target_ent)
+
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
     """
@@ -722,18 +734,15 @@ class GRPOTrainer(Trainer):
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
 
-        # Entropy loss weight
-        self.ent_coef = max(args.ent_coef, 0.0)
-        if args.use_adapt_ent:
-            # Use adaptive entropy controller
-            self.ent_ctrl = AdaptiveEntropyController(
-                min_ent_coef=args.min_ent_coef,
-                max_ent_coef=args.max_ent_coef,
-                delta_ent_coef=args.delta_ent_coef,
-                target_ent=args.target_ent,
-            )
-        else:
-            self.ent_ctrl = None
+        # Entropy controller to adapt entropy loss coefficient
+        self.ent_ctrl = EntropyController(
+            use_adapt_ent=args.use_adapt_entropy,
+            ent_coef=args.entropy_coef,
+            min_ent_coef=args.entropy_coef_min,
+            max_ent_coef=args.entropy_coef_max,
+            delta_ent_coef=args.entropy_coef_delta,
+            target_ent=args.entropy_target,
+        )
 
         if self.use_liger_loss and not self.importance_sampling_level == "token":
             raise NotImplementedError(
@@ -1884,14 +1893,15 @@ class GRPOTrainer(Trainer):
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        if self.ent_coef > 0 or self.ent_ctrl is not None:
-            entropy_loss = agg_loss(
-                entropies, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
-            )
-            entropy_loss_coef = self.ent_coef if self.ent_ctrl is None else self.ent_ctrl(entropy_loss.item())
-            loss = loss - entropy_loss_coef * entropy_loss
-            self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
-            self._metrics[mode]["entropy_loss_coef"].append(entropy_loss_coef)
+        # Apply entropy loss regularization
+        entropy_loss = agg_loss(
+            entropies, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
+        )
+        entropy_loss_coef = self.ent_ctrl(entropy_loss.item())
+        loss = loss - entropy_loss_coef * entropy_loss
+        self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
+        self._metrics[mode]["entropy_loss_coef"].append(entropy_loss_coef)
+
         completion_token_count = completion_mask.sum().clamp(min=1.0)
 
         def masked_batch_mean(x):

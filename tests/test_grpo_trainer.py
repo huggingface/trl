@@ -30,7 +30,9 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.grpo_trainer import (
+    EntropyController,
     RepeatSampler,
+    agg_loss,
     get_high_entropy_mask,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
@@ -492,6 +494,47 @@ class UnsplitPixelValuesByGridTester(unittest.TestCase):
         batch = {"pixel_values": original}
         result = unsplit_pixel_values_by_grid(batch)
         self.assertTrue(torch.equal(result["pixel_values"], original))
+
+
+class EntropyControlTester(unittest.TestCase):
+    def test_static_entropy_coef(self):
+        # Disable adaptive entropy control and set a static coefficient
+        ent_ctrl = EntropyController(
+            use_adapt_ent=False, ent_coef=-1.0, min_ent_coef=0.0, max_ent_coef=1.0, delta_ent_coef=0.01, target_ent=1.0
+        )
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
+        entropy_loss = agg_loss(entropies, mask, "grpo")
+        entropy_loss_coef = ent_ctrl(entropy_loss.item())
+        self.assertEqual(
+            entropy_loss_coef, -1.0, f"Expected entropy loss coefficient to be -1.0, got {entropy_loss_coef}"
+        )
+
+    def test_adaptive_entropy_lower_than_tgt_entropy(self):
+        # Enable adaptive entropy control with entropy loss smaller than target entropy
+        ent_ctrl = EntropyController(
+            use_adapt_ent=True, ent_coef=0.1, min_ent_coef=0.0, max_ent_coef=1.0, delta_ent_coef=0.01, target_ent=1.0
+        )
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
+        mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
+        entropy_loss = agg_loss(entropies, mask, "grpo")
+        entropy_loss_coef = ent_ctrl(entropy_loss.item())
+        self.assertEqual(
+            entropy_loss_coef, 0.11, f"Expected entropy loss coefficient to be 0.11, got {entropy_loss_coef}"
+        )
+
+    def test_adaptive_entropy_higher_than_tgt_entropy(self):
+        # Enable adaptive entropy control with entropy loss smaller than target entropy
+        ent_ctrl = EntropyController(
+            use_adapt_ent=True, ent_coef=0.1, min_ent_coef=0.0, max_ent_coef=1.0, delta_ent_coef=0.01, target_ent=0.2
+        )
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
+        mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
+        entropy_loss = agg_loss(entropies, mask, "grpo")
+        entropy_loss_coef = ent_ctrl(entropy_loss.item())
+        self.assertEqual(
+            entropy_loss_coef, 0.0, f"Expected entropy loss coefficient to be 0.0, got {entropy_loss_coef}"
+        )
 
 
 class GRPOTrainerTester(unittest.TestCase):
@@ -1111,6 +1154,74 @@ class GRPOTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_static_entropy_ctrl(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+                entropy_coef=0.1,
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["entropy_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["entropy_loss_coef"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_with_adaptive_entropy_ctrl(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                report_to="none",
+                use_adapt_entropy=True,
+                entropy_coef=0.01,
+                entropy_target=15.0,
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["entropy_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["entropy_loss_coef"])
 
             # Check that the params have changed
             for n, param in previous_trainable_params.items():
