@@ -208,9 +208,8 @@ class GRPOConfig(TrainingArguments):
             Whether to apply adaptive entropy control. Override ent_coef if set to True.
         entropy_coef_min (`float`, *optional*, defaults to `0.0`):
             Lower bound for entropy coefficient when using adaptive entropy control.
-        max_ent_coef (`float`, *optional*, defaults to `1.0`):
-            Maximum weight of the entropy regularization term.
-            Used to cap the minimum entropy term weight in adaptive entropy control.
+        entropy_coef_max (`float`, *optional*, defaults to `1.0`):
+            Upper bound for entropy coefficient when using adaptive entropy control.
         entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
             Step size for adjusting entropy coefficient during adaptive entropy control.
         entropy_target (`float`, *optional*, defaults to `0.2`):
