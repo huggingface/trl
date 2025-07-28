@@ -36,6 +36,13 @@ from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 
+if is_peft_available():
+    from peft import LoraConfig, PeftModel, get_peft_model
+
+if is_vision_available():
+    from PIL import Image as PILImage
+
+
 def formatting_prompts_func(example):
     text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
     return text
@@ -43,13 +50,6 @@ def formatting_prompts_func(example):
 
 def formatting_func_for_pretokenized(example):
     return example["input_ids"]
-
-
-if is_peft_available():
-    from peft import LoraConfig, get_peft_model
-
-if is_vision_available():
-    from PIL import Image as PILImage
 
 
 class TestDataCollatorForLanguageModeling(unittest.TestCase):
@@ -815,7 +815,7 @@ class SFTTrainerTester2(unittest.TestCase):
             training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
 
             trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
-            
+
             # Verify model is a PeftModel
             self.assertIsInstance(trainer.model, PeftModel)
 
