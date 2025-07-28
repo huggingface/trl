@@ -585,7 +585,7 @@ class GRPOTrainer(Trainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
