@@ -218,7 +218,7 @@ def clone_chat_template(
 
     # After padding, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
     # ensure vocabulary size matches the embedding matrix dimensions.
-    new_embedding_size = model.get_input_embeddings().weight.size(0)
+    new_embedding_size = model.vocab_size
     vocab_size_before_padding = len(tokenizer.vocab)
 
     if new_embedding_size > vocab_size_before_padding:
