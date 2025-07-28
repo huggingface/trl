@@ -319,7 +319,7 @@ class CPOTrainer(Trainer):
         if args.loss_type == "simpo":
             self.simpo_gamma = args.simpo_gamma
 
-        # AlphaPO parameters work with all loss types
+        # AlphaPO parameter for reward shaping
         self.alpha = args.alpha
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
@@ -662,7 +662,7 @@ class CPOTrainer(Trainer):
             loss for each example in the batch. The chosen_rewards and rejected_rewards tensors contain the rewards for
             the chosen and rejected responses, respectively.
         """
-        # Apply AlphaPO transformation if alpha != 0
+        # Apply AlphaPO reward transformation if alpha != 0
         if self.alpha != 0.0:
             # Compute probabilities
             chosen_probs = torch.exp(policy_chosen_logps)
