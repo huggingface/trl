@@ -64,7 +64,8 @@ class CPOConfig(TrainingArguments):
         alpha (`float`, *optional*, defaults to `0.0`):
             Alpha parameter that controls reward function shape across all loss types. When alpha=0 (default),
             uses standard log probability rewards. When alpha!=0, applies AlphaPO transformation:
-            r = (1 - p^(-alpha)) / alpha. This parameter works with all loss types.
+            r = (1 - p^(-alpha)) / alpha from the [AlphaPO paper](https://huggingface.co/papers/2501.03884).
+            This parameter works with all loss types.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int` or `None`, *optional*, defaults to `None`):
@@ -161,7 +162,8 @@ class CPOConfig(TrainingArguments):
             "help": "Alpha parameter that controls the reward function shape. "
             "When alpha=0 (default), uses standard log probability rewards. "
             "When alpha!=0, applies AlphaPO transformation: r = (1 - p^(-alpha)) / alpha "
-            "from the [AlphaPO paper](https://huggingface.co/papers/2501.03884)."
+            "from the [AlphaPO paper](https://huggingface.co/papers/2501.03884). "
+            "This parameter works with all loss types."
         },
     )
     label_pad_token_id: int = field(
