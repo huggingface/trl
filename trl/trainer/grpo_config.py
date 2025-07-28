@@ -211,9 +211,8 @@ class GRPOConfig(TrainingArguments):
         max_ent_coef (`float`, *optional*, defaults to `1.0`):
             Maximum weight of the entropy regularization term.
             Used to cap the minimum entropy term weight in adaptive entropy control.
-        delta_ent_coef (`float`, *optional*, defaults to `0.005`):
-            Per step delta weight of the entropy regularization term.
-            Used to adjust the entropy term based on current entropy in adaptive entropy control.
+        entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
+            Step size for adjusting entropy coefficient during adaptive entropy control.
         target_ent (`float`, *optional*, defaults to `0.2`):
             Target entropy value as the upper bound of entropy loss.
             The entropy we aim to maintain in adaptive entropy control.
