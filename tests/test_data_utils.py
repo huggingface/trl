@@ -689,7 +689,7 @@ class TestGetDataset(unittest.TestCase):
         dataset_config = DatasetConfig(
             id="trl-internal-testing/zen", config="standard_language_modeling", split="train"
         )
-        mixture_config = DatasetMixtureConfig(datasets=[dataset_config], seed=42, test_split_size=0.2)
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config], seed=42, test_split_size=2)
 
         args = ScriptArguments(dataset_name=None, dataset_mixture=asdict(mixture_config))
 
@@ -700,10 +700,7 @@ class TestGetDataset(unittest.TestCase):
         self.assertIn("test", result)
         self.assertGreater(len(result["train"]), 0)
         self.assertGreater(len(result["test"]), 0)
-
-        total_size = len(result["train"]) + len(result["test"])
-        test_ratio = len(result["test"]) / total_size
-        self.assertAlmostEqual(test_ratio, 0.2, delta=0.1)
+        self.assertEqual(len(result["test"]), 2)
 
     def test_empty_dataset_mixture_raises_error(self):
         mixture_config = DatasetMixtureConfig(datasets=[], seed=42)
@@ -734,9 +731,6 @@ class TestGetDataset(unittest.TestCase):
         self.assertIsInstance(result, DatasetDict)
         self.assertIn("train", result)
         self.assertGreater(len(result["train"]), 0)
-
-        # Should contain examples from both configurations
-        # The exact structure will depend on how the datasets are combined
 
 
 # Run the tests
