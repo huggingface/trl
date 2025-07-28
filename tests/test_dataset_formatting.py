@@ -179,6 +179,21 @@ class CloneChatTemplateTestCase(unittest.TestCase):
         # Check that the input embeddings size matches the tokenizer vocabulary size
         self.assertEqual(self.model.vocab_size, len(modified_tokenizer.vocab))
 
+    def test_clone_with_resize_and_extra_tokens_already_in_vocab(self):
+        # This will add <extra_id_0>, <extra_id_1>, ... to the tokenizer
+        modified_model, modified_tokenizer, _ = clone_chat_template(
+            self.model, self.tokenizer, self.source, resize_to_multiple_of=123
+        )
+        # Try if we can resize a tokenizer that already has extra these extra tokens
+        modified_model, modified_tokenizer, _ = clone_chat_template(
+            modified_model, modified_tokenizer, self.source, resize_to_multiple_of=124
+        )
+
+        # Check that the input embeddings have been resized to a multiple of 123
+        self.assertEqual((modified_model.vocab_size % 124), 0)
+        # Check that the input embeddings size matches the tokenizer vocabulary size
+        self.assertEqual(self.model.vocab_size, len(modified_tokenizer.vocab))
+
     def test_apply_new_chat_template(self):
         _, modified_tokenizer, _ = clone_chat_template(self.model, self.tokenizer, self.source)
         messages = [

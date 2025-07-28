@@ -218,21 +218,19 @@ def clone_chat_template(
 
     # After resizing, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
     # ensure vocabulary size matches the embedding matrix dimensions.
-    new_embedding_size = model.vocab_size
-    vocab_size_before_resizing = len(tokenizer.vocab)
-
-    if new_embedding_size > vocab_size_before_resizing:
-        # Add dummy tokens to fill the gap created by resizing
-        num_dummy_tokens = new_embedding_size - vocab_size_before_resizing
-        dummy_tokens = [AddedToken(f"<extra_id_{idx}>") for idx in range(num_dummy_tokens)]
-        tokenizer.add_tokens(dummy_tokens)
-        added_tokens.extend(dummy_tokens)
+    idx = 0
+    while model.vocab_size > len(tokenizer.vocab):
+        dummy_token = AddedToken(f"<extra_id_{idx}>")
+        is_added = tokenizer.add_tokens(dummy_token)
+        idx += 1
+        if is_added == 1:
+            added_tokens.append(dummy_token)
 
     # Verify that vocabulary size now matches embedding dimensions
-    if len(tokenizer.vocab) != new_embedding_size:
+    if len(tokenizer.vocab) != model.vocab_size:
         raise RuntimeError(
             f"Vocabulary size mismatch after resizing: tokenizer vocab size is {len(tokenizer.vocab)}, but model "
-            f"embedding size is {new_embedding_size}. This indicates an internal error in the token alignment process."
+            f"embedding size is {model.vocab_size}. This indicates an internal error in the token alignment process."
         )
     added_tokens = [token.content for token in added_tokens]
     added_tokens = tokenizer.convert_tokens_to_ids(added_tokens)
