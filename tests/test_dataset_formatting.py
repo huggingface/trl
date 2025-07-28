@@ -135,7 +135,7 @@ class SetupChatFormatTestCase(unittest.TestCase):
         self.assertEqual(modified_tokenizer.eos_token, _chatml.eos_token)
         self.assertEqual(modified_tokenizer.pad_token, _chatml.pad_token)
         self.assertEqual(modified_tokenizer.bos_token, _chatml.bos_token)
-        self.assertEqual((modified_model.get_input_embeddings().num_embeddings % 123), 0)
+        self.assertEqual((modified_model.vocab_size % 123), 0)
 
     def test_example_with_setup_model(self):
         modified_model, modified_tokenizer = setup_chat_format(
@@ -175,9 +175,9 @@ class CloneChatTemplateTestCase(unittest.TestCase):
         )
 
         # Check that the input embeddings have been resized to a multiple of 123
-        self.assertEqual((modified_model.get_input_embeddings().num_embeddings % 123), 0)
+        self.assertEqual((modified_model.vocab_size % 123), 0)
         # Check that the input embeddings size matches the tokenizer vocabulary size
-        self.assertEqual(self.model.get_input_embeddings().weight.size(0), len(modified_tokenizer.vocab))
+        self.assertEqual(self.model.vocab_size, len(modified_tokenizer.vocab))
 
     def test_apply_new_chat_template(self):
         _, modified_tokenizer, _ = clone_chat_template(self.model, self.tokenizer, self.source)
