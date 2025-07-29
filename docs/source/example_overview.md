@@ -29,7 +29,7 @@ accelerate config # will prompt you to define the training configuration
 Then, it is encouraged to launch jobs with `accelerate launch`!
 
 
-# Maintained Examples
+## Maintained Examples
 
 Scripts can be used as examples of how to use TRL trainers. They are located in the [`trl/scripts`](https://github.com/huggingface/trl/blob/main/trl/scripts) directory. Additionally, we provide examples in the [`examples/scripts`](https://github.com/huggingface/trl/blob/main/examples/scripts) directory. These examples are maintained and tested regularly.
 
