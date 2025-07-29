@@ -40,8 +40,8 @@ python examples/scripts/mpo_vlm.py \
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForVision2Seq, AutoProcessor
 from PIL import Image
+from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
     DPOConfig,
