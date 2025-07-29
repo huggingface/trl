@@ -18,10 +18,9 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     importance_sampling_level="sequence",
     loss_type="grpo",
-    steps_per_generation=...,
-    beta=0.04,  # not explicitly specified in the paper, but they likely used the same value as in the GRPO paper
-    epsilon=3e-4,  # https://x.com/ChujieZheng/status/1948933507696525392
+    beta=0.0,  # GSPO set kl regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
+    epsilon=3e-4,  # GSPO paper (v2), section 5.1
+    epsilon_high=4e-4,  # GSPO paper (v2), section 5.1
+    gradient_accumulation_steps=4,  # partition rollout batch into 4 mini-batches. GSPO paper (v2), section 5.1
 )
 ```
-
-While the original paper doesn’t specify the hyperparameters used, this modification only has an effect when training is slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
