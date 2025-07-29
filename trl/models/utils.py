@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import torch.nn as nn
 from packaging import version
-from transformers import AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
+from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
@@ -149,7 +149,7 @@ def clone_chat_template(
     tokenizer: PreTrainedTokenizer,
     source_tokenizer_path: str,
     resize_to_multiple_of: Optional[int] = 64,
-) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[int]]:
     """
     Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
 
@@ -158,7 +158,8 @@ def clone_chat_template(
     - Adds any new tokens from the source tokenizer to the target tokenizer.
     - Sets and synchronizes the EOS token across the tokenizer and model.
     - Resizes the model's token embeddings to match the new vocabulary size, optionally rounding it up to a multiple of
-      a specified value.
+      a specified value. In such cases, dummy tokens are added to the tokenizer to ensure the vocabulary size matches
+      the embedding dimensions.
 
     Args:
         model (`PreTrainedModel`):
@@ -176,6 +177,8 @@ def clone_chat_template(
             Updated model with resized token embeddings and EOS token configured.
         tokenizer (`~transformers.PreTrainedTokenizer`):
             Updated tokenizer with the chat template and special tokens applied.
+        added_tokens (`list[int]`):
+            List of tokens that were added to the tokenizer from the source tokenizer.
 
     Example:
     ```python
@@ -184,7 +187,7 @@ def clone_chat_template(
 
     model = AutoModelForCausalLM.from_pretrained("meta-llama/Llama-3.2-1B")
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B")
-    model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+    model, tokenizer, added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
     ```
     """
     # Load the source tokenizer containing the desired chat template
@@ -194,7 +197,10 @@ def clone_chat_template(
     tokenizer.chat_template = tokenizer_source.get_chat_template()
 
     # Ensure all added tokens from the source are available in the target tokenizer
-    tokenizer.add_tokens(list(tokenizer_source.added_tokens_decoder.values()))
+    added_tokens = [
+        token for token in tokenizer_source.added_tokens_decoder.values() if token.content not in tokenizer.vocab
+    ]
+    tokenizer.add_tokens(added_tokens)
 
     # Set the EOS token from the source tokenizer (important for generation)
     tokenizer.eos_token = tokenizer_source.eos_token
@@ -210,7 +216,25 @@ def clone_chat_template(
         pad_to_multiple_of=resize_to_multiple_of if resize_to_multiple_of is not None else None,
     )
 
-    return model, tokenizer
+    # After resizing, the embedding matrix size may exceed the vocabulary size. Add dummy tokens to the tokenizer to
+    # ensure vocabulary size matches the embedding matrix dimensions.
+    idx = 0
+    while model.vocab_size > len(tokenizer.vocab):
+        dummy_token = AddedToken(f"<extra_id_{idx}>")
+        is_added = tokenizer.add_tokens(dummy_token)
+        idx += 1
+        if is_added == 1:
+            added_tokens.append(dummy_token)
+
+    # Verify that vocabulary size now matches embedding dimensions
+    if len(tokenizer.vocab) != model.vocab_size:
+        raise RuntimeError(
+            f"Vocabulary size mismatch after resizing: tokenizer vocab size is {len(tokenizer.vocab)}, but model "
+            f"embedding size is {model.vocab_size}. This indicates an internal error in the token alignment process."
+        )
+    added_tokens = [token.content for token in added_tokens]
+    added_tokens = tokenizer.convert_tokens_to_ids(added_tokens)
+    return model, tokenizer, added_tokens
 
 
 def remove_hooks(model: "DeepSpeedEngine") -> None:
@@ -347,11 +371,12 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
 
 def prepare_fsdp(model, accelerator):
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
+    from torch.distributed.fsdp import FSDPModule
     from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 
     # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
     # don't wrap it again
-    if not isinstance(model, FSDP):
+    if not (isinstance(model, FSDP) or isinstance(model, FSDPModule)):
         accelerator.state.fsdp_plugin.set_auto_wrap_policy(model)
         fsdp_plugin = accelerator.state.fsdp_plugin
         kwargs = {

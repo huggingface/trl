@@ -397,11 +397,40 @@ class SFTTrainer(Trainer):
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
                 with open(args.chat_template_path, encoding="utf-8") as chat_template_file:
                     processing_class.chat_template = chat_template_file.read()
+                added_tokens = []
             else:
-                model, processing_class = clone_chat_template(model, processing_class, args.chat_template_path)
+                model, processing_class, added_tokens = clone_chat_template(
+                    model, processing_class, args.chat_template_path
+                )
+        else:
+            added_tokens = []
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
+            if added_tokens:
+                # Ensure that the added tokens are trainable
+                if peft_config.trainable_token_indices is None:
+                    peft_config.trainable_token_indices = {"embed_tokens": added_tokens}
+                elif "embed_tokens" not in peft_config.trainable_token_indices:
+                    peft_config.trainable_token_indices["embed_tokens"] = added_tokens
+                else:
+                    peft_config.trainable_token_indices["embed_tokens"].extend(added_tokens)
+
+                # Ensure that the lm_head is trainable
+                if peft_config.modules_to_save is None or "lm_head" not in peft_config.modules_to_save:
+                    warnings.warn(
+                        "Cloning chat template added new tokens to the tokenizer, but 'lm_head' is not in PEFT's "
+                        "`modules_to_save`. As a result, the model may not learn to generate outputs with these new "
+                        "tokens, leading to degraded generation quality. To fix this, add "
+                        "`modules_to_save=['lm_head']` to your PEFT configuration."
+                    )
+
+                    if peft_config.modules_to_save is None:
+                        peft_config.modules_to_save = ["lm_head"]
+                    else:
+                        peft_config.modules_to_save.append("lm_head")
+
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = self._prepare_peft_model(model, peft_config, args)
 
         # Data collator
@@ -432,9 +461,9 @@ class SFTTrainer(Trainer):
                     "to at least 2."
                 )
 
+        dataset_sample = next(iter(train_dataset))
         if args.completion_only_loss is None:
-            first_example = next(iter(train_dataset))
-            self.completion_only_loss = "prompt" in first_example
+            self.completion_only_loss = "prompt" in dataset_sample
         else:
             self.completion_only_loss = args.completion_only_loss
 
@@ -470,7 +499,7 @@ class SFTTrainer(Trainer):
                 "between batches. To avoid this, either disable packing by setting `packing=False`, or set "
                 "`attn_implementation='flash_attention_2'` in the model configuration."
             )
-        if args.assistant_only_loss and not is_conversational(train_dataset[0]):
+        if args.assistant_only_loss and not is_conversational(dataset_sample):
             raise ValueError(
                 "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
                 "supported for conversational datasets."
@@ -564,15 +593,6 @@ class SFTTrainer(Trainer):
         if not is_peft_available():
             raise ImportError("To use PeftModel, you need to install the `peft` library.")
 
-        if not isinstance(peft_config, PeftConfig):
-            raise ValueError(
-                f"Expected PeftConfig object but got {type(peft_config)}. If you want to use the PeftModel, you need "
-                "to pass a PeftConfig object to the SFTTrainer."
-            )
-
-        if isinstance(model, PeftModel):
-            return model
-
         # Handle quantized models (QLoRA)
         is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
 
@@ -593,14 +613,15 @@ class SFTTrainer(Trainer):
             model = self._enable_gradient_checkpointing(model, args)
 
         # Create PEFT model
-        if (
-            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
-            and getattr(model, "is_loaded_in_4bit", False)
-            and is_sharded_qlora
-        ):
-            model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
-        else:
-            model = get_peft_model(model, peft_config)
+        if peft_config is not None:
+            if (
+                version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
+                and getattr(model, "is_loaded_in_4bit", False)
+                and is_sharded_qlora
+            ):
+                model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
+            else:
+                model = get_peft_model(model, peft_config)
 
         # Handle bf16 casting for 4-bit models
         if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:

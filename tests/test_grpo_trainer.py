@@ -1600,8 +1600,10 @@ class GRPOTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
+            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
             ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
+            # ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration",), seems not to support bf16 properly
         ]
     )
     @require_vision
@@ -1615,6 +1617,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
+                max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1631,10 +1634,16 @@ class GRPOTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # Check that the params have changed
+            # Because of the way the tiny models are initialized, the gradient does not flow properly through the
+            # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
+            params_to_skip = (
+                "model.vision_tower.",
+                "model.multi_modal_projector.",
+                "model.vision_model.",
+                "model.connector.modality_projection.",
+            )
             for n, param in previous_trainable_params.items():
-                # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-                # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-                if n.startswith(("model.vision_tower.", "model.multi_modal_projector.")):
+                if n.startswith(params_to_skip):
                     continue
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -1793,6 +1802,38 @@ class GRPOTrainerTester(unittest.TestCase):
             )
             trainer = GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    def test_training_sequence_importance_sampling(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                num_iterations=2,  # the importance sampling weights won't be 0 in this case
+                importance_sampling_level="sequence",
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
