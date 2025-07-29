@@ -1139,18 +1139,15 @@ class GRPOTrainer(Trainer):
         return name
 
     def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
-        """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
+        """
+        Sync FSDP parameters to vLLM: only root FSDP should call summon_full_params with recurse=True!
+        """
         if visited is None:
             visited = set()
 
-        for child_name, child_module in module.named_children():
-            child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp_params_to_vllm(
-                child_module, prefix=child_prefix, visited=visited
-            )  # recurse into the child
-
-        if isinstance(module, FSDP):
-            with FSDP.summon_full_params(module, recurse=False, writeback=False):
+        # Only perform the sync at the root FSDP module.
+        if isinstance(module, FSDP) and getattr(module, "_is_root", True):
+            with FSDP.summon_full_params(module, recurse=True, writeback=False):
                 for param_name, param in module.named_parameters():
                     full_name = f"{prefix}.{param_name}" if prefix else param_name
                     full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
@@ -1164,6 +1161,10 @@ class GRPOTrainer(Trainer):
                     elif self.vllm_mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
+        else:
+            for child_name, child_module in module.named_children():
+                child_prefix = f"{prefix}.{child_name}" if prefix else child_name
+                self._sync_fsdp_params_to_vllm(child_module, prefix=child_prefix, visited=visited)
 
     @profiling_decorator
     def _move_model_to_vllm(self):
