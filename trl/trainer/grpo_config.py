@@ -211,7 +211,7 @@ class GRPOConfig(TrainingArguments):
             Static coefficient of the entropy regularization term in the loss.
             A positive coefficient adds an entropy bonus to encourage exploration.
             It is also used as the initial entropy coefficient when using adaptive entropy control.
-        use_adapt_entropy (`bool`, *optional*, defaults to `False`):
+        use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
             Whether to apply adaptive entropy control. Overrides `entropy_coef`.
         entropy_coef_min (`float`, *optional*, defaults to `0.0`):
             Lower bound for entropy coefficient when using adaptive entropy control.
@@ -572,7 +572,7 @@ class GRPOConfig(TrainingArguments):
             "It is also used as the initial entropy coefficient when using adaptive entropy control."
         },
     )
-    use_adapt_entropy: bool = field(
+    use_adaptive_entropy: bool = field(
         default=False,
         metadata={"help": "Whether to apply adaptive entropy control. Overrides `entropy_coef`."},
     )

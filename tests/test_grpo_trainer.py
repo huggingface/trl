@@ -500,7 +500,8 @@ class EntropyControlTester(unittest.TestCase):
     def test_static_entropy_coef(self):
         # Disable adaptive entropy control and set a static coefficient
         ent_ctrl = EntropyController(
-            use_adapt_ent=False, ent_coef=-1.0, min_ent_coef=0.0, max_ent_coef=1.0, delta_ent_coef=0.01, target_ent=1.0
+            use_adaptive_entropy=False, entropy_coef=-1.0, entropy_coef_min=0.0, entropy_coef_max=1.0,
+            entropy_coef_delta=0.01, entropy_target=1.0
         )
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
@@ -513,7 +514,8 @@ class EntropyControlTester(unittest.TestCase):
     def test_adaptive_entropy_lower_than_tgt_entropy(self):
         # Enable adaptive entropy control with entropy loss smaller than target entropy
         ent_ctrl = EntropyController(
-            use_adapt_ent=True, ent_coef=0.1, min_ent_coef=0.0, max_ent_coef=1.0, delta_ent_coef=0.01, target_ent=1.0
+            use_adaptive_entropy=True, entropy_coef=0.1, entropy_coef_min=0.0, entropy_coef_max=1.0,
+            entropy_coef_delta=0.01, entropy_target=1.0
         )
         entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
         mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
@@ -526,7 +528,8 @@ class EntropyControlTester(unittest.TestCase):
     def test_adaptive_entropy_higher_than_tgt_entropy(self):
         # Enable adaptive entropy control with entropy loss smaller than target entropy
         ent_ctrl = EntropyController(
-            use_adapt_ent=True, ent_coef=0.1, min_ent_coef=0.0, max_ent_coef=1.0, delta_ent_coef=0.01, target_ent=0.2
+            use_adaptive_entropy=True, entropy_coef=0.1, entropy_coef_min=0.0, entropy_coef_max=1.0,
+            entropy_coef_delta=0.01, entropy_target=0.2
         )
         entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
         mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])

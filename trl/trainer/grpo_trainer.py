@@ -315,16 +315,17 @@ def agg_loss(per_token_loss: torch.Tensor, loss_mask: torch.Tensor, loss_type: s
 
 class EntropyController:
     def __init__(
-        self, use_adapt_ent=False, ent_coef=0.0, min_ent_coef=0.0, max_ent_coef=0.0, delta_ent_coef=0.0, target_ent=0.0
+            self, use_adaptive_entropy=False, entropy_coef=0.0, entropy_coef_min=0.0, entropy_coef_max=0.0,
+            entropy_coef_delta=0.0, entropy_target=0.0
     ):
-        self.use_adapt_ent = use_adapt_ent
-        self.ent_coef = ent_coef
-        self.min_ent_coef = min_ent_coef
-        self.max_ent_coef = max_ent_coef
-        self.delta_ent_coef = delta_ent_coef
-        self.target_ent = target_ent
+        self.use_adaptive_entropy = use_adaptive_entropy
+        self.entropy_coef = entropy_coef
+        self.entropy_coef_min = entropy_coef_min
+        self.entropy_coef_max = entropy_coef_max
+        self.entropy_coef_delta = entropy_coef_delta
+        self.entropy_target = entropy_target
         # Use ent_coef as the initial value when using adaptive entropy control
-        self.value = ent_coef
+        self.value = entropy_coef
 
     def __call__(self, ent):
         """
@@ -343,17 +344,17 @@ class EntropyController:
         Returns:
             `float`: Adjusted entropy coefficient.
         """
-        if not self.use_adapt_ent:
-            return self.ent_coef
+        if not self.use_adaptive_entropy:
+            return self.entropy_coef
 
-        if ent < self.target_ent:
-            self.value += self.delta_ent_coef
+        if ent < self.entropy_target:
+            self.value += self.entropy_coef_delta
         else:
-            self.value -= self.delta_ent_coef
+            self.value -= self.entropy_coef_delta
 
-        self.value = float(max(self.min_ent_coef, min(self.value, self.max_ent_coef)))
+        self.value = float(max(self.entropy_coef_min, min(self.value, self.entropy_coef_max)))
 
-        return self.value * (ent < self.target_ent)
+        return self.value * (ent < self.entropy_target)
 
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
@@ -736,12 +737,12 @@ class GRPOTrainer(Trainer):
 
         # Entropy controller to adapt entropy loss coefficient
         self.ent_ctrl = EntropyController(
-            use_adapt_ent=args.use_adapt_entropy,
-            ent_coef=args.entropy_coef,
-            min_ent_coef=args.entropy_coef_min,
-            max_ent_coef=args.entropy_coef_max,
-            delta_ent_coef=args.entropy_coef_delta,
-            target_ent=args.entropy_target,
+            use_adaptive_entropy=args.use_adaptive_entropy,
+            entropy_coef=args.entropy_coef,
+            entropy_coef_min=args.entropy_coef_min,
+            entropy_coef_max=args.entropy_coef_max,
+            entropy_coef_delta=args.entropy_coef_delta,
+            entropy_target=args.entropy_target,
         )
 
         if self.use_liger_loss and not self.importance_sampling_level == "token":
