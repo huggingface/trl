@@ -371,8 +371,8 @@ def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
 
 def prepare_fsdp(model, accelerator):
     # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1421
-    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
     from torch.distributed.fsdp import FSDPModule
+    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
 
     # Check if the model is already a FSDP model due to `Manual Wrapping` and if so,
     # don't wrap it again
