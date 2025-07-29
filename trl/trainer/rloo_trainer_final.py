@@ -59,7 +59,7 @@ from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
-from .rloo_new_config import RLOOConfig_NEW
+from .rloo_trainer_final_config import RLOOConfig_NEW
 from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
