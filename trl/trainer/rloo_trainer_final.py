@@ -1320,6 +1320,7 @@ class RLOOTrainer_NEW(Trainer):
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
+        
         return rewards_per_func
 
     @profiling_decorator
