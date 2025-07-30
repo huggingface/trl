@@ -39,16 +39,16 @@ accelerate launch \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \
     --log_completions \
-    --per_device_train_batch_size 1 \
-    --num_generations 2  \
+    --per_device_train_batch_size 8 \
+    --num_generations 8 \
     --bf16 True \
     --importance_sampling_level sequence \
     --epsilon 3e-4 \
     --epsilon_high 4e-4 \
     --beta 0.0 \
     --loss_type grpo \
-    --gradient_accumulation_steps 1 \
-    --steps_per_generation 4
+    --gradient_accumulation_steps 2 \
+    --steps_per_generation 8
 
 """
 
