@@ -18,10 +18,9 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     importance_sampling_level="sequence",
     loss_type="grpo",
-    steps_per_generation=...,
+    steps_per_generation=4,  # "each batch of rollout data is partitioned into four mini- batches for gradient updates"
     beta=0.04,  # not explicitly specified in the paper, but they likely used the same value as in the GRPO paper
-    epsilon=3e-4,  # https://x.com/ChujieZheng/status/1948933507696525392
+    epsilon=3e-4,  # "we set the left and right clipping ranges in Equation (5) to 3e-4 and 4e-4, respectively"
+    epsilon_high=4e-4,  
 )
 ```
-
-While the original paper doesn’t specify the hyperparameters used, this modification only has an effect when training is slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
