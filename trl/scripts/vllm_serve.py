@@ -200,6 +200,10 @@ class ScriptArguments:
         enforce_eager (`bool`, *optional*, defaults to `False`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
         kv_cache_dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for KV cache. If set to `"auto"`, the dtype will default to the model data type.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
