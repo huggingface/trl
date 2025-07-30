@@ -138,6 +138,10 @@ class GRPOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
 
         > Parameters that control the training
 
@@ -391,6 +395,14 @@ class GRPOConfig(TrainingArguments):
             "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
             "contention with training."
+        },
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={
+            "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
+            "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
+            "model implementation."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
