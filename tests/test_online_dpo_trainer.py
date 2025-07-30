@@ -267,11 +267,11 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     @require_torch_accelerator
     @require_vllm
     @pytest.mark.slow
-    def test_training_with_vllm(self, config_name):
+    def test_training_with_vllm_colocate(self):
+        """Test vLLM colocate mode with our refactored implementation"""
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -281,10 +281,20 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
                 use_vllm=True,
-                gpu_memory_utilization=0.2,
+                vllm_mode="colocate",
+                vllm_gpu_memory_utilization=0.2,
+                vllm_tensor_parallel_size=1,
+                per_device_train_batch_size=1,
+                max_steps=2,
                 report_to="none",
+                # Test generation parameters
+                temperature=0.9,
+                top_p=0.95,
+                top_k=50,
+                repetition_penalty=1.1,
+                max_new_tokens=32,
             )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
             trainer = OnlineDPOTrainer(
                 model=model,
@@ -294,6 +304,29 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 processing_class=tokenizer,
                 reward_processing_class=self.reward_tokenizer,
             )
+
+            # Verify vLLM setup
+            self.assertTrue(trainer.use_vllm)
+            self.assertEqual(trainer.vllm_mode, "colocate")
+            self.assertIsNotNone(trainer.llm)
+            self.assertIsNone(trainer.vllm_client)
+            self.assertEqual(trainer.vllm_gpu_memory_utilization, 0.2)
+            self.assertEqual(trainer.vllm_tensor_parallel_size, 1)
+
+            # Verify generation parameters
+            self.assertEqual(trainer.temperature, 0.9)
+            self.assertEqual(trainer.top_p, 0.95)
+            self.assertEqual(trainer.top_k, 50)
+            self.assertEqual(trainer.repetition_penalty, 1.1)
+
+            # Verify generation config
+            self.assertIsNotNone(trainer.generation_config)
+            self.assertEqual(trainer.generation_config.temperature, 0.9)
+            self.assertEqual(trainer.generation_config.top_p, 0.95)
+            self.assertEqual(trainer.generation_config.top_k, 50)
+            self.assertEqual(trainer.generation_config.repetition_penalty, 1.1)
+            self.assertEqual(trainer.generation_config.max_tokens, 32)
+
             trainer.train()
 
             # Check if training loss is available
@@ -302,11 +335,15 @@ class TestOnlineDPOTrainer(unittest.TestCase):
     def test_vllm_config_validation(self):
         """Test vLLM configuration validation"""
         # Test valid vllm_mode values
-        config = OnlineDPOConfig(vllm_mode="server")
+        config = OnlineDPOConfig(use_vllm=True, vllm_mode="server")
         self.assertEqual(config.vllm_mode, "server")
 
-        config = OnlineDPOConfig(vllm_mode="colocate")
+        config = OnlineDPOConfig(use_vllm=True, vllm_mode="colocate")
         self.assertEqual(config.vllm_mode, "colocate")
+
+        # Test invalid vllm_mode
+        with self.assertRaises(ValueError):
+            config = OnlineDPOConfig(use_vllm=True, vllm_mode="invalid")
 
         # Test default values
         config = OnlineDPOConfig()
@@ -316,43 +353,30 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         self.assertEqual(config.vllm_server_port, 8000)
         self.assertEqual(config.vllm_server_timeout, 240.0)
         self.assertEqual(config.vllm_tensor_parallel_size, 1)
+        self.assertEqual(config.vllm_gpu_memory_utilization, 0.55)
 
-    def test_vllm_server_mode_init(self):
-        """Test that vLLM server mode initializes correctly"""
+        # Test generation parameters
+        self.assertEqual(config.top_p, 1.0)
+        self.assertIsNone(config.top_k)
+        self.assertIsNone(config.min_p)
+        self.assertEqual(config.repetition_penalty, 1.0)
+        self.assertFalse(config.use_transformers_paged)
+        self.assertIsNone(config.cache_implementation)
+        self.assertIsNone(config.generation_kwargs)
+
+    def test_generation_config_setup(self):
+        """Test that generation configuration is properly set up for both vLLM and transformers"""
         with tempfile.TemporaryDirectory() as tmp_dir:
+            # Test transformers generation config
             training_args = OnlineDPOConfig(
                 output_dir=tmp_dir,
-                use_vllm=True,
-                vllm_mode="server",
-                vllm_server_host="localhost",
-                vllm_server_port=9999,
-                vllm_server_timeout=300.0,
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-
-            # This should not raise an error during initialization
-            trainer = OnlineDPOTrainer(
-                model=self.model,
-                reward_model=self.reward_model,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                processing_class=self.tokenizer,
-                reward_processing_class=self.reward_tokenizer,
-            )
-
-            # Check that server mode is correctly set
-            self.assertEqual(trainer.vllm_mode, "server")
-            self.assertIsNone(trainer.llm)  # No colocated vLLM instance
-
-    def test_vllm_server_base_url_config(self):
-        """Test that vLLM server base URL is properly configured"""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                use_vllm=True,
-                vllm_mode="server",
-                vllm_server_base_url="http://custom-server:8080",
+                use_vllm=False,
+                temperature=0.8,
+                top_p=0.9,
+                top_k=40,
+                repetition_penalty=1.2,
+                max_new_tokens=64,
+                generation_kwargs={"do_sample": False},
                 report_to="none",
             )
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -366,6 +390,42 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 reward_processing_class=self.reward_tokenizer,
             )
 
-            # Check that server mode configuration is preserved
-            self.assertEqual(trainer.vllm_mode, "server")
-            self.assertEqual(trainer.args.vllm_server_base_url, "http://custom-server:8080")
+            # Verify transformers generation config
+            self.assertFalse(trainer.use_vllm)
+            self.assertIsNone(trainer.llm)
+            self.assertIsNone(trainer.vllm_client)
+            self.assertIsNotNone(trainer.generation_config)
+            self.assertEqual(trainer.generation_config.temperature, 0.8)
+            self.assertEqual(trainer.generation_config.top_p, 0.9)
+            self.assertEqual(trainer.generation_config.top_k, 40)
+            self.assertEqual(trainer.generation_config.repetition_penalty, 1.2)
+            self.assertEqual(trainer.generation_config.max_new_tokens, 64)
+            self.assertFalse(trainer.generation_config.do_sample)  # From generation_kwargs
+
+    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    def test_training_with_transformers_paged(self, config_name):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                report_to="none",
+                use_transformers_paged=True,
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                reward_model=self.reward_model,
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+                reward_processing_class=self.reward_tokenizer,
+            )
+            trainer.train()
+
+            # Check if training loss is available
+            self.assertIn("train_loss", trainer.state.log_history[-1])

@@ -15,6 +15,7 @@
 import os
 import textwrap
 import warnings
+from contextlib import nullcontext
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
@@ -25,8 +26,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+from accelerate.utils import is_peft_model
 from datasets import Dataset
 from packaging import version
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
     AutoModelForCausalLM,
@@ -44,9 +47,15 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
+from transformers.utils import (
+    is_flash_attn_2_available,
+    is_peft_available,
+    is_sagemaker_mp_enabled,
+    logging,
+)
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..extras.profiling import profiling_context
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model
@@ -61,6 +70,7 @@ from .utils import (
     generate_model_card,
     get_comet_experiment_url,
     get_reward,
+    pad,
     prepare_deepspeed,
     truncate_right,
 )
@@ -84,6 +94,7 @@ else:
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
+    from vllm.sampling_params import GuidedDecodingParams
 
 if is_wandb_available():
     import wandb
@@ -283,54 +294,22 @@ class OnlineDPOTrainer(Trainer):
             self.stats["objective/scores_margin"] = []
             self.stats["objective/scores"] = []
 
-        if args.use_vllm:
-            if not is_vllm_available():
-                raise ImportError(
-                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
-                )
+        # Store generation parameters for later use
+        self.use_vllm = args.use_vllm
+        self.temperature = args.temperature
+        self.top_p = args.top_p
+        self.top_k = args.top_k
+        self.min_p = args.min_p
+        self.repetition_penalty = args.repetition_penalty
+        self.use_transformers_paged = args.use_transformers_paged
+        self.vllm_mode = args.vllm_mode if args.use_vllm else None
+        self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization
+        self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
 
-            self.vllm_mode = args.vllm_mode
-            self.generation_config = SamplingParams(
-                n=2,  # 2 generations per prompt
-                max_tokens=args.max_new_tokens,
-                temperature=args.temperature,
-                top_k=50,
-                top_p=1.0,
-                detokenize=False,  # to avoid vllm to decode (we don't need it)
-            )
-
-            if self.vllm_mode == "server":
-                # Initialize vLLM client for server mode - this will be set up after accelerator initialization
-                self.vllm_client = None
-                self.llm = None
-            elif self.vllm_mode == "colocate":
-                # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instantiation.
-                # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
-                # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
-                # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
-                # space for them. Setting gpu_memory_utilization to 0.55 seems to work well in practice.
-                self.llm = LLM(
-                    model=model.name_or_path,
-                    gpu_memory_utilization=args.gpu_memory_utilization,
-                    dtype=torch.float32,
-                    tensor_parallel_size=args.vllm_tensor_parallel_size,
-                    # When release by vLLM, we would be able to distribute the model on multiple GPUs
-                    # See https://github.com/vllm-project/vllm/pull/12071
-                    # distributed_executor_backend="external_launcher",
-                )
-                self.vllm_client = None
-            else:
-                raise ValueError(f"Invalid vllm_mode: {self.vllm_mode}. Must be 'server' or 'colocate'.")
-        else:
-            self.generation_config = GenerationConfig(
-                max_new_tokens=args.max_new_tokens,
-                temperature=args.temperature,
-                top_k=50,
-                top_p=1.0,
-                do_sample=True,
-                use_cache=False if args.gradient_checkpointing else True,
-            )
+        # Store token attributes for consistency with GRPO trainer
+        self.pad_token = processing_class.pad_token
+        self.pad_token_id = processing_class.pad_token_id
+        self.eos_token_id = processing_class.eos_token_id
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
@@ -359,16 +338,105 @@ class OnlineDPOTrainer(Trainer):
 
         self._beta = args.beta
 
-        # Placed after the super().__init__ because we need self.is_deepspeed_enabled and self.accelerator
+        # Set up generation configuration and vLLM after super().__init__
+        if self.use_vllm:
+            if not is_vllm_available():
+                raise ImportError(
+                    "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
+                    "`pip install vllm` to use it."
+                )
 
-        # Initialize vLLM client for server mode after accelerator is available
-        if args.use_vllm and self.vllm_mode == "server" and self.accelerator.is_main_process:
-            if args.vllm_server_base_url is not None:
-                base_url = args.vllm_server_base_url
-            else:
-                base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-            self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-            self.vllm_client.init_communicator(device=torch.cuda.current_device())
+            if self.vllm_mode == "server":
+                if self.accelerator.is_main_process:
+                    if args.vllm_server_base_url is not None:
+                        base_url = args.vllm_server_base_url
+                    else:
+                        base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+                    self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
+                else:
+                    self.vllm_client = None
+                self.llm = None
+            elif self.vllm_mode == "colocate":
+                # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instantiation.
+                # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
+                # However, at this stage, the optimizer's weights are not yet loaded onto the GPU; they will be loaded
+                # after the first optimizer step and remain in GPU memory throughout training. So we must reserve enough
+                # space for them.
+                # Configure vLLM parameters
+                vllm_kwargs = {
+                    "model": model.name_or_path,
+                    "tensor_parallel_size": self.vllm_tensor_parallel_size,
+                    "gpu_memory_utilization": self.vllm_gpu_memory_utilization,
+                    "max_num_seqs": self.args.per_device_train_batch_size * self.vllm_tensor_parallel_size,
+                    "max_model_len": args.max_length + args.max_new_tokens,  # max_length includes prompt + completion
+                    # Feed identical seed for tp groups to ensure sampling results are the same across workers
+                    "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
+                    # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
+                    "max_num_batched_tokens": 4096,
+                }
+
+                # Only use external_launcher if we're in a distributed environment
+                if self.accelerator.num_processes > 1 and self.vllm_tensor_parallel_size > 1:
+                    vllm_kwargs["distributed_executor_backend"] = "external_launcher"
+
+                self.llm = LLM(**vllm_kwargs)
+                self.vllm_client = None
+            # vLLM specific sampling arguments
+            self.guided_decoding_regex = args.vllm_guided_decoding_regex
+            self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
+
+            # Set up vLLM generation config
+            generation_params = {
+                "n": 2,  # 2 generations per prompt for Online DPO
+                "repetition_penalty": self.repetition_penalty,
+                "temperature": self.temperature,
+                "top_p": self.top_p,
+                "top_k": -1 if self.top_k is None else self.top_k,
+                "min_p": 0.0 if self.min_p is None else self.min_p,
+                "max_tokens": args.max_new_tokens,
+                "detokenize": False,  # to avoid vllm to decode (we don't need it)
+            }
+            if args.generation_kwargs is not None:
+                generation_params.update(args.generation_kwargs)
+            if self.guided_decoding_regex:
+                generation_params["guided_decoding"] = GuidedDecodingParams(regex=self.guided_decoding_regex)
+            self.generation_config = SamplingParams(**generation_params)
+
+            # When using vLLM, the main process is responsible for loading the model weights. This can cause process
+            # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
+            # synchronize all processes after vLLM has been fully initialized.
+            self.accelerator.wait_for_everyone()
+        else:
+            # Set up transformers generation config
+            generation_kwargs = {
+                "max_new_tokens": args.max_new_tokens,
+                "do_sample": True,
+                "pad_token_id": processing_class.pad_token_id,
+                "bos_token_id": processing_class.bos_token_id,
+                "eos_token_id": processing_class.eos_token_id,
+                "temperature": self.temperature,
+                "top_k": self.top_k,
+                "top_p": self.top_p,
+                "repetition_penalty": self.repetition_penalty,
+                "use_cache": True if not self.args.gradient_checkpointing else False,
+            }
+            # Add min_p if supported
+            if self.min_p is not None:
+                generation_kwargs["min_p"] = self.min_p
+            if args.generation_kwargs is not None:
+                generation_kwargs.update(args.generation_kwargs)
+            if self.use_transformers_paged:
+                generation_kwargs["max_batch_tokens"] = 512
+                generation_kwargs["num_blocks"] = 1024
+                generation_kwargs["block_size"] = 128
+            # Remove None values
+            generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
+            self.generation_config = GenerationConfig(**generation_kwargs)
+
+            # Not using vLLM
+            self.vllm_client = None
+            self.llm = None
 
         if self.is_deepspeed_enabled:
             if self.reward_model is not None:
@@ -528,14 +596,18 @@ class OnlineDPOTrainer(Trainer):
         all_prompts = gather_object(prompts)
 
         if self.accelerator.is_main_process:
-            # Generate using vLLM client
+            # Generate using vLLM client with the same approach as GRPO trainer
             completion_ids = self.vllm_client.generate(
                 prompts=all_prompts,
-                n=2,  # 2 generations per prompt
-                temperature=self.generation_config.temperature,
-                top_p=self.generation_config.top_p,
-                top_k=self.generation_config.top_k,
-                max_tokens=self.generation_config.max_tokens,
+                n=2,  # Generate 2 completions per prompt for Online DPO
+                repetition_penalty=self.repetition_penalty,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                top_k=-1 if self.top_k is None else self.top_k,
+                min_p=0.0 if self.min_p is None else self.min_p,
+                max_tokens=self.max_completion_length,
+                guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
+                generation_kwargs=self.args.generation_kwargs,
             )
             # Flatten: each prompt generates 2 completions
             completion_ids = [comp_id for prompt_completions in completion_ids for comp_id in prompt_completions]
@@ -562,24 +634,9 @@ class OnlineDPOTrainer(Trainer):
         return completion_ids, prompt_ids
 
     def _generate_vllm_colocate(self, model, prompts):
-        """Generate completions using vLLM colocate mode (original implementation)"""
-        # Load the latest weights
-        try:
-            # Legacy vLLM API (< 0.6.0)
-            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
-            llm_model.load_weights(model.state_dict().items())
-        except AttributeError:
-            # vLLM >= 0.6.0 removed the model_executor API
-            # For now, continue without weight updates (weights from model initialization will be used)
-            # This matches the current limitation across TRL's vLLM integration
-            import logging
-
-            logger = logging.getLogger(__name__)
-            logger.warning(
-                "Runtime weight updates in vLLM colocate mode are not supported with current vLLM versions "
-                "due to API changes. Using model weights from initialization. For proper weight synchronization "
-                "during training, use server mode (`vllm_mode='server'`)."
-            )
+        """Generate completions using vLLM colocate mode"""
+        # Update model weights if needed
+        self._move_model_to_vllm(model)
 
         if is_conversational({"prompt": prompts[0]}):
             outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
@@ -592,18 +649,121 @@ class OnlineDPOTrainer(Trainer):
         return completion_ids, prompt_ids
 
     def _move_model_to_vllm(self, model):
-        """Synchronize model weights to vLLM server (simplified version of GRPO's implementation)"""
+        """Synchronize model weights to vLLM server with support for PEFT, DeepSpeed, and FSDP"""
+        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        if zero_stage_3:
+            import deepspeed
+
+            gather_if_zero3 = deepspeed.zero.GatheredParameters
+        else:
+            gather_if_zero3 = nullcontext
+
+        if is_peft_model(model):
+            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
+            # merging adapters in a sharded manner is not supported.
+            # TODO: does this work with FSDP?
+            with gather_if_zero3(list(model.parameters())):
+                model.merge_adapter()
+
+                # Update vLLM weights while parameters are gathered
+                if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
+                    # Update vLLM weights while parameters are gathered
+                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
+                    fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                    if fsdp_version == 1:
+                        # use memory-efficient post-order traversal for FSDP
+                        self._sync_fsdp1_params_to_vllm(model)
+                    elif fsdp_version == 2:
+                        self._sync_fsdp2_params_to_vllm(model)
+                else:
+                    # DeepSpeed ZeRO-3 with PEFT
+                    for name, param in model.named_parameters():
+                        # When using PEFT, we need to recover the original parameter name and discard some parameters
+                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        if model.prefix in name:
+                            continue
+                        # When module to save, remove its prefix and discard the original module
+                        if "original_module" in name:
+                            continue
+                        name = self._fix_param_name_to_vllm(name, extra_prefixes=["modules_to_save.default."])
+
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights([(name, param.data)])
+                # Unmerge adapters while parameters are still gathered
+                model.unmerge_adapter()
+                # Parameters will automatically be repartitioned when exiting the context
+        else:
+            # For non-PEFT models, simply gather (if needed) and update each parameter individually.
+            if self.is_fsdp_enabled:
+                fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                if fsdp_version == 1:
+                    self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
+                elif fsdp_version == 2:
+                    self._sync_fsdp2_params_to_vllm(model)
+            else:
+                for name, param in model.named_parameters():
+                    name = self._fix_param_name_to_vllm(name)
+                    with gather_if_zero3([param]):
+                        if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                            self.vllm_client.update_named_param(name, param.data)
+                        elif self.vllm_mode == "colocate":
+                            llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                            llm_model.load_weights([(name, param.data)])
+
+        # Reset cache on vLLM
         if self.vllm_mode == "server" and self.accelerator.is_main_process:
-            # For OnlineDPO, we'll use a simplified approach
-            for name, param in model.named_parameters():
-                # Clean parameter name for vLLM
-                clean_name = self._fix_param_name_to_vllm(name)
-                self.vllm_client.update_named_param(clean_name, param.data)
-
-            # Reset cache on vLLM server
             self.vllm_client.reset_prefix_cache()
+        elif self.vllm_mode == "colocate":
+            self.llm.reset_prefix_cache()
 
-    def _fix_param_name_to_vllm(self, name, extra_prefixes=None):
+    def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
+        """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
+        # For FSDP1, we need to recurse into children and also use summon_full_params
+        if visited is None:
+            visited = set()
+        for child_name, child_module in module.named_children():
+            child_prefix = f"{prefix}.{child_name}" if prefix else child_name
+            self._sync_fsdp1_params_to_vllm(
+                child_module, prefix=child_prefix, visited=visited
+            )  # recurse into the child
+
+        if isinstance(module, FSDP):
+            with FSDP.summon_full_params(module, recurse=False, writeback=False):
+                for param_name, param in module.named_parameters():
+                    full_name = f"{prefix}.{param_name}" if prefix else param_name
+                    full_name = self._fix_param_name_to_vllm(full_name, extra_prefixes=["_fsdp_wrapped_module."])
+
+                    if full_name in visited:
+                        continue  # skip FSDP subtrees already traversed
+                    visited.add(full_name)
+
+                    if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                        self.vllm_client.update_named_param(full_name, param.data)
+                    elif self.vllm_mode == "colocate":
+                        llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                        llm_model.load_weights([(full_name, param.data)])
+
+    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
+        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
+        for name, param in module.state_dict().items():
+            if param.is_cpu:
+                param = param.to(torch.device("cuda"))
+            param = param.full_tensor()
+
+            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                self.vllm_client.update_named_param(name, param)
+            elif self.vllm_mode == "colocate":
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model.load_weights([(name, param)])
+
+    def _fix_param_name_to_vllm(self, name, extra_prefixes: Optional[list[str]] = None):
         """Clean parameter names for vLLM compatibility"""
         extra_prefixes = extra_prefixes or []
         prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
@@ -612,6 +772,8 @@ class OnlineDPOTrainer(Trainer):
         return name
 
     def _generate(self, model, prompts):
+        """Generate completions using the model"""
+        device = next(model.parameters()).device
         eos_token_id = self.processing_class.eos_token_id
         pad_token_id = self.processing_class.pad_token_id
 
@@ -626,19 +788,71 @@ class OnlineDPOTrainer(Trainer):
         inputs = self._prepare_inputs(inputs)
         prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
         prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
-        with unwrap_model_for_generation(
-            model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
-        ) as unwrapped_model:
-            output = unwrapped_model.generate(
-                input_ids=prompt_ids,
-                attention_mask=prompt_mask,
-                generation_config=self.generation_config,
-            )
 
-        completion_ids = output[:, prompt_ids.size(1) :]
-        completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+        if self.use_transformers_paged:
+            previous_attn = self.model_wrapped.config._attn_implementation
 
-        return prompt_ids, prompt_mask, completion_ids, completion_mask
+            if is_flash_attn_2_available():
+                self.model_wrapped.config._attn_implementation = "paged_attention"
+            else:
+                self.model_wrapped.config._attn_implementation = "sdpa_paged"
+            with (
+                profiling_context(self, "transformers.generate_batch"),
+                unwrap_model_for_generation(
+                    model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model,
+                torch.no_grad(),
+                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+            ):
+                # Cast to the appropriate dtype based on training configuration
+                if self.args.bf16:
+                    unwrapped_model.to(torch.bfloat16)
+                elif self.args.fp16:
+                    unwrapped_model.to(torch.float16)
+                with torch.inference_mode():
+                    all_outputs = unwrapped_model.generate_batch(
+                        prompt_ids.tolist(),
+                        generation_config=self.generation_config,
+                        progress_bar=False,
+                    )
+            completion_ids = [output.generated_tokens for output in all_outputs.values()]
+            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+            completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
+            prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            # Restore the original attention implementation, training mode
+            self.model_wrapped.config._attn_implementation = previous_attn
+
+            # Extract completion_ids and create completion_mask
+            prompt_length = prompt_ids.size(1)
+            completion_ids = prompt_completion_ids[:, prompt_length:]
+            completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+
+            return prompt_ids, prompt_mask, completion_ids, completion_mask
+        else:
+            # Regular generation path
+            with (
+                profiling_context(self, "transformers.generate"),
+                unwrap_model_for_generation(
+                    model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
+                ) as unwrapped_model,
+                torch.no_grad(),
+                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
+            ):
+                # Setup cache implementation if specified
+                if self.args.cache_implementation is not None:
+                    unwrapped_model.generation_config.cache_implementation = self.args.cache_implementation
+
+                # Standard generation
+                output = unwrapped_model.generate(
+                    input_ids=prompt_ids,
+                    attention_mask=prompt_mask,
+                    generation_config=self.generation_config,
+                )
+
+            completion_ids = output[:, prompt_ids.size(1) :]
+            completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
+
+            return prompt_ids, prompt_mask, completion_ids, completion_mask
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask):
         # Get the number of tokens to truncate from prompt
