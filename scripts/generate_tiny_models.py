@@ -71,6 +71,8 @@ from transformers import (
     Qwen3ForSequenceClassification,
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
+    SmolVLMConfig,
+    SmolVLMForConditionalGeneration,
     T5Config,
     T5ForConditionalGeneration,
 )
@@ -239,6 +241,7 @@ for model_id, config_class, model_class in [
     ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
     ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
     ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
+    ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMConfig, SmolVLMForConditionalGeneration),
     ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
     ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
     ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLConfig, Qwen2VLForConditionalGeneration),

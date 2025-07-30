@@ -6,7 +6,7 @@ This document will guide you through the process of using vLLM with TRL for fast
 
 💡 **Note**: Resources required for this specific example: a single node with 8 GPUs.
 
-<Tip warning=true>
+<Tip warning={true}>
 vLLM server and TRL trainer must use different CUDA devices to avoid conflicts.
 </Tip>
 

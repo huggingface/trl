@@ -135,7 +135,7 @@ class SetupChatFormatTestCase(unittest.TestCase):
         self.assertEqual(modified_tokenizer.eos_token, _chatml.eos_token)
         self.assertEqual(modified_tokenizer.pad_token, _chatml.pad_token)
         self.assertEqual(modified_tokenizer.bos_token, _chatml.bos_token)
-        self.assertEqual((modified_model.get_input_embeddings().num_embeddings % 123), 0)
+        self.assertEqual((modified_model.vocab_size % 123), 0)
 
     def test_example_with_setup_model(self):
         modified_model, modified_tokenizer = setup_chat_format(
@@ -164,19 +164,38 @@ class CloneChatTemplateTestCase(unittest.TestCase):
         self.source = "trl-internal-testing/tiny-Qwen3ForCausalLM"
 
     def test_clone(self):
-        _, modified_tokenizer = clone_chat_template(self.model, self.tokenizer, self.source)
+        _, modified_tokenizer, _ = clone_chat_template(self.model, self.tokenizer, self.source)
 
         # Check if special tokens are correctly set
         self.assertEqual(modified_tokenizer.eos_token, "<|im_end|>")
 
     def test_clone_with_resize(self):
-        modified_model, _ = clone_chat_template(self.model, self.tokenizer, self.source, resize_to_multiple_of=123)
+        modified_model, modified_tokenizer, _ = clone_chat_template(
+            self.model, self.tokenizer, self.source, resize_to_multiple_of=123
+        )
 
         # Check that the input embeddings have been resized to a multiple of 123
-        self.assertEqual((modified_model.get_input_embeddings().num_embeddings % 123), 0)
+        self.assertEqual((modified_model.vocab_size % 123), 0)
+        # Check that the input embeddings size matches the tokenizer vocabulary size
+        self.assertEqual(self.model.vocab_size, len(modified_tokenizer.vocab))
+
+    def test_clone_with_resize_and_extra_tokens_already_in_vocab(self):
+        # This will add <extra_id_0>, <extra_id_1>, ... to the tokenizer
+        modified_model, modified_tokenizer, _ = clone_chat_template(
+            self.model, self.tokenizer, self.source, resize_to_multiple_of=123
+        )
+        # Try if we can resize a tokenizer that already has extra these extra tokens
+        modified_model, modified_tokenizer, _ = clone_chat_template(
+            modified_model, modified_tokenizer, self.source, resize_to_multiple_of=124
+        )
+
+        # Check that the input embeddings have been resized to a multiple of 123
+        self.assertEqual((modified_model.vocab_size % 124), 0)
+        # Check that the input embeddings size matches the tokenizer vocabulary size
+        self.assertEqual(self.model.vocab_size, len(modified_tokenizer.vocab))
 
     def test_apply_new_chat_template(self):
-        _, modified_tokenizer = clone_chat_template(self.model, self.tokenizer, self.source)
+        _, modified_tokenizer, _ = clone_chat_template(self.model, self.tokenizer, self.source)
         messages = [
             {"role": "system", "content": "You are helpful"},
             {"role": "user", "content": "Hello"},
