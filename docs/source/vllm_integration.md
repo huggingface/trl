@@ -188,7 +188,7 @@ Given these factors, our experiments on the Qwen model family (3B, 7B, 14B, 32B)
 
 ## vLLM with Transformers Backend
 
-vLLM now supports transformers backend for model implementations. Simply passing in `transformers` in `vllm_model_impl` in configurations or through argument parser will set use transformers backend. See an example below.
+vLLM now supports transformers backend for model implementations. Simply passing in `transformers` in `vllm_model_impl` in configurations or through argument parser will set use transformers backend. This works for both LLMs and VLMs. See an example below, you can get more information [here](https://blog.vllm.ai/2025/04/11/transformers-backend.html).
 
 ```
 CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen
