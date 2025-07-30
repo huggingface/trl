@@ -402,6 +402,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             self.assertEqual(trainer.generation_config.max_new_tokens, 64)
             self.assertFalse(trainer.generation_config.do_sample)  # From generation_kwargs
 
+    @require_torch_accelerator
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_transformers_paged(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
