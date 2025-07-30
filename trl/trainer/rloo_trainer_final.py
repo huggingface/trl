@@ -1123,10 +1123,9 @@ class RLOOTrainer_NEW(Trainer):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
         if visited is None:
             visited = set()
-
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp_params_to_vllm(
+            self._sync_fsdp1_params_to_vllm(
                 child_module, prefix=child_prefix, visited=visited
             )  # recurse into the child
 
@@ -1146,6 +1145,18 @@ class RLOOTrainer_NEW(Trainer):
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
 
+    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
+        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
+        for name, param in module.state_dict().items():
+            if param.is_cpu:
+                param = param.to(torch.device("cuda"))
+            param = param.full_tensor()
+
+            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                self.vllm_client.update_named_param(name, param)
+            elif self.vllm_mode == "colocate":
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model.load_weights([(name, param)])
     @profiling_decorator
     def _move_model_to_vllm(self):
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
@@ -1169,7 +1180,14 @@ class RLOOTrainer_NEW(Trainer):
                 if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
                     # Update vLLM weights while parameters are gathered
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    self._sync_fsdp_params_to_vllm(self.model)
+                    fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                    if fsdp_version == 1:
+                        self._sync_fsdp1_params_to_vllm(
+                            self.model
+                        )  # use memory-efficient post-order traversal for FSDP
+                    elif fsdp_version == 2:
+                        self._sync_fsdp2_params_to_vllm(self.model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
@@ -1192,8 +1210,14 @@ class RLOOTrainer_NEW(Trainer):
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
+            
             if self.is_fsdp_enabled:
-                self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
+                fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                if fsdp_version == 1:
+                    self._sync_fsdp1_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
+                elif fsdp_version == 2:
+                    self._sync_fsdp2_params_to_vllm(self.model)
             else:
                 for name, param in self.model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
@@ -1245,6 +1269,7 @@ class RLOOTrainer_NEW(Trainer):
             inputs = self._generate_and_score_completions(generation_batch)
         return inputs
 
+    @profiling_decorator
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
@@ -1355,7 +1380,7 @@ class RLOOTrainer_NEW(Trainer):
             padding_side="left",
             add_special_tokens=False,
             **kwargs,
-        ).to(self.model.dtype)
+        )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
@@ -1601,7 +1626,7 @@ class RLOOTrainer_NEW(Trainer):
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
-        rewards_per_func = self._calculate_rewards(inputs, original_prompts, completions, completion_ids_list) 
+        rewards_per_func = self._calculate_rewards(inputs, original_prompts, completions, completion_ids_list)
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
@@ -1667,7 +1692,6 @@ class RLOOTrainer_NEW(Trainer):
         if mode == "train":
             self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
-
 
         # Log completion lengths, mean, min, max
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
@@ -1744,12 +1768,12 @@ class RLOOTrainer_NEW(Trainer):
             entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
-            
+              
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
             per_token_kl = (
-                ref_per_token_logps - per_token_logps
+                per_token_logps - ref_per_token_logps
             )
 
         # Compute the loss
@@ -1759,6 +1783,7 @@ class RLOOTrainer_NEW(Trainer):
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
