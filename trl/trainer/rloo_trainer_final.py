@@ -205,7 +205,7 @@ def kl_penalty(logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor, kl_pe
     raise NotImplementedError(f"KL penalty type {kl_penalty_type} not implemented")
 
 
-def apply_kl_penalty_to_rewards(data, beta, kl_penalty):
+def apply_kl_penalty_to_rewards(inputs, beta, kl_penalty):
     """Apply KL penalty to the token-level rewards.
 
     This function computes the KL divergence between the reference policy and current policy,
@@ -220,11 +220,11 @@ def apply_kl_penalty_to_rewards(data, beta, kl_penalty):
             token_level_rewards: The updated token-level rewards adjusted by KL penalty
 
     """
-    completion_mask = data.batch["completion_mask"]
-    token_level_scores = data.batch["token_level_scores"]
+    completion_mask = inputs["completion_mask"]
+    token_level_scores = inputs["token_level_scores"]
     
     # Compute KL divergence per token
-    kl = kl_penalty(data.batch["old_log_probs"], data.batch["ref_log_prob"], kl_penalty=kl_penalty) # (batch_size, response_length)
+    kl = kl_penalty(inputs["old_log_probs"], inputs["ref_log_prob"], kl_penalty=kl_penalty) # (batch_size, response_length)
     kl = kl * completion_mask # (batch_size, response_length) 
     beta = beta # kl coef
     token_level_rewards = token_level_scores - beta * kl # <-- this line is including the KL penalty in the reward
