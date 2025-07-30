@@ -24,7 +24,7 @@
 """
 pip install math_verify
 
-# For Qwen/Qwen2-0.5B-Instruct
+# For Qwen/Qwen3-0.6B
 pip install num2words
 
 accelerate launch \
