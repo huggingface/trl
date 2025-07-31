@@ -10,6 +10,6 @@ This module contains some useful reward functions, primarily intended for use wi
 
 ## Other rewards
 
-### get_soft_overlong_punishmen
+### get_soft_overlong_punishment
 
 [[autodoc]] rewards.get_soft_overlong_punishment
