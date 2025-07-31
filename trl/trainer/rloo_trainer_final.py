@@ -183,56 +183,6 @@ class RepeatSampler(Sampler):
         return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
 
 
-
-def kl_penalty(logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor, kl_penalty_type: str = "kl") -> torch.FloatTensor:
-    """
-    Compute KL divergence given logprob and ref_logprob.
-    
-    Args:
-        logprob: Current policy log probabilities
-        ref_logprob: Reference policy log probabilities  
-        kl_penalty_type: Type of KL penalty ("kl", "abs")
-        
-    Returns:
-        KL divergence tensor
-    """
-    if kl_penalty_type in ("kl", "k1"):
-        return logprob - ref_logprob
-
-    if kl_penalty_type == "abs":
-        return (logprob - ref_logprob).abs()
-
-    raise NotImplementedError(f"KL penalty type {kl_penalty_type} not implemented")
-
-
-def apply_kl_penalty_to_rewards(inputs, beta, kl_penalty):
-    """Apply KL penalty to the token-level rewards.
-
-    This function computes the KL divergence between the reference policy and current policy,
-    then applies a penalty to the token-level rewards based on this divergence.
-
-    Args:
-        data : Token-level reward scores
-        beta: KL penalty coefficient
-        kl_penalty (str, optional): Type of KL penalty to apply. Defaults to "kl".
-        
-    Returns:
-            token_level_rewards: The updated token-level rewards adjusted by KL penalty
-
-    """
-    completion_mask = inputs["completion_mask"]
-    token_level_scores = inputs["token_level_scores"]
-    
-    # Compute KL divergence per token
-    kl = kl_penalty(inputs["old_log_probs"], inputs["ref_log_prob"], kl_penalty=kl_penalty) # (batch_size, response_length)
-    kl = kl * completion_mask # (batch_size, response_length) 
-    beta = beta # kl coef
-    token_level_rewards = token_level_scores - beta * kl # <-- this line is including the KL penalty in the reward
-    token_level_rewards = token_level_rewards * completion_mask # (batch_size, response_length)
-
-    return token_level_rewards 
-    
-
 # torch.nanstd doesn't exist, so we define it here
 def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -1270,6 +1220,70 @@ class RLOOTrainer_NEW(Trainer):
         return inputs
 
     @profiling_decorator
+    def compute_kl(self, a, b, kl_penalty_type: str = "kl") -> torch.FloatTensor:
+        """
+        Compute KL divergence given logprob and ref_logprob.
+
+        Args:
+            logprob: Current/Old policy log probabilities
+            ref_logprob: Reference policy log probabilities  
+            kl_penalty_type: Type of KL penalty ("kl", "abs")
+            
+        Returns:
+            KL divergence tensor
+        """
+        if kl_penalty_type in ("kl", "k1"):
+            return a - b # shape: (batch_size, response_length)
+
+        if kl_penalty_type == "abs":
+            return (a - b).abs()
+
+        raise NotImplementedError(f"KL penalty type {kl_penalty_type} not implemented")
+
+    @profiling_decorator
+    def convert_rewards_to_token_level(self, data, scores: torch.Tensor):
+        # Get data from the inputs dictionary 
+        attention_mask = data["attention_mask"]  # Shape: (batch_size, full_seq_len)
+        completion_mask = data["completion_mask"]  # Shape: (batch_size, response_length)
+        batch_size = attention_mask.shape[0]
+        
+        # Find the last valid token position in the full sequence using attention_mask
+        seq_lengths = attention_mask.sum(dim=-1)  # (batch_size,) - length of each sequence
+        eos_mask_idx = (seq_lengths - 1).long()  # Last valid position
+        
+        # Create token-level scores tensor for the full sequence
+        token_level_scores = torch.zeros_like(attention_mask, dtype=scores.dtype)  # (batch_size, full_seq_len)
+        token_level_scores[torch.arange(batch_size), eos_mask_idx] = scores
+        
+        # Extract only the completion/response part
+        # The completion starts at position (full_seq_len - response_length)
+        response_length = completion_mask.shape[-1]
+        token_level_scores = token_level_scores[:, -response_length:]
+        
+        # Apply completion mask to zero out invalid completion tokens
+        token_level_scores = token_level_scores * completion_mask
+        
+        return token_level_scores
+
+    @profiling_decorator
+    def apply_kl_penalty_to_rewards(self, completion_mask, token_level_scores, kl, beta):
+        """
+        Args:
+            data : Token-level reward scores
+            beta: KL penalty coefficient
+            kl_penalty (str, optional): Type of KL penalty to apply. Defaults to "kl".
+            
+        Returns:
+                token_level_rewards: The updated token-level rewards adjusted by KL penalty
+        """
+        kl = kl * completion_mask # (batch_size, response_length) 
+        beta = beta # kl coef
+        token_level_rewards = token_level_scores - beta * kl # <-- this line is including the KL penalty in the reward
+        token_level_rewards_including_kl = token_level_rewards * completion_mask # (batch_size, response_length)
+
+        return token_level_rewards_including_kl
+
+    @profiling_decorator
     def _calculate_rewards(self, inputs, prompts, completions, completion_ids_list):
         device = self.accelerator.device
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
@@ -1320,41 +1334,42 @@ class RLOOTrainer_NEW(Trainer):
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
         # completions may be distributed across processes
         rewards_per_func = gather(rewards_per_func)
-        
+
+        if self.token_level_kl:
+            kl = self.compute_kl(inputs["old_log_probs"], inputs["ref_log_prob"], "kl")
+            token_level_rewards = self.convert_rewards_to_token_level(inputs, rewards_per_func)
+            token_level_rewards_including_kl = self.apply_kl_penalty_to_rewards(token_level_rewards, kl, self.beta)
+            rewards_per_func = token_level_rewards_including_kl #not sure how to save this so that we can use it in _compute_rloo_advantages
+        else:
+            kl = self.compute_kl(inputs["old_log_probs"], inputs["ref_log_prob"], "kl")
+            kl = kl.sum(1)
+            rewards_per_func = rewards_per_func - self.beta * kl # <-- to include KL penalty in the reward
+            
         return rewards_per_func
 
     @profiling_decorator
-    def _compute_rloo_advantages(
-        self,
-        token_level_rewards: torch.Tensor,
-        response_mask: torch.Tensor,
-        num_generations: int,
-    ) -> torch.Tensor:
+    def _compute_rloo_advantages(self, inputs, rewards_scores) -> torch.Tensor:
         """
-        Compute RLOO advantages following VERL's approach exactly.
-        
         Args:
-            token_level_rewards: Token-level rewards, shape (batch_size * num_generations, seq_len)
-            completion_mask: Response mask, shape (batch_size * num_generations, seq_len)  
-            num_generations: Number of generations per prompt
-            
+            rewards_scores: rewards scores, shape (batch_size * num_generations,)    
         Returns:
             advantages: Token-level advantages, shape (batch_size * num_generations, seq_len)
         """
-        # token_level_rewards already include KL penalty if needed (applied earlier in the flow)
-        scores = token_level_rewards.sum(dim=-1)
-
-        # Reshape scores to group by prompts: (num_prompts, num_generations)
-        scores_grouped = scores.view(-1, num_generations)  
+        response_mask = inputs["completion_mask"]
         
-        # Compute RLOO baseline for each group (exclude current sample from mean)
-        baseline = (scores_grouped.sum(dim=1, keepdim=True) - scores_grouped) / (num_generations - 1)
-        
-        # Compute advantages and flatten back
-        advantages_scores = (scores_grouped - baseline).flatten()
-        
-        # Convert to token-level advantages by broadcasting
-        advantages = advantages_scores.unsqueeze(-1) * response_mask
+        if self.token_level_kl:
+            token_level_rewards = inputs["token_level_rewards"]
+            scores = token_level_rewards.sum(dim=-1)
+            rewards_scores = scores
+        else:
+            scores = rewards_scores
+            
+        # vectorized RLOO advantages implementation
+        rlhf_reward = rewards_scores.reshape(self.num_generations, -1)
+        baseline = (rlhf_reward.sum(0) - rlhf_reward) / (self.num_generations - 1)
+        advantages = rlhf_reward - baseline
+        advantages = advantages.flatten()
+        advantages = advantages.unsqueeze(-1) * response_mask
 
         return advantages
 
@@ -1369,11 +1384,8 @@ class RLOOTrainer_NEW(Trainer):
         # We don't yet support visual reward models/function, so we keep a copy of the original text-only prompts for
         # later use in the reward computation. 
         original_prompts = copy.deepcopy(prompts)
-
         kwargs = {}
-
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
-
         prompt_inputs = self.processing_class(
             text=prompts_text,
             return_tensors="pt",
@@ -1628,55 +1640,14 @@ class RLOOTrainer_NEW(Trainer):
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
         rewards_per_func = self._calculate_rewards(inputs, original_prompts, completions, completion_ids_list)
-
+        
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
-        # Compute current model's per-token logprobs for KL penalty
-        if self.beta != 0.0 and self.include_kl_in_reward:
-            current_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                self.model,
-                prompt_completion_ids,
-                attention_mask,
-                logits_to_keep,
-                batch_size=batch_size,
-            )
-        else:
-            current_per_token_logps = None
+        advantages = self._compute_rloo_advantages(inputs, rewards)
 
-        # Convert sequence-level rewards to token-level rewards
-        # Place the reward at the end of each sequence (similar to old RLOO implementation)
-        token_level_rewards = torch.zeros_like(completion_mask, dtype=torch.float)
-        
-        # Get the index of the last non-padded token for each sequence
-        sequence_lengths = completion_mask.sum(dim=1) - 1  # -1 because we want the last valid token index
-        
-        # Place the sequence-level reward at the last token of each sequence
-        for i in range(len(rewards)):
-            if sequence_lengths[i] >= 0:  # Make sure we have at least one token
-                token_level_rewards[i, sequence_lengths[i]] = rewards[i]
-
-        # Apply KL penalty to token-level rewards (following VERL's approach)
-        if self.beta != 0.0 and self.include_kl_in_reward and old_per_token_logps is not None and ref_per_token_logps is not None:
-            # Compute KL divergence per token
-            kl_per_token = old_per_token_logps - ref_per_token_logps
-            kl_penalty_per_token = -self.beta * kl_per_token
-            # Apply KL penalty to token-level rewards
-            token_level_rewards = token_level_rewards + kl_penalty_per_token * completion_mask
-    
-        # Compute grouped-wise rewards
-        grouped_rewards = rewards.view(-1, self.num_generations)
-        mean_grouped_rewards = grouped_rewards.mean(dim=1)
-        std_grouped_rewards = grouped_rewards.std(dim=1)
-        is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
-
-        # RLOO advantage computation using VERL's exact approach with token-level rewards
-        token_level_advantages = self._compute_rloo_advantages(
-            token_level_rewards, completion_mask, self.num_generations
-        )
-        
-        # Convert token-level advantages to sequence-level for compatibility with existing code
-        advantages = token_level_advantages.sum(1)
+        # not sure if we need this
+        advantages = advantages.sum(1)
 
         if self.normalize_advantages:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -1717,8 +1688,8 @@ class RLOOTrainer_NEW(Trainer):
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
             std_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
-        self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["reward"].append(rlhf_reward.mean().item()) #how to access this from the advantages method?
+        self._metrics[mode]["reward_std"].append(rlhf_reward.std().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
@@ -1734,6 +1705,7 @@ class RLOOTrainer_NEW(Trainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "attention_mask": attention_mask,
             "advantages": advantages,
         }
         if old_per_token_logps is not None:
@@ -1769,13 +1741,6 @@ class RLOOTrainer_NEW(Trainer):
             entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
-              
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                per_token_logps - ref_per_token_logps
-            )
 
         # Compute the loss
         advantages = inputs["advantages"]
@@ -1785,6 +1750,11 @@ class RLOOTrainer_NEW(Trainer):
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
+        # Compute the KL divergence between the model and the reference model
+        if self.beta != 0.0: #its old - ref for consistancy with old rloo 
+            ref_per_token_logps = inputs["ref_per_token_logps"]
+            per_token_kl = self.compute_kl(old_per_token_logps, ref_per_token_logps, "kl") 
+            
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio

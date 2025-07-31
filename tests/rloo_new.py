@@ -25,7 +25,7 @@ training_args = RLOOConfig_NEW(
     num_generations=4,
     per_device_eval_batch_size=2,
     report_to=[],
-    max_steps=20,  
+    max_steps=10,  
     beta=0.05,  # was kl_coef=0.05 (this is default anyway)
 )
 
