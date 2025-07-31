@@ -34,7 +34,7 @@ In GSPO, the policy ratio is defined at the sequence-level. In simple terms, it 
 
 The sequence likelihood is defined as:
 ```math
-\pi_\theta (y_i | x) = \prod^{|y_i|}_{i=1} \pi_\theta (y_{i,t} | x, y_{i, <t} )
+\pi_\theta (y_i \mid x) = \prod_{t=1}^{|y_i|} \pi_\theta (y_{i,t} \mid x, y_{i,<t})
 ```
 Where: 
 - $\pi_\theta$ is the policy $\pi$ with parameters $\theta$; 
@@ -57,7 +57,7 @@ The exponent $\frac{1}{|y_i|}$ represents a sequence-length normalization, minim
 Practically, it is computed in the log space, as follows:
 
 ```math
-s_i (\theta) = exp \left( \frac{1}{|y_i|} \sum^{y_i}_{t=1} log \frac{\pi_\theta (y_{i,t} | x, y_{i, <t} )}{\pi_{\theta_{old}} (y_{i,t} | x, y_{i, <t} )} \right)
+s_i(\theta) = \exp\left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \log \left( \frac{\pi_\theta(y_{i,t} \mid x, y_{i,<t})}{\pi_{\theta_{\text{old}}}(y_{i,t} \mid x, y_{i,<t})} \right) \right)
 ```
 
 While GSPO defines the policy ratio at the sequence level, GRPO operates at the token level. Specifically, GRPO computes an importance ratio for each token in the sequence:
