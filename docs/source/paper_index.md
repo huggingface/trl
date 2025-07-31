@@ -34,9 +34,7 @@ In GSPO, the policy ratio is defined at the sequence-level. In simple terms, it 
 
 The sequence likelihood is defined as:
 
-$$
-\pi_\theta (y_i \mid x) = \prod_{t=1}^{|y_i|} \pi_\theta (y_{i,t} \mid x, y_{i,<t})
-$$
+$$\pi_\theta (y_i \mid x) = \prod_{t=1}^{|y_i|} \pi_\theta (y_{i,t} \mid x, y_{i,<t})$$
 
 Where: 
 - $\pi_\theta$ is the policy $\pi$ with parameters $\theta$; 
@@ -50,23 +48,17 @@ This equation expresses the sequence likelihood as the product of the conditiona
 
 The sequence likelihood ratio $s_i (\theta)$ is defined as:
 
-$$
-s_i (\theta) = \left(\frac{\pi_\theta (y_i | x)}{\pi_{\theta_{old}} (y_i | x)} \right)^{\frac{1}{|y_i|}}
-$$
+$$s_i (\theta) = \left(\frac{\pi_\theta (y_i | x)}{\pi_{\theta_{old}} (y_i | x)} \right)^{\frac{1}{|y_i|}}$$
 
 The exponent $\frac{1}{|y_i|}$ represents a sequence-length normalization, minimizing the influence of sequence lenght in sequence likelihood. In other terms, it computes the geometric mean of token probabilities, ensuring a fair comparison across sequences of varying lengths.
 
 Practically, it is computed in the log space, as follows:
 
-$$
-s_i(\theta) = \exp\left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \log \left( \frac{\pi_\theta(y_{i,t} \mid x, y_{i,<t})}{\pi_{\theta_{\text{old}}}(y_{i,t} \mid x, y_{i,<t})} \right) \right)
-$$
+$$s_i(\theta) = \exp\left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \log \left( \frac{\pi_\theta(y_{i,t} \mid x, y_{i,<t})}{\pi_{\theta_{\text{old}}}(y_{i,t} \mid x, y_{i,<t})} \right) \right)$$
 
 While GSPO defines the policy ratio at the sequence level, GRPO operates at the token level. Specifically, GRPO computes an importance ratio for each token in the sequence:
 
-$$
-w_{i,t}(\theta) = \frac{\pi_\theta (y_{i,t} \mid x, y_{i,<t})}{\pi_{\theta_{\text{old}}} (y_{i,t} \mid x, y_{i,<t})}
-$$
+$$w_{i,t}(\theta) = \frac{\pi_\theta (y_{i,t} \mid x, y_{i,<t})}{\pi_{\theta_{\text{old}}} (y_{i,t} \mid x, y_{i,<t})}$$
 
 This token-level ratio is then combined with a shared advantage $\hat{A}_i$, and the GRPO objective clips and optimizes each token independently across the sequence.
 
