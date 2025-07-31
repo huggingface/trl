@@ -845,6 +845,7 @@ class GRPOTrainer(Trainer):
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                     max_num_batched_tokens=4096,
+                    model_impl=self.args.vllm_model_impl,
                 )
 
             # vLLM specific sampling arguments
@@ -1575,7 +1576,7 @@ class GRPOTrainer(Trainer):
             ):
                 prompt_inputs["input_ids"], prompt_inputs["attention_mask"] = prompt_ids, prompt_mask
                 prompt_completion_ids = unwrapped_model.generate(
-                    **prompt_inputs, generation_config=self.generation_config
+                    **prompt_inputs, generation_config=self.generation_config, disable_compile=True
                 )
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
