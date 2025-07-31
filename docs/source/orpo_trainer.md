@@ -122,9 +122,6 @@ While training and evaluating we record the following reward metrics:
 ## ORPOTrainer
 
 [[autodoc]] ORPOTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## ORPOConfig
 

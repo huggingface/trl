@@ -84,9 +84,6 @@ For reference results, please refer PR [#1932](https://github.com/huggingface/tr
 ## RewardTrainer
 
 [[autodoc]] RewardTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## RewardConfig
 

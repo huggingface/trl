@@ -285,9 +285,6 @@ dpo_trainer = DPOTrainer(
 ## DPOTrainer
 
 [[autodoc]] DPOTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## DPOConfig
 

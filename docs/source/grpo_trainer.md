@@ -591,9 +591,6 @@ The trainer automatically handles image-to-tensor conversion via the model’s i
 ## GRPOTrainer
 
 [[autodoc]] GRPOTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## GRPOConfig
 

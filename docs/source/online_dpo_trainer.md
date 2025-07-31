@@ -266,9 +266,6 @@ The online DPO checkpoint gets increasingly more win rate as we scale up the mod
 ## OnlineDPOTrainer
 
 [[autodoc]] OnlineDPOTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## OnlineDPOConfig
 

@@ -152,9 +152,6 @@ The logged metrics are as follows:
 ## NashMDTrainer
 
 [[autodoc]] NashMDTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## NashMDConfig
 

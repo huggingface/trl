@@ -284,9 +284,6 @@ These options are available via the appropriate arguments in the [`RLOOConfig`] 
 ## RLOOTrainer
 
 [[autodoc]] RLOOTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## RLOOConfig
 

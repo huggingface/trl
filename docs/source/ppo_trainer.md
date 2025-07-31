@@ -233,9 +233,6 @@ python -m openrlbenchmark.rlops_multi_metrics \
 ## PPOTrainer
 
 [[autodoc]] PPOTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## PPOConfig
 

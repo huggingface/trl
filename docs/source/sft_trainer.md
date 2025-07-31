@@ -400,9 +400,6 @@ A full example of training LLaVa 1.5 on the [HuggingFaceH4/llava-instruct-mix-vs
 ## SFTTrainer
 
 [[autodoc]] SFTTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## SFTConfig
 
