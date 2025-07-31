@@ -23,12 +23,11 @@ def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int
     Reference: Eq. (13) from the DAPO paper (https://huggingface.co/papers/2503.14476)
 
     $$
-    R_{\text{length}}(y) =
-    \begin{cases}
-    0, & |y| \\le L_{\\max} - L_{\text{cache}} \\
-    \\dfrac{(L_{\\max} - L_{\text{cache}}) - |y|}{L_{\text{cache}}}, & L_{\\max} - L_{\text{cache}} < |y| \\le L_{\\max} \\
-    -1, & L_{\\max} < |y|
-    \\end{cases}
+    R_{\text{length}}(y) = \begin{cases}
+    0, & |y| \le L_{\max} - L_{\text{cache}} \\
+    \dfrac{(L_{\max} - L_{\text{cache}}) - |y|}{L_{\text{cache}}}, & L_{\max} - L_{\text{cache}} < |y| \le L_{\max} \\
+    -1, & L_{\max} < |y|
+    \end{cases}
     $$
 
     Args:
