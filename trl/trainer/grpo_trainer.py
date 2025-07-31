@@ -314,47 +314,29 @@ def agg_loss(per_token_loss: torch.Tensor, loss_mask: torch.Tensor, loss_type: s
 
 
 class EntropyController:
-    def __init__(
-            self, use_adaptive_entropy=False, entropy_coef=0.0, entropy_coef_min=0.0, entropy_coef_max=0.0,
-            entropy_coef_delta=0.0, entropy_target=0.0
-    ):
-        self.use_adaptive_entropy = use_adaptive_entropy
-        self.entropy_coef = entropy_coef
+    def __init__(self, entropy_coef_min=0.0, entropy_coef_max=0.0, entropy_coef_delta=0.0, entropy_target=0.0):
         self.entropy_coef_min = entropy_coef_min
         self.entropy_coef_max = entropy_coef_max
         self.entropy_coef_delta = entropy_coef_delta
         self.entropy_target = entropy_target
-        # Use ent_coef as the initial value when using adaptive entropy control
-        self.value = entropy_coef
 
-    def __call__(self, ent):
+    def step(self, entropy, entropy_coef):
         """
-        If self.use_adapt_ent is True,
-        this method adjusts the entropy coefficient based on the current entropy.
+        This method adaptively adjusts the entropy coefficient based on the current entropy.
         Following https://github.com/SkyworkAI/Skywork-OR1/tree/main
         Related post:
         https://capricious-hydrogen-41c.notion.site/Skywork-Open-Reasoner-Series-1d0bc9ae823a80459b46c149e4f51680?pvs=25#1d1bc9ae823a801592a0c3891ea5328f
 
-        If self.use_adapt_ent is False,
-        this method returns self.ent_coef
-
         Args:
-            ent (`float`): Current entropy value.
+            entropy (`float`): Current entropy value.
+            entropy_coef (`float`): Current entropy coef.
 
         Returns:
             `float`: Adjusted entropy coefficient.
         """
-        if not self.use_adaptive_entropy:
-            return self.entropy_coef
-
-        if ent < self.entropy_target:
-            self.value += self.entropy_coef_delta
-        else:
-            self.value -= self.entropy_coef_delta
-
-        self.value = float(max(self.entropy_coef_min, min(self.value, self.entropy_coef_max)))
-
-        return self.value * (ent < self.entropy_target)
+        new_entropy_coef = entropy_coef + (1 if entropy < self.entropy_target else -1) * self.entropy_coef_delta
+        new_entropy_coef = float(max(self.entropy_coef_min, min(new_entropy_coef, self.entropy_coef_max)))
+        return new_entropy_coef * (entropy < self.entropy_target)
 
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
@@ -736,9 +718,9 @@ class GRPOTrainer(Trainer):
             )
 
         # Entropy controller to adapt entropy loss coefficient
+        self.entropy_coef = args.entropy_coef
+        self.use_adaptive_entropy = args.use_adaptive_entropy
         self.ent_ctrl = EntropyController(
-            use_adaptive_entropy=args.use_adaptive_entropy,
-            entropy_coef=args.entropy_coef,
             entropy_coef_min=args.entropy_coef_min,
             entropy_coef_max=args.entropy_coef_max,
             entropy_coef_delta=args.entropy_coef_delta,
@@ -1964,10 +1946,20 @@ class GRPOTrainer(Trainer):
         entropy_loss = agg_loss(
             entropies, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
         )
-        entropy_loss_coef = self.ent_ctrl(entropy_loss.item())
-        loss = loss - entropy_loss_coef * entropy_loss
+
+        if self.use_adaptive_entropy:
+            world_entropy_loss = torch.mean(gather(entropy_loss.detach()))
+            if self.accelerator.is_main_process:
+                self.entropy_coef = self.ent_ctrl.step(world_entropy_loss.item(), self.entropy_coef)
+                entropy_loss_coefs = [self.entropy_coef]
+            else:
+                entropy_loss_coefs = [None]  # Placeholder for non-main processes
+            entropy_loss_coefs = broadcast_object_list(entropy_loss_coefs, from_process=0)
+            self.entropy_coef = entropy_loss_coefs[0]
+
+        loss = loss - self.entropy_coef * entropy_loss
         self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
-        self._metrics[mode]["entropy_loss_coef"].append(entropy_loss_coef)
+        self._metrics[mode]["entropy_loss_coef"].append(self.entropy_coef)
 
         completion_token_count = completion_mask.sum().clamp(min=1.0)
 
