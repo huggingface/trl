@@ -21,6 +21,7 @@ training_args = GRPOConfig(
     beta=0.0,  # GSPO set kl regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
     epsilon=3e-4,  # GSPO paper (v2), section 5.1
     epsilon_high=4e-4,  # GSPO paper (v2), section 5.1
-    steps_per_generation=4,  # partition rollout batch into 4 mini-batches. GSPO paper (v2), section 5.1
+    gradient_accumulation_steps=1,
+    steps_per_generation=4,  # partition rollout batch into 4 mini-batches. GSPO paper (v2), section 5.1. Must be 4 times gradient_accumulation_steps
 )
 ```
