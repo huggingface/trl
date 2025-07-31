@@ -92,6 +92,8 @@ The dataset should be formatted as a list of "messages" where each message is a 
 
 [[autodoc]] GKDTrainer
     - train
+    - save_model
+    - push_to_hub
 
 ## GKDConfig
 

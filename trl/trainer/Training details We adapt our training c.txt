@@ -1,0 +1,22 @@
+Training details We adapt our training codebase from verl (Sheng et al., 2024) and follow the training
+recipe of DAPO (Yu et al., 2025), one of the state-of-the-art RL algorithms for LLMs. Both configurations,
+RLVR with full gradients (vanilla DAPO depicted in Equation (4)) and RLVR with only policy gradients
+on forking tokens (described in Equation (6)), employ techniques such as 
+clip-higher, ϵhigh= 0.28, ϵlow = 0.2
+dynamic sampling,
+token-level policy gradient loss, 
+and overlong reward shaping for overlong reward shaping, the maximum response length is 20480 and the cache length is 4096.
+we use a training batch size of 512 and a mini-batch size of 32 in verl’s configuration,
+
+16 gradient steps per training batch, with a
+learning rate of 10−6 and no learning rate warmup or scheduling.
+
+Importantly, the training process excludes both KL divergence loss and entropy loss.
+
+To evaluate the scaling ability of these methods, we perform RLVR experiments across the Qwen3-
+32B base and Qwen3-8B base models, using DAPO-Math-17K (Yu et al., 2025) as the training dataset.
+For main results, we set ρ= 20% in Equation (6), meaning that the policy is updated using only the
+gradients of the top 20% highest-entropy tokens within each batch. The chat template we use for
+Qwen3 models is "User:\n[question]\nPlease reason step by step, and put your final answer within
+\boxed{}.\n\nAssistant:\n" with "<|endoftext|>" serving as the EOS token, where "[question]" should
+be replaced by the specific question.
