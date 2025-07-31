@@ -35,14 +35,14 @@ In GSPO, the policy ratio is defined at the sequence-level. In simple terms, it 
 The sequence likelihood is defined as:
 
 ```math
-\pi_\theta (y_i \mid x) = \prod_{t=1}^{|y_i|} \pi_\theta (y_{i,t} \mid x, y_{i, <t})
+\pi_\theta (y_i \mid x) = \prod_{t=1}^{|y_i|} \pi_\theta  (y_{i,t} | x, y_{i, \lt t} )
 ```
 
 Where: 
 - $\pi_\theta$ is the policy $\pi$ with parameters $\theta$; 
 - $y_i$ is the i-th sequence $y$;  
 - $y_{i,t}$ is the t-th token in the sequence;  
-- $y_{i,<t}$ denotes all tokens before $t$;  
+- $y_{i,\lt t}$ denotes all tokens before $t$;  
 - $x$ is the input query; 
 - and $t$ is the current token index. 
 
@@ -61,13 +61,14 @@ Practically, it is computed in the log space, as follows:
 
 
 ```math
-s_i(\theta) = \exp\left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \log \left( \frac{\pi_\theta(y_{i,t} \mid x, y_{i,<t})}{\pi_{\theta_{\text{old}}}(y_{i,t} \mid x, y_{i,<t})} \right) \right)
+s_i(\theta) = \exp\left( \frac{1}{|y_i|} \sum_{t=1}^{|y_i|} \log \left( \frac{\pi_\theta(y_{i,t} \mid x, y_{i,\lt t})}{\pi_{\theta_{\text{old}}}(y_{i,t} \mid x, y_{i,\lt t})} \right) \right)
 ```
+
 
 While GSPO defines the policy ratio at the sequence level, GRPO operates at the token level. Specifically, GRPO computes an importance ratio for each token in the sequence:
 
 ```math
-w_{i,t}(\theta) = \frac{\pi_\theta (y_{i,t} \mid x, y_{i,<t})}{\pi_{\theta_{\text{old}}} (y_{i,t} \mid x, y_{i,<t})}
+w_{i,t}(\theta) = \frac{\pi_\theta (y_{i,t} \mid x, y_{i,\lt t})}{\pi_{\theta_{\text{old}}} (y_{i,t} \mid x, y_{i,\lt t})}
 ```
 
 This token-level ratio is then combined with a shared advantage $\hat{A}_i$, and the GRPO objective clips and optimizes each token independently across the sequence.
