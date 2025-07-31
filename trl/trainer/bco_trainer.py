@@ -802,9 +802,9 @@ class BCOTrainer(Trainer):
             attention_mask=batch["embedding_attention_mask"],
         )
 
-        labels = torch.tensor(batch["label"], dtype=torch.bool)
-        chosen_idx = torch.nonzero(labels, as_tuple=True)[0]
-        rejected_idx = torch.nonzero(~labels, as_tuple=True)[0]
+        labels = torch.tensor(batch["label"], dtype=torch.bool, device=embeddings.device)
+        chosen_idx = torch.where(labels)[0]
+        rejected_idx = torch.where(~labels)[0]
 
         chosen_embeddings = embeddings[chosen_idx, ...]
         rejected_embeddings = embeddings[rejected_idx, ...]
@@ -1406,8 +1406,8 @@ class BCOTrainer(Trainer):
             random_batch = self.data_collator(random_batch_dataset)
             random_batch = self._prepare_inputs(random_batch)
 
-            target_labels = torch.tensor(random_batch["label"], dtype=torch.bool)
-            target_indicies = torch.nonzero(~target_labels, as_tuple=True)[0]
+            target_labels = torch.tensor(random_batch["label"], dtype=torch.bool, device=self.accelerator.device)
+            target_indicies = torch.where(~target_labels)[0]
             target_batch = {
                 "prompt_input_ids": random_batch["prompt_input_ids"][target_indicies],
                 "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indicies],
