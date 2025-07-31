@@ -88,10 +88,10 @@ The dataset should be formatted as a list of "messages" where each message is a 
 * `role`: either `system`, `assistant` or `user`
 * `content`: the message content
 
-
 ## GKDTrainer
 
 [[autodoc]] GKDTrainer
+    - train
 
 ## GKDConfig
 
