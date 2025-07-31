@@ -35,7 +35,7 @@ def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int
             Maximum length of the completion,  \(( L_{\max} \)).
         soft_punish_cache (`int`):
             Minimum length of the completion,  \(( L_{\text{cache}} \)). If set to `0`, no minimum length is applied.
-    
+
     Example:
     ```python
     from trl.rewards import get_soft_overlong_punishment
