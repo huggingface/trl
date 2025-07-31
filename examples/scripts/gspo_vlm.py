@@ -27,28 +27,9 @@ pip install math_verify
 # For Qwen/Qwen2.5-VL-3B-Instruct
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/grpo_vlm.py \
+    examples/scripts/gspo_vlm.py \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
-    --output_dir grpo-Qwen2.5-VL-3B-Instruct \
-    --learning_rate 1e-5 \
-    --gradient_checkpointing \
-    --torch_dtype bfloat16 \
-    --max_prompt_length 2048 \
-    --max_completion_length 1024 \
-    --use_vllm \
-    --vllm_mode colocate \
-    --use_peft \
-    --lora_target_modules "q_proj", "v_proj" \
-    --log_completions
-
-# For HuggingFaceTB/SmolVLM2-2.2B-Instruct
-pip install num2words
-
-accelerate launch \
-    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/grpo_vlm.py \
-    --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
-    --output_dir grpo-SmolVLM2-2.2B-Instruct \
+    --output_dir gspo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
     --torch_dtype bfloat16 \
     --max_prompt_length 2048 \
@@ -56,10 +37,16 @@ accelerate launch \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \
     --log_completions \
-    --per_device_train_batch_size 1 \
+    --per_device_train_batch_size 8 \
+    --num_generations 8 \
+    --bf16 True \
+    --importance_sampling_level sequence \
+    --epsilon 3e-4 \
+    --epsilon_high 4e-4 \
+    --beta 0.0 \
+    --loss_type grpo \
     --gradient_accumulation_steps 2 \
-    --num_generations 2  \
-    --bf16 True
+    --steps_per_generation 8
 
 """
 

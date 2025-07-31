@@ -6,7 +6,7 @@ This document will guide you through the process of using vLLM with TRL for fast
 
 💡 **Note**: Resources required for this specific example: a single node with 8 GPUs.
 
-<Tip warning=true>
+<Tip warning={true}>
 vLLM server and TRL trainer must use different CUDA devices to avoid conflicts.
 </Tip>
 
@@ -185,3 +185,12 @@ Given these factors, our experiments on the Qwen model family (3B, 7B, 14B, 32B)
 
 * For reasonable-sized models (3B–14B) and a moderate context window (`max_len < 8k`), using full capacity for data parallelism gives better throughput. The setup `(tp=1, dp=8)` yields the best results.
 * For larger models (32B) and longer context windows (`max_len > 8k`), a smaller DP size combined with some model-side parallelism performs better. For example, `(tp=2, dp=4)` is a good setup for 32B models with a larger context window.
+
+## vLLM with Transformers Backend
+
+vLLM now supports transformers backend for model implementations. Simply passing in `transformers` in `vllm_model_impl` in configurations or through argument parser will set use transformers backend. This works for both LLMs and VLMs. See an example below, you can get more information [here](https://blog.vllm.ai/2025/04/11/transformers-backend.html).
+
+```
+CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=0 trl vllm-serve --model Qwen/Qwen
+2.5-VL-3B-Instruct --tensor-parallel-size 1 --port 8000 --enforce_eager --vllm_model_impl transformers
+```

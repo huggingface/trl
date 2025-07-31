@@ -164,15 +164,15 @@ This constant is recommended to be the maximum completion length. To use this fo
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
-- `clip_ratio/region_mean`: The ratio of token probabilities where the GRPO objective is clipped to stay within the trust region:
+- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:
 $$
 \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
 $$
 A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
-- `clip_ratio/low_mean`: The average ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/low_min`: The minimum ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/high_mean`: The average ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
-- `clip_ratio/high_max`: The maximum ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
 
@@ -536,9 +536,11 @@ GRPO supports training Vision-Language Models (VLMs) on multimodal datasets cont
 
 Tested with:
 
-- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
-- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
 - **Gemma3** — e.g., `google/gemma-3-4b-it`
+- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
+- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
+- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
+- **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
   
 <Tip>
 Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
@@ -568,8 +570,11 @@ accelerate launch \
 
 ### Configuration Tips
 
+<Tip warning={true}>
+VLM training may fail if image tokens are truncated. We highly recommend to disable truncation by setting `max_prompt_length` to `None`.
+</Tip>
+
 - Use LoRA on vision-language projection layers
-- VLM may require a lot of image tokens, which cannot be truncated. Set `max_prompt_length` to a higher value (e.g., 2048 in the above example) to accommodate longer prompts.
 - Enable 4-bit quantization to reduce memory usage
 - VLMs are memory-intensive — start with smaller batch sizes
 - Most models are compatible with vLLM (`server` and `colocate` modes)
