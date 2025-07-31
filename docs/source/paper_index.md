@@ -38,8 +38,7 @@ from trl import CPOConfig
 
 # Mistral-Instruct from Table 3 of the paper
 training_args = CPOConfig(
-    loss_type="simpo",
-    cpo_alpha=0.0,
+    loss_type="alphapo",
     alpha=0.25,
     beta=2.5,
     simpo_gamma=0.1,

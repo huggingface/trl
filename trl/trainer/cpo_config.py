@@ -54,6 +54,7 @@ class CPOConfig(TrainingArguments):
                   [SLiC](https://huggingface.co/papers/2305.10425) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
                 - `"simpo"`: SimPO loss from the [SimPO](https://huggingface.co/papers/2405.14734) paper.
+                - `"alphapo"`: AlphaPO loss from the [AlphaPO](https://huggingface.co/papers/2501.03884) paper. This automatically sets `loss_type="simpo"` and `cpo_alpha=0.0`.
 
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
@@ -141,7 +142,7 @@ class CPOConfig(TrainingArguments):
         default="sigmoid",
         metadata={
             "help": "Type of loss to use.",
-            "choices": ["sigmoid", "hinge", "ipo", "simpo"],
+            "choices": ["sigmoid", "hinge", "ipo", "simpo", "alphapo"],
         },
     )
     disable_dropout: bool = field(
@@ -203,5 +204,10 @@ class CPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Syntactic sugar for AlphaPO: set loss_type to "simpo" and cpo_alpha to 0.0
+        if self.loss_type == "alphapo":
+            self.loss_type = "simpo"
+            self.cpo_alpha = 0.0
 
         super().__post_init__()
