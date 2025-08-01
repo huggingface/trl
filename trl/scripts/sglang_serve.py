@@ -61,9 +61,8 @@ if is_vision_available():
 
 
 if is_sglang_available():
-    import sglang as sgl
     from sglang.srt.server_args import ServerArgs
-    # We'll use subprocess to launch SGLang server similar to slime
+    from ..extras.sglang_engine_adapter import SGLangEngine, get_base_gpu_id
 
 
 logger = logging.getLogger(__name__)
@@ -72,79 +71,7 @@ logger = logging.getLogger(__name__)
 os.environ["SGLANG_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
-class WeightSyncWorkerExtension:
-    """
-    An SGLang worker extension that enables weight synchronization between a client and multiple server workers.
-
-    This worker uses a distributed process group to establish communication and handle efficient GPU-based
-    communication using NCCL. The primary purpose is to receive updated model weights from a client process
-    and distribute them to all worker processes participating in model inference.
-    """
-
-    def __init__(self):
-        self.process_group = None
-        self.rank = None
-        self.world_size = None
-        self.group_name = None
-
-    def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
-        """
-        Initialize the weight update communication group.
-
-        Args:
-            master_address (`str`): Master node hostname or IP address
-            master_port (`int`): Port number for communication
-            rank_offset (`int`): Offset to add to the rank
-            world_size (`int`): Total number of participating processes
-            group_name (`str`): Name of the process group
-            backend (`str`): Backend to use (e.g., "nccl")
-        """
-        import torch.distributed as dist
-
-        if not dist.is_initialized():
-            dist.init_process_group(
-                backend=backend,
-                init_method=f"tcp://{master_address}:{master_port}",
-                rank=rank_offset,
-                world_size=world_size,
-            )
-
-        self.rank = rank_offset
-        self.world_size = world_size
-        self.group_name = group_name
-
-    def update_weights_from_distributed(self, names, dtypes, shapes, group_name, flush_cache=False):
-        """
-        Receive updated weights from the client process and update the model.
-
-        Args:
-            names (`list[str]`): Names of the weight tensors
-            dtypes (`list[str]`): Data types of the weight tensors
-            shapes (`list[list[int]]`): Shapes of the weight tensors
-            group_name (`str`): Name of the process group
-            flush_cache (`bool`): Whether to flush the cache after updating weights
-        """
-        import torch.distributed as dist
-
-        if group_name != self.group_name:
-            raise ValueError(f"Group name mismatch: expected {self.group_name}, got {group_name}")
-
-        weights = []
-        for name, dtype_str, shape in zip(names, dtypes, shapes):
-            dtype = getattr(torch, dtype_str.split(".")[-1])
-            weight = torch.empty(shape, dtype=dtype, device="cuda")
-            
-            # Receive weight from the client (last rank)
-            dist.broadcast(weight, src=self.world_size - 1)
-            weights.append((name, weight))
-
-        # Update model weights
-        # This will be implemented in the actual SGLang integration
-        # For now, we just store the weights
-        self.updated_weights = weights
-
-        if flush_cache:
-            torch.cuda.empty_cache()
+# WeightSyncWorkerExtension is now handled by SGLangEngine in sglang_engine_adapter.py
 
 
 @dataclass
@@ -252,7 +179,7 @@ def sglang_worker(
     script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection
 ) -> None:
     """
-    Worker process for SGLang engine.
+    Worker process for SGLang engine using improved architecture.
     
     Args:
         script_args: Configuration arguments
@@ -265,108 +192,64 @@ def sglang_worker(
     os.environ["SGLANG_DP_SIZE"] = str(script_args.data_parallel_size)
     os.environ["SGLANG_DP_MASTER_PORT"] = str(master_port)
 
-    # Prepare server arguments
-    server_kwargs = {
-        "model_path": script_args.model,
-        "trust_remote_code": script_args.trust_remote_code,
-        "tp_size": script_args.tensor_parallel_size,
-        "dp_size": script_args.data_parallel_size,
-        "host": script_args.host,
-        "port": script_args.port + data_parallel_rank,  # Different port for each DP rank
-        "mem_fraction_static": script_args.gpu_memory_utilization,
-        "dtype": script_args.dtype,
-        "context_length": script_args.max_model_len,
-        "enable_prefix_caching": script_args.enable_prefix_caching,
-        "disable_cuda_graph": script_args.enforce_eager,
-    }
+    # Create SGLang engine using improved adapter
+    port = script_args.port + data_parallel_rank
+    nccl_port = master_port + 1000 + data_parallel_rank  # Separate NCCL ports
+    dist_init_addr = f"{script_args.host}:{master_port}"
 
-    # Filter out None values
-    server_kwargs = {k: v for k, v in server_kwargs.items() if v is not None}
-    
-    # Create ServerArgs
-    server_args = ServerArgs(**server_kwargs)
-    
-    # Create worker extension
-    worker_extension = WeightSyncWorkerExtension()
-    
-    # Launch server using subprocess (similar to slime's approach)
-    # Build command line arguments for SGLang server
-    cmd = [
-        "python", "-m", "sglang.launch_server",
-        "--model-path", server_kwargs["model_path"],
-        "--host", server_kwargs["host"],
-        "--port", str(server_kwargs["port"]),
-        "--tp-size", str(server_kwargs["tp_size"]),
-    ]
-    
-    # Add optional arguments
-    if "mem_fraction_static" in server_kwargs:
-        cmd.extend(["--mem-fraction-static", str(server_kwargs["mem_fraction_static"])])
-    if "dtype" in server_kwargs and server_kwargs["dtype"] != "auto":
-        cmd.extend(["--dtype", server_kwargs["dtype"]])
-    if "context_length" in server_kwargs:
-        cmd.extend(["--context-length", str(server_kwargs["context_length"])])
-    if server_kwargs.get("trust_remote_code"):
-        cmd.append("--trust-remote-code")
-    if server_kwargs.get("disable_cuda_graph"):
-        cmd.append("--disable-cuda-graph")
-    
-    # Start the server process
-    server_process = subprocess.Popen(cmd)
+    # Add required attributes to script_args for SGLangEngine
+    script_args.sglang_model_path = script_args.model
+    script_args.sglang_host = script_args.host
+    script_args.sglang_tensor_parallel_size = script_args.tensor_parallel_size
+    script_args.sglang_data_parallel_size = script_args.data_parallel_size
+    script_args.sglang_pipeline_parallel_size = 1
+    script_args.sglang_expert_parallel_size = 1
+    script_args.sglang_num_gpus_per_node = 8  # Default
+    script_args.colocate = True
+    script_args.offload = False
 
-    # Wait for server to be ready
-    base_url = f"http://{script_args.host}:{script_args.port + data_parallel_rank}"
-    max_retries = 60
-    for i in range(max_retries):
-        try:
-            response = requests.get(f"{base_url}/health")
-            if response.status_code == 200:
+    try:
+        # Create SGLang engine
+        sglang_engine = SGLangEngine(
+            args=script_args,
+            rank=data_parallel_rank,
+            dist_init_addr=dist_init_addr,
+            port=port,
+            nccl_port=nccl_port,
+        )
+
+        # Send ready signal
+        connection.send({"status": "ready", "url": f"http://{script_args.host}:{port}"})
+
+        # Main loop to handle commands
+        while True:
+            try:
+                command = connection.recv()
+            except KeyboardInterrupt:
                 break
-        except:
-            pass
-        time.sleep(2)
-        if not server_process.is_alive():
-            raise RuntimeError("SGLang server process died during startup")
-    else:
-        raise RuntimeError(f"SGLang server failed to start after {max_retries * 2} seconds")
 
-    # Send ready signal
-    connection.send({"status": "ready", "url": base_url})
+            if command["type"] == "init_communicator":
+                sglang_engine.init_process_group(**command["kwargs"])
+                connection.send({"status": "ok"})
+            elif command["type"] == "update_weights":
+                sglang_engine.update_weights_from_distributed(**command["kwargs"])
+                connection.send({"status": "ok"})
+            elif command["type"] == "generate":
+                result = sglang_engine.generate(**command["kwargs"])
+                connection.send(result)
+            elif command["type"] == "flush_cache":
+                sglang_engine.reset_prefix_cache()
+                connection.send({"status": "ok"})
+            elif command["type"] == "shutdown":
+                break
 
-    # Main loop to handle commands
-    while True:
-        try:
-            command = connection.recv()
-        except KeyboardInterrupt:
-            break
-
-        if command["type"] == "init_communicator":
-            worker_extension.init_weights_update_group(**command["kwargs"])
-            connection.send({"status": "ok"})
-        elif command["type"] == "update_weights":
-            worker_extension.update_weights_from_distributed(**command["kwargs"])
-            # Forward weight updates to SGLang server
-            response = requests.post(
-                f"{base_url}/update_weights_from_distributed",
-                json=command["kwargs"]
-            )
-            connection.send({"status": "ok", "response": response.json()})
-        elif command["type"] == "generate":
-            # Forward generation request to SGLang server
-            response = requests.post(
-                f"{base_url}/generate",
-                json=command["kwargs"]
-            )
-            connection.send(response.json())
-        elif command["type"] == "flush_cache":
-            response = requests.get(f"{base_url}/flush_cache")
-            connection.send({"status": "ok"})
-        elif command["type"] == "shutdown":
-            break
-
-    # Cleanup
-    server_process.terminate()
-    server_process.wait()
+    except Exception as e:
+        connection.send({"status": "error", "message": str(e)})
+        raise
+    finally:
+        # Cleanup
+        if 'sglang_engine' in locals():
+            sglang_engine.shutdown()
 
 
 def chunk_list(lst: list, n: int) -> list[list]:

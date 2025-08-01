@@ -273,6 +273,7 @@ class SGLangClient:
     def update_named_param(self, name: str, weights: torch.Tensor):
         """
         Updates a specific named parameter in the model and broadcasts it to other processes.
+        Uses SGLang's native weight update mechanism for efficiency.
 
         Args:
             name (`str`):
@@ -283,19 +284,22 @@ class SGLangClient:
         dtype_str = str(weights.dtype)
         shape = list(weights.shape)
         
+        # Use SGLang's update_weights_from_distributed endpoint
         url = f"{self.base_url}/update_weights/"
         response = self.session.post(
             url, 
             json={
                 "names": [name], 
                 "dtypes": [dtype_str], 
-                "shapes": [shape]
+                "shapes": [shape],
+                "group_name": "weight_sync",
+                "flush_cache": True,
             }
         )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        # Broadcast the weights to the other processes
+        # Broadcast the weights to the other processes using NCCL
         import torch.distributed as dist
         dist.broadcast(weights, src=self.rank)
         dist.barrier()
@@ -320,14 +324,16 @@ class SGLangClient:
             shapes.append(list(param.data.shape))
             weights_list.append(param.data)
         
-        # Send metadata to server
+        # Send metadata to server using SGLang's batch update API
         url = f"{self.base_url}/update_weights/"
         response = self.session.post(
             url,
             json={
                 "names": names,
                 "dtypes": dtypes,
-                "shapes": shapes
+                "shapes": shapes,
+                "group_name": "weight_sync",
+                "flush_cache": True,
             }
         )
         if response.status_code != 200:

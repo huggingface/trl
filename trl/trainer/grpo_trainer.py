@@ -55,6 +55,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..extras.sglang_client import SGLangClient
+from ..extras.sglang_engine_adapter import SGLangEngine
 from ..import_utils import is_liger_kernel_available, is_sglang_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
@@ -82,7 +83,7 @@ if is_vllm_available():
     from vllm.sampling_params import GuidedDecodingParams
 
 if is_sglang_available():
-    import sglang as sgl
+    pass  # SGLang imports handled in sglang_engine_adapter
 
 if is_wandb_available():
     import wandb
@@ -905,12 +906,25 @@ class GRPOTrainer(Trainer):
                 os.environ["MASTER_ADDR"] = self.accelerator.state.main_process_ip
                 os.environ["MASTER_PORT"] = str(self.accelerator.state.main_process_port)
 
-                # Initialize SGLang runtime (colocate mode)
-                # This is simplified - in practice we'd use slime's SglangEngine
-                self.sglang_runtime = sgl.Runtime(
-                    model_path=model.name_or_path,
-                    tp_size=self.sglang_tensor_parallel_size,
-                    mem_fraction_static=self.sglang_gpu_memory_utilization,
+                # Initialize SGLang engine (colocate mode) using improved adapter
+                # Add required attributes for SGLangEngine
+                args.sglang_model_path = model.name_or_path
+                args.sglang_host = "127.0.0.1"
+                args.sglang_num_gpus_per_node = torch.cuda.device_count()
+                args.colocate = True
+                args.offload = False
+                
+                # Create SGLang engine
+                port = 8001 + self.accelerator.process_index  # Different port per process
+                nccl_port = 29500 + self.accelerator.process_index
+                dist_init_addr = f"{self.accelerator.state.main_process_ip}:{self.accelerator.state.main_process_port}"
+                
+                self.sglang_engine = SGLangEngine(
+                    args=args,
+                    rank=self.accelerator.process_index,
+                    dist_init_addr=dist_init_addr,
+                    port=port,
+                    nccl_port=nccl_port,
                 )
 
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
@@ -1347,9 +1361,10 @@ class GRPOTrainer(Trainer):
                     if self.sglang_mode == "server" and self.accelerator.is_main_process:
                         self.sglang_client.update_named_param(full_name, param.data)
                     elif self.sglang_mode == "colocate":
-                        # For colocate mode, we'd update SGLang runtime directly
-                        # This is simplified - actual implementation would depend on SGLang's API
-                        pass
+                        # For colocate mode, update SGLang engine directly
+                        self.sglang_engine.update_weights_from_distributed(
+                            [full_name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
+                        )
 
     def _sync_fsdp2_params_to_sglang(self, module: nn.Module):
         """Sync FSDP2 parameters to SGLang."""
@@ -1361,8 +1376,10 @@ class GRPOTrainer(Trainer):
             if self.sglang_mode == "server" and self.accelerator.is_main_process:
                 self.sglang_client.update_named_param(name, param)
             elif self.sglang_mode == "colocate":
-                # For colocate mode, we'd update SGLang runtime directly
-                pass
+                # For colocate mode, update SGLang engine directly
+                self.sglang_engine.update_weights_from_distributed(
+                    [name], [str(param.dtype)], [list(param.shape)], "weight_sync"
+                )
 
     @profiling_decorator
     def _move_model_to_sglang(self):
@@ -1399,8 +1416,10 @@ class GRPOTrainer(Trainer):
                         if self.sglang_mode == "server" and self.accelerator.is_main_process:
                             self.sglang_client.update_named_param(name, param.data)
                         elif self.sglang_mode == "colocate":
-                            # For colocate mode, update SGLang runtime
-                            pass
+                            # For colocate mode, update SGLang engine
+                            self.sglang_engine.update_weights_from_distributed(
+                                [name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
+                            )
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
         elif self.accelerator.state.fsdp_plugin is not None:
@@ -1419,15 +1438,17 @@ class GRPOTrainer(Trainer):
                     if self.sglang_mode == "server" and self.accelerator.is_main_process:
                         self.sglang_client.update_named_param(name, param.data)
                     elif self.sglang_mode == "colocate":
-                        # For colocate mode, update SGLang runtime
-                        pass
+                        # For colocate mode, update SGLang engine
+                        self.sglang_engine.update_weights_from_distributed(
+                            [name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
+                        )
 
         # Reset cache on SGLang
         if self.sglang_mode == "server" and self.accelerator.is_main_process:
             self.sglang_client.flush_cache()
         elif self.sglang_mode == "colocate":
-            # For colocate mode, flush SGLang runtime cache
-            pass
+            # For colocate mode, flush SGLang engine cache
+            self.sglang_engine.reset_prefix_cache()
 
     @profiling_decorator
     def _prepare_inputs(
@@ -1764,11 +1785,11 @@ class GRPOTrainer(Trainer):
                     all_images = images if has_images else None
 
                 with profiling_context(self, "SGLang.generate"):
-                    # Use SGLang runtime to generate completions
-                    completion_ids = self.sglang_runtime.generate(
+                    # Use SGLang engine to generate completions
+                    completion_ids = self.sglang_engine.generate(
                         prompts=all_prompts_text,
-                        images=all_images,
                         sampling_params=sampling_params,
+                        images=all_images,
                     )
 
                 if self.sglang_tensor_parallel_size > 1:
