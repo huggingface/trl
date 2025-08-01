@@ -1067,7 +1067,7 @@ class GRPOTrainer(Trainer):
 
         # For multi-GPU training, gather entropies from all processes to compute global quantile
         if self.accelerator is not None and self.accelerator.num_processes > 1:
-            all_non_pad_entropies = self.accelerator.gather(non_pad_entropies.unsqueeze(0)).flatten()
+            all_non_pad_entropies = self.accelerator.gather(non_pad_entropies).flatten()
             # Filter out any empty tensors that might result from processes with no valid tokens
             if all_non_pad_entropies.numel() > 0:
                 entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
