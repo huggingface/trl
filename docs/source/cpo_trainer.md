@@ -115,6 +115,9 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 ## CPOTrainer
 
 [[autodoc]] CPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## CPOConfig
 

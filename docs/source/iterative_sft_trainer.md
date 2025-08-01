@@ -132,6 +132,9 @@ config = IterativeSFTConfig(
 ## IterativeSFTTrainer
 
 [[autodoc]] IterativeSFTTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## IterativeSFTConfig
 
