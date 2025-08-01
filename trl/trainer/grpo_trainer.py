@@ -1339,13 +1339,21 @@ class GRPOTrainer(Trainer):
             name = name.replace(prefix, "")
         return name
 
-    def _sync_fsdp1_params_to_sglang(self, module: nn.Module, prefix: str = "", visited=None):
+    def _sync_fsdp1_params_to_sglang(self, module: nn.Module, prefix: str = "", visited=None, batch_params=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with SGLang."""
         if visited is None:
             visited = set()
+        if batch_params is None:
+            batch_params = {"names": [], "dtypes": [], "shapes": [], "params": []}
+            is_root_call = True
+        else:
+            is_root_call = False
+
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp1_params_to_sglang(child_module, prefix=child_prefix, visited=visited)
+            self._sync_fsdp1_params_to_sglang(
+                child_module, prefix=child_prefix, visited=visited, batch_params=batch_params
+            )
 
         if isinstance(module, FSDP):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
@@ -1357,28 +1365,69 @@ class GRPOTrainer(Trainer):
                         continue
                     visited.add(full_name)
 
-                    if self.sglang_mode == "server" and self.accelerator.is_main_process:
-                        self.sglang_client.update_named_param(full_name, param.data)
-                    elif self.sglang_mode == "colocate":
-                        # For colocate mode, update SGLang engine directly
-                        self.sglang_engine.update_weights_from_distributed(
-                            [full_name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
-                        )
+                    # Collect parameters for batch update
+                    batch_params["names"].append(full_name)
+                    batch_params["dtypes"].append(str(param.data.dtype))
+                    batch_params["shapes"].append(list(param.data.shape))
+                    batch_params["params"].append(param)
+
+        # If this is the root call, perform the batched update
+        if is_root_call and batch_params["names"]:
+            if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                # Use SGLang client's batch update API
+                url = f"{self.sglang_client.base_url}/update_weights/"
+                response = self.sglang_client.session.post(
+                    url,
+                    json={
+                        "names": batch_params["names"],
+                        "dtypes": batch_params["dtypes"],
+                        "shapes": batch_params["shapes"],
+                        "group_name": "weight_sync",
+                        "flush_cache": False,
+                    },
+                )
+                if response.status_code != 200:
+                    raise Exception(f"SGLang FSDP1 weight update failed: {response.status_code}, {response.text}")
+            elif self.sglang_mode == "colocate":
+                # Single NCCL operation for all FSDP parameters
+                self.sglang_engine.update_weights_from_distributed(
+                    batch_params["names"], batch_params["dtypes"], batch_params["shapes"], "weight_sync"
+                )
 
     def _sync_fsdp2_params_to_sglang(self, module: nn.Module):
-        """Sync FSDP2 parameters to SGLang."""
+        """Sync FSDP2 parameters to SGLang using batched updates."""
+        names, dtypes, shapes, params = [], [], [], []
+
         for name, param in module.state_dict().items():
             if param.is_cpu:
                 param = param.to(torch.device("cuda"))
             param = param.full_tensor()
 
+            names.append(name)
+            dtypes.append(str(param.dtype))
+            shapes.append(list(param.shape))
+            params.append(param)
+
+        # Batched update for all FSDP2 parameters
+        if names:
             if self.sglang_mode == "server" and self.accelerator.is_main_process:
-                self.sglang_client.update_named_param(name, param)
-            elif self.sglang_mode == "colocate":
-                # For colocate mode, update SGLang engine directly
-                self.sglang_engine.update_weights_from_distributed(
-                    [name], [str(param.dtype)], [list(param.shape)], "weight_sync"
+                # Use SGLang client's batch update API
+                url = f"{self.sglang_client.base_url}/update_weights/"
+                response = self.sglang_client.session.post(
+                    url,
+                    json={
+                        "names": names,
+                        "dtypes": dtypes,
+                        "shapes": shapes,
+                        "group_name": "weight_sync",
+                        "flush_cache": False,
+                    },
                 )
+                if response.status_code != 200:
+                    raise Exception(f"SGLang FSDP2 weight update failed: {response.status_code}, {response.text}")
+            elif self.sglang_mode == "colocate":
+                # Single NCCL operation for all FSDP2 parameters
+                self.sglang_engine.update_weights_from_distributed(names, dtypes, shapes, "weight_sync")
 
     @profiling_decorator
     def _move_model_to_sglang(self):
@@ -1408,7 +1457,8 @@ class GRPOTrainer(Trainer):
                     elif fsdp_version == 2:
                         self._sync_fsdp2_params_to_sglang(self.model)
                 else:
-                    # DeepSpeed ZeRO-3 with PEFT
+                    # DeepSpeed ZeRO-3 with PEFT - Batch all parameter updates
+                    names, dtypes, shapes = [], [], []
                     for name, param in self.model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name and discard some parameters
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
@@ -1418,12 +1468,32 @@ class GRPOTrainer(Trainer):
                         if "original_module" in name:
                             continue
                         name = self._fix_param_name_to_sglang(name, extra_prefixes=["modules_to_save.default."])
+                        names.append(name)
+                        dtypes.append(str(param.data.dtype))
+                        shapes.append(list(param.data.shape))
+
+                    # Single batched update for all parameters
+                    if names:  # Only update if we have parameters
                         if self.sglang_mode == "server" and self.accelerator.is_main_process:
-                            self.sglang_client.update_named_param(name, param.data)
-                        elif self.sglang_mode == "colocate":
-                            self.sglang_engine.update_weights_from_distributed(
-                                [name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
+                            # Use SGLang client's batch update API
+                            url = f"{self.sglang_client.base_url}/update_weights/"
+                            response = self.sglang_client.session.post(
+                                url,
+                                json={
+                                    "names": names,
+                                    "dtypes": dtypes,
+                                    "shapes": shapes,
+                                    "group_name": "weight_sync",
+                                    "flush_cache": False,  # Don't flush here, do it at the end
+                                },
                             )
+                            if response.status_code != 200:
+                                raise Exception(
+                                    f"SGLang weight update failed: {response.status_code}, {response.text}"
+                                )
+                        elif self.sglang_mode == "colocate":
+                            # Single NCCL operation for all parameters
+                            self.sglang_engine.update_weights_from_distributed(names, dtypes, shapes, "weight_sync")
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
@@ -1437,15 +1507,38 @@ class GRPOTrainer(Trainer):
                 elif fsdp_version == 2:
                     self._sync_fsdp2_params_to_sglang(self.model)
             else:
+                # Regular model parameters - Batch all parameter updates
+                names, dtypes, shapes = [], [], []
+                params_to_gather = []
+
                 for name, param in self.model.named_parameters():
                     name = self._fix_param_name_to_sglang(name)
-                    with gather_if_zero3([param]):
-                        if self.sglang_mode == "server" and self.accelerator.is_main_process:
-                            self.sglang_client.update_named_param(name, param.data)
-                        elif self.sglang_mode == "colocate":
-                            self.sglang_engine.update_weights_from_distributed(
-                                [name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
-                            )
+                    names.append(name)
+                    dtypes.append(str(param.dtype))
+                    shapes.append(list(param.shape))
+                    params_to_gather.append(param)
+
+                # Gather all parameters at once for DeepSpeed ZeRO-3
+                with gather_if_zero3(params_to_gather):
+                    # Single batched update for all parameters
+                    if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                        # Use SGLang client's batch update API
+                        url = f"{self.sglang_client.base_url}/update_weights/"
+                        response = self.sglang_client.session.post(
+                            url,
+                            json={
+                                "names": names,
+                                "dtypes": dtypes,
+                                "shapes": shapes,
+                                "group_name": "weight_sync",
+                                "flush_cache": False,  # Don't flush here, do it at the end
+                            },
+                        )
+                        if response.status_code != 200:
+                            raise Exception(f"SGLang weight update failed: {response.status_code}, {response.text}")
+                    elif self.sglang_mode == "colocate":
+                        # Single NCCL operation for all parameters
+                        self.sglang_engine.update_weights_from_distributed(names, dtypes, shapes, "weight_sync")
 
         # Reset cache on SGLang
         if self.sglang_mode == "server" and self.accelerator.is_main_process:
