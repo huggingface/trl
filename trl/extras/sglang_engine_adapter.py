@@ -26,6 +26,7 @@ from urllib3.exceptions import NewConnectionError
 
 from ..import_utils import is_sglang_available
 
+
 if is_sglang_available():
     from sglang.srt.entrypoints.http_server import launch_server
     from sglang.srt.server_args import ServerArgs
@@ -35,23 +36,22 @@ if is_sglang_available():
 def get_base_gpu_id(args, rank):
     """
     Calculate base GPU ID for SGLang engine based on slime's logic.
-    
+
     Args:
         args: Configuration arguments
         rank: Rank of the current engine
-        
+
     Returns:
         int: Base GPU ID to use
     """
-    num_gpus = min(getattr(args, 'sglang_num_gpus_per_node', 8), 
-                   getattr(args, 'sglang_num_gpus_per_engine', 1))
-    
-    if getattr(args, 'colocate', True):
-        start_index = (rank * num_gpus) % getattr(args, 'sglang_num_gpus_per_node', 8)
+    num_gpus = min(getattr(args, "sglang_num_gpus_per_node", 8), getattr(args, "sglang_num_gpus_per_engine", 1))
+
+    if getattr(args, "colocate", True):
+        start_index = (rank * num_gpus) % getattr(args, "sglang_num_gpus_per_node", 8)
     else:
-        num_actor_gpus = getattr(args, 'actor_num_gpus_per_node', 0) * getattr(args, 'actor_num_nodes', 1)
-        start_index = (num_actor_gpus + rank * num_gpus) % getattr(args, 'sglang_num_gpus_per_node', 8)
-    
+        num_actor_gpus = getattr(args, "actor_num_gpus_per_node", 0) * getattr(args, "actor_num_nodes", 1)
+        start_index = (num_actor_gpus + rank * num_gpus) % getattr(args, "sglang_num_gpus_per_node", 8)
+
     return start_index
 
 
@@ -107,7 +107,7 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
 class SGLangHttpServerEngineAdapter:
     """
     SGLang HTTP Server Engine Adapter based on slime's HttpServerEngineAdapter.
-    
+
     This class provides a clean interface to launch and manage SGLang HTTP servers
     with proper weight synchronization, memory management, and distributed support.
     """
@@ -117,12 +117,12 @@ class SGLangHttpServerEngineAdapter:
         self.router_port = router_port
         self.server_args = ServerArgs(**kwargs)
         self.node_rank = self.server_args.node_rank
-        
+
         print(f"Launch SGLangHttpServerEngineAdapter at: {self.server_args.host}:{self.server_args.port}")
-        
+
         # Launch server process
         self.process = launch_server_process(self.server_args)
-        
+
         # Register with router if specified
         if self.node_rank == 0 and self.router_ip and self.router_port:
             try:
@@ -149,12 +149,12 @@ class SGLangHttpServerEngineAdapter:
             return
 
         url = f"http://{self.server_args.host}:{self.server_args.port}/{endpoint}"
-        
+
         if method.upper() == "GET":
             response = requests.get(url)
         else:
             response = requests.post(url, json=payload or {})
-        
+
         response.raise_for_status()
         return response.json()
 
@@ -166,7 +166,7 @@ class SGLangHttpServerEngineAdapter:
     ):
         """
         Update model weights from tensor data using SGLang's native API.
-        
+
         This method uses SGLang's built-in weight update mechanism for efficient
         GPU-to-GPU weight transfer without CPU intermediary.
         """
@@ -182,7 +182,7 @@ class SGLangHttpServerEngineAdapter:
     def update_weights_from_distributed(self, names, dtypes, shapes, group_name, flush_cache=False):
         """
         Update model weights from distributed training using NCCL broadcast.
-        
+
         This is the preferred method for weight synchronization in distributed setups.
         """
         return self._make_request(
@@ -216,7 +216,7 @@ class SGLangHttpServerEngineAdapter:
         """Flush the cache of the server."""
         if self.node_rank != 0:
             return
-            
+
         # flush_cache will not return status_code 200 when there are pending requests
         while True:
             try:
@@ -248,12 +248,12 @@ class SGLangHttpServerEngineAdapter:
     def generate(self, prompts, sampling_params, images=None):
         """
         Generate completions using the SGLang server.
-        
+
         Args:
             prompts: List of text prompts
             sampling_params: Dictionary of sampling parameters
             images: Optional list of images for multi-modal generation
-            
+
         Returns:
             Generated completions
         """
@@ -261,10 +261,10 @@ class SGLangHttpServerEngineAdapter:
             "text": prompts,
             "sampling_params": sampling_params,
         }
-        
+
         if images:
             payload["images"] = images
-            
+
         return self._make_request("generate", payload)
 
     def shutdown(self):
@@ -278,7 +278,7 @@ class SGLangHttpServerEngineAdapter:
                 )
             except requests.RequestException:
                 pass  # Router might be down
-        
+
         # Kill the server process
         kill_process_tree(self.process.pid)
 
@@ -286,7 +286,7 @@ class SGLangHttpServerEngineAdapter:
 class SGLangEngine:
     """
     SGLang Engine wrapper based on slime's SglangEngine.
-    
+
     This class provides a higher-level interface for managing SGLang engines
     with proper resource management and distributed support.
     """
@@ -299,19 +299,20 @@ class SGLangEngine:
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 
         # Calculate distributed configuration
-        nnodes = max(1, getattr(args, 'sglang_tensor_parallel_size', 1) // 
-                    getattr(args, 'sglang_num_gpus_per_node', 8))
+        nnodes = max(
+            1, getattr(args, "sglang_tensor_parallel_size", 1) // getattr(args, "sglang_num_gpus_per_node", 8)
+        )
         node_rank = rank % nnodes
 
         # Prepare server configuration
         server_kwargs = {
-            "model_path": args.model if hasattr(args, 'model') else args.sglang_model_path,
-            "trust_remote_code": getattr(args, 'trust_remote_code', True),
-            "random_seed": getattr(args, 'seed', 42) + rank,
+            "model_path": args.model if hasattr(args, "model") else args.sglang_model_path,
+            "trust_remote_code": getattr(args, "trust_remote_code", True),
+            "random_seed": getattr(args, "seed", 42) + rank,
             # Memory configuration
-            "enable_memory_saver": getattr(args, 'offload', False),
+            "enable_memory_saver": getattr(args, "offload", False),
             # Distributed configuration
-            "host": getattr(args, 'sglang_host', '0.0.0.0'),
+            "host": getattr(args, "sglang_host", "0.0.0.0"),
             "port": port,
             "nccl_port": nccl_port,
             "nnodes": nnodes,
@@ -320,10 +321,10 @@ class SGLangEngine:
             "gpu_id_step": 1,
             "base_gpu_id": get_base_gpu_id(args, rank),
             # Parallelism configuration
-            "tp_size": getattr(args, 'sglang_tensor_parallel_size', 1),
-            "dp_size": getattr(args, 'sglang_data_parallel_size', 1),
-            "pp_size": getattr(args, 'sglang_pipeline_parallel_size', 1),
-            "ep_size": getattr(args, 'sglang_expert_parallel_size', 1),
+            "tp_size": getattr(args, "sglang_tensor_parallel_size", 1),
+            "dp_size": getattr(args, "sglang_data_parallel_size", 1),
+            "pp_size": getattr(args, "sglang_pipeline_parallel_size", 1),
+            "ep_size": getattr(args, "sglang_expert_parallel_size", 1),
             # Performance configuration
             "skip_server_warmup": True,  # Always skip warmup to prevent timeout
         }
@@ -333,9 +334,9 @@ class SGLangEngine:
 
         # Create the HTTP server engine adapter
         self.llm = SGLangHttpServerEngineAdapter(
-            router_ip=getattr(args, 'sglang_router_ip', None),
-            router_port=getattr(args, 'sglang_router_port', None),
-            **server_kwargs
+            router_ip=getattr(args, "sglang_router_ip", None),
+            router_port=getattr(args, "sglang_router_port", None),
+            **server_kwargs,
         )
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):

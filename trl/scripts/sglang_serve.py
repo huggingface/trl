@@ -13,21 +13,14 @@
 # limitations under the License.
 
 import argparse
-import base64
 import logging
 import os
-import subprocess
-import time
-from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from io import BytesIO
-from itertools import chain
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 from typing import Optional
 
-import torch
 from transformers import is_vision_available
 
 from trl import TrlParser
@@ -53,16 +46,15 @@ if is_uvicorn_available():
 
 
 if is_requests_available():
-    import requests
+    pass
 
 
 if is_vision_available():
-    from PIL import Image
+    pass
 
 
 if is_sglang_available():
-    from sglang.srt.server_args import ServerArgs
-    from ..extras.sglang_engine_adapter import SGLangEngine, get_base_gpu_id
+    from ..extras.sglang_engine_adapter import SGLangEngine
 
 
 logger = logging.getLogger(__name__)
@@ -133,45 +125,31 @@ class ScriptArguments:
     )
     gpu_memory_utilization: float = field(
         default=0.9,
-        metadata={
-            "help": "Ratio of GPU memory to reserve for the model weights, activations, and KV cache."
-        },
+        metadata={"help": "Ratio of GPU memory to reserve for the model weights, activations, and KV cache."},
     )
     dtype: str = field(
         default="auto",
-        metadata={
-            "help": "Data type to use for SGLang generation."
-        },
+        metadata={"help": "Data type to use for SGLang generation."},
     )
     max_model_len: Optional[int] = field(
         default=None,
-        metadata={
-            "help": "Maximum model length to use."
-        },
+        metadata={"help": "Maximum model length to use."},
     )
     enable_prefix_caching: Optional[bool] = field(
         default=None,
-        metadata={
-            "help": "Whether to enable prefix caching in SGLang."
-        },
+        metadata={"help": "Whether to enable prefix caching in SGLang."},
     )
     enforce_eager: Optional[bool] = field(
         default=False,
-        metadata={
-            "help": "Whether to enforce eager execution."
-        },
+        metadata={"help": "Whether to enforce eager execution."},
     )
     trust_remote_code: bool = field(
         default=False,
-        metadata={
-            "help": "Whether to trust remote code when loading models."
-        },
+        metadata={"help": "Whether to trust remote code when loading models."},
     )
     log_level: str = field(
         default="info",
-        metadata={
-            "help": "Log level for uvicorn."
-        },
+        metadata={"help": "Log level for uvicorn."},
     )
 
 
@@ -180,13 +158,14 @@ def sglang_worker(
 ) -> None:
     """
     Worker process for SGLang engine using improved architecture.
-    
+
     Args:
         script_args: Configuration arguments
         data_parallel_rank: Rank of this worker in data parallel group
         master_port: Port for distributed communication
         connection: Pipe connection to parent process
     """
+
     # Set environment variables for data parallelism
     os.environ["SGLANG_DP_RANK"] = str(data_parallel_rank)
     os.environ["SGLANG_DP_SIZE"] = str(script_args.data_parallel_size)
@@ -248,7 +227,7 @@ def sglang_worker(
         raise
     finally:
         # Cleanup
-        if 'sglang_engine' in locals():
+        if "sglang_engine" in locals():
             sglang_engine.shutdown()
 
 
@@ -275,14 +254,16 @@ def main(script_args: ScriptArguments):
         )
 
     if not is_sglang_available():
-        raise ImportError("SGLang is required to run the SGLang serve script. Please install it using `pip install sglang`.")
+        raise ImportError(
+            "SGLang is required to run the SGLang serve script. Please install it using `pip install sglang`."
+        )
 
     # Spawn data parallel workers
     master_port = 29500  # Fixed port for DP communication
     connections = []
     processes = []
     worker_urls = []
-    
+
     for data_parallel_rank in range(script_args.data_parallel_size):
         parent_connection, child_connection = Pipe()
         process = Process(target=sglang_worker, args=(script_args, data_parallel_rank, master_port, child_connection))
@@ -305,7 +286,7 @@ def main(script_args: ScriptArguments):
         # Shutdown workers
         for connection in connections:
             connection.send({"type": "shutdown"})
-        
+
         # Wait for processes to terminate
         for process in processes:
             process.join(timeout=10)
@@ -340,12 +321,12 @@ def main(script_args: ScriptArguments):
         """Generate completions for the provided prompts."""
         # Distribute prompts across DP workers
         chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
-        
+
         # Send to workers
         for connection, prompts in zip(connections, chunked_prompts):
             if not prompts:
                 prompts = ["<placeholder>"]  # SGLang requires at least one prompt
-            
+
             kwargs = {
                 "text": prompts,
                 "sampling_params": request.sampling_params,
@@ -379,7 +360,7 @@ def main(script_args: ScriptArguments):
     async def init_communicator(request: InitCommunicatorRequest):
         """Initialize the weight update communicator."""
         world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
-        
+
         # Initialize communicator on all workers
         for i, connection in enumerate(connections):
             kwargs = {
@@ -391,11 +372,11 @@ def main(script_args: ScriptArguments):
                 "backend": "nccl",
             }
             connection.send({"type": "init_communicator", "kwargs": kwargs})
-        
+
         # Wait for all to complete
         for connection in connections:
             connection.recv()
-        
+
         return {"message": "Communicator initialized"}
 
     class UpdateWeightsRequest(BaseModel):
@@ -413,15 +394,15 @@ def main(script_args: ScriptArguments):
             "group_name": "weight_sync",
             "flush_cache": True,
         }
-        
+
         # Send to all workers
         for connection in connections:
             connection.send({"type": "update_weights", "kwargs": kwargs})
-        
+
         # Wait for all to complete
         for connection in connections:
             connection.recv()
-        
+
         return {"message": "Weights updated"}
 
     @app.post("/flush_cache/")
@@ -429,10 +410,10 @@ def main(script_args: ScriptArguments):
         """Flush the cache."""
         for connection in connections:
             connection.send({"type": "flush_cache"})
-        
+
         for connection in connections:
             connection.recv()
-        
+
         return {"message": "Cache flushed"}
 
     @app.post("/close_communicator/")
@@ -447,7 +428,9 @@ def main(script_args: ScriptArguments):
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
     if subparsers is not None:
-        parser = subparsers.add_parser("sglang-serve", help="Run the SGLang serve script", dataclass_types=ScriptArguments)
+        parser = subparsers.add_parser(
+            "sglang-serve", help="Run the SGLang serve script", dataclass_types=ScriptArguments
+        )
     else:
         parser = TrlParser(ScriptArguments)
     return parser

@@ -710,13 +710,11 @@ class GRPOConfig(TrainingArguments):
         # SGLang validation
         if self.use_sglang and self.use_vllm:
             raise ValueError("Cannot use both SGLang and vLLM at the same time.")
-        
+
         if self.use_sglang:
             if self.sglang_mode not in ["server", "colocate"]:
                 raise ValueError(f"sglang_mode must be either 'server' or 'colocate', got '{self.sglang_mode}'")
-            
+
             if self.sglang_mode == "colocate":
                 if self.sglang_data_parallel_size > 1 and not self.sglang_enable_dp_attention:
-                    raise ValueError(
-                        "sglang_enable_dp_attention must be True when sglang_data_parallel_size > 1"
-                    )
+                    raise ValueError("sglang_enable_dp_attention must be True when sglang_data_parallel_size > 1")

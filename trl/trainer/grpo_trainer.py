@@ -53,9 +53,8 @@ from transformers.utils import is_datasets_available, is_flash_attn_2_available,
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
-from ..extras.vllm_client import VLLMClient
 from ..extras.sglang_client import SGLangClient
-from ..extras.sglang_engine_adapter import SGLangEngine
+from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_sglang_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
@@ -83,7 +82,7 @@ if is_vllm_available():
     from vllm.sampling_params import GuidedDecodingParams
 
 if is_sglang_available():
-    pass  # SGLang imports handled in sglang_engine_adapter
+    from ..extras.sglang_engine_adapter import SGLangEngine
 
 if is_wandb_available():
     import wandb
@@ -894,7 +893,9 @@ class GRPOTrainer(Trainer):
                     # Create subgroups of ranks for TP
                     self.sglang_tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
                         [
-                            list(range(i * self.sglang_tensor_parallel_size, (i + 1) * self.sglang_tensor_parallel_size))
+                            list(
+                                range(i * self.sglang_tensor_parallel_size, (i + 1) * self.sglang_tensor_parallel_size)
+                            )
                             for i in range(self.accelerator.num_processes // self.sglang_tensor_parallel_size)
                         ]
                     )
@@ -913,12 +914,12 @@ class GRPOTrainer(Trainer):
                 args.sglang_num_gpus_per_node = torch.cuda.device_count()
                 args.colocate = True
                 args.offload = False
-                
+
                 # Create SGLang engine
                 port = 8001 + self.accelerator.process_index  # Different port per process
                 nccl_port = 29500 + self.accelerator.process_index
                 dist_init_addr = f"{self.accelerator.state.main_process_ip}:{self.accelerator.state.main_process_port}"
-                
+
                 self.sglang_engine = SGLangEngine(
                     args=args,
                     rank=self.accelerator.process_index,
@@ -1344,9 +1345,7 @@ class GRPOTrainer(Trainer):
             visited = set()
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp1_params_to_sglang(
-                child_module, prefix=child_prefix, visited=visited
-            )
+            self._sync_fsdp1_params_to_sglang(child_module, prefix=child_prefix, visited=visited)
 
         if isinstance(module, FSDP):
             with FSDP.summon_full_params(module, recurse=False, writeback=False):
@@ -1405,7 +1404,7 @@ class GRPOTrainer(Trainer):
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        
+
                         # Skip certain PEFT parameters
                         if "lora_dropout" in name or "modules_to_save.default.lm_head" in name:
                             continue
@@ -1754,7 +1753,7 @@ class GRPOTrainer(Trainer):
 
                 # Distribute completions back to processes
                 num_prompts_per_process = [len(p) for p in gather_object(len(prompts_text))]
-                start_idx = sum(num_prompts_per_process[:self.accelerator.process_index])
+                start_idx = sum(num_prompts_per_process[: self.accelerator.process_index])
                 end_idx = start_idx + num_prompts_per_process[self.accelerator.process_index]
                 completion_ids = completion_ids[start_idx:end_idx]
 

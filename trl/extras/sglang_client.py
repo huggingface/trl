@@ -197,12 +197,14 @@ class SGLangClient:
 
         # Prepare sampling parameters
         params = sampling_params or {}
-        params.update({
-            "temperature": temperature,
-            "top_p": top_p,
-            "top_k": top_k,
-            "max_new_tokens": max_tokens,
-        })
+        params.update(
+            {
+                "temperature": temperature,
+                "top_p": top_p,
+                "top_k": top_k,
+                "max_new_tokens": max_tokens,
+            }
+        )
 
         response = self.session.post(
             url,
@@ -283,24 +285,25 @@ class SGLangClient:
         """
         dtype_str = str(weights.dtype)
         shape = list(weights.shape)
-        
+
         # Use SGLang's update_weights_from_distributed endpoint
         url = f"{self.base_url}/update_weights/"
         response = self.session.post(
-            url, 
+            url,
             json={
-                "names": [name], 
-                "dtypes": [dtype_str], 
+                "names": [name],
+                "dtypes": [dtype_str],
                 "shapes": [shape],
                 "group_name": "weight_sync",
                 "flush_cache": True,
-            }
+            },
         )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         # Broadcast the weights to the other processes using NCCL
         import torch.distributed as dist
+
         dist.broadcast(weights, src=self.rank)
         dist.barrier()
 
@@ -317,13 +320,13 @@ class SGLangClient:
         dtypes = []
         shapes = []
         weights_list = []
-        
+
         for name, param in model.named_parameters():
             names.append(name)
             dtypes.append(str(param.data.dtype))
             shapes.append(list(param.data.shape))
             weights_list.append(param.data)
-        
+
         # Send metadata to server using SGLang's batch update API
         url = f"{self.base_url}/update_weights/"
         response = self.session.post(
@@ -334,13 +337,14 @@ class SGLangClient:
                 "shapes": shapes,
                 "group_name": "weight_sync",
                 "flush_cache": True,
-            }
+            },
         )
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
-        
+
         # Broadcast all weights
         import torch.distributed as dist
+
         for weight in weights_list:
             dist.broadcast(weight, src=self.rank)
         dist.barrier()

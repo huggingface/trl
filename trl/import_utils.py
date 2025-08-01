@@ -94,7 +94,15 @@ def is_joblib_available() -> bool:
 
 
 def is_sglang_available() -> bool:
-    return _sglang_available
+    if not _sglang_available:
+        return False
+
+    # Additional check to ensure SGLang server modules can be imported
+    # (SGLang has strict GPU/Triton requirements that can fail on CPU nodes)
+    try:
+        return True
+    except Exception:
+        return False
 
 
 class _LazyModule(ModuleType):

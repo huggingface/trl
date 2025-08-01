@@ -24,11 +24,11 @@ from .scripts.env import print_env
 from .scripts.grpo import make_parser as make_grpo_parser
 from .scripts.kto import make_parser as make_kto_parser
 from .scripts.sft import make_parser as make_sft_parser
+from .scripts.sglang_serve import main as sglang_serve_main
+from .scripts.sglang_serve import make_parser as make_sglang_serve_parser
 from .scripts.utils import TrlParser
 from .scripts.vllm_serve import main as vllm_serve_main
 from .scripts.vllm_serve import make_parser as make_vllm_serve_parser
-from .scripts.sglang_serve import main as sglang_serve_main
-from .scripts.sglang_serve import make_parser as make_sglang_serve_parser
 
 
 def main():
