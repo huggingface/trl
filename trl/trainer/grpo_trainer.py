@@ -1848,6 +1848,7 @@ class GRPOTrainer(Trainer):
             per_token_kl = (
                 torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
             )
+            per_token_kl = self.beta * per_token_kl
 
         # Compute the loss
         advantages = inputs["advantages"]
@@ -1878,22 +1879,30 @@ class GRPOTrainer(Trainer):
         if self.args.delta is not None:
             coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
-        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        policy_loss1 = coef_1 * advantages.unsqueeze(1)
+        policy_loss2 = coef_2 * advantages.unsqueeze(1)
+        policy_loss = -torch.min(policy_loss1, policy_loss2)
         if entropy_mask is not None:
-            per_token_loss = per_token_loss * entropy_mask
-        if self.beta != 0.0:
-            per_token_loss = per_token_loss + self.beta * per_token_kl
+            policy_loss = policy_loss * entropy_mask            
 
-        if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        if self.importance_sampling_level == "sequence":
+            loss = policy_loss
+            if self.beta != 0.0:
+                loss += (per_token_kl * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            loss = loss.mean()
         else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
+            per_token_loss = policy_loss
+            if self.beta != 0.0:
+                per_token_loss += per_token_kl
+            
+            if self.loss_type == "grpo":
+                loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            elif self.loss_type == "bnpo":
+                loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            elif self.loss_type == "dr_grpo":
+                loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            else:
+                raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
