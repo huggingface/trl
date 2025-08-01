@@ -2,7 +2,7 @@ name: Slow tests (on push)
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     paths:
       # Run only when python files are modified
       - "trl/**.py"
@@ -12,13 +12,16 @@ env:
   IS_GITHUB_CI: "1"
   SLACK_API_TOKEN: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
 
-
 jobs:
   run_all_tests_single_gpu:
     strategy:
       fail-fast: false
       matrix:
-        docker-image-name: ["huggingface/trl-latest-gpu:latest", "huggingface/trl-source-gpu:latest"]
+        docker-image-name:
+          [
+            "huggingface/trl-latest-gpu:latest",
+            "huggingface/trl-source-gpu:latest",
+          ]
     runs-on:
       group: aws-g4dn-2xlarge
     env:
@@ -35,7 +38,7 @@ jobs:
       - name: Pip install
         run: |
           source activate trl
-          pip install -e ".[test]" --no-deps
+          pip install -e ".[test,vlm]" --no-deps
           pip install pytest-reportlog parameterized
 
       - name: Run slow SFT tests on single GPU
@@ -43,19 +46,22 @@ jobs:
         run: |
           source activate trl
           make slow_tests
-      
+
       - name: Generate Report
         if: always()
         run: |
           pip install slack_sdk tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
 
-
   run_all_tests_multi_gpu:
     strategy:
       fail-fast: false
       matrix:
-        docker-image-name: ["huggingface/trl-latest-gpu:latest", "huggingface/trl-source-gpu:latest"]
+        docker-image-name:
+          [
+            "huggingface/trl-latest-gpu:latest",
+            "huggingface/trl-source-gpu:latest",
+          ]
     runs-on:
       group: aws-g4dn-2xlarge
     env:
@@ -72,7 +78,7 @@ jobs:
       - name: Pip install
         run: |
           source activate trl
-          pip install -e ".[test]" --no-deps
+          pip install -e ".[test,vlm]" --no-deps
           pip install pytest-reportlog parameterized
 
       - name: Run slow SFT tests on Multi GPU
@@ -87,7 +93,7 @@ jobs:
           source activate trl
           pip install deepspeed
           make test_examples
-      
+
       - name: Generate Reports
         if: always()
         run: |
