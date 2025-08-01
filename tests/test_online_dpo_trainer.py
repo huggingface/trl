@@ -283,7 +283,6 @@ class TestOnlineDPOTrainer(unittest.TestCase):
                 use_vllm=True,
                 vllm_mode="colocate",
                 vllm_gpu_memory_utilization=0.2,
-                vllm_tensor_parallel_size=1,
                 per_device_train_batch_size=1,
                 max_steps=2,
                 report_to="none",
@@ -311,7 +310,6 @@ class TestOnlineDPOTrainer(unittest.TestCase):
             self.assertIsNotNone(trainer.llm)
             self.assertIsNone(trainer.vllm_client)
             self.assertEqual(trainer.vllm_gpu_memory_utilization, 0.2)
-            self.assertEqual(trainer.vllm_tensor_parallel_size, 1)
 
             # Verify generation parameters
             self.assertEqual(trainer.temperature, 0.9)
@@ -352,7 +350,6 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         self.assertEqual(config.vllm_server_host, "0.0.0.0")
         self.assertEqual(config.vllm_server_port, 8000)
         self.assertEqual(config.vllm_server_timeout, 240.0)
-        self.assertEqual(config.vllm_tensor_parallel_size, 1)
         self.assertEqual(config.vllm_gpu_memory_utilization, 0.55)
 
         # Test generation parameters

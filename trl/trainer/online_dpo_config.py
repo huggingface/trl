@@ -126,10 +126,7 @@ class OnlineDPOConfig(TrainingArguments):
             Control the GPU memory utilization for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_gpu_memory_utilization` flag.
-        vllm_tensor_parallel_size (`int`, *optional*, defaults to `1`):
-            Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
-            `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
-            launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+
 
         > Other parameters
 
@@ -321,14 +318,7 @@ class OnlineDPOConfig(TrainingArguments):
             "after the timeout, a `ConnectionError` is raised.",
         },
     )
-    vllm_tensor_parallel_size: int = field(
-        default=1,
-        metadata={
-            "help": "Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set "
-            "to `'colocate'`. If you are using `vllm_mode='server'`, this parameter must be passed separately when "
-            "launching the vLLM server via the `--vllm_tensor_parallel_size` flag.",
-        },
-    )
+
     ds3_gather_for_generation: bool = field(
         default=True,
         metadata={

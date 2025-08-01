@@ -304,7 +304,6 @@ class OnlineDPOTrainer(Trainer):
         self.use_transformers_paged = args.use_transformers_paged
         self.vllm_mode = args.vllm_mode if args.use_vllm else None
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization
-        self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
 
         # Store token attributes for consistency with GRPO trainer
         self.pad_token = processing_class.pad_token
@@ -366,19 +365,22 @@ class OnlineDPOTrainer(Trainer):
                 # Configure vLLM parameters
                 vllm_kwargs = {
                     "model": model.name_or_path,
-                    "tensor_parallel_size": self.vllm_tensor_parallel_size,
+                    "tensor_parallel_size": 1,  # Online DPO doesn't need complex tensor parallelism
                     "gpu_memory_utilization": self.vllm_gpu_memory_utilization,
-                    "max_num_seqs": self.args.per_device_train_batch_size * self.vllm_tensor_parallel_size,
+                    "max_num_seqs": self.args.per_device_train_batch_size * 2,
                     "max_model_len": args.max_length + args.max_new_tokens,  # max_length includes prompt + completion
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
-                    "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
+                    "seed": self.accelerator.process_index,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
+                    "distributed_executor_backend": "external_launcher",
                 }
 
-                # Only use external_launcher if we're in a distributed environment
-                if self.accelerator.num_processes > 1 and self.vllm_tensor_parallel_size > 1:
-                    vllm_kwargs["distributed_executor_backend"] = "external_launcher"
+                os.environ["RANK"] = str(self.accelerator.process_index)
+                os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
+                os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
+                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
 
                 self.llm = LLM(**vllm_kwargs)
                 self.vllm_client = None
@@ -584,14 +586,6 @@ class OnlineDPOTrainer(Trainer):
         """Generate completions using vLLM server mode"""
         from accelerate.utils import broadcast_object_list, gather_object
 
-        # Update vLLM server weights if needed
-        if hasattr(self, "_last_loaded_step") and self.state.global_step != self._last_loaded_step:
-            self._move_model_to_vllm(model)
-            self._last_loaded_step = self.state.global_step
-        elif not hasattr(self, "_last_loaded_step"):
-            self._move_model_to_vllm(model)
-            self._last_loaded_step = self.state.global_step
-
         # Gather all prompts to main process
         all_prompts = gather_object(prompts)
 
@@ -635,9 +629,6 @@ class OnlineDPOTrainer(Trainer):
 
     def _generate_vllm_colocate(self, model, prompts):
         """Generate completions using vLLM colocate mode"""
-        # Update model weights if needed
-        self._move_model_to_vllm(model)
-
         if is_conversational({"prompt": prompts[0]}):
             outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
         else:
@@ -1055,6 +1046,12 @@ class OnlineDPOTrainer(Trainer):
                 scaled_loss.backward()
         else:
             self.accelerator.backward(loss, **kwargs)
+
+        # Sync vLLM weights after gradient update if using vLLM
+        if self.use_vllm and self.accelerator.sync_gradients:
+            self._move_model_to_vllm(model)
+            if hasattr(self, "_last_loaded_step"):
+                self._last_loaded_step = self.state.global_step
 
         return loss.detach() / self.args.gradient_accumulation_steps
 
