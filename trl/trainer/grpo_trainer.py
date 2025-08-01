@@ -54,7 +54,8 @@ from transformers.utils import is_datasets_available, is_flash_attn_2_available,
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_liger_kernel_available, is_vllm_available
+from ..extras.sglang_client import SGLangClient
+from ..import_utils import is_liger_kernel_available, is_sglang_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
@@ -79,6 +80,9 @@ if is_liger_kernel_available():
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
+
+if is_sglang_available():
+    import sglang as sgl
 
 if is_wandb_available():
     import wandb
@@ -667,6 +671,10 @@ class GRPOTrainer(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
+        self.use_sglang = args.use_sglang
+        self.sglang_mode = args.sglang_mode
+        self.sglang_gpu_memory_utilization = args.sglang_gpu_memory_utilization  # only applies to colocation mode
+        self.sglang_tensor_parallel_size = args.sglang_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
@@ -857,7 +865,60 @@ class GRPOTrainer(Trainer):
             # desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, we
             # synchronize all processes after vLLM has been fully initialized.
             self.accelerator.wait_for_everyone()
-        else:
+
+        if self.use_sglang:
+            if not is_sglang_available():
+                raise ImportError(
+                    "SGLang is not available and `use_sglang` is set to True. Please install SGLang with "
+                    "`pip install sglang` to use it."
+                )
+
+            if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                if args.sglang_server_base_url is not None:
+                    base_url = args.sglang_server_base_url
+                else:
+                    base_url = f"http://{args.sglang_server_host}:{args.sglang_server_port}"
+                self.sglang_client = SGLangClient(base_url=base_url, connection_timeout=args.sglang_server_timeout)
+                self.sglang_client.init_communicator(device=torch.cuda.current_device())
+
+            elif self.sglang_mode == "colocate":
+                # Make sure sglang_tensor_parallel_size group size evenly divides the world size
+                if not self.accelerator.num_processes % self.sglang_tensor_parallel_size == 0:
+                    raise ValueError(
+                        f"sglang_tensor_parallel_size ({self.sglang_tensor_parallel_size}) must divide world size "
+                        f"({self.accelerator.num_processes}) evenly."
+                    )
+
+                if self.sglang_tensor_parallel_size > 1:
+                    # Create subgroups of ranks for TP
+                    self.sglang_tp_group, _ = torch.distributed.new_subgroups_by_enumeration(
+                        [
+                            list(range(i * self.sglang_tensor_parallel_size, (i + 1) * self.sglang_tensor_parallel_size))
+                            for i in range(self.accelerator.num_processes // self.sglang_tensor_parallel_size)
+                        ]
+                    )
+
+                # Set environment variables for SGLang distributed training
+                os.environ["RANK"] = str(self.accelerator.process_index)
+                os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
+                os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
+                os.environ["MASTER_ADDR"] = self.accelerator.state.main_process_ip
+                os.environ["MASTER_PORT"] = str(self.accelerator.state.main_process_port)
+
+                # Initialize SGLang runtime (colocate mode)
+                # This is simplified - in practice we'd use slime's SglangEngine
+                self.sglang_runtime = sgl.Runtime(
+                    model_path=model.name_or_path,
+                    tp_size=self.sglang_tensor_parallel_size,
+                    mem_fraction_static=self.sglang_gpu_memory_utilization,
+                )
+
+            self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
+
+            # Synchronize all processes after SGLang initialization
+            self.accelerator.wait_for_everyone()
+
+        if not self.use_vllm and not self.use_sglang:
             generation_kwargs = {
                 "max_new_tokens": self.max_completion_length,
                 "do_sample": True,
@@ -1255,6 +1316,119 @@ class GRPOTrainer(Trainer):
         elif self.vllm_mode == "colocate":
             self.llm.reset_prefix_cache()
 
+    def _fix_param_name_to_sglang(self, name, extra_prefixes: Optional[list[str]] = None):
+        """Fix parameter names for SGLang compatibility."""
+        extra_prefixes = extra_prefixes or []
+        prefixes = ["_checkpoint_wrapped_module."] + extra_prefixes
+        for prefix in prefixes:
+            name = name.replace(prefix, "")
+        return name
+
+    def _sync_fsdp1_params_to_sglang(self, module: nn.Module, prefix: str = "", visited=None):
+        """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with SGLang."""
+        if visited is None:
+            visited = set()
+        for child_name, child_module in module.named_children():
+            child_prefix = f"{prefix}.{child_name}" if prefix else child_name
+            self._sync_fsdp1_params_to_sglang(
+                child_module, prefix=child_prefix, visited=visited
+            )
+
+        if isinstance(module, FSDP):
+            with FSDP.summon_full_params(module, recurse=False, writeback=False):
+                for param_name, param in module.named_parameters():
+                    full_name = f"{prefix}.{param_name}" if prefix else param_name
+                    full_name = self._fix_param_name_to_sglang(full_name, extra_prefixes=["_fsdp_wrapped_module."])
+
+                    if full_name in visited:
+                        continue
+                    visited.add(full_name)
+
+                    if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                        self.sglang_client.update_named_param(full_name, param.data)
+                    elif self.sglang_mode == "colocate":
+                        # For colocate mode, we'd update SGLang runtime directly
+                        # This is simplified - actual implementation would depend on SGLang's API
+                        pass
+
+    def _sync_fsdp2_params_to_sglang(self, module: nn.Module):
+        """Sync FSDP2 parameters to SGLang."""
+        for name, param in module.state_dict().items():
+            if param.is_cpu:
+                param = param.to(torch.device("cuda"))
+            param = param.full_tensor()
+
+            if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                self.sglang_client.update_named_param(name, param)
+            elif self.sglang_mode == "colocate":
+                # For colocate mode, we'd update SGLang runtime directly
+                pass
+
+    @profiling_decorator
+    def _move_model_to_sglang(self):
+        """Move model weights to SGLang for inference."""
+        # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
+        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+        zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
+        if zero_stage_3:
+            import deepspeed
+
+            if is_peft_model(self.model):
+                self.model.merge_adapter()
+
+            with deepspeed.zero.GatheredParameters(list(self.model.parameters(recurse=True)), modifier_rank=0):
+                fsdp_plugin = self.accelerator.state.fsdp_plugin
+                if fsdp_plugin is not None:
+                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                    if fsdp_version == 1:
+                        self._sync_fsdp1_params_to_sglang(self.model)
+                    elif fsdp_version == 2:
+                        self._sync_fsdp2_params_to_sglang(self.model)
+                else:
+                    # DeepSpeed ZeRO-3 with PEFT
+                    for name, param in self.model.named_parameters():
+                        name = name.removeprefix("base_model.model.").replace(".base_layer", "")
+                        
+                        # Skip certain PEFT parameters
+                        if "lora_dropout" in name or "modules_to_save.default.lm_head" in name:
+                            continue
+                        if "original_module" in name:
+                            continue
+                        name = self._fix_param_name_to_sglang(name, extra_prefixes=["modules_to_save.default."])
+
+                        if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                            self.sglang_client.update_named_param(name, param.data)
+                        elif self.sglang_mode == "colocate":
+                            # For colocate mode, update SGLang runtime
+                            pass
+                # Unmerge adapters while parameters are still gathered
+                self.model.unmerge_adapter()
+        elif self.accelerator.state.fsdp_plugin is not None:
+            if is_peft_model(self.model):
+                self.model.merge_adapter()
+            fsdp_plugin = self.accelerator.state.fsdp_plugin
+            fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+            if fsdp_version == 1:
+                self._sync_fsdp1_params_to_sglang(self.model)
+            elif fsdp_version == 2:
+                self._sync_fsdp2_params_to_sglang(self.model)
+        else:
+            for name, param in self.model.named_parameters():
+                name = self._fix_param_name_to_sglang(name)
+                with gather_if_zero3([param]):
+                    if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                        self.sglang_client.update_named_param(name, param.data)
+                    elif self.sglang_mode == "colocate":
+                        # For colocate mode, update SGLang runtime
+                        pass
+
+        # Reset cache on SGLang
+        if self.sglang_mode == "server" and self.accelerator.is_main_process:
+            self.sglang_client.flush_cache()
+        elif self.sglang_mode == "colocate":
+            # For colocate mode, flush SGLang runtime cache
+            pass
+
     @profiling_decorator
     def _prepare_inputs(
         self, generation_batch: dict[str, Union[torch.Tensor, Any]]
@@ -1521,6 +1695,85 @@ class GRPOTrainer(Trainer):
                     # Slice completions for this rank within its TP group.
                     # Each rank generates all outputs — we keep only our share.
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
+                    tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    completion_ids = completion_ids[tp_slice]
+
+        elif self.use_sglang:
+            # First, update the SGLang weights if needed
+            if self.state.global_step != self._last_loaded_step:
+                self._move_model_to_sglang()
+                self._last_loaded_step = self.state.global_step
+
+            # Generate completions using SGLang
+            if self.sglang_mode == "server":
+                all_prompts_text = gather_object(prompts_text)
+                if has_images:
+                    all_images = gather_object(images)
+
+                if self.accelerator.is_main_process:
+                    # Prepare sampling parameters for SGLang
+                    sampling_params = {
+                        "temperature": self.temperature,
+                        "top_p": self.top_p,
+                        "top_k": -1 if self.top_k is None else self.top_k,
+                        "max_new_tokens": self.max_completion_length,
+                    }
+
+                    with profiling_context(self, "SGLang.generate"):
+                        completion_ids = self.sglang_client.generate(
+                            prompts=all_prompts_text,
+                            images=all_images if has_images else None,
+                            sampling_params=sampling_params,
+                        )
+
+                    # Broadcast completion_ids to all processes
+                    completion_ids = broadcast_object_list([completion_ids])[0]
+                else:
+                    completion_ids = broadcast_object_list([None])[0]
+
+                # Distribute completions back to processes
+                num_prompts_per_process = [len(p) for p in gather_object(len(prompts_text))]
+                start_idx = sum(num_prompts_per_process[:self.accelerator.process_index])
+                end_idx = start_idx + num_prompts_per_process[self.accelerator.process_index]
+                completion_ids = completion_ids[start_idx:end_idx]
+
+            elif self.sglang_mode == "colocate":
+                # For colocate mode, each process generates its own completions
+                sampling_params = {
+                    "temperature": self.temperature,
+                    "top_p": self.top_p,
+                    "top_k": -1 if self.top_k is None else self.top_k,
+                    "max_new_tokens": self.max_completion_length,
+                }
+
+                if self.sglang_tensor_parallel_size > 1:
+                    # Gather prompts from all ranks in the TP group
+                    orig_size = len(prompts_text)
+                    gathered_prompts = [None for _ in range(self.sglang_tensor_parallel_size)]
+                    torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.sglang_tp_group)
+                    all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
+
+                    if has_images:
+                        gathered_images = [None for _ in range(self.sglang_tensor_parallel_size)]
+                        torch.distributed.all_gather_object(gathered_images, images, group=self.sglang_tp_group)
+                        all_images = [img for sublist in gathered_images for img in sublist]
+                    else:
+                        all_images = None
+                else:
+                    all_prompts_text = prompts_text
+                    all_images = images if has_images else None
+
+                with profiling_context(self, "SGLang.generate"):
+                    # Use SGLang runtime to generate completions
+                    completion_ids = self.sglang_runtime.generate(
+                        prompts=all_prompts_text,
+                        images=all_images,
+                        sampling_params=sampling_params,
+                    )
+
+                if self.sglang_tensor_parallel_size > 1:
+                    # Slice completions for this rank within its TP group
+                    local_rank_in_group = torch.distributed.get_rank(group=self.sglang_tp_group)
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
 

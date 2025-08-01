@@ -445,6 +445,86 @@ class GRPOConfig(TrainingArguments):
         },
     )
 
+    # Parameters that control generation acceleration powered by SGLang
+    use_sglang: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use SGLang for generating completions. If set to `True`, the trainer will use SGLang for "
+            "generation instead of the default model.generate(). Requires `sglang` to be installed."
+        },
+    )
+    sglang_mode: str = field(
+        default="server",
+        metadata={
+            "help": "Mode to use for SGLang integration when `use_sglang` is set to `True`. Must be one of `server` or "
+            "`'colocate'`. `'server'`: The trainer will send generation requests to a separate SGLang server. Make sure "
+            "a TRL SGLang server is running (start with `trl sglang-serve`). `'colocate'`: SGLang will run in the same "
+            "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
+            "contention with training."
+        },
+    )
+    sglang_server_base_url: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Base URL for the SGLang server (e.g., 'http://localhost:8001'). If provided, `sglang_server_host` "
+            "and `sglang_server_port` are ignored."
+        },
+    )
+    sglang_server_host: str = field(
+        default="0.0.0.0",
+        metadata={"help": "Host of the SGLang server to connect to. Ignored if sglang_server_base_url is provided."},
+    )
+    sglang_server_port: int = field(
+        default=8001,
+        metadata={"help": "Port of the SGLang server to connect to. Ignored if sglang_server_base_url is provided."},
+    )
+    sglang_server_timeout: float = field(
+        default=240.0,
+        metadata={
+            "help": "Total timeout duration in seconds to wait for the SGLang server to be up. If the server is not up "
+            "after the timeout, a `ConnectionError` is raised."
+        },
+    )
+
+    # Parameters that control colocated SGLang execution (only used when `sglang_mode` is `"colocate"`)
+    sglang_gpu_memory_utilization: float = field(
+        default=0.3,
+        metadata={
+            "help": "Control the GPU memory utilization for SGLang. This setting only applies when `sglang_mode` is set "
+            "to `'colocate'`. If you are using `sglang_mode='server'`, this parameter must be passed separately when "
+            "launching the SGLang server via the `--gpu-memory-utilization` flag."
+        },
+    )
+    sglang_tensor_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "Control the tensor parallel size for SGLang. This setting only applies when `sglang_mode` is set "
+            "to `'colocate'`. If you are using `sglang_mode='server'`, this parameter must be passed separately when "
+            "launching the SGLang server via the `--tensor-parallel-size` flag."
+        },
+    )
+    sglang_pipeline_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "Control the pipeline parallel size for SGLang. This setting only applies when `sglang_mode` is set "
+            "to `'colocate'`. Defaults to 1."
+        },
+    )
+    sglang_data_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "Control the data parallel size for SGLang. This setting only applies when `sglang_mode` is set "
+            "to `'colocate'`. Defaults to 1."
+        },
+    )
+    sglang_enable_dp_attention: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable distributed attention for SGLang when using data parallelism. Required when "
+            "`sglang_data_parallel_size` > 1."
+        },
+    )
+
     # Parameters that control the training
     beta: float = field(
         default=0.0,
@@ -626,3 +706,17 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
+
+        # SGLang validation
+        if self.use_sglang and self.use_vllm:
+            raise ValueError("Cannot use both SGLang and vLLM at the same time.")
+        
+        if self.use_sglang:
+            if self.sglang_mode not in ["server", "colocate"]:
+                raise ValueError(f"sglang_mode must be either 'server' or 'colocate', got '{self.sglang_mode}'")
+            
+            if self.sglang_mode == "colocate":
+                if self.sglang_data_parallel_size > 1 and not self.sglang_enable_dp_attention:
+                    raise ValueError(
+                        "sglang_enable_dp_attention must be True when sglang_data_parallel_size > 1"
+                    )
