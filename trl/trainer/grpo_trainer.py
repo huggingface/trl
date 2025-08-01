@@ -1883,7 +1883,7 @@ class GRPOTrainer(Trainer):
         policy_loss2 = coef_2 * advantages.unsqueeze(1)
         policy_loss = -torch.min(policy_loss1, policy_loss2)
         if entropy_mask is not None:
-            policy_loss = policy_loss * entropy_mask            
+            policy_loss = policy_loss * entropy_mask
 
         if self.importance_sampling_level == "sequence":
             loss = policy_loss
@@ -1894,7 +1894,6 @@ class GRPOTrainer(Trainer):
             per_token_loss = policy_loss
             if self.beta != 0.0:
                 per_token_loss += per_token_kl
-            
             if self.loss_type == "grpo":
                 loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
             elif self.loss_type == "bnpo":
