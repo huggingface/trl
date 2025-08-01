@@ -1069,10 +1069,7 @@ class GRPOTrainer(Trainer):
         if self.accelerator is not None and self.accelerator.num_processes > 1:
             all_non_pad_entropies = self.accelerator.gather(non_pad_entropies)
             # Filter out any empty tensors that might result from processes with no valid tokens
-            if all_non_pad_entropies.numel() > 0:
-                entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
-            else:
-                entropy_threshold = torch.quantile(non_pad_entropies, threshold)
+            entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
         else:
             entropy_threshold = torch.quantile(non_pad_entropies, threshold)
 
