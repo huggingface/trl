@@ -400,6 +400,7 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         # Create a minimal trainer instance just to access the method
         trainer = Mock(spec=GRPOTrainer)
         trainer.accelerator = mock_accelerator
+        trainer.accelerator.gather = lambda x: x  # Mock gather to return the input directly
 
         # Call the actual method from GRPOTrainer
         return GRPOTrainer.get_high_entropy_mask(trainer, entropies, mask, threshold)
