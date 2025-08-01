@@ -945,14 +945,16 @@ class GRPOTrainer(Trainer):
                     logger.info("Initialized SGLang weight update group")
                 except Exception as e:
                     logger.warning(f"Failed to initialize SGLang weight update group: {e}")
-                    logger.warning("This may cause issues with weight updates. Consider using a patched SGLang version or disabling bucketed updates.")
+                    logger.warning(
+                        "This may cause issues with weight updates. Consider using a patched SGLang version or disabling bucketed updates."
+                    )
 
             elif self.sglang_mode == "server":
                 # Initialize weight update group for server mode too
                 if hasattr(self, "sglang_client") and self.sglang_client is not None:
                     # TODO: Add server mode weight update group initialization if needed
                     pass
-                
+
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
             # Initialize slime-style weight updater if enabled

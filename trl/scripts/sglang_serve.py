@@ -222,6 +222,12 @@ def sglang_worker(
             elif command["type"] == "flush_cache":
                 sglang_engine.reset_prefix_cache()
                 connection.send({"status": "ok"})
+            elif command["type"] == "pause_generation":
+                sglang_engine.pause_generation()
+                connection.send({"status": "ok"})
+            elif command["type"] == "continue_generation":
+                sglang_engine.continue_generation()
+                connection.send({"status": "ok"})
             elif command["type"] == "shutdown":
                 break
 
@@ -482,6 +488,30 @@ def main(script_args: ScriptArguments):
         """Close the weight update communicator."""
         # SGLang doesn't need explicit communicator closing
         return {"message": "Communicator closed"}
+
+    @app.post("/pause_generation/")
+    async def pause_generation():
+        """Pause generation on all SGLang workers."""
+        for connection in connections:
+            connection.send({"type": "pause_generation"})
+
+        # Wait for all to complete
+        for connection in connections:
+            connection.recv()
+
+        return {"message": "Generation paused"}
+
+    @app.post("/continue_generation/")
+    async def continue_generation():
+        """Continue generation on all SGLang workers."""
+        for connection in connections:
+            connection.send({"type": "continue_generation"})
+
+        # Wait for all to complete
+        for connection in connections:
+            connection.recv()
+
+        return {"message": "Generation continued"}
 
     # Start the server
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
