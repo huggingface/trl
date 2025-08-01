@@ -886,6 +886,22 @@ class SFTTrainer(Trainer):
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
+            # Handle PEFT models with virtual tokens (e.g., PromptEncoder)
+            # Check if logits and labels have different sequence lengths
+            if shift_logits.shape[1] != shift_labels.shape[1]:
+                # For PEFT models with virtual tokens, we need to align the dimensions
+                # Virtual tokens are typically prepended, so we skip them in logits
+                num_virtual_tokens = shift_logits.shape[1] - shift_labels.shape[1]
+                if num_virtual_tokens > 0:
+                    shift_logits = shift_logits[:, num_virtual_tokens:, :]
+                else:
+                    # This shouldn't happen, but handle it gracefully
+                    warnings.warn(
+                        f"Unexpected dimension mismatch: logits have {shift_logits.shape[1]} tokens "
+                        f"but labels have {shift_labels.shape[1]} tokens. Skipping token accuracy computation."
+                    )
+                    return (loss, outputs) if return_outputs else loss
+
             # Get predictions
             predictions = shift_logits.argmax(dim=-1)
 
