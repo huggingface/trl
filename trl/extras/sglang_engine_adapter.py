@@ -200,6 +200,35 @@ class SGLangHttpServerEngineAdapter:
             },
         )
 
+    def update_weights_bucketed(self, names, dtypes, shapes, group_name, flush_cache=False):
+        """
+        Update model weights using bucketed batch approach (slime-style).
+
+        This method is optimized for large models with memory-aware parameter bucketing.
+        """
+        return self._make_request(
+            "update_weights_from_distributed",
+            {
+                "names": names,
+                "dtypes": [str(dtype).replace("torch.", "") for dtype in dtypes],
+                "shapes": shapes,
+                "group_name": group_name,
+                "flush_cache": flush_cache,
+            },
+        )
+
+    def pause_generation(self):
+        """Pause generation on the server."""
+        return self._make_request("pause_generation")
+
+    def continue_generation(self):
+        """Continue generation on the server."""
+        return self._make_request("continue_generation")
+
+    def get_memory_info(self):
+        """Get memory information from the server."""
+        return self._make_request("get_memory_info", method="GET")
+
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         """
         Initialize the distributed weight update group.
@@ -240,14 +269,6 @@ class SGLangHttpServerEngineAdapter:
     def resume_memory_occupation(self):
         """Resume memory occupation after offloading."""
         return self._make_request("resume_memory_occupation")
-
-    def pause_generation(self):
-        """Pause generation on the server."""
-        return self._make_request("pause_generation")
-
-    def continue_generation(self):
-        """Continue generation on the server."""
-        return self._make_request("continue_generation")
 
     def generate(self, prompts, sampling_params, images=None):
         """

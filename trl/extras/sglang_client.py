@@ -349,6 +349,77 @@ class SGLangClient:
             dist.broadcast(weight, src=self.rank)
         dist.barrier()
 
+    def update_weights_bucketed(
+        self,
+        names: list[str],
+        dtypes: list[str],
+        shapes: list[list[int]],
+        group_name: str = "weight_sync",
+        flush_cache: bool = False,
+    ):
+        """
+        Updates model weights using bucketed batch approach (slime-style).
+
+        Args:
+            names (`list[str]`):
+                List of parameter names to update.
+            dtypes (`list[str]`):
+                List of parameter data types.
+            shapes (`list[list[int]]`):
+                List of parameter shapes.
+            group_name (`str`, *optional*, defaults to `"weight_sync"`):
+                Name of the distributed group for weight synchronization.
+            flush_cache (`bool`, *optional*, defaults to `False`):
+                Whether to flush the cache after this bucket update.
+        """
+        # Send metadata to server using SGLang's batch update API
+        url = f"{self.base_url}/update_weights/"
+        response = self.session.post(
+            url,
+            json={
+                "names": names,
+                "dtypes": dtypes,
+                "shapes": shapes,
+                "group_name": group_name,
+                "flush_cache": flush_cache,
+            },
+        )
+        if response.status_code != 200:
+            raise Exception(f"SGLang bucketed weight update failed: {response.status_code}, {response.text}")
+
+    def get_memory_info(self):
+        """
+        Get memory information from the SGLang server.
+
+        Returns:
+            dict: Memory information from the server.
+        """
+        url = f"{self.base_url}/get_memory_info/"
+        try:
+            response = self.session.get(url)
+            if response.status_code == 200:
+                return response.json()
+            else:
+                logger.warning(f"Failed to get memory info: {response.status_code}")
+                return {"error": "Unable to get memory info"}
+        except Exception as e:
+            logger.warning(f"Exception getting memory info: {e}")
+            return {"error": str(e)}
+
+    def pause_generation(self):
+        """Pause generation on the SGLang server."""
+        url = f"{self.base_url}/pause_generation/"
+        response = self.session.post(url)
+        if response.status_code != 200:
+            raise Exception(f"Failed to pause generation: {response.status_code}, {response.text}")
+
+    def continue_generation(self):
+        """Continue generation on the SGLang server."""
+        url = f"{self.base_url}/continue_generation/"
+        response = self.session.post(url)
+        if response.status_code != 200:
+            raise Exception(f"Failed to continue generation: {response.status_code}, {response.text}")
+
     def flush_cache(self):
         """
         Flush the cache for the model.

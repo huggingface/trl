@@ -507,7 +507,31 @@ class GRPOConfig(TrainingArguments):
         default=1,
         metadata={
             "help": "Control the pipeline parallel size for SGLang. This setting only applies when `sglang_mode` is set "
-            "to `'colocate'`. Defaults to 1."
+            "to `'colocate'`. If you are using `sglang_mode='server'`, this parameter must be passed separately when "
+            "launching the SGLang server via the `--pipeline-parallel-size` flag."
+        },
+    )
+
+    # Parameters for slime-style bucketed weight updates
+    use_sglang_bucketed_updates: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to use slime-style bucketed weight updates for SGLang. This provides better memory management "
+            "and performance for large models by grouping parameters into memory-aware buckets."
+        },
+    )
+    sglang_update_weight_buffer_size: int = field(
+        default=512 * 1024**2,  # 512MB
+        metadata={
+            "help": "Buffer size for SGLang weight updates in bytes. Parameters are grouped into buckets that don't exceed "
+            "this size to prevent memory issues. Default is 512MB. Increase for better batching, decrease if encountering OOM."
+        },
+    )
+    sglang_pause_generation_during_update: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to pause SGLang generation during weight updates to prevent race conditions and ensure "
+            "consistent inference results. Recommended for production use."
         },
     )
     sglang_data_parallel_size: int = field(

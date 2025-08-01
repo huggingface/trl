@@ -14,6 +14,7 @@
 
 import copy
 import inspect
+import logging
 import os
 import re
 import textwrap
@@ -54,6 +55,7 @@ from transformers.utils import is_datasets_available, is_flash_attn_2_available,
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.sglang_client import SGLangClient
+from ..extras.sglang_weight_utils import SGLangWeightUpdater
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_sglang_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
@@ -90,6 +92,8 @@ if is_wandb_available():
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+logger = logging.getLogger(__name__)
 
 
 class RepeatSampler(Sampler):
@@ -930,6 +934,22 @@ class GRPOTrainer(Trainer):
 
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
+            # Initialize slime-style weight updater if enabled
+            if args.use_sglang_bucketed_updates:
+                self.sglang_weight_updater = SGLangWeightUpdater(
+                    model=self.model,
+                    sglang_mode=self.sglang_mode,
+                    sglang_client=getattr(self, "sglang_client", None),
+                    sglang_engine=getattr(self, "sglang_engine", None),
+                    accelerator=self.accelerator,
+                    update_weight_buffer_size=args.sglang_update_weight_buffer_size,
+                )
+                logger.info(
+                    f"Initialized slime-style SGLang weight updater with buffer size: {args.sglang_update_weight_buffer_size / (1024**2):.2f}MB"
+                )
+            else:
+                self.sglang_weight_updater = None
+
             # Synchronize all processes after SGLang initialization
             self.accelerator.wait_for_everyone()
 
@@ -1432,6 +1452,39 @@ class GRPOTrainer(Trainer):
     @profiling_decorator
     def _move_model_to_sglang(self):
         """Move model weights to SGLang for inference."""
+        # Use slime-style bucketed updates if available
+        if self.sglang_weight_updater is not None:
+            # Pause generation during weight updates if configured
+            if (
+                hasattr(self.args, "sglang_pause_generation_during_update")
+                and self.args.sglang_pause_generation_during_update
+            ):
+                if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                    self.sglang_client.pause_generation()
+                elif self.sglang_mode == "colocate":
+                    self.sglang_engine.pause_generation()
+
+            # Use the advanced weight updater
+            deepspeed_plugin = self.accelerator.state.deepspeed_plugin
+            self.sglang_weight_updater.update_model_weights(deepspeed_plugin=deepspeed_plugin)
+
+            # Resume generation if paused
+            if (
+                hasattr(self.args, "sglang_pause_generation_during_update")
+                and self.args.sglang_pause_generation_during_update
+            ):
+                if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                    self.sglang_client.continue_generation()
+                elif self.sglang_mode == "colocate":
+                    self.sglang_engine.continue_generation()
+
+            return  # Exit early - the advanced updater handles everything
+
+        # Fallback to original implementation if bucketed updates are disabled
+        logger.warning(
+            "Using legacy weight update method. Consider enabling 'use_sglang_bucketed_updates' for better performance."
+        )
+
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
         zero_stage_3 = deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3
