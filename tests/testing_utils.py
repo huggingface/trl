@@ -26,6 +26,7 @@ from trl.import_utils import (
     is_joblib_available,
     is_llm_blender_available,
     is_mergekit_available,
+    is_sglang_available,
     is_vllm_available,
 )
 
@@ -79,6 +80,13 @@ def require_sklearn(test_case):
     Decorator marking a test that requires sklearn. Skips the test if sklearn is not available.
     """
     return unittest.skipUnless(is_sklearn_available() and is_joblib_available(), "test requires sklearn")(test_case)
+
+
+def require_sglang(test_case):
+    """
+    Decorator marking a test that requires sglang. Skips the test if sglang is not available.
+    """
+    return unittest.skipUnless(is_sglang_available(), "test requires sglang")(test_case)
 
 
 def require_vllm(test_case):

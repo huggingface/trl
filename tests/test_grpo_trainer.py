@@ -39,7 +39,7 @@ from trl.trainer.grpo_trainer import (
     unsplit_pixel_values_by_grid,
 )
 
-from .testing_utils import require_vllm
+from .testing_utils import require_sglang, require_vllm
 
 
 if is_peft_available():
@@ -1273,6 +1273,99 @@ class GRPOTrainerTester(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_sglang
+    def test_training_sglang_colocate_mode(self):
+        """Test that training works with SGLang colocate mode for generation."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                num_generations=2,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                max_prompt_length=64,  # reduce prompt length to save memory
+                report_to="none",
+                use_sglang=True,
+                sglang_mode="colocate",
+                sglang_gpu_memory_utilization=0.1,  # Use minimal GPU memory
+                use_sglang_bucketed_updates=True,  # Enable bucketed updates 
+                sglang_update_weight_buffer_size=64 * 1024**2,  # 64MB buffer
+                sglang_pause_generation_during_update=True,
+            )
+            trainer = GRPOTrainer(
+                model="microsoft/DialoGPT-small",  # Use smaller model for SGLang test
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            
+            # Verify SGLang integration is working
+            self.assertTrue(trainer.use_sglang, "SGLang should be enabled")
+            self.assertEqual(trainer.sglang_mode, "colocate", "SGLang should be in colocate mode")
+            self.assertIsNotNone(trainer.sglang_engine, "SGLang engine should be initialized")
+            
+            # Verify slime-style bucketed weight updater is enabled
+            self.assertTrue(trainer.args.use_sglang_bucketed_updates, "Bucketed updates should be enabled")
+            if hasattr(trainer, 'sglang_weight_updater'):
+                self.assertIsNotNone(trainer.sglang_weight_updater, "SGLang weight updater should be initialized")
+            
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_sglang
+    def test_training_sglang_colocate_with_peft(self):
+        """Test that training works with SGLang colocate mode and PEFT."""
+        model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-small")
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                num_generations=2,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                max_prompt_length=64,  # reduce prompt length to save memory
+                report_to="none",
+                use_sglang=True,
+                sglang_mode="colocate",
+                sglang_gpu_memory_utilization=0.1,  # Use minimal GPU memory
+                use_sglang_bucketed_updates=False,  # Disable bucketed updates for now
+            )
+            lora_config = LoraConfig(
+                target_modules="all-linear",
+                modules_to_save=["lm_head"],  # Simpler config for testing
+            )
+            trainer = GRPOTrainer(
+                model=model,
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
+            )
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            
+            # Verify SGLang with PEFT integration
+            self.assertTrue(trainer.use_sglang, "SGLang should be enabled")
+            self.assertEqual(trainer.sglang_mode, "colocate", "SGLang should be in colocate mode")
+            
+            # Check that the peft params have changed and the base model params have not changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if n in base_param_names:  # We expect the base model params to be the same
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                elif "base_layer" not in n and "original_module" not in n:
+                    # We expect the peft params to be different (except for the base layer)
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_no_scale_rewards(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

@@ -336,6 +336,7 @@ class SGLangEngine:
             "random_seed": getattr(args, "seed", 42) + rank,
             # Memory configuration
             "enable_memory_saver": getattr(args, "offload", False),
+            "mem_fraction_static": getattr(args, "sglang_gpu_memory_utilization", 0.2),
             # Distributed configuration
             "host": getattr(args, "sglang_host", "0.0.0.0"),
             "port": port,

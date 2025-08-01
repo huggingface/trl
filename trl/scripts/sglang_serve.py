@@ -210,6 +210,9 @@ def sglang_worker(
             if command["type"] == "init_communicator":
                 sglang_engine.init_process_group(**command["kwargs"])
                 connection.send({"status": "ok"})
+            elif command["type"] == "init_weights_update_group":
+                sglang_engine.init_process_group(**command["kwargs"])
+                connection.send({"status": "ok"})
             elif command["type"] == "update_weights":
                 sglang_engine.update_weights_from_distributed(**command["kwargs"])
                 connection.send({"status": "ok"})
@@ -379,6 +382,36 @@ def main(script_args: ScriptArguments):
 
         return {"message": "Communicator initialized"}
 
+    class InitWeightsUpdateGroupRequest(BaseModel):
+        master_address: str
+        master_port: int
+        rank_offset: int
+        world_size: int
+        group_name: str
+        backend: str
+
+    @app.post("/init_weights_update_group/")
+    async def init_weights_update_group(request: InitWeightsUpdateGroupRequest):
+        """Initialize the weight update group for distributed training."""
+        kwargs = {
+            "master_address": request.master_address,
+            "master_port": request.master_port,
+            "rank_offset": request.rank_offset,
+            "world_size": request.world_size,
+            "group_name": request.group_name,
+            "backend": request.backend,
+        }
+
+        # Send to all workers
+        for connection in connections:
+            connection.send({"type": "init_weights_update_group", "kwargs": kwargs})
+
+        # Wait for all to complete
+        for connection in connections:
+            connection.recv()
+
+        return {"message": "Weight update group initialized"}
+
     class UpdateWeightsRequest(BaseModel):
         names: list[str]
         dtypes: list[str]
@@ -404,6 +437,34 @@ def main(script_args: ScriptArguments):
             connection.recv()
 
         return {"message": "Weights updated"}
+
+    class UpdateWeightsFromDistributedRequest(BaseModel):
+        names: list[str]
+        dtypes: list[str]
+        shapes: list[list[int]]
+        group_name: str = "weight_sync"
+        flush_cache: bool = False
+
+    @app.post("/update_weights_from_distributed/")
+    async def update_weights_from_distributed(request: UpdateWeightsFromDistributedRequest):
+        """Update model weights from distributed training using NCCL broadcast."""
+        kwargs = {
+            "names": request.names,
+            "dtypes": request.dtypes,
+            "shapes": request.shapes,
+            "group_name": request.group_name,
+            "flush_cache": request.flush_cache,
+        }
+
+        # Send to all workers
+        for connection in connections:
+            connection.send({"type": "update_weights", "kwargs": kwargs})
+
+        # Wait for all to complete
+        for connection in connections:
+            connection.recv()
+
+        return {"message": "Distributed weights updated"}
 
     @app.post("/flush_cache/")
     async def flush_cache():

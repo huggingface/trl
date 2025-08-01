@@ -100,6 +100,7 @@ def is_sglang_available() -> bool:
     # Additional check to ensure SGLang server modules can be imported
     # (SGLang has strict GPU/Triton requirements that can fail on CPU nodes)
     try:
+        from sglang.srt.entrypoints.http_server import launch_server
         return True
     except Exception:
         return False

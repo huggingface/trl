@@ -908,8 +908,8 @@ class GRPOTrainer(Trainer):
                 os.environ["RANK"] = str(self.accelerator.process_index)
                 os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                os.environ["MASTER_ADDR"] = self.accelerator.state.main_process_ip
-                os.environ["MASTER_PORT"] = str(self.accelerator.state.main_process_port)
+                os.environ["MASTER_ADDR"] = getattr(self.accelerator.state, "main_process_ip", "localhost")
+                os.environ["MASTER_PORT"] = str(getattr(self.accelerator.state, "main_process_port", 29500))
 
                 # Initialize SGLang engine (colocate mode) using improved adapter
                 # Add required attributes for SGLangEngine
@@ -922,7 +922,7 @@ class GRPOTrainer(Trainer):
                 # Create SGLang engine
                 port = 8001 + self.accelerator.process_index  # Different port per process
                 nccl_port = 29500 + self.accelerator.process_index
-                dist_init_addr = f"{self.accelerator.state.main_process_ip}:{self.accelerator.state.main_process_port}"
+                dist_init_addr = f"{getattr(self.accelerator.state, 'main_process_ip', 'localhost')}:{getattr(self.accelerator.state, 'main_process_port', 29500)}"
 
                 self.sglang_engine = SGLangEngine(
                     args=args,
@@ -932,6 +932,27 @@ class GRPOTrainer(Trainer):
                     nccl_port=nccl_port,
                 )
 
+                # Initialize weight update group (required before weight updates)
+                try:
+                    self.sglang_engine.init_process_group(
+                        master_address=getattr(self.accelerator.state, "main_process_ip", "localhost"),
+                        master_port=getattr(self.accelerator.state, "main_process_port", 29500),
+                        rank_offset=self.accelerator.process_index,
+                        world_size=self.accelerator.num_processes,
+                        group_name="sglang_weight_sync",
+                        backend="nccl",
+                    )
+                    logger.info("Initialized SGLang weight update group")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize SGLang weight update group: {e}")
+                    logger.warning("This may cause issues with weight updates. Consider using a patched SGLang version or disabling bucketed updates.")
+
+            elif self.sglang_mode == "server":
+                # Initialize weight update group for server mode too
+                if hasattr(self, "sglang_client") and self.sglang_client is not None:
+                    # TODO: Add server mode weight update group initialization if needed
+                    pass
+                
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
             # Initialize slime-style weight updater if enabled
