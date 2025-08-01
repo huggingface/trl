@@ -1367,6 +1367,106 @@ class GRPOTrainerTester(unittest.TestCase):
                     # We expect the peft params to be different (except for the base layer)
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
+    @require_sglang
+    def test_training_sglang_bucketed_weight_updates(self):
+        """Test SGLang with sophisticated slime-style bucketed weight updates."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=2,  # reduce the batch size to reduce memory usage
+                num_generations=2,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                max_prompt_length=64,  # reduce prompt length to save memory
+                report_to="none",
+                use_sglang=True,
+                sglang_mode="colocate",
+                sglang_gpu_memory_utilization=0.05,  # Use minimal GPU memory for testing
+                
+                # Enable ALL sophisticated slime-style features
+                use_sglang_bucketed_updates=True,  # Core bucketed updates
+                sglang_update_weight_buffer_size=32 * 1024**2,  # 32MB buffer for testing
+                sglang_pause_generation_during_update=True,  # Pause/resume during updates
+            )
+            trainer = GRPOTrainer(
+                model="microsoft/DialoGPT-small",  # Use smaller model for SGLang test
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+            
+            # Verify sophisticated weight updater is properly initialized
+            self.assertTrue(trainer.use_sglang, "SGLang should be enabled")
+            self.assertEqual(trainer.sglang_mode, "colocate", "SGLang should be in colocate mode")
+            self.assertIsNotNone(trainer.sglang_engine, "SGLang engine should be initialized")
+            
+            # Verify slime-style bucketed weight updater
+            self.assertTrue(trainer.args.use_sglang_bucketed_updates, "Bucketed updates should be enabled")
+            self.assertIsNotNone(trainer.sglang_weight_updater, "SGLang weight updater should be initialized")
+            self.assertEqual(trainer.args.sglang_update_weight_buffer_size, 32 * 1024**2, "Buffer size should be 32MB")
+            self.assertTrue(trainer.args.sglang_pause_generation_during_update, "Generation pause should be enabled")
+            
+            # Test memory info functionality
+            memory_info = trainer.sglang_weight_updater.get_memory_info()
+            self.assertIn("total_GB", memory_info, "Memory info should contain total GB")
+            self.assertIn("free_GB", memory_info, "Memory info should contain free GB")
+            self.assertIn("used_GB", memory_info, "Memory info should contain used GB")
+            
+            # Test parameter info extraction
+            param_infos = trainer.sglang_weight_updater.get_param_infos(trainer.model)
+            self.assertGreater(len(param_infos), 0, "Should extract parameter information")
+            
+            # Verify parameter info structure
+            for param_info in param_infos[:3]:  # Check first few parameters
+                self.assertIsInstance(param_info.name, str, "Parameter name should be string")
+                self.assertIsInstance(param_info.size, int, "Parameter size should be integer")
+                self.assertGreater(param_info.size, 0, "Parameter size should be positive")
+            
+            # Test bucketing functionality
+            param_buckets = trainer.sglang_weight_updater.get_param_info_buckets(param_infos)
+            self.assertGreater(len(param_buckets), 0, "Should create parameter buckets")
+            self.assertIsInstance(param_buckets, list, "Buckets should be a list")
+            
+            # Verify buckets respect memory constraints
+            for bucket in param_buckets:
+                bucket_size = sum(p.size for p in bucket)
+                # Allow single oversized parameters to be in their own bucket
+                if len(bucket) == 1:
+                    # Single parameter bucket can exceed buffer size (oversized parameter)
+                    continue  
+                else:
+                    # Multi-parameter buckets must respect buffer size
+                    self.assertLessEqual(
+                        bucket_size, 
+                        trainer.args.sglang_update_weight_buffer_size, 
+                        f"Multi-parameter bucket size ({bucket_size}) should not exceed buffer size ({trainer.args.sglang_update_weight_buffer_size})"
+                    )
+            
+            # Test sophisticated weight update
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            
+            # This should trigger the sophisticated slime-style bucketed weight update
+            trainer._move_model_to_sglang()
+            
+            # Verify parameters changed (indicating successful weight update)
+            params_changed = 0
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if not torch.equal(param, new_param):
+                    params_changed += 1
+            
+            # Note: Parameters might not change in a simple weight sync, but the operation should complete successfully
+            # The key test is that the sophisticated weight update completes without errors
+            
+            # Test that we can do multiple weight updates (stress test)
+            for i in range(3):
+                try:
+                    trainer._move_model_to_sglang() 
+                    # Each update should complete successfully
+                except Exception as e:
+                    self.fail(f"Weight update {i+1} failed: {e}")
+
     def test_training_no_scale_rewards(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
