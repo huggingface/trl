@@ -1064,15 +1064,10 @@ class GRPOTrainer(Trainer):
         non_pad_entropies = entropies[mask.bool()].float()
         if non_pad_entropies.numel() == 0:
             return torch.zeros_like(entropies, dtype=torch.bool)
-
-        # For multi-GPU training, gather entropies from all processes to compute global quantile
-        if self.accelerator is not None and self.accelerator.num_processes > 1:
-            all_non_pad_entropies = self.accelerator.gather(non_pad_entropies)
-            # Filter out any empty tensors that might result from processes with no valid tokens
-            entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
-        else:
-            entropy_threshold = torch.quantile(non_pad_entropies, threshold)
-
+        
+        all_non_pad_entropies = self.accelerator.gather(non_pad_entropies)
+        # Filter out any empty tensors that might result from processes with no valid tokens
+        entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
         masked_entropies = entropies * mask.float()
         entropy_mask = masked_entropies >= entropy_threshold
         return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
