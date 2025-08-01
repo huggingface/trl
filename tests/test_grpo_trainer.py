@@ -391,8 +391,6 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         # Create a mock trainer with minimal setup
         from unittest.mock import Mock
 
-        from trl.trainer.grpo_trainer import GRPOTrainer
-
         # Create a mock accelerator
         mock_accelerator = Mock()
         mock_accelerator.num_processes = 1  # Single process for testing
