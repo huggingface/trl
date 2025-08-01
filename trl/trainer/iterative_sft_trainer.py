@@ -84,12 +84,6 @@ class IterativeSFTTrainer(Trainer):
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
             metric values.
-        max_length (`int`, *optional*, deprecated):
-            Maximum length of the tokenized sequence. Use `args.max_length` instead.
-        truncation_mode (`str`, *optional*, deprecated):
-            The truncation mode to use. Use `args.truncation_mode` instead.
-        optimize_device_cache (`bool`, *optional*, deprecated):
-            Whether to optimize accelerator cache. Use `args.optimize_device_cache` instead.
     """
 
     _tag_names = ["trl", "iterative-sft"]
