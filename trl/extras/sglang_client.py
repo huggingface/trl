@@ -381,7 +381,7 @@ if __name__ == "__main__":
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], max_tokens=32)
-    print("Responses:", responses)
+    # Example output would show responses here
 
     # Update model weights
     from transformers import AutoModelForCausalLM

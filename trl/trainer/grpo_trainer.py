@@ -1389,12 +1389,19 @@ class GRPOTrainer(Trainer):
         if zero_stage_3:
             import deepspeed
 
-            if is_peft_model(self.model):
-                self.model.merge_adapter()
+            gather_if_zero3 = deepspeed.zero.GatheredParameters
+        else:
+            gather_if_zero3 = nullcontext
 
-            with deepspeed.zero.GatheredParameters(list(self.model.parameters(recurse=True)), modifier_rank=0):
-                fsdp_plugin = self.accelerator.state.fsdp_plugin
-                if fsdp_plugin is not None:
+        if is_peft_model(self.model):
+            # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging
+            with gather_if_zero3(list(self.model.parameters())):
+                self.model.merge_adapter()
+                # Update SGLang weights while parameters are gathered
+                if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
+                    # Update SGLang weights while parameters are gathered
+                    # For PEFT with FSDP we need to use the memory efficient post-order traversal
+                    fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
                     fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
                     if fsdp_version == 1:
                         self._sync_fsdp1_params_to_sglang(self.model)
@@ -1403,50 +1410,47 @@ class GRPOTrainer(Trainer):
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
+                        # When using PEFT, we need to recover the original parameter name and discard some parameters
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-
-                        # Skip certain PEFT parameters
-                        if "lora_dropout" in name or "modules_to_save.default.lm_head" in name:
+                        if self.model.prefix in name:
                             continue
+                        # When module to save, remove its prefix and discard the original module
                         if "original_module" in name:
                             continue
                         name = self._fix_param_name_to_sglang(name, extra_prefixes=["modules_to_save.default."])
-
                         if self.sglang_mode == "server" and self.accelerator.is_main_process:
                             self.sglang_client.update_named_param(name, param.data)
                         elif self.sglang_mode == "colocate":
-                            # For colocate mode, update SGLang engine
                             self.sglang_engine.update_weights_from_distributed(
                                 [name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
                             )
                 # Unmerge adapters while parameters are still gathered
                 self.model.unmerge_adapter()
-        elif self.accelerator.state.fsdp_plugin is not None:
-            if is_peft_model(self.model):
-                self.model.merge_adapter()
-            fsdp_plugin = self.accelerator.state.fsdp_plugin
-            fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
-            if fsdp_version == 1:
-                self._sync_fsdp1_params_to_sglang(self.model)
-            elif fsdp_version == 2:
-                self._sync_fsdp2_params_to_sglang(self.model)
+                # Parameters will automatically be repartitioned when exiting the context
         else:
-            for name, param in self.model.named_parameters():
-                name = self._fix_param_name_to_sglang(name)
-                with gather_if_zero3([param]):
-                    if self.sglang_mode == "server" and self.accelerator.is_main_process:
-                        self.sglang_client.update_named_param(name, param.data)
-                    elif self.sglang_mode == "colocate":
-                        # For colocate mode, update SGLang engine
-                        self.sglang_engine.update_weights_from_distributed(
-                            [name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
-                        )
+            # Regular model parameters - no PEFT
+            if self.is_fsdp_enabled:
+                fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                if fsdp_version == 1:
+                    self._sync_fsdp1_params_to_sglang(self.model)
+                elif fsdp_version == 2:
+                    self._sync_fsdp2_params_to_sglang(self.model)
+            else:
+                for name, param in self.model.named_parameters():
+                    name = self._fix_param_name_to_sglang(name)
+                    with gather_if_zero3([param]):
+                        if self.sglang_mode == "server" and self.accelerator.is_main_process:
+                            self.sglang_client.update_named_param(name, param.data)
+                        elif self.sglang_mode == "colocate":
+                            self.sglang_engine.update_weights_from_distributed(
+                                [name], [str(param.data.dtype)], [list(param.data.shape)], "weight_sync"
+                            )
 
         # Reset cache on SGLang
         if self.sglang_mode == "server" and self.accelerator.is_main_process:
             self.sglang_client.flush_cache()
         elif self.sglang_mode == "colocate":
-            # For colocate mode, flush SGLang engine cache
             self.sglang_engine.reset_prefix_cache()
 
     @profiling_decorator

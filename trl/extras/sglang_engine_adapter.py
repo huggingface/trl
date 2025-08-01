@@ -16,15 +16,19 @@
 SGLang Engine Adapter - Improved implementation based on slime patterns.
 """
 
+import logging
 import multiprocessing
 import os
 import time
-from typing import List, Optional
+from typing import Optional
 
 import requests
 from urllib3.exceptions import NewConnectionError
 
 from ..import_utils import is_sglang_available
+
+
+logger = logging.getLogger(__name__)
 
 
 if is_sglang_available():
@@ -118,7 +122,7 @@ class SGLangHttpServerEngineAdapter:
         self.server_args = ServerArgs(**kwargs)
         self.node_rank = self.server_args.node_rank
 
-        print(f"Launch SGLangHttpServerEngineAdapter at: {self.server_args.host}:{self.server_args.port}")
+        logger.info(f"Launch SGLangHttpServerEngineAdapter at: {self.server_args.host}:{self.server_args.port}")
 
         # Launch server process
         self.process = launch_server_process(self.server_args)
@@ -131,7 +135,7 @@ class SGLangHttpServerEngineAdapter:
                     f"?url=http://{self.server_args.host}:{self.server_args.port}"
                 )
             except requests.RequestException as e:
-                print(f"Warning: Failed to register with router: {e}")
+                logger.warning(f"Failed to register with router: {e}")
 
     def _make_request(self, endpoint: str, payload: Optional[dict] = None, method: str = "POST"):
         """
@@ -160,7 +164,7 @@ class SGLangHttpServerEngineAdapter:
 
     def update_weights_from_tensor(
         self,
-        serialized_named_tensors: List[str],
+        serialized_named_tensors: list[str],
         load_format: Optional[str] = None,
         flush_cache: bool = False,
     ):
@@ -226,7 +230,7 @@ class SGLangHttpServerEngineAdapter:
             except NewConnectionError as e:
                 raise e
             except Exception as e:
-                print(f"Error flushing cache: {e}")
+                logger.error(f"Error flushing cache: {e}")
                 continue
 
     def release_memory_occupation(self):
