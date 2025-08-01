@@ -1055,9 +1055,6 @@ class GRPOTrainer(Trainer):
                 Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
             threshold (`float`):
                 Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
-            accelerator (`Accelerator`, *optional*, defaults to `None`):
-                Accelerator object for multi-GPU synchronization. If provided, entropies will be gathered
-                across all processes to compute the global quantile threshold.
 
         Returns:
             `torch.Tensor`:
