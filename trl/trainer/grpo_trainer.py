@@ -1041,8 +1041,10 @@ class GRPOTrainer(Trainer):
         # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
         last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
-    
-    def get_high_entropy_mask(self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float, accelerator=None) -> torch.Tensor:
+
+    def get_high_entropy_mask(
+        self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float, accelerator=None
+    ) -> torch.Tensor:
         """
         Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
 
@@ -1065,7 +1067,7 @@ class GRPOTrainer(Trainer):
         non_pad_entropies = entropies[mask.bool()].float()
         if non_pad_entropies.numel() == 0:
             return torch.zeros_like(entropies, dtype=torch.bool)
-        
+
         # For multi-GPU training, gather entropies from all processes to compute global quantile
         if self.accelerator is not None and self.accelerator.num_processes > 1:
             all_non_pad_entropies = self.accelerator.gather(non_pad_entropies.unsqueeze(0)).flatten()
@@ -1076,11 +1078,10 @@ class GRPOTrainer(Trainer):
                 entropy_threshold = torch.quantile(non_pad_entropies, threshold)
         else:
             entropy_threshold = torch.quantile(non_pad_entropies, threshold)
-        
+
         masked_entropies = entropies * mask.float()
         entropy_mask = masked_entropies >= entropy_threshold
         return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
-
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(

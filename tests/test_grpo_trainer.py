@@ -386,21 +386,21 @@ class TruncateWithProtectedTokensTester(unittest.TestCase):
 
 
 class GetHighEntropyMaskTester(unittest.TestCase):
-
     def get_high_entropy_mask(self, entropies, mask, threshold):
         """Helper method to test the get_high_entropy_mask functionality."""
         # Create a mock trainer with minimal setup
-        from trl.trainer.grpo_trainer import GRPOTrainer
         from unittest.mock import Mock
-        
+
+        from trl.trainer.grpo_trainer import GRPOTrainer
+
         # Create a mock accelerator
         mock_accelerator = Mock()
         mock_accelerator.num_processes = 1  # Single process for testing
-        
+
         # Create a minimal trainer instance just to access the method
         trainer = Mock(spec=GRPOTrainer)
         trainer.accelerator = mock_accelerator
-        
+
         # Call the actual method from GRPOTrainer
         return GRPOTrainer.get_high_entropy_mask(trainer, entropies, mask, threshold)
 
