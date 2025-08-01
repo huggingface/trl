@@ -250,13 +250,76 @@ By default, GRPO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, 
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
+### Speed up training with SGLang-powered generation
+
+Generation is often the main bottleneck when training with online methods. As an alternative to vLLM, you can use [SGLang](https://github.com/sgl-project/sglang), a high-performance inference engine designed for structured generation with language models. SGLang is particularly well-suited for tasks requiring structured outputs, complex reasoning patterns, and advanced prompting techniques. To enable it, first install the package with
+```shell
+pip install trl[sglang]
+```
+
+We support two ways of using SGLang during training: **server mode** and **colocate mode**.
+
+#### 🔌 Option 1: Server mode
+
+In this mode, SGLang runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
+
+1. **Start the SGLang server**:
+   ```bash
+   trl sglang-serve --model <model_name>
+   ```
+
+2. **Enable server mode in your training script**:
+   ```python
+   from trl import GRPOConfig
+
+   training_args = GRPOConfig(
+       ...,
+       use_sglang=True,
+       sglang_mode="server",  # default value, can be omitted
+   )
+   ```
+
+<Tip warning={true}>
+
+Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
+
+</Tip>
+
+#### 🧩 Option 2: Colocate mode
+
+In this mode, SGLang runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_sglang=True,
+    sglang_mode="colocate",
+)
+```
+
+<Tip>
+
+Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `sglang_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
+
+</Tip>
+
+<Tip>
+
+By default, GRPO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for SGLang, but you can override these values by setting the environment variables accordingly.
+
+</Tip>
+
+For more information, see [SGLang Integration](sglang_integration).
+
 ### GRPO at scale: train a 70B+ Model on multiple nodes
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
 
 - **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
 - **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
-- **vLLM**: See the previous section on how to use vLLM to speed up generation.
+- **vLLM or SGLang**: See the previous sections on how to use vLLM or SGLang to speed up generation. Both engines provide high-performance inference capabilities, with SGLang being particularly well-suited for structured generation tasks.
 
 Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
 
@@ -314,6 +377,73 @@ def main():
         gradient_checkpointing=True,
         use_vllm=True,
         vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
+    )
+
+    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer.train()
+
+if __name__=="__main__":
+    main()
+```
+
+#### Alternative: Using SGLang for large-scale training
+
+You can also use SGLang instead of vLLM for large-scale training. SGLang is particularly well-suited for structured generation tasks and complex reasoning patterns. Here's the same example using SGLang:
+
+```sh
+#!/bin/bash
+#SBATCH --nodes=5
+#SBATCH --gres=gpu:8
+
+# Get the list of allocated nodes
+NODELIST=($(scontrol show hostnames $SLURM_JOB_NODELIST))
+
+# Assign the first 4 nodes for training and the 5th node for SGLang
+TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
+SGLANG_NODE="${NODELIST[4]}"  # Node 4 for SGLang
+
+# Run training on the first 4 nodes (Group 1)
+srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
+     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+     --num_processes 32 \
+     --num_machines 4 \
+     --main_process_ip ${NODELIST[0]} \
+     --machine_rank $SLURM_PROCID \
+     --rdzv_backend c10d \
+     train_grpo_sglang.py \
+     --sglang_server_host $SGLANG_NODE &
+
+# Run SGLang server on the 5th node (Group 2)
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl sglang-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+
+wait
+```
+
+```python
+import argparse
+
+from datasets import load_dataset
+from trl import GRPOTrainer, GRPOConfig
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--sglang_server_host", type=str, default="", help="The SGLang server IP")
+    args = parser.parse_args()
+
+    # Example dataset from TLDR
+    dataset = load_dataset("trl-lib/tldr", split="train")
+
+    # Dummy reward function: count the number of unique characters in the completions
+    def reward_num_unique_chars(completions, **kwargs):
+        return [len(set(c)) for c in completions]
+
+    training_args = GRPOConfig(
+        output_dir="Qwen2.5-72B-GRPO-SGLang",
+        per_device_train_batch_size=4,
+        bf16=True,
+        gradient_checkpointing=True,
+        use_sglang=True,
+        sglang_server_base_url=f"http://{args.sglang_server_host}:8001",
     )
 
     trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
@@ -551,6 +681,7 @@ Compatibility with all VLMs is not guaranteed. If you believe a model should be 
 Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
+# Using vLLM
 accelerate launch \
   --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
   examples/scripts/grpo_vlm.py \
@@ -566,6 +697,23 @@ accelerate launch \
   --use_peft \
   --lora_target_modules "q_proj", "v_proj" \
   --log_completions
+
+# Using SGLang (alternative for structured generation)
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/grpo_vlm.py \
+  --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
+  --output_dir grpo-Qwen2.5-VL-3B-Instruct-SGLang \
+  --learning_rate 1e-5 \
+  --gradient_checkpointing \
+  --torch_dtype bfloat16 \
+  --max_prompt_length 2048 \
+  --max_completion_length 1024 \
+  --use_sglang \
+  --sglang_mode colocate \
+  --use_peft \
+  --lora_target_modules "q_proj", "v_proj" \
+  --log_completions
 ```
 
 ### Configuration Tips
@@ -577,7 +725,8 @@ VLM training may fail if image tokens are truncated. We highly recommend to disa
 - Use LoRA on vision-language projection layers
 - Enable 4-bit quantization to reduce memory usage
 - VLMs are memory-intensive — start with smaller batch sizes
-- Most models are compatible with vLLM (`server` and `colocate` modes)
+- Most models are compatible with both vLLM and SGLang (`server` and `colocate` modes)
+- SGLang is particularly well-suited for structured generation tasks with VLMs
 
 ### Dataset Format
 
