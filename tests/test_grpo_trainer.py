@@ -32,7 +32,7 @@ from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.grpo_trainer import (
     EntropyController,
     RepeatSampler,
-    agg_loss,
+    aggregate_loss,
     get_high_entropy_mask,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
@@ -251,6 +251,62 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         assert sampled[0:4] == sampled[4:8] == sampled[8:12]
         assert sampled[12:16] == sampled[16:20] == sampled[20:24]
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
+
+
+class EntropyControlTester(unittest.TestCase):
+    def test_static_entropy_coef(self):
+        # Disable adaptive entropy control and set a static coefficient
+        ent_ctrl = EntropyController(
+            use_adaptive_entropy=False,
+            entropy_coef=-1.0,
+            entropy_coef_min=0.0,
+            entropy_coef_max=1.0,
+            entropy_coef_delta=0.01,
+            entropy_target=1.0,
+        )
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
+        mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
+        entropy_loss = aggregate_loss(entropies, mask, "grpo")
+        entropy_loss_coef = ent_ctrl(entropy_loss.item())
+        self.assertEqual(
+            entropy_loss_coef, -1.0, f"Expected entropy loss coefficient to be -1.0, got {entropy_loss_coef}"
+        )
+
+    def test_adaptive_entropy_lower_than_tgt_entropy(self):
+        # Enable adaptive entropy control with entropy loss smaller than target entropy
+        ent_ctrl = EntropyController(
+            use_adaptive_entropy=True,
+            entropy_coef=0.1,
+            entropy_coef_min=0.0,
+            entropy_coef_max=1.0,
+            entropy_coef_delta=0.01,
+            entropy_target=1.0,
+        )
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
+        mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
+        entropy_loss = aggregate_loss(entropies, mask, "grpo")
+        entropy_loss_coef = ent_ctrl(entropy_loss.item())
+        self.assertEqual(
+            entropy_loss_coef, 0.11, f"Expected entropy loss coefficient to be 0.11, got {entropy_loss_coef}"
+        )
+
+    def test_adaptive_entropy_higher_than_tgt_entropy(self):
+        # Enable adaptive entropy control with entropy loss smaller than target entropy
+        ent_ctrl = EntropyController(
+            use_adaptive_entropy=True,
+            entropy_coef=0.1,
+            entropy_coef_min=0.0,
+            entropy_coef_max=1.0,
+            entropy_coef_delta=0.01,
+            entropy_target=0.2,
+        )
+        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
+        mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
+        entropy_loss = aggregate_loss(entropies, mask, "grpo")
+        entropy_loss_coef = ent_ctrl(entropy_loss.item())
+        self.assertEqual(
+            entropy_loss_coef, 0.0, f"Expected entropy loss coefficient to be 0.0, got {entropy_loss_coef}"
+        )
 
 
 class TruncateWithProtectedTokensTester(unittest.TestCase):
@@ -494,50 +550,6 @@ class UnsplitPixelValuesByGridTester(unittest.TestCase):
         batch = {"pixel_values": original}
         result = unsplit_pixel_values_by_grid(batch)
         self.assertTrue(torch.equal(result["pixel_values"], original))
-
-
-class EntropyControlTester(unittest.TestCase):
-    def test_static_entropy_coef(self):
-        # Disable adaptive entropy control and set a static coefficient
-        ent_ctrl = EntropyController(
-            use_adaptive_entropy=False, entropy_coef=-1.0, entropy_coef_min=0.0, entropy_coef_max=1.0,
-            entropy_coef_delta=0.01, entropy_target=1.0
-        )
-        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
-        mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
-        entropy_loss = agg_loss(entropies, mask, "grpo")
-        entropy_loss_coef = ent_ctrl(entropy_loss.item())
-        self.assertEqual(
-            entropy_loss_coef, -1.0, f"Expected entropy loss coefficient to be -1.0, got {entropy_loss_coef}"
-        )
-
-    def test_adaptive_entropy_lower_than_tgt_entropy(self):
-        # Enable adaptive entropy control with entropy loss smaller than target entropy
-        ent_ctrl = EntropyController(
-            use_adaptive_entropy=True, entropy_coef=0.1, entropy_coef_min=0.0, entropy_coef_max=1.0,
-            entropy_coef_delta=0.01, entropy_target=1.0
-        )
-        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
-        mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
-        entropy_loss = agg_loss(entropies, mask, "grpo")
-        entropy_loss_coef = ent_ctrl(entropy_loss.item())
-        self.assertEqual(
-            entropy_loss_coef, 0.11, f"Expected entropy loss coefficient to be 0.11, got {entropy_loss_coef}"
-        )
-
-    def test_adaptive_entropy_higher_than_tgt_entropy(self):
-        # Enable adaptive entropy control with entropy loss smaller than target entropy
-        ent_ctrl = EntropyController(
-            use_adaptive_entropy=True, entropy_coef=0.1, entropy_coef_min=0.0, entropy_coef_max=1.0,
-            entropy_coef_delta=0.01, entropy_target=0.2
-        )
-        entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
-        mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
-        entropy_loss = agg_loss(entropies, mask, "grpo")
-        entropy_loss_coef = ent_ctrl(entropy_loss.item())
-        self.assertEqual(
-            entropy_loss_coef, 0.0, f"Expected entropy loss coefficient to be 0.0, got {entropy_loss_coef}"
-        )
 
 
 class GRPOTrainerTester(unittest.TestCase):
@@ -1188,8 +1200,9 @@ class GRPOTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["policy_loss"])
             self.assertIsNotNone(trainer.state.log_history[-1]["entropy_loss"])
-            self.assertIsNotNone(trainer.state.log_history[-1]["entropy_loss_coef"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["entropy_coef"])
 
             # Check that the params have changed
             for n, param in previous_trainable_params.items():
@@ -1223,8 +1236,9 @@ class GRPOTrainerTester(unittest.TestCase):
             trainer.train()
 
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["policy_loss"])
             self.assertIsNotNone(trainer.state.log_history[-1]["entropy_loss"])
-            self.assertIsNotNone(trainer.state.log_history[-1]["entropy_loss_coef"])
+            self.assertIsNotNone(trainer.state.log_history[-1]["entropy_coef"])
 
             # Check that the params have changed
             for n, param in previous_trainable_params.items():

@@ -216,7 +216,7 @@ class GRPOConfig(TrainingArguments):
             A positive coefficient adds an entropy bonus to encourage exploration.
             It is also used as the initial entropy coefficient when using adaptive entropy control.
         use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
-            Whether to apply adaptive entropy control. Overrides `entropy_coef`.
+            Whether to use adaptive entropy control, introduced in [Skywork OR1](https://huggingface.co/papers/2505.22312). This will adaptively adjust the entropy loss coefficient, `entropy_coef`, based on the target entropy `entropy_target` and the completion entropy.
         entropy_coef_min (`float`, *optional*, defaults to `0.0`):
             Lower bound for entropy coefficient when using adaptive entropy control.
         entropy_coef_max (`float`, *optional*, defaults to `1.0`):
@@ -581,12 +581,16 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Static coefficient of the entropy regularization term in the loss."
             "A positive coefficient adds an entropy bonus to encourage exploration."
-            "It is also used as the initial entropy coefficient when using adaptive entropy control."
+            "When adaptive entropy control is used, this is used as the initial entropy coefficient."
         },
     )
     use_adaptive_entropy: bool = field(
         default=False,
-        metadata={"help": "Whether to apply adaptive entropy control. Overrides `entropy_coef`."},
+        metadata={
+            "help": "Whether to use adaptive entropy control, introduced in "
+            "[Skywork OR1](https://huggingface.co/papers/2505.22312). This will adaptively adjust the entropy loss "
+            "coefficient `entropy_coef` based on the target entropy `entropy_target` and the completion entropy."
+        },
     )
     entropy_coef_min: float = field(
         default=0.0,
