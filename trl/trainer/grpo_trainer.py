@@ -1844,7 +1844,6 @@ class GRPOTrainer(Trainer):
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         mean_entropy = masked_batch_mean(entropies)
-        self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
@@ -1855,14 +1854,22 @@ class GRPOTrainer(Trainer):
         high_clip = masked_batch_mean(is_high_clipped.float())
         clip_ratio = masked_batch_mean(is_region_clipped.float())
 
-        gathered_low_clip = self.accelerator.gather(low_clip)
-        self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
-        self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(high_clip)
-        self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
-        self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(clip_ratio)
-        self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
+        metrics_to_gather = {
+            "entropy": mean_entropy,
+            "low_clip": low_clip,
+            "high_clip": high_clip,
+            "clip_ratio": clip_ratio,
+        }
+
+        gathered_metrics = self.accelerator.gather(metrics_to_gather)
+
+        # Extract gathered metrics and update the metrics dictionary
+        self._metrics[mode]["entropy"].append(gathered_metrics["entropy"].nanmean().item())
+        self._metrics[mode]["clip_ratio/low_mean"].append(gathered_metrics["low_clip"].nanmean().item())
+        self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_metrics["low_clip"]).item())
+        self._metrics[mode]["clip_ratio/high_mean"].append(gathered_metrics["high_clip"].nanmean().item())
+        self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_metrics["high_clip"]).item())
+        self._metrics[mode]["clip_ratio/region_mean"].append(gathered_metrics["clip_ratio"].nanmean().item())
         return loss
 
     def prediction_step(self, model, inputs, prediction_loss_only, ignore_keys: Optional[list[str]] = None):
