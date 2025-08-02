@@ -19,7 +19,7 @@ import unittest
 import numpy as np
 import torch
 import transformers
-from datasets import Dataset, Image, Sequence, load_dataset
+from datasets import Dataset, Image, Sequence, load_dataset, load_from_disk
 from packaging import version
 from parameterized import parameterized
 from transformers import (
@@ -599,6 +599,7 @@ class SFTTrainerTester2(unittest.TestCase):
         [
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),
             ("trl-internal-testing/tiny-Qwen3MoeForCausalLM",),
+            ("trl-internal-testing/tiny-GptOssForCausalLM",),
         ]
     )
     def test_train(self, model_id):
@@ -609,6 +610,32 @@ class SFTTrainerTester2(unittest.TestCase):
             # Initialize the trainer
             training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
             trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    # Special case for harmony
+    def test_train_gpt_oss(self):
+        # Get the dataset
+        dataset = load_from_disk("trl-internal-testing/harmony/language_modeling/train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-GptOssForCausalLM", args=training_args, train_dataset=dataset
+            )
 
             # Save the initial parameters to compare them later
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -680,7 +707,7 @@ class SFTTrainerTester2(unittest.TestCase):
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
-    def test_train_with_peft_config(self):
+    def test_train_dense_with_peft_config(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -698,6 +725,46 @@ class SFTTrainerTester2(unittest.TestCase):
                 args=training_args,
                 train_dataset=dataset,
                 peft_config=LoraConfig(),
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the peft params have changed and the base model params have not changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if n in base_param_names:  # We expect the base model parameters to be the same
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                elif (
+                    "base_layer" not in n
+                ):  # We expect the peft parameters to be different (except for the base layer)
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @require_peft
+    def test_train_moe_with_peft_config(self):
+        # Get the base model parameter names
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+
+            trainer = SFTTrainer(
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
             )
 
             # Save the initial parameters to compare them later
@@ -760,7 +827,7 @@ class SFTTrainerTester2(unittest.TestCase):
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
-    def test_train_with_peft_config_gradient_checkpointing(self):
+    def test_train_dense_with_peft_config_and_gradient_checkpointing(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -800,7 +867,47 @@ class SFTTrainerTester2(unittest.TestCase):
                     self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
-    def test_train_with_peft_model_gradient_checkpointing(self):
+    def test_train_moe_with_peft_config_and_gradient_checkpointing(self):
+        # Get the base model parameter names
+        model_id = "trl-internal-testing/tiny-GptOssForCausalLM"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Initialize the trainer
+            training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
+
+            trainer = SFTTrainer(
+                model=model_id,
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
+            )
+
+            # Save the initial parameters to compare them later
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            # Train the model
+            trainer.train()
+
+            # Check that the training loss is not None
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check the peft params have changed and the base model params have not changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if n in base_param_names:  # We expect the base model parameters to be the same
+                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                elif (
+                    "base_layer" not in n
+                ):  # We expect the peft parameters to be different (except for the base layer)
+                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @require_peft
+    def test_train_with_peft_model_and_gradient_checkpointing(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id)
