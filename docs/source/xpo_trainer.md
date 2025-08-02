@@ -155,6 +155,9 @@ The logged metrics are as follows:
 ## XPOTrainer
 
 [[autodoc]] XPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## XPOConfig
 
