@@ -62,7 +62,7 @@ import wandb
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
-from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
 
@@ -206,7 +206,7 @@ if __name__ == "__main__":
         quantization_config=bnb_config,
     )
 
-    model = AutoModelForVision2Seq.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     peft_config = LoraConfig(
         task_type="CAUSAL_LM",

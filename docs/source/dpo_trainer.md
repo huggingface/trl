@@ -85,7 +85,7 @@ Additionally, unlike standard text-based models where a `tokenizer` is used, for
 
 ```diff
 - model = AutoModelForCausalLM.from_pretrained(model_id)
-+ model = AutoModelForVision2Seq.from_pretrained(model_id)
++ model = AutoModelForImageTextToText.from_pretrained(model_id)
 
 - tokenizer = AutoTokenizer.from_pretrained(model_id)
 + processor = AutoProcessor.from_pretrained(model_id)
