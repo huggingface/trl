@@ -1949,14 +1949,9 @@ class GRPOTrainer(Trainer):
         )
 
         if self.use_adaptive_entropy:
-            world_entropy_loss = torch.mean(gather(entropy_loss.detach()))
-            if self.accelerator.is_main_process:
-                self.entropy_coef = self.ent_ctrl.step(world_entropy_loss.item(), self.entropy_coef)
-                entropy_loss_coefs = [self.entropy_coef]
-            else:
-                entropy_loss_coefs = [None]  # Placeholder for non-main processes
-            entropy_loss_coefs = broadcast_object_list(entropy_loss_coefs, from_process=0)
-            self.entropy_coef = entropy_loss_coefs[0]
+            world_entropy_loss = self.accelerator.reduce(entropy_loss, reduction="mean")
+            entropy_coef = self.ent_ctrl.step(world_entropy_loss.item(), self.entropy_coef)
+            self.entropy_coef = entropy_coef
 
         loss = loss - self.entropy_coef * entropy_loss
         self._metrics[mode]["entropy_loss"].append(self.accelerator.gather(entropy_loss).nanmean().item())
