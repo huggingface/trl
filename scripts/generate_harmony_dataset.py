@@ -70,11 +70,32 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}, {"role": "assistant", "thinking": "Clarity suggests soundness.", "content": "It means it may be a good idea."}],
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "thinking": "Namespaces prevent conflicts.", "content": "Namespaces are one honking great idea."}]
         ],
+        "chat_template_kwargs": [
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+        ]
     })
     language_modeling_dataset = language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         language_modeling_dataset.push_to_hub(repo_id, config_name="language_modeling")
-    language_modeling_dataset.save_to_disk(repo_id)
+    language_modeling_dataset.save_to_disk(repo_id + "/language_modeling")
     prompt_completion_dataset = Dataset.from_dict({
         "prompt": [
             [{"role": "user", "content": "What is better than ugly?"}],
@@ -118,11 +139,32 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "thinking": "Clarity suggests soundness.", "content": "It means it may be a good idea."}],
             [{"role": "assistant", "thinking": "Namespaces prevent conflicts.", "content": "Namespaces are one honking great idea."}],
         ],
+        "chat_template_kwargs": [
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "medium", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "high", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+            {"reasoning_effort": "low", "model_identity": "You are Tiny ChatGPT, a tiny language model."},
+        ]
     })
     prompt_completion_dataset = prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         prompt_completion_dataset.push_to_hub(repo_id, config_name="prompt_completion")
-    prompt_completion_dataset.save_to_disk(repo_id)
+    prompt_completion_dataset.save_to_disk(repo_id + "/prompt_completion")
     # fmt: on
 
 
