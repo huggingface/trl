@@ -1646,14 +1646,19 @@ class GRPOTrainer(Trainer):
             self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
+        metrics_to_gather = {"completion_lengths": completion_lengths, "is_eos": is_eos.any(dim=1)}
+
+        gathered_metrics = self.accelerator.gather(metrics_to_gather)
+        self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
+
         # Log completion lengths, mean, min, max
-        agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        agg_completion_lengths = gathered_metrics["completion_lengths"]
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        agg_terminated_with_eos = self.accelerator.gather(is_eos.any(dim=1))
+        agg_terminated_with_eos = gathered_metrics["is_eos"]
         term_completion_lengths = agg_completion_lengths[agg_terminated_with_eos]
         clipped_completions_ratio = 1 - len(term_completion_lengths) / len(agg_completion_lengths)
         self._metrics[mode]["completions/clipped_ratio"].append(clipped_completions_ratio)
