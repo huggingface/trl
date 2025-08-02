@@ -182,7 +182,7 @@ for model_id, config_class, model_class, suffix in [
 # MoE models
 for model_id, config_class, model_class, suffix in [
     ("Qwen/Qwen3-30B-A3B", Qwen3MoeConfig, Qwen3MoeForCausalLM, None),
-    # ("/fsx/vb/new-oai/gpt-oss-20b-trfs", GptOssConfig, GptOssForCausalLM, None),
+    ("/fsx/vb/new-oai/gpt-oss-20b-trfs", GptOssConfig, GptOssForCausalLM, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
