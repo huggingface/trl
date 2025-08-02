@@ -1419,7 +1419,7 @@ class GRPOTrainer(Trainer):
                     prompts_text = [re.sub(rf"({escaped_img_token})+", trainer.image_token, text) for text in prompts_text]
                 else:
                     # If the chat template doesn't use the image token, we remove all instances of it + vision_end_token_id
-                    escaped_eoi_token = re.escape(trainer.processing_class.tokenizer.convert_ids_to_tokens(trainer.vision_end_token_id))
+                    escaped_eoi_token = re.escape(trainer.processing_class.tokenizer.decode([trainer.vision_end_token_id]))
                     prompts_text = [re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
