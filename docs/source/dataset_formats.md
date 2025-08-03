@@ -211,9 +211,7 @@ For more detailed information on tool calling, refer to the [Tool Calling sectio
 
 ### Harmony
 
-The [Harmony response format](TODO) was introduced with the [OpenAI GPT-OSS models](TODO). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior.
-
-#### Key Features
+The [Harmony response format](TODO) was introduced with the [OpenAI GPT-OSS models](TODO). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior. Key features include:
 
 - **Developer role** – Provides high-level instructions (similar to a system prompt) and lists available tools.
 - **Channels** – Separate types of assistant output into distinct streams:
