@@ -365,7 +365,7 @@ class SFTTrainerTester(unittest.TestCase):
                 train_dataset=self.standard_prompt_completion_dataset["train"],
             )
 
-            # Same but with prompt completion dataset
+            # Same but with prompt-completion dataset
             training_args = SFTConfig(
                 output_dir=tmp_dir,
                 per_device_train_batch_size=2,
