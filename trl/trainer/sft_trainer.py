@@ -186,10 +186,20 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
-        attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+
+        # Check if we have meaningful seq_lengths from packing (restarting sequences)
+        has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
+
+        # For packing with position_ids, we should NOT create attention_mask as it causes
+        # flash attention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
+        if not has_packed_position_ids:
+            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+
         if self.return_position_ids:
-            if "position_ids" in examples[0]:
-                position_ids = [torch.tensor(example["position_ids"]) for example in examples]
+            if "seq_lengths" in examples[0]:
+                position_ids = self._convert_seq_lengths_to_position_ids(
+                    [example["seq_lengths"] for example in examples]
+                )
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
         if "labels" in examples[0]:
@@ -205,7 +215,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output = {}
         if self.padding_free:
             output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
-            output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+            if not has_packed_position_ids:
+                output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
             if self.return_position_ids:
                 output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
             output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
@@ -215,7 +226,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             if "assistant_masks" in examples[0]:
                 assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
                 output["labels"][assistant_masks == 0] = -100
-
         else:
             output["input_ids"] = pad(
                 input_ids,
@@ -244,6 +254,18 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
                 output["labels"][assistant_masks == 0] = -100
         return output
+
+    @staticmethod
+    def _convert_seq_lengths_to_position_ids(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
+        example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
+        batch_seq_lengths = torch.tensor(
+            [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
+        )
+        position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
+        position_ids[0] = 0
+        position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
+        position_ids = position_ids.cumsum(0)
+        return list(position_ids.split(example_lengths))
 
 
 class SFTTrainer(Trainer):
@@ -389,9 +411,9 @@ class SFTTrainer(Trainer):
             model = self._prepare_peft_model(model, peft_config, args)
 
         # Data collator
-        # FFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
+        # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "ffd")
+        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -444,7 +466,7 @@ class SFTTrainer(Trainer):
 
         if (
             args.packing
-            and args.packing_strategy == "ffd"
+            and args.packing_strategy == "bfd"
             and model.config._attn_implementation != "flash_attention_2"
         ):
             warnings.warn(
@@ -728,10 +750,10 @@ class SFTTrainer(Trainer):
                                 **example.get("chat_template_kwargs", {}),
                             )
                         else:
-                            prompt_ids = processing_class(text=example["prompt"]).input_ids
-                            prompt_completion_ids = processing_class(
-                                text=example["prompt"] + example["completion"]
-                            ).input_ids
+                            prompt_ids = processing_class(text=example["prompt"])["input_ids"]
+                            prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
+                                "input_ids"
+                            ]
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
@@ -764,7 +786,7 @@ class SFTTrainer(Trainer):
                                 )
                             processed = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
-                            processed = {"input_ids": processing_class(text=example[dataset_text_field]).input_ids}
+                            processed = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
                     return processed
 
                 dataset = dataset.map(
@@ -784,15 +806,17 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
                 dataset = dataset.select_columns("input_ids")
-                # Packing adds new column "position_ids" needed for document aware flash attention
+                # Packing adds new column "seq_lengths" needed for document aware flash attention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
-            # For Liger kernel, ensure only input_ids is present
+            # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                dataset = dataset.select_columns({"input_ids", "position_ids"}.intersection(dataset.column_names))
+                dataset = dataset.select_columns(
+                    {"input_ids", "seq_lengths", "completion_mask"}.intersection(dataset.column_names)
+                )
 
         return dataset
 
@@ -805,7 +829,7 @@ class SFTTrainer(Trainer):
             self._signature_columns = [
                 "input_ids",
                 "labels",
-                "position_ids",
+                "seq_lengths",
                 "completion_mask",
                 "assistant_masks",
             ]
