@@ -36,7 +36,7 @@ tpu_use_cluster: false
 tpu_use_sudo: false
 use_cpu: false
 ```
-Run this script with `accelerate launch --config_file accelerate_config.yaml grpo_tldr.py`
+Run this script with `CUDA_VISIBLE_DEVICES=2,3 accelerate launch --config_file accelerate_config.yaml grpo_tldr.py`
 """
 
 from datasets import Dataset, load_dataset
