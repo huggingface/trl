@@ -798,7 +798,7 @@ class OnPolicyConfig(TrainingArguments):
         },
     )
     response_length: int = field(
-        default=53,
+        default=256,
         metadata={"help": "Length of the response."},
     )
     stop_token: Optional[Literal["eos"]] = field(
