@@ -54,7 +54,7 @@ from transformers.utils import is_datasets_available, is_flash_attn_2_available,
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
-from ..import_utils import is_liger_kernel_available, is_vllm_available
+from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
@@ -661,21 +661,12 @@ class RLOOTrainer_NEW(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
-        self.use_liger_loss = args.use_liger_loss
-        self.loss_type = args.loss_type
-        self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
-        if self.use_liger_loss and self.top_entropy_quantile < 1.0:
-            raise NotImplementedError(
-                "Liger Kernels don't currently support masking token positions based on entropy."
-            )
-        if self.use_liger_loss and not self.importance_sampling_level == "token":
-            raise NotImplementedError(
-                "Liger Kernels currently only support token-level importance sampling. Please set"
-                "`importance_sampling_level` to 'token'."
-            )
+        self.normalize_rewards = args.normalize_rewards
+        self.reward_clip_range = args.reward_clip_range
+        
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1559,31 +1550,51 @@ class RLOOTrainer_NEW(Trainer):
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
-                # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            per_token_kl = old_per_token_logps - ref_per_token_logps 
-            per_seq_kl = per_token_kl.sum(1) # try the x * completion_mask).sum()
-            rewards = rewards - self.beta * per_seq_kl #rewards include the KL penalty
+                # Apply weights to each reward function's output and sum
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
-        #calculate baseline and advantages
         # Compute grouped-wise rewards
-        grouped_rewards = rewards.view(-1, self.num_generations)
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
         is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
-        baseline = (grouped_rewards.sum(0) - grouped_rewards) / (self.num_generations - 1)
+
+        # Normalize the rewards to compute the advantages
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        advantages = rewards - mean_grouped_rewards
+
+        # # Compute the KL divergence between the model and the reference model
+        # if self.beta != 0.0 and ref_per_token_logps is not None: 
+        #     current_per_token_logps, _ = self._get_per_token_logps_and_entropies(   
+        #         self.model,                                                                                                                          
+        #         prompt_completion_ids,                                                                                                              
+        #         attention_mask,                                                                                                                      
+        #         logits_to_keep,                                                                                                                      
+        #         batch_size)                                                                                                                       
+             
+        #     per_token_kl = current_per_token_logps - ref_per_token_logps                                                                            
+        #     per_seq_kl = (per_token_kl * completion_mask).sum(1)  # Apply completion mask to KL  
+        #     #per_seq_kl = per_token_kl.sum(1) # try the x * completion_mask).sum()
+        #     rewards = rewards - self.beta * per_seq_kl #rewards include the KL penalty
+        #calculate baseline and advantages
+        # # Compute grouped-wise rewards
+        # grouped_rewards = rewards.view(-1, self.num_generations)
+        # std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        # is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
+        # baseline = (grouped_rewards.sum(0) - grouped_rewards) / (self.num_generations - 1)
         
-        if self.normalize_rewards:
-            mean_grouped_rewards = grouped_rewards.mean(dim=1)
-            mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-            grouped_rewards = torch.clamp(grouped_rewards, -self.reward_clip_range, self.reward_clip_range)
-            std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        # # Always compute mean_grouped_rewards for metrics
+        # mean_grouped_rewards = grouped_rewards.mean(dim=1)
+        # mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        
+        # if self.normalize_rewards:
+        #     grouped_rewards = torch.clamp(grouped_rewards, -self.reward_clip_range, self.reward_clip_range)
+        #     std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
 
-        #RLOO advantages
-        advantages = rewards - baseline
-        advantages = advantages.unsqueeze(-1) * completion_mask #try advantage.flatten()
-
-        if self.scale_rewards:
-            advantages = advantages / (std_grouped_rewards + 1e-4)
+        # #RLOO advantages
+        # baseline = baseline.flatten()  # Flatten baseline to match rewards shape
+        # advantages = rewards - baseline
+        # advantages = advantages.flatten() #try advantage.flatten()
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1639,7 +1650,7 @@ class RLOOTrainer_NEW(Trainer):
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "advantages": advantages,
-            "per_token_kl": per_token_kl,
+            #"per_token_kl": per_token_kl,
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
@@ -1653,13 +1664,8 @@ class RLOOTrainer_NEW(Trainer):
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
-            raise ValueError("The RLOOTrainer does not support returning outputs")
-        if self.use_liger_loss:
-            # Compute the loss using the liger grpo loss
-            unwrapped_model = self.accelerator.unwrap_model(model)
-            return self._forward_redirection(model, unwrapped_model, self.compute_liger_loss, unwrapped_model, inputs)
-        else:
-            return self._compute_loss(model, inputs)
+            raise ValueError("The RLOOTrainer does not support returning outputs")   
+        return self._compute_loss(model, inputs)
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
@@ -1683,7 +1689,8 @@ class RLOOTrainer_NEW(Trainer):
             entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
-  
+
+
         # Compute the loss
         advantages = inputs["advantages"]
         # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
