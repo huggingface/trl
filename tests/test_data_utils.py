@@ -339,10 +339,9 @@ class ApplyChatTemplateHarmonyTester(unittest.TestCase):
         Knowledge cutoff: 2024-06
         Current date: {strftime("%Y-%m-%d")}
 
-        reasoning: low
+        Reasoning: low
 
-        # Valid channels: analysis, commentary, final. Channel must be included for every message.
-        Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
 
@@ -367,10 +366,9 @@ class ApplyChatTemplateHarmonyTester(unittest.TestCase):
         Knowledge cutoff: 2024-06
         Current date: {strftime("%Y-%m-%d")}
 
-        reasoning: low
+        Reasoning: low
 
-        # Valid channels: analysis, commentary, final. Channel must be included for every message.
-        Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
 
@@ -398,10 +396,9 @@ class ApplyChatTemplateHarmonyTester(unittest.TestCase):
         Knowledge cutoff: 2024-06
         Current date: {strftime("%Y-%m-%d")}
 
-        reasoning: low
+        Reasoning: low
 
-        # Valid channels: analysis, commentary, final. Channel must be included for every message.
-        Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
         expected_completion = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
@@ -434,10 +431,9 @@ class ApplyChatTemplateHarmonyTester(unittest.TestCase):
         Knowledge cutoff: 2024-06
         Current date: {strftime("%Y-%m-%d")}
 
-        reasoning: low
+        Reasoning: low
 
-        # Valid channels: analysis, commentary, final. Channel must be included for every message.
-        Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
         expected_chosen = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
@@ -472,10 +468,9 @@ class ApplyChatTemplateHarmonyTester(unittest.TestCase):
         Knowledge cutoff: 2024-06
         Current date: {strftime("%Y-%m-%d")}
 
-        reasoning: low
+        Reasoning: low
 
-        # Valid channels: analysis, commentary, final. Channel must be included for every message.
-        Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
         expected_rejected = textwrap.dedent(f"""\
@@ -483,10 +478,9 @@ class ApplyChatTemplateHarmonyTester(unittest.TestCase):
         Knowledge cutoff: 2024-06
         Current date: {strftime("%Y-%m-%d")}
 
-        reasoning: low
+        Reasoning: low
 
-        # Valid channels: analysis, commentary, final. Channel must be included for every message.
-        Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the tree...<|end|><|start|>assistant<|channel|>final<|message|>It is green.<|return|>""")
 
@@ -516,10 +510,9 @@ class ApplyChatTemplateHarmonyTester(unittest.TestCase):
         Knowledge cutoff: 2024-06
         Current date: {strftime("%Y-%m-%d")}
 
-        reasoning: low
+        Reasoning: low
 
-        # Valid channels: analysis, commentary, final. Channel must be included for every message.
-        Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
         expected_completion = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"

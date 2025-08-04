@@ -211,7 +211,7 @@ For more detailed information on tool calling, refer to the [Tool Calling sectio
 
 ### Harmony
 
-The [Harmony response format](TODO) was introduced with the [OpenAI GPT-OSS models](TODO). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior. Key features include:
+The [Harmony response format](https://cookbook.openai.com/articles/openai-harmony) was introduced with the [OpenAI GPT-OSS models](TODO). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior. Key features include:
 
 - **Developer role** – Provides high-level instructions (similar to a system prompt) and lists available tools.
 - **Channels** – Separate types of assistant output into distinct streams:
@@ -251,15 +251,14 @@ This produces:
 Knowledge cutoff: 2024-06
 Current date: 2025-08-03
 
-reasoning: low
+Reasoning: low
 
-# Valid channels: analysis, commentary, final. Channel must be included for every message.
-Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
 Use a friendly tone.<|end|><|start|>user<|message|>What is the meaning of life?<|end|><|start|>assistant<|channel|>analysis<|message|>Deep reflection...<|end|><|start|>assistant<|channel|>final<|message|>The final answer is...<|return|>
 ```
 
-For full details on message structure, supported fields, and advanced usage, see the [Harmony documentation](TODO).
+For full details on message structure, supported fields, and advanced usage, see the [Harmony documentation](https://cookbook.openai.com/articles/openai-harmony).
 
 ### Types
 
