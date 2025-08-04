@@ -53,7 +53,7 @@ class RLOOConfig_NEW(TrainingArguments):
         num_generations (`int` or `None`, *optional*, defaults to `2`):
             Number of generations per prompt to sample. The effective batch size (num_processes *
             per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
-        max_completion_length (`int` or `None`, *optional*, defaults to `53`):
+        max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
             This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
@@ -271,7 +271,7 @@ class RLOOConfig_NEW(TrainingArguments):
         },
     )
     max_completion_length: Optional[int] = field(
-        default=53,
+        default=256,
         metadata={"help": "Maximum length of the generated completion."},
     )
     ds3_gather_for_generation: bool = field(
