@@ -226,7 +226,7 @@ The [Harmony response format](TODO) was introduced with the [OpenAI GPT-OSS mode
 ```python
 from transformers import AutoTokenizer
 
-tokenizer = AutoTokenizer.from_pretrained("TODO")
+tokenizer = AutoTokenizer.from_pretrained("openai/gpt-oss-20b")
 
 messages = [
     {"role": "developer", "content": "Use a friendly tone."},
