@@ -256,7 +256,7 @@ reasoning: low
 # Valid channels: analysis, commentary, final. Channel must be included for every message.
 Calls to these tools must go to the commentary channel: 'functions'.<|end|><|start|>developer<|message|># Instructions
 
-Use a friendly tone.<|end|><|start|>user<|message|>What is the meaning of life?<|end|><|start|>assistant<|channel|>analysis<|message|>Deep thoughts...<|end|><|start|>assistant<|channel|>final<|message|>The final answer is...<|return|>
+Use a friendly tone.<|end|><|start|>user<|message|>What is the meaning of life?<|end|><|start|>assistant<|channel|>analysis<|message|>Deep reflection...<|end|><|start|>assistant<|channel|>final<|message|>The final answer is...<|return|>
 ```
 
 For full details on message structure, supported fields, and advanced usage, see the [Harmony documentation](TODO).
@@ -957,7 +957,7 @@ dataset = dataset.filter(lambda x: all(x["labels"])).map(concatenate_prompt_comp
 {'text': 'Blue light scatters more in the atmosphere, so the sky is green.'}
 ```
 
-### From stepwise supervision to prompt completion dataset
+### From stepwise supervision to prompt-completion dataset
 
 To convert a stepwise supervision dataset into a prompt-completion dataset, join the good completions and remove the labels.
 
@@ -983,7 +983,7 @@ dataset = dataset.filter(lambda x: all(x["labels"])).map(join_completions, remov
 {'prompt': 'Blue light', 'completion': ' scatters more in the atmosphere, so the sky is green.'}
 ```
 
-### From stepwise supervision to prompt only dataset
+### From stepwise supervision to prompt-only dataset
 
 To convert a stepwise supervision dataset into a prompt-only dataset, remove the completions and the labels.
 
