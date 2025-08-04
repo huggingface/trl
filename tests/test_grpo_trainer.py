@@ -29,7 +29,7 @@ from transformers.testing_utils import require_liger_kernel, require_peft, requi
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.grpo_trainer import (
+from trl.trainer.rloo_final import (
     RepeatSampler,
     get_high_entropy_mask,
     shuffle_sequence_dict,

@@ -106,8 +106,8 @@ if TYPE_CHECKING:
     from .dpo_trainer import DPOTrainer
     from .gkd_config import GKDConfig
     from .gkd_trainer import GKDTrainer
-    from .grpo_config import GRPOConfig
-    from .grpo_trainer import GRPOTrainer
+    from .rloo_final_config import GRPOConfig
+    from .rloo_final import GRPOTrainer
     from .iterative_sft_trainer import IterativeSFTConfig, IterativeSFTTrainer
     from .judges import (
         AllTrueJudge,
