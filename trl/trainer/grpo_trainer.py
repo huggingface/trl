@@ -924,7 +924,7 @@ class GRPOTrainer(Trainer):
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
             self._sync_fsdp_params_to_vllm(
-                child_module, prefix=child_prefix, visited=visited
+                child_module, prefix=child_prefix, visited=visited, summon_full_params=summon_full_params
             )  # recurse into the child
 
         if isinstance(module, FSDP):
