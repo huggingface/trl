@@ -14,6 +14,7 @@
 
 import copy
 import inspect
+import math
 import os
 import re
 import textwrap
@@ -658,6 +659,15 @@ class GRPOTrainer(Trainer):
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
         self.temperature = args.temperature
+        # Dynamic temperature scheduling
+        self.max_temp = args.max_temp
+        self.min_temp = args.min_temp
+        self.temp_warmup_steps = args.temp_warmup_steps
+        self.use_dynamic_temp = (
+            self.max_temp is not None and 
+            self.min_temp is not None and 
+            self.temp_warmup_steps is not None
+        )
         self.top_p = args.top_p
         self.top_k = args.top_k
         self.min_p = args.min_p
@@ -908,6 +918,33 @@ class GRPOTrainer(Trainer):
                         reward_func, evaluation_mode=True, device_placement=True
                     )
 
+    def get_temp(self, it):
+        """
+        Compute dynamic temperature using cosine decay schedule.
+        
+        Args:
+            it: current training step
+            
+        Returns:
+            temperature value for current step
+        """
+        if not self.use_dynamic_temp:
+            return self.temperature
+            
+        max_steps = self.args.max_steps
+        
+        # 1) linear warmup for temp_warmup_steps
+        if it < self.temp_warmup_steps:
+            return self.max_temp * (it + 1) / self.temp_warmup_steps
+        # 2) if it > max_steps, return min temperature
+        if it > max_steps:
+            return self.min_temp
+        # 3) in between, use cosine decay down to min temperature
+        decay_ratio = (it - self.temp_warmup_steps) / (max_steps - self.temp_warmup_steps)
+        assert 0 <= decay_ratio <= 1
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))  # coeff starts at 1 and goes to 0
+        return self.min_temp + coeff * (self.max_temp - self.min_temp)
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -1117,8 +1154,8 @@ class GRPOTrainer(Trainer):
             logits = logits[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-            logits = logits / self.temperature
-
+            current_temp = self.get_temp(self.state.global_step)
+            logits = logits / current_temp
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
@@ -1444,7 +1481,7 @@ class GRPOTrainer(Trainer):
                             images=ordered_set_of_images,
                             n=self.num_generations,
                             repetition_penalty=self.repetition_penalty,
-                            temperature=self.temperature,
+                            temperature=self.get_temp(self.state.global_step),
                             top_p=self.top_p,
                             top_k=-1 if self.top_k is None else self.top_k,
                             min_p=0.0 if self.min_p is None else self.min_p,
@@ -1473,7 +1510,7 @@ class GRPOTrainer(Trainer):
                 generation_kwargs = {
                     "n": 1,  # vLLM on each GPU generates only 1 in colocate mode
                     "repetition_penalty": self.repetition_penalty,
-                    "temperature": self.temperature,
+                    "temperature": self.get_temp(self.state.global_step),
                     "top_p": self.top_p,
                     "top_k": -1 if self.top_k is None else self.top_k,
                     "min_p": 0.0 if self.min_p is None else self.min_p,
@@ -1553,8 +1590,11 @@ class GRPOTrainer(Trainer):
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
+                    # Update generation config with dynamic temperature
+                    dynamic_generation_config = copy.deepcopy(self.generation_config)
+                    dynamic_generation_config.temperature = self.get_temp(self.state.global_step)
                     all_outputs = unwrapped_model.generate_batch(
-                        paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
+                        paged_prompt_inputs.input_ids, generation_config=dynamic_generation_config, progress_bar=False
                     )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
@@ -1575,8 +1615,11 @@ class GRPOTrainer(Trainer):
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 prompt_inputs["input_ids"], prompt_inputs["attention_mask"] = prompt_ids, prompt_mask
+                # Update generation config with dynamic temperature  
+                dynamic_generation_config = copy.deepcopy(self.generation_config)
+                dynamic_generation_config.temperature = self.get_temp(self.state.global_step)
                 prompt_completion_ids = unwrapped_model.generate(
-                    **prompt_inputs, generation_config=self.generation_config, disable_compile=True
+                    **prompt_inputs, generation_config=dynamic_generation_config, disable_compile=True
                 )
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)

@@ -321,6 +321,18 @@ class GRPOConfig(TrainingArguments):
         default=1.0,
         metadata={"help": "Temperature for sampling. The higher the temperature, the more random the completions."},
     )
+    max_temp: Optional[float] = field(
+        default=None,
+        metadata={"help": "Maximum temperature for dynamic temperature scheduling. If None, uses static temperature."},
+    )
+    min_temp: Optional[float] = field(
+        default=None,
+        metadata={"help": "Minimum temperature for dynamic temperature scheduling. If None, uses static temperature."},
+    )
+    temp_warmup_steps: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of warmup steps for temperature scheduling. Temperature linearly increases from 0 to max_temp."},
+    )
     top_p: float = field(
         default=1.0,
         metadata={

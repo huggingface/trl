@@ -1850,6 +1850,78 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    def test_training_dynamic_temperature(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=32,
+                max_steps=10,  # Very short training for testing
+                max_temp=2.0,  # Dynamic temperature parameters
+                min_temp=0.1,
+                temp_warmup_steps=3,
+                temperature=1.0,  # Fallback static temperature
+                report_to="none",
+            )
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            # Test that dynamic temperature is enabled
+            self.assertTrue(trainer.use_dynamic_temp)
+            self.assertEqual(trainer.max_temp, 2.0)
+            self.assertEqual(trainer.min_temp, 0.1)
+            self.assertEqual(trainer.temp_warmup_steps, 3)
+
+            # Test temperature calculation at different steps
+            # Step 0: Should be close to 0 (warmup start)
+            temp_step_0 = trainer.get_temp(0)
+            self.assertAlmostEqual(temp_step_0, 2.0 * 1 / 3, places=4)  # max_temp * (0+1) / temp_warmup_steps
+            
+            # Warmup end: Should be max_temp
+            temp_warmup_end = trainer.get_temp(3)
+            self.assertAlmostEqual(temp_warmup_end, 2.0, places=4)
+            
+            # Max steps: Should be min_temp
+            temp_max_steps = trainer.get_temp(10)
+            self.assertAlmostEqual(temp_max_steps, 0.1, places=4)
+            
+            # Beyond max steps: Should remain min_temp
+            temp_beyond = trainer.get_temp(15)
+            self.assertAlmostEqual(temp_beyond, 0.1, places=4)
+
+            # Test that static temperature fallback works
+            static_args = GRPOConfig(
+                output_dir=tmp_dir,
+                temperature=1.5,
+                per_device_train_batch_size=3,
+                num_generations=3,
+                max_completion_length=32,
+                max_steps=10,
+                report_to="none",
+            )
+            static_trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=static_args,
+                train_dataset=dataset,
+            )
+            
+            # Should use static temperature
+            self.assertFalse(static_trainer.use_dynamic_temp)
+            self.assertEqual(static_trainer.get_temp(0), 1.5)
+            self.assertEqual(static_trainer.get_temp(100), 1.5)
+
+            # Run a few training steps to ensure no errors
+            trainer.train()
+
 
 if __name__ == "__main__":
     unittest.main()
