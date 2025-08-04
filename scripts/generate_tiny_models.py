@@ -98,7 +98,36 @@ This is a minimal model built for unit tests in the [TRL](https://github.com/hug
 api = HfApi()
 
 
+def push_to_hub(model, tokenizer, prefix=None, suffix=None):
+    model_class_name = model.__class__.__name__
+    content = MODEL_CARD.format(model_class_name=model_class_name)
+    model_card = ModelCard(content)
+    if prefix is not None:
+        model_class_name = f"{prefix}-{model_class_name}"
+    repo_id = f"{ORGANIZATION}/{model_class_name}"
+    if suffix is not None:
+        repo_id += f"-{suffix}"
+
+    if api.repo_exists(repo_id):
+        print(f"Model {repo_id} already exists, skipping")
+    else:
+        model.push_to_hub(repo_id)
+        tokenizer.push_to_hub(repo_id)
+        model_card.push_to_hub(repo_id)
+
+
 def init_weights_tiny_model(model):
+    """
+    Initialize tiny test models to avoid NaNs from uninitialized weights.
+
+    Uses safe defaults:
+      - Linear/Conv1d: Xavier uniform (weights), zero (biases)
+      - Embedding: Normal(0, 0.02)
+      - LayerNorm: Ones (weights), zero (biases)
+
+    Args:
+        model: PyTorch model (modified in-place)
+    """
     for module in model.modules():
         if isinstance(module, nn.Linear):
             # Attention/MLP projections → Xavier or Normal
@@ -121,24 +150,6 @@ def init_weights_tiny_model(model):
             if module.bias is not None:
                 nn.init.zeros_(module.bias)
             nn.init.xavier_uniform_(module.weight)
-
-
-def push_to_hub(model, tokenizer, prefix=None, suffix=None):
-    model_class_name = model.__class__.__name__
-    content = MODEL_CARD.format(model_class_name=model_class_name)
-    model_card = ModelCard(content)
-    if prefix is not None:
-        model_class_name = f"{prefix}-{model_class_name}"
-    repo_id = f"{ORGANIZATION}/{model_class_name}"
-    if suffix is not None:
-        repo_id += f"-{suffix}"
-
-    if api.repo_exists(repo_id):
-        print(f"Model {repo_id} already exists, skipping")
-    else:
-        model.push_to_hub(repo_id)
-        tokenizer.push_to_hub(repo_id)
-        model_card.push_to_hub(repo_id)
 
 
 # Decoder models
@@ -182,7 +193,7 @@ for model_id, config_class, model_class, suffix in [
 # MoE models
 for model_id, config_class, model_class, suffix in [
     ("Qwen/Qwen3-30B-A3B", Qwen3MoeConfig, Qwen3MoeForCausalLM, None),
-    ("/fsx/vb/new-oai/gpt-oss-20b-trfs", GptOssConfig, GptOssForCausalLM, None),
+    ("/fsx/vb/new-oai/gpt-oss-20b-trfs", GptOssConfig, GptOssForCausalLM, None), # TODO: rename
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
