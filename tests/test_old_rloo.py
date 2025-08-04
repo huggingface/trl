@@ -1,7 +1,7 @@
 import tempfile
 import unittest
 from datasets import Dataset, load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import RLOOConfig, RLOOTrainer
 
 
@@ -9,7 +9,6 @@ class RLOOTrainerTester(unittest.TestCase):
     def setUp(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.policy_model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        self.reward_model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
         self.policy_ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id, padding_side="right")
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
