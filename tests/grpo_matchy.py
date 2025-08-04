@@ -28,6 +28,8 @@ class GRPOTrainerTester(unittest.TestCase):
                 report_to="none",
                 beta=0.05,
                 max_steps=2,
+                loss_type="grpo",
+                importance_sampling_level="sequence",
             )
             
             trainer = GRPOTrainer(
