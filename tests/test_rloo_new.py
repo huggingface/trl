@@ -1,7 +1,7 @@
 import tempfile
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import GRPOConfig, GRPOTrainer
+from trl.trainer.rloo_final_2 import RLOOTrainer_NEW, RLOOConfig_NEW
 
 
 def reward_func(completions, **kwargs):
@@ -11,14 +11,14 @@ def reward_func(completions, **kwargs):
 
 
 def main():
-    model_id = "Qwen/Qwen3-0.6B"
+    model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
     policy_model = AutoModelForCausalLM.from_pretrained(model_id)
     tokenizer = AutoTokenizer.from_pretrained(model_id, padding_side="right")
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        training_args = GRPOConfig(
+        training_args = RLOOConfig_NEW(
             output_dir=tmp_dir,
             per_device_train_batch_size=2,
             learning_rate=0.1,
@@ -26,11 +26,10 @@ def main():
             report_to="none",
             beta=0.05,
             max_steps=2,
-            loss_type="grpo",
             importance_sampling_level="sequence",
         )
         
-        trainer = GRPOTrainer(
+        trainer = RLOOTrainer_NEW(
             model=policy_model,
             reward_funcs=reward_func,
             args=training_args,
