@@ -1840,7 +1840,7 @@ class GRPOTrainer(Trainer):
         elif self.importance_sampling_level == "sequence_token":
             # GSPO-token: sg[si(θ)] * πθ(yi,t)/sg[πθ(yi,t)]
             seq_level_log_weight = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-            seq_level_log_weight = seq_level_log_weight.unsqueeze(-1).detach()  # Stop gradient
+            seq_level_log_weight = seq_level_log_weight.detach().unsqueeze(-1)  # Stop gradient
             log_importance_weights = per_token_logps - per_token_logps.detach() + seq_level_log_weight
         else:
             raise ValueError(
