@@ -627,7 +627,6 @@ class SFTTrainerTester2(unittest.TestCase):
     def test_train_gpt_oss(self):
         # Get the dataset
         # dataset = load_dataset("trl-internal-testing/harmony", "language_modeling", split="train")
-        dataset = load_from_disk("trl-internal-testing/harmony/language_modeling/train")  # TODO: replace this
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
@@ -1176,8 +1175,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
     def test_train_completion_only_harmony(self):
         # Get the dataset
-        # dataset = load_dataset("trl-internal-testing/harmony", "prompt_completion", split="train")
-        dataset = load_from_disk("trl-internal-testing/harmony/prompt_completion/train")  # TODO: replace this
+        dataset = load_dataset("trl-internal-testing/harmony", "prompt_completion", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
