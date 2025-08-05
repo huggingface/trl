@@ -16,15 +16,21 @@ import tempfile
 import unittest
 
 import pytest
-from datasets import load_dataset
+from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft, require_torch_accelerator
-from transformers.utils import is_peft_available
+from transformers.testing_utils import require_peft, require_torch_accelerator, require_vision
+from transformers.utils import is_peft_available, is_vision_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer
 
 from .testing_utils import RandomPairwiseJudge, require_llm_blender, require_vllm
+
+
+if is_vision_available():
+    import numpy as np
+    from PIL import Image
+    from transformers import AutoModelForVision2Seq, AutoProcessor
 
 
 if is_peft_available():
@@ -427,3 +433,58 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
+
+
+@require_vision
+class OnlineDPOVisionTrainerTester(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),
+            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
+        ]
+    )
+    def test_online_dpo_vlm_trainer(self, model_id):
+        dataset_dict = {
+            "prompt": [
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe the image."}]}],
+                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What do you see?"}]}],
+            ],
+            "images": [
+                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
+                [Image.fromarray(np.random.randint(0, 255, (64, 64, 3), dtype=np.uint8))],
+            ],
+        }
+        dataset = Dataset.from_dict(dataset_dict)
+        dataset = dataset.cast_column("images", features.Sequence(features.Image()))
+
+        model = AutoModelForVision2Seq.from_pretrained(model_id)
+        reward_model = AutoModelForSequenceClassification.from_pretrained(
+            "trl-internal-testing/tiny-LlamaForCausalLM-3.2", num_labels=1
+        )
+        processor = AutoProcessor.from_pretrained(model_id)
+        reward_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
+        reward_tokenizer.pad_token = reward_tokenizer.eos_token
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=1,
+                max_steps=2,
+                learning_rate=0.01,
+                max_prompt_length=None,
+                max_length=None,
+                report_to="none",
+            )
+            trainer = OnlineDPOTrainer(
+                model=model,
+                reward_model=reward_model,
+                args=training_args,
+                processing_class=processor,
+                train_dataset=dataset,
+                eval_dataset=dataset,
+                reward_processing_class=reward_tokenizer,
+            )
+
+            trainer.train()
+
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
