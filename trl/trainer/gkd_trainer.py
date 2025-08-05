@@ -77,8 +77,9 @@ class GKDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
     ):
-        # add remove_unused_columns=False to the dataclass args
         if args is not None:
+            # Adds remove_unused_columns=False to the dataclass args.
+            # TODO(seungduk-yanolja): Please describe why this is necessary.
             args.remove_unused_columns = False
         if data_collator is None:
             data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
