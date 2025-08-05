@@ -134,7 +134,7 @@ preference_example = {
 
 Conversational datasets are useful for training chat models, but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
-## Tool Calling
+#### Tool Calling
 
 Some chat templates support *tool calling*, which allows the model to interact with external functions—referred to as **tools**—during generation. This extends the conversational capabilities of the model by enabling it to output a `"tool_calls"` field instead of a standard `"content"` message whenever it decides to invoke a tool.
 
@@ -208,6 +208,57 @@ A complete dataset entry for SFT might look like:
 ```
 
 For more detailed information on tool calling, refer to the [Tool Calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the blog post [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use).
+
+### Harmony
+
+The [Harmony response format](https://cookbook.openai.com/articles/openai-harmony) was introduced with the [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior. Key features include:
+
+- **Developer role** – Provides high-level instructions (similar to a system prompt) and lists available tools.
+- **Channels** – Separate types of assistant output into distinct streams:
+
+  - `analysis` – for internal reasoning, from the key `"thinking"`
+  - `final` – for the user-facing answer, from the key `"content"`
+  - `commentary` – for tool calls or meta notes
+
+- **Reasoning effort** – Signals how much thinking the model should show (e.g., `"low"`, `"medium"`, `"high"`).
+- **Model identity** – Explicitly defines the assistant’s persona.
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("openai/gpt-oss-20b")
+
+messages = [
+    {"role": "developer", "content": "Use a friendly tone."},
+    {"role": "user", "content": "What is the meaning of life?"},
+    {"role": "assistant", "thinking": "Deep reflection...", "content": "The final answer is..."},
+]
+
+print(
+    tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        reasoning_effort="low",
+        model_identity="You are HuggingGPT, a large language model trained by Hugging Face."
+    )
+)
+```
+
+This produces:
+
+```txt
+<|start|>system<|message|>You are HuggingGPT, a large language model trained by Hugging Face.
+Knowledge cutoff: 2024-06
+Current date: 2025-08-03
+
+Reasoning: low
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+Use a friendly tone.<|end|><|start|>user<|message|>What is the meaning of life?<|end|><|start|>assistant<|channel|>analysis<|message|>Deep reflection...<|end|><|start|>assistant<|channel|>final<|message|>The final answer is...<|return|>
+```
+
+For full details on message structure, supported fields, and advanced usage, see the [Harmony documentation](https://cookbook.openai.com/articles/openai-harmony).
 
 ### Types
 
@@ -905,7 +956,7 @@ dataset = dataset.filter(lambda x: all(x["labels"])).map(concatenate_prompt_comp
 {'text': 'Blue light scatters more in the atmosphere, so the sky is green.'}
 ```
 
-### From stepwise supervision to prompt completion dataset
+### From stepwise supervision to prompt-completion dataset
 
 To convert a stepwise supervision dataset into a prompt-completion dataset, join the good completions and remove the labels.
 
@@ -931,7 +982,7 @@ dataset = dataset.filter(lambda x: all(x["labels"])).map(join_completions, remov
 {'prompt': 'Blue light', 'completion': ' scatters more in the atmosphere, so the sky is green.'}
 ```
 
-### From stepwise supervision to prompt only dataset
+### From stepwise supervision to prompt-only dataset
 
 To convert a stepwise supervision dataset into a prompt-only dataset, remove the completions and the labels.
 
