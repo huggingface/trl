@@ -69,9 +69,9 @@ class SFTConfig(TrainingArguments):
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
-            supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
-            batch structure. When packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the
-            value of this parameter.
+            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
+            packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
+            parameter.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
@@ -199,10 +199,10 @@ class SFTConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
-            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
-            "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
-            "handle the flattened batch structure. When packing is enabled with strategy `'bfd'`, padding-free is "
-            "enabled, regardless of the value of this parameter."
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
+            "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
+            "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
+            "value of this parameter."
         },
     )
     pad_to_multiple_of: Optional[int] = field(
