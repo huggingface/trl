@@ -9,7 +9,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 ## 🎉 What's New
 
-> **✨ Open AI GPT-OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT-OSS models](https://huggingface.co/collections/TODO)! Check out the
+> **✨ Open AI GPT OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT OSS models](https://huggingface.co/collections/TODO)! Check out the
 >
 > - [OpenAI Cookbook](https://cookbook.openai.com/articles/gpt-oss/fine-tune-transfomers)
 > - [Our example script](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gpt_oss.py)
