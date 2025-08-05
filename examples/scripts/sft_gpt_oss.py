@@ -19,6 +19,8 @@
 # ///
 
 """
+pip install –-upgrade kernels
+
 Example:
 
 accelerate launch \
