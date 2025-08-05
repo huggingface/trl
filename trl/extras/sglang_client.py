@@ -197,14 +197,20 @@ class SGLangClient:
 
         # Prepare sampling parameters
         params = sampling_params or {}
+        # Update with provided parameters, ensuring correct key names
         params.update(
             {
                 "temperature": temperature,
                 "top_p": top_p,
                 "top_k": top_k,
-                "max_new_tokens": max_tokens,
+                "max_new_tokens": params.get(
+                    "max_new_tokens", max_tokens
+                ),  # Support both max_tokens and max_new_tokens
             }
         )
+        # Remove max_tokens if max_new_tokens is present to avoid conflicts
+        if "max_tokens" in params and "max_new_tokens" in params:
+            params.pop("max_tokens")
 
         response = self.session.post(
             url,

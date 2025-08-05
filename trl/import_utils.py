@@ -94,15 +94,49 @@ def is_joblib_available() -> bool:
 
 
 def is_sglang_available() -> bool:
+    """
+    Check if SGLang is available and can be imported successfully.
+
+    This function performs comprehensive checks to ensure SGLang is not only installed
+    but also functionally importable, which can fail due to missing dependencies,
+    GPU/CUDA requirements, or version incompatibilities.
+
+    Returns:
+        bool: True if SGLang is available and all required modules can be imported
+    """
     if not _sglang_available:
         return False
 
-    # Additional check to ensure SGLang server modules can be imported
-    # (SGLang has strict GPU/Triton requirements that can fail on CPU nodes)
+    # Check if core SGLang modules can be imported
+    # These are the essential modules used by TRL's SGLang integration
+    required_modules = [
+        ("sglang.srt.entrypoints.http_server", "launch_server"),
+        ("sglang.srt.server_args", "ServerArgs"),
+        ("sglang.srt.utils", "kill_process_tree"),
+    ]
+
+    for module_name, attr_name in required_modules:
+        try:
+            module = __import__(module_name, fromlist=[attr_name])
+            if not hasattr(module, attr_name):
+                return False
+        except (ImportError, ModuleNotFoundError, AttributeError):
+            return False
+        except Exception:
+            # Catch other potential issues like CUDA/GPU initialization errors,
+            # missing Triton kernels, version mismatches, etc.
+            return False
+
+    # Additional runtime check to ensure SGLang server can actually be instantiated
+    # This catches issues with GPU availability, CUDA compatibility, etc.
     try:
-        from sglang.srt.entrypoints.http_server import launch_server
+        from sglang.srt.server_args import ServerArgs
+
+        # Try to create a minimal ServerArgs instance to verify basic functionality
+        _ = ServerArgs(model_path="dummy")
         return True
     except Exception:
+        # If ServerArgs creation fails, SGLang likely has environment issues
         return False
 
 

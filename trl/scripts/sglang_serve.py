@@ -63,9 +63,6 @@ logger = logging.getLogger(__name__)
 os.environ["SGLANG_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
-# WeightSyncWorkerExtension is now handled by SGLangEngine in sglang_engine_adapter.py
-
-
 @dataclass
 class ScriptArguments:
     r"""
