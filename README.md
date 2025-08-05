@@ -21,7 +21,7 @@
 
 > **✨ Open AI GPT-OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT-OSS models](https://huggingface.co/collections/TODO)! Check out the
 >
-> - [OpenAI Cookbook](https://cookbook.openai.com/examples/TODO)
+> - [OpenAI Cookbook](https://cookbook.openai.com/articles/gpt-oss/fine-tune-transfomers)
 > - [Our example script](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gpt_oss.py)
 
 ## Overview
