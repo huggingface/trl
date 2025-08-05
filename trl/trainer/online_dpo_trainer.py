@@ -272,10 +272,6 @@ class OnlineDPOTrainer(Trainer):
         if self.reward_model is not None:
             self.reward_model.eval()
 
-        # Define the collator is not provided
-        if data_collator is None:
-            data_collator = DPODataCollatorWithPadding(pad_token_id=processing_class.pad_token_id)
-
         self.max_length = args.max_length
 
         self.stats = {
@@ -309,15 +305,29 @@ class OnlineDPOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
         self.vllm_model_impl = args.vllm_model_impl
 
-        # Store token attributes for consistency with GRPO trainer
-        self.pad_token = processing_class.pad_token
-        self.pad_token_id = processing_class.pad_token_id
-        self.eos_token_id = processing_class.eos_token_id
+        # Handle pad token for processors or tokenizers (following GRPO pattern)
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        self.pad_token = tokenizer.pad_token
+        self.pad_token_id = tokenizer.pad_token_id
+        self.eos_token_id = tokenizer.eos_token_id
 
         # Vision tokens for VLM support
         self.image_token_id = getattr(processing_class, "image_token_id", None)
         self.vision_start_token_id = getattr(processing_class, "vision_start_token_id", None)
         self.vision_end_token_id = getattr(processing_class, "vision_end_token_id", None)
+
+        # Define the collator if not provided
+        if data_collator is None:
+            data_collator = DPODataCollatorWithPadding(pad_token_id=self.pad_token_id)
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in Online DPO, the sampled data does not include
@@ -421,9 +431,9 @@ class OnlineDPOTrainer(Trainer):
             generation_kwargs = {
                 "max_new_tokens": args.max_new_tokens,
                 "do_sample": True,
-                "pad_token_id": processing_class.pad_token_id,
-                "bos_token_id": processing_class.bos_token_id,
-                "eos_token_id": processing_class.eos_token_id,
+                "pad_token_id": self.pad_token_id,
+                "bos_token_id": tokenizer.bos_token_id,
+                "eos_token_id": self.eos_token_id,
                 "temperature": self.temperature,
                 "top_k": self.top_k,
                 "top_p": self.top_p,
@@ -560,8 +570,8 @@ class OnlineDPOTrainer(Trainer):
         return self.accelerator.prepare(eval_dataloader)
 
     def _generate_vllm(self, model, prompts, images=None):
-        eos_token_id = self.processing_class.eos_token_id
-        pad_token_id = self.processing_class.pad_token_id
+        eos_token_id = self.eos_token_id
+        pad_token_id = self.pad_token_id
 
         # Generate completion_ids and prompt_ids based on mode
         if self.vllm_mode == "server":
@@ -815,11 +825,10 @@ class OnlineDPOTrainer(Trainer):
     def _generate(self, model, prompts, images=None):
         """Generate completions using the model"""
         device = next(model.parameters()).device
-        eos_token_id = self.processing_class.eos_token_id
-        pad_token_id = self.processing_class.pad_token_id
+        eos_token_id = self.eos_token_id
+        pad_token_id = self.pad_token_id
 
-        # Apply chat template and tokenize the input. We do this on-the-fly to enable the use of reward models and
-        # policies with different tokenizers / chat templates.
+        # Apply chat template and tokenize the input (following GRPO pattern)
         inputs = [{"prompt": prompt} for prompt in prompts]
 
         # Add images if provided (VLM support)
@@ -827,30 +836,41 @@ class OnlineDPOTrainer(Trainer):
             for i, image in enumerate(images):
                 inputs[i]["image"] = image
 
-        inputs = [maybe_apply_chat_template(x, self.processing_class) for x in inputs]
+        # Apply chat template to get text prompts
+        prompts_text = [maybe_apply_chat_template(x, self.processing_class)["prompt"] for x in inputs]
 
-        # Use vision processing if it's a vision model and we have images
-        if self.is_vision_model and images is not None:
-            inputs = [self.process_vision_row(x, self.processing_class) for x in inputs]
-        else:
-            inputs = [self.tokenize_row(x, self.is_encoder_decoder, self.processing_class) for x in inputs]
+        # Prepare kwargs for processing class (following GRPO pattern)
+        kwargs = {}
+        if images is not None:
+            kwargs = {"images": [[img] for img in images]}
 
-        inputs = self.data_collator(inputs)
+        # Process inputs using the processing class (handles both VLM and LLM)
+        prompt_inputs = self.processing_class(
+            text=prompts_text,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            add_special_tokens=False,
+            **kwargs,
+        )
+
+        prompt_inputs = {k: v.to(device) for k, v in prompt_inputs.items()}
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
-        inputs = self._prepare_inputs(inputs)
-        prompt_ids = inputs["prompt_input_ids"].repeat(2, 1)
-        prompt_mask = inputs["prompt_attention_mask"].repeat(2, 1)
+        prompt_ids = prompt_inputs["input_ids"].repeat(2, 1)
+        prompt_mask = prompt_inputs["attention_mask"].repeat(2, 1)
 
         # Prepare vision inputs if available
         vision_generation_kwargs = {}
         if self.is_vision_model and images is not None:
-            if "pixel_values" in inputs:
-                vision_generation_kwargs["pixel_values"] = inputs["pixel_values"].repeat(2, 1, 1, 1)
-            if "pixel_attention_mask" in inputs:
-                vision_generation_kwargs["pixel_attention_mask"] = inputs["pixel_attention_mask"].repeat(2, 1)
-            if "image_sizes" in inputs:
-                vision_generation_kwargs["image_sizes"] = inputs["image_sizes"].repeat(2, 1)
+            if "pixel_values" in prompt_inputs:
+                vision_generation_kwargs["pixel_values"] = prompt_inputs["pixel_values"].repeat(2, 1, 1, 1)
+            if "pixel_attention_mask" in prompt_inputs:
+                vision_generation_kwargs["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"].repeat(2, 1)
+            if "image_sizes" in prompt_inputs:
+                vision_generation_kwargs["image_sizes"] = prompt_inputs["image_sizes"].repeat(2, 1)
+            if "image_grid_thw" in prompt_inputs:
+                vision_generation_kwargs["image_grid_thw"] = prompt_inputs["image_grid_thw"].repeat(2, 1)
 
         if self.use_transformers_paged:
             previous_attn = self.model_wrapped.config._attn_implementation
@@ -984,7 +1004,7 @@ class OnlineDPOTrainer(Trainer):
         else:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
 
-        contain_eos_token = torch.any(completion_ids == self.processing_class.eos_token_id, dim=-1)
+        contain_eos_token = torch.any(completion_ids == self.eos_token_id, dim=-1)
 
         # Extract vision inputs if available for VLM support
         vision_inputs = None
