@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.20.0.dev0"
+__version__ = "0.21.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -30,7 +30,6 @@ _import_structure = {
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
         "pack_dataset",
-        "pack_examples",
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
@@ -57,7 +56,6 @@ _import_structure = {
         "BCOTrainer",
         "CPOConfig",
         "CPOTrainer",
-        "DataCollatorForCompletionOnlyLM",
         "DPOConfig",
         "DPOTrainer",
         "FDivergenceConstants",
@@ -126,7 +124,6 @@ if TYPE_CHECKING:
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
         pack_dataset,
-        pack_examples,
         truncate_dataset,
         unpair_preference_dataset,
     )
@@ -154,7 +151,6 @@ if TYPE_CHECKING:
         BCOTrainer,
         CPOConfig,
         CPOTrainer,
-        DataCollatorForCompletionOnlyLM,
         DPOConfig,
         DPOTrainer,
         FDivergenceConstants,

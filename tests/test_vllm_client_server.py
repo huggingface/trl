@@ -296,6 +296,7 @@ class TestVLLMClientServerDP(unittest.TestCase):
 
         # Initialize the client
         cls.client = VLLMClient(connection_timeout=240)
+        cls.client.init_communicator()
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -325,6 +326,81 @@ class TestVLLMClientServerDP(unittest.TestCase):
 
         # Close the client
         cls.client.close_communicator()
+
+        # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
+        # kill the server process and its children explicitly.
+        parent = psutil.Process(cls.server_process.pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            child.send_signal(signal.SIGTERM)
+        cls.server_process.terminate()
+        cls.server_process.wait()
+
+
+@pytest.mark.slow
+@require_torch_multi_accelerator
+class TestVLLMClientServerDeviceParameter(unittest.TestCase):
+    """Test the device parameter functionality in init_communicator."""
+
+    model_id = "Qwen/Qwen2.5-1.5B"
+
+    @classmethod
+    def setUpClass(cls):
+        # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
+        env = os.environ.copy()
+        VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
+        env[VISIBLE_DEVICES] = "1"  # Restrict to accelerator 1
+
+        # Start the server process
+        cls.server_process = subprocess.Popen(
+            ["trl", "vllm-serve", "--model", cls.model_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+        )
+
+    def test_init_communicator_with_device_int(self):
+        """Test init_communicator with integer device parameter."""
+        client = VLLMClient(connection_timeout=240)
+        client.init_communicator(device=0)  # Explicitly specify device 0
+
+        # Test basic functionality
+        prompts = ["Hello, AI!"]
+        outputs = client.generate(prompts)
+        self.assertIsInstance(outputs, list)
+        self.assertEqual(len(outputs), len(prompts))
+
+        client.close_communicator()
+
+    def test_init_communicator_with_device_string(self):
+        """Test init_communicator with string device parameter."""
+        client = VLLMClient(connection_timeout=240)
+        client.init_communicator(device="cuda:0")  # Explicitly specify device as string
+
+        # Test basic functionality
+        prompts = ["Hello, AI!"]
+        outputs = client.generate(prompts)
+        self.assertIsInstance(outputs, list)
+        self.assertEqual(len(outputs), len(prompts))
+
+        client.close_communicator()
+
+    def test_init_communicator_with_torch_device(self):
+        """Test init_communicator with torch.device object."""
+        import torch
+
+        client = VLLMClient(connection_timeout=240)
+        device = torch.device("cuda:0")
+        client.init_communicator(device=device)  # Explicitly specify torch.device object
+
+        # Test basic functionality
+        prompts = ["Hello, AI!"]
+        outputs = client.generate(prompts)
+        self.assertIsInstance(outputs, list)
+        self.assertEqual(len(outputs), len(prompts))
+
+        client.close_communicator()
+
+    @classmethod
+    def tearDownClass(cls):
+        super().tearDownClass()
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.

@@ -16,50 +16,31 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
-#     "Pillow>=9.4.0",
 # ]
 # ///
 
 """
-Without dataset streaming:
-
-```
-accelerate launch examples/scripts/dpo_vlm.py \
+python examples/scripts/mpo_vlm.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
-    --per_device_train_batch_size 2 \
-    --gradient_accumulation_steps 32 \
-    --dataset_num_proc 32 \
+    --per_device_train_batch_size 4 \
+    --per_device_eval_batch_size 4 \
+    --num_train_epochs 1 \
+    --gradient_accumulation_steps 8 \
+    --dataset_num_proc 1 \
     --output_dir dpo_idefics_rlaif-v \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --lora_target_modules=all-linear \
-    --report_to wandb
-```
-
-With dataset streaming:
-
-```
-accelerate launch examples/scripts/dpo_vlm.py \
-    --dataset_name HuggingFaceH4/rlaif-v_formatted \
-    --dataset_streaming \
-    --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
-    --per_device_train_batch_size 2 \
-    --max_steps 100 \
-    --gradient_accumulation_steps 32 \
-    --dataset_num_proc 32 \
-    --output_dir dpo_idefics_rlaif-v \
-    --torch_dtype bfloat16 \
-    --gradient_checkpointing \
-    --use_peft \
-    --lora_target_modules=all-linear \
-    --report_to wandb
-```
+    --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj \
+    --loss_type sigmoid bco_pair sft \
+    --loss_weights 0.8 0.2 1.0 \
+    --bf16 True
 """
 
 import torch
 from datasets import load_dataset
+from PIL import Image
 from transformers import AutoModelForVision2Seq, AutoProcessor
 
 from trl import (
@@ -79,7 +60,7 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
 
     ################
-    # Model & Tokenizer
+    # Model & Processor
     ################
     torch_dtype = (
         model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
@@ -87,6 +68,7 @@ if __name__ == "__main__":
     quantization_config = get_quantization_config(model_args)
 
     model_kwargs = dict(
+        trust_remote_code=model_args.trust_remote_code,
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=torch_dtype,
@@ -95,38 +77,19 @@ if __name__ == "__main__":
     )
     model = AutoModelForVision2Seq.from_pretrained(
         model_args.model_name_or_path,
-        trust_remote_code=model_args.trust_remote_code,
         **model_kwargs,
     )
     peft_config = get_peft_config(model_args)
     if peft_config is None:
         ref_model = AutoModelForVision2Seq.from_pretrained(
             model_args.model_name_or_path,
-            trust_remote_code=model_args.trust_remote_code,
             **model_kwargs,
         )
     else:
         ref_model = None
     processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, do_image_splitting=False
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
-    tokenizer = processor.tokenizer
-
-    # Set up the chat template
-    if model.config.model_type == "idefics2":
-        pass  # the processor already has a valid chat template
-    elif model.config.model_type == "paligemma":
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}<|im_start|>{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] if item['type'] == 'text' %}{{ item['text'] }}<|im_end|>{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-    elif model.config.model_type == "llava":
-        processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
-
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    if script_args.ignore_bias_buffers:
-        # torch distributed hack
-        model._ddp_params_and_buffers_to_ignore = [
-            name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
-        ]
 
     ################
     # Dataset
@@ -136,16 +99,32 @@ if __name__ == "__main__":
         name=script_args.dataset_config,
         streaming=script_args.dataset_streaming,
     )
+    train_dataset = dataset[script_args.dataset_train_split]
+    test_dataset = dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None
+
+    def ensure_rgb(example):
+        # Convert the image to RGB if it's not already
+        image = example["images"][0]
+        if isinstance(image, Image.Image):
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+            example["images"] = [image]
+        return example
+
+    # Apply the transformation to the dataset (change num_proc depending on the available compute)
+    train_dataset = train_dataset.map(ensure_rgb, num_proc=training_args.dataset_num_proc)
+    if test_dataset is not None:
+        test_dataset = test_dataset.map(ensure_rgb, num_proc=training_args.dataset_num_proc)
 
     ################
     # Training
     ################
     trainer = DPOTrainer(
-        model,
-        ref_model,
+        model=model,
+        ref_model=ref_model,
         args=training_args,
-        train_dataset=dataset[script_args.dataset_train_split],
-        eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
+        train_dataset=train_dataset,
+        eval_dataset=test_dataset,
         processing_class=processor,
         peft_config=peft_config,
     )

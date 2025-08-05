@@ -13,17 +13,20 @@
 # limitations under the License.
 
 import argparse
+import base64
 import logging
 import os
 from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from io import BytesIO
 from itertools import chain
 from multiprocessing import Pipe, Process
 from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
+from transformers import is_vision_available
 
 from trl import TrlParser
 from trl.import_utils import (
@@ -45,6 +48,10 @@ if is_pydantic_available():
 
 if is_uvicorn_available():
     import uvicorn
+
+
+if is_vision_available():
+    from PIL import Image
 
 
 if is_vllm_available():
@@ -80,7 +87,7 @@ class WeightSyncWorkerExtension:
     pynccl_comm = None  # Communicator for weight updates
     client_rank = None  # Source rank for broadcasting updated weights
 
-    def init_communicator(self, host: str, port: int, world_size: int) -> None:
+    def init_communicator(self, host: str, port: int, world_size: int, client_device_uuid: str) -> None:
         """
         Initializes the weight update communicator using a stateless process group.
 
@@ -94,10 +101,18 @@ class WeightSyncWorkerExtension:
                 Port number to be used for communication.
             world_size (`int`):
                 Total number of participating processes in the update group.
+            client_device_uuid (`str`):
+                UUID of the device of client main process. Used to assert that devices are different from vllm workers devices.
         """
         if self.pynccl_comm is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
+        if client_device_uuid == str(torch.cuda.get_device_properties(self.device).uuid):
+            raise RuntimeError(
+                f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) for multiple distinct "
+                "roles/ranks within the same communicator. This setup is unsupported and will likely lead to program "
+                "hangs or incorrect behavior. Ensure that trainer is using different devices than vLLM server."
+            )
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
@@ -185,6 +200,10 @@ class ScriptArguments:
         enforce_eager (`bool`, *optional*, defaults to `False`):
             Whether to enforce eager execution. If set to `True`, we will disable CUDA graph and always execute the
             model in eager mode. If `False` (default behavior), we will use CUDA graph and eager execution in hybrid.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
         kv_cache_dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for KV cache. If set to `"auto"`, the dtype will default to the model data type.
         trust_remote_code (`bool`, *optional*, defaults to `False`):
@@ -277,6 +296,14 @@ class ScriptArguments:
             "'trace'."
         },
     )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={
+            "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
+            "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
+            "model implementation."
+        },
+    )
 
 
 def llm_worker(
@@ -303,6 +330,7 @@ def llm_worker(
         max_model_len=script_args.max_model_len,
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
+        model_impl=script_args.vllm_model_impl,
     )
 
     # Send ready signal to parent process
@@ -426,6 +454,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateRequest(BaseModel):
         prompts: list[str]
+        images: Optional[list[str]] = None
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -447,6 +476,7 @@ def main(script_args: ScriptArguments):
         Args:
             request (`GenerateRequest`):
                 - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
+                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process along with prompts.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
                 - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during generation.
                 - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead to more random outputs.
@@ -471,6 +501,14 @@ def main(script_args: ScriptArguments):
         {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
         ```
         """
+        request.images = request.images or [None] * len(request.prompts)
+
+        prompts = []
+        for prompt, image in zip(request.prompts, request.images):
+            row = {"prompt": prompt}
+            if image is not None:
+                row["multi_modal_data"] = {"image": Image.open(BytesIO(base64.b64decode(image)))}
+            prompts.append(row)
 
         # Guided decoding, if enabled
         if request.guided_decoding_regex is not None:
@@ -492,7 +530,7 @@ def main(script_args: ScriptArguments):
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
-        chunked_prompts = chunk_list(request.prompts, script_args.data_parallel_size)
+        chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
 
         # Send the prompts to each worker
         for connection, prompts in zip(connections, chunked_prompts):
@@ -519,6 +557,7 @@ def main(script_args: ScriptArguments):
         host: str
         port: int
         world_size: int
+        client_device_uuid: str
 
     @app.post("/init_communicator/")
     async def init_communicator(request: InitCommunicatorRequest):
@@ -530,13 +569,18 @@ def main(script_args: ScriptArguments):
                 - `host` (`str`): Hostname or IP address of the master node.
                 - `port` (`int`): Port number to be used for communication.
                 - `world_size` (`int`): Total number of participating processes in the group.
+                - `client_device_uuid` (`str`): UUID of the device of client main process. Used to assert that devices
+                  are different from vLLM workers devices.
         """
         world_size = script_args.tensor_parallel_size * script_args.data_parallel_size + 1
 
         # The function init_communicator is called this way: init_communicator(host, port, world_size)
         # So with collective_rpc we need to call it this way:
         # llm.collective_rpc(method="init_communicator", args=(host, port, world_size))
-        kwargs = {"method": "init_communicator", "args": (request.host, request.port, world_size)}
+        kwargs = {
+            "method": "init_communicator",
+            "args": (request.host, request.port, world_size, request.client_device_uuid),
+        }
         for connection in connections:
             connection.send({"type": "fire_and_forget", "method": "collective_rpc", "kwargs": kwargs})
 
