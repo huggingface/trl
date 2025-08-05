@@ -137,11 +137,11 @@ class IsConversationalTester(unittest.TestCase):
         {"prompt": "The sky is", "completion": " blue.", "label": True},
     ]
 
-    @parameterized.expand(conversational_examples)
+    @parameterized.expand(itertools.product(conversational_examples))
     def test_conversational(self, example):
         self.assertTrue(is_conversational(example))
 
-    @parameterized.expand(non_conversational_examples)
+    @parameterized.expand(itertools.product(non_conversational_examples))
     def test_non_conversational(self, example):
         self.assertFalse(is_conversational(example))
 
