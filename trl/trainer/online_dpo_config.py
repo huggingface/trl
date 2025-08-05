@@ -365,3 +365,7 @@ class OnlineDPOConfig(TrainingArguments):
 
         if hasattr(self.beta, "__len__") and len(self.beta) == 1:
             self.beta = self.beta[0]
+
+        # Validate vLLM configuration
+        if self.vllm_mode not in ["server", "colocate"]:
+            raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'")
