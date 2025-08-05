@@ -132,6 +132,9 @@ While training and evaluating we record the following reward metrics:
 ## KTOTrainer
 
 [[autodoc]] KTOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## KTOConfig
 

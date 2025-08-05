@@ -192,7 +192,7 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 
 You can further accelerate QLoRA / LoRA (2x faster, 60% less memory) using the [`unsloth`](https://github.com/unslothai/unsloth) library that is fully compatible with `SFTTrainer`. Currently `unsloth` supports only Llama (Yi, TinyLlama, Qwen, Deepseek etc) and Mistral architectures. Some benchmarks for DPO listed below:
 
-| GPU      | Model     | Dataset    | 🤗   | 🤗 + Flash Attention 2 | 🦥 Unsloth | 🦥 VRAM saved |
+| GPU      | Model     | Dataset    | 🤗   | 🤗 + FlashAttention 2 | 🦥 Unsloth | 🦥 VRAM saved |
 | -------- | --------- | ---------- | --- | --------------------- | --------- | ------------ |
 | A100 40G | Zephyr 7b | Ultra Chat | 1x  | 1.24x                 | **1.88x** | -11.6%       |
 | Tesla T4 | Zephyr 7b | Ultra Chat | 1x  | 1.09x                 | **1.55x** | -18.6%       |
@@ -285,6 +285,9 @@ dpo_trainer = DPOTrainer(
 ## DPOTrainer
 
 [[autodoc]] DPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## DPOConfig
 

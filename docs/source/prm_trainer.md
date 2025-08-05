@@ -118,6 +118,9 @@ accelerate launch examples/scripts/prm.py \
 ## PRMTrainer
 
 [[autodoc]] PRMTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## PRMConfig
 

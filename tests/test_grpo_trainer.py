@@ -31,7 +31,6 @@ from transformers.utils import is_peft_available
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.grpo_trainer import (
     RepeatSampler,
-    get_high_entropy_mask,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
     split_tensor_dict,
@@ -387,6 +386,23 @@ class TruncateWithProtectedTokensTester(unittest.TestCase):
 
 
 class GetHighEntropyMaskTester(unittest.TestCase):
+    def get_high_entropy_mask(self, entropies, mask, threshold):
+        """Helper method to test the get_high_entropy_mask functionality."""
+        # Create a mock trainer with minimal setup
+        from unittest.mock import Mock
+
+        # Create a mock accelerator
+        mock_accelerator = Mock()
+        mock_accelerator.num_processes = 1  # Single process for testing
+
+        # Create a minimal trainer instance just to access the method
+        trainer = Mock(spec=GRPOTrainer)
+        trainer.accelerator = mock_accelerator
+        trainer.accelerator.gather = lambda x: x  # Mock gather to return the input directly
+
+        # Call the actual method from GRPOTrainer
+        return GRPOTrainer.get_high_entropy_mask(trainer, entropies, mask, threshold)
+
     def test_compute_entropy_mask_0(self):
         # We have a total of 12 tokens out of which 10 are non-pad.
         # for a top_entropy_quantile of 0.8, we expect the top 20% i.e 2 non-pad tokens corresponding to
@@ -395,7 +411,7 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         # tokens they are excluded from the entropy threshold calculation.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
-        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.8)
+        entropy_mask = self.get_high_entropy_mask(entropies, mask, threshold=0.8)
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 1, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
@@ -403,7 +419,7 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         # Another example with a different set of entropies and a different mask.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
         mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
-        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.8)
+        entropy_mask = self.get_high_entropy_mask(entropies, mask, threshold=0.8)
         expected_mask = torch.tensor([[0, 0, 0, 1, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
@@ -411,7 +427,7 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         # For a threshold of 0.5 we expect the top half of the non-pad tokens to be unmasked.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
-        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.5)
+        entropy_mask = self.get_high_entropy_mask(entropies, mask, threshold=0.5)
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 1], [1, 1, 1, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
@@ -419,7 +435,7 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         # If the threshold is 0.0 then we expect the mask to be all ones for non-pad tokens.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
-        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.0)
+        entropy_mask = self.get_high_entropy_mask(entropies, mask, threshold=0.0)
         expected_mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
@@ -427,7 +443,7 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         # If the threshold is 1.0 then we expect the mask to be all zeros BUT ONE VALUE.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
-        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=1.0)
+        entropy_mask = self.get_high_entropy_mask(entropies, mask, threshold=1.0)
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 1, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
@@ -435,7 +451,7 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         # If there are no non-pad tokens we expect the mask to be all zeros.
         entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
         mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]])
-        entropy_mask = get_high_entropy_mask(entropies, mask, threshold=0.5)
+        entropy_mask = self.get_high_entropy_mask(entropies, mask, threshold=0.5)
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
 
@@ -1600,8 +1616,10 @@ class GRPOTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
-            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
+            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
             ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
+            # ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration",), seems not to support bf16 properly
         ]
     )
     @require_vision
@@ -1615,6 +1633,7 @@ class GRPOTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
+                max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
                 report_to="none",
             )
             trainer = GRPOTrainer(
@@ -1631,10 +1650,16 @@ class GRPOTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # Check that the params have changed
+            # Because of the way the tiny models are initialized, the gradient does not flow properly through the
+            # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
+            params_to_skip = (
+                "model.vision_tower.",
+                "model.multi_modal_projector.",
+                "model.vision_model.",
+                "model.connector.modality_projection.",
+            )
             for n, param in previous_trainable_params.items():
-                # Because of the way the tiny models are initialized, the gradient does not flow properly through the
-                # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-                if n.startswith(("model.vision_tower.", "model.multi_modal_projector.")):
+                if n.startswith(params_to_skip):
                     continue
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")

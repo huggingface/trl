@@ -31,7 +31,6 @@ import torch.utils.data
 import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -332,32 +331,6 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
         return batch
 
 
-def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
-    """
-    Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
-
-    Args:
-        entropies (`torch.Tensor`):
-            Tensor of shape (batch_size, seq_len) with per-token entropy values.
-        mask (`torch.Tensor`):
-            Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
-        threshold (`float`):
-            Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
-
-    Returns:
-        `torch.Tensor`:
-            Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
-            `False` otherwise.
-    """
-    non_pad_entropies = entropies[mask.bool()].float()
-    if non_pad_entropies.numel() == 0:
-        return torch.zeros_like(entropies, dtype=torch.bool)
-    entropy_threshold = torch.quantile(non_pad_entropies, threshold)
-    masked_entropies = entropies * mask.float()
-    entropy_mask = masked_entropies >= entropy_threshold
-    return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
-
-
 def truncate_with_protected_tokens(
     ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -585,7 +558,7 @@ class GRPOTrainer(Trainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -845,6 +818,7 @@ class GRPOTrainer(Trainer):
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                     max_num_batched_tokens=4096,
+                    model_impl=self.args.vllm_model_impl,
                 )
 
             # vLLM specific sampling arguments
@@ -947,13 +921,10 @@ class GRPOTrainer(Trainer):
         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
             dataloader_params["sampler"] = self._get_train_sampler()
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            if version.parse(transformers.__version__) >= version.parse("4.52.0"):
-                # from transformers 4.52.0, the `seed_worker` requires the `num_workers` and `rank` arguments
-                dataloader_params["worker_init_fn"] = partial(
-                    seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
-                )
-            else:
-                dataloader_params["worker_init_fn"] = seed_worker
+            dataloader_params["worker_init_fn"] = partial(
+                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+            )
+
             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
@@ -1066,7 +1037,15 @@ class GRPOTrainer(Trainer):
 
     @profiling_decorator
     def _get_last_hidden_state(
-        self, unwrapped_model, input_ids, attention_mask, logits_to_keep, pixel_values, image_grid_thw
+        self,
+        unwrapped_model,
+        input_ids,
+        attention_mask,
+        logits_to_keep,
+        pixel_values=None,
+        image_grid_thw=None,
+        pixel_attention_mask=None,
+        image_sizes=None,
     ):
         if is_peft_model(unwrapped_model):
             unwrapped_model = unwrapped_model.base_model.model
@@ -1074,10 +1053,18 @@ class GRPOTrainer(Trainer):
         # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
         model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
 
+        # For Qwen models:
         if image_grid_thw is not None and pixel_values is not None:
             model_inputs["image_grid_thw"] = image_grid_thw
+        # For Gemma, SmolVLM2, LLaVa-Next etc.:
         if pixel_values is not None:
             model_inputs["pixel_values"] = pixel_values
+        # For SmolVLM2
+        if pixel_attention_mask is not None:
+            model_inputs["pixel_attention_mask"] = pixel_attention_mask
+        # For LLaVa-Next
+        if image_sizes is not None:
+            model_inputs["image_sizes"] = image_sizes
 
         # Only add logits_to_keep if the model supports it
         if "logits_to_keep" in self.model_kwarg_keys:
@@ -1091,6 +1078,35 @@ class GRPOTrainer(Trainer):
         last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
+    def get_high_entropy_mask(
+        self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float, accelerator=None
+    ) -> torch.Tensor:
+        """
+        Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
+
+        Args:
+            entropies (`torch.Tensor`):
+                Tensor of shape (batch_size, seq_len) with per-token entropy values.
+            mask (`torch.Tensor`):
+                Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
+            threshold (`float`):
+                Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
+
+        Returns:
+            `torch.Tensor`:
+                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
+                `False` otherwise.
+        """
+        non_pad_entropies = entropies[mask.bool()].float()
+        if non_pad_entropies.numel() == 0:
+            return torch.zeros_like(entropies, dtype=torch.bool)
+        all_non_pad_entropies = self.accelerator.gather(non_pad_entropies)
+        # Filter out any empty tensors that might result from processes with no valid tokens
+        entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
+        masked_entropies = entropies * mask.float()
+        entropy_mask = masked_entropies >= entropy_threshold
+        return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
+
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
         self,
@@ -1102,6 +1118,8 @@ class GRPOTrainer(Trainer):
         compute_entropy=False,
         pixel_values=None,
         image_grid_thw=None,
+        pixel_attention_mask=None,
+        image_sizes=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -1121,6 +1139,10 @@ class GRPOTrainer(Trainer):
                 model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
             elif pixel_values is not None:
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+            if pixel_attention_mask is not None:
+                model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
+            if image_sizes is not None:
+                model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1156,14 +1178,14 @@ class GRPOTrainer(Trainer):
             name = name.replace(prefix, "")
         return name
 
-    def _sync_fsdp_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
+    def _sync_fsdp1_params_to_vllm(self, module: nn.Module, prefix: str = "", visited=None):
         """Memory-efficient post-order traversal of FSDP modules to extract full parameters and sync with vLLM."""
+        # For FSDP1, we need to recurse into children and also use summon_full_params
         if visited is None:
             visited = set()
-
         for child_name, child_module in module.named_children():
             child_prefix = f"{prefix}.{child_name}" if prefix else child_name
-            self._sync_fsdp_params_to_vllm(
+            self._sync_fsdp1_params_to_vllm(
                 child_module, prefix=child_prefix, visited=visited
             )  # recurse into the child
 
@@ -1182,6 +1204,19 @@ class GRPOTrainer(Trainer):
                     elif self.vllm_mode == "colocate":
                         llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                         llm_model.load_weights([(full_name, param.data)])
+
+    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
+        # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
+        for name, param in module.state_dict().items():
+            if param.is_cpu:
+                param = param.to(torch.device("cuda"))
+            param = param.full_tensor()
+
+            if self.vllm_mode == "server" and self.accelerator.is_main_process:
+                self.vllm_client.update_named_param(name, param)
+            elif self.vllm_mode == "colocate":
+                llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+                llm_model.load_weights([(name, param)])
 
     @profiling_decorator
     def _move_model_to_vllm(self):
@@ -1206,7 +1241,14 @@ class GRPOTrainer(Trainer):
                 if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
                     # Update vLLM weights while parameters are gathered
                     # For PEFT with FSDP we need to use the memory efficient post-order traversal
-                    self._sync_fsdp_params_to_vllm(self.model)
+                    fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                    fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                    if fsdp_version == 1:
+                        self._sync_fsdp1_params_to_vllm(
+                            self.model
+                        )  # use memory-efficient post-order traversal for FSDP
+                    elif fsdp_version == 2:
+                        self._sync_fsdp2_params_to_vllm(self.model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
@@ -1230,7 +1272,12 @@ class GRPOTrainer(Trainer):
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:
-                self._sync_fsdp_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
+                fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
+                fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
+                if fsdp_version == 1:
+                    self._sync_fsdp1_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
+                elif fsdp_version == 2:
+                    self._sync_fsdp2_params_to_vllm(self.model)
             else:
                 for name, param in self.model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
@@ -1359,10 +1406,15 @@ class GRPOTrainer(Trainer):
             for prompt in prompts:
                 if isinstance(prompt, list):
                     for message in prompt:
-                        if isinstance(message, dict) and message.get("role") == "user":
-                            if isinstance(message.get("content"), str):
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
-                            break
+                        if not isinstance(message, dict):
+                            continue
+                        content = message.get("content")
+                        role = message.get("role")
+                        if isinstance(content, str):
+                            if role == "user":
+                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
+                            elif role == "system":
+                                message["content"] = [{"type": "text", "text": content}]
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1563,7 +1615,7 @@ class GRPOTrainer(Trainer):
             ):
                 prompt_inputs["input_ids"], prompt_inputs["attention_mask"] = prompt_ids, prompt_mask
                 prompt_completion_ids = unwrapped_model.generate(
-                    **prompt_inputs, generation_config=self.generation_config
+                    **prompt_inputs, generation_config=self.generation_config, disable_compile=True
                 )
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
@@ -1613,6 +1665,8 @@ class GRPOTrainer(Trainer):
                     batch_size,
                     pixel_values=prompt_inputs.get("pixel_values"),
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                    pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
+                    image_sizes=prompt_inputs.get("image_sizes"),
                 )
             else:
                 old_per_token_logps = None
@@ -1628,6 +1682,8 @@ class GRPOTrainer(Trainer):
                         batch_size=batch_size,
                         pixel_values=prompt_inputs.get("pixel_values"),
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                        pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
+                        image_sizes=prompt_inputs.get("image_sizes"),
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -1639,6 +1695,8 @@ class GRPOTrainer(Trainer):
                             batch_size=batch_size,
                             pixel_values=prompt_inputs.get("pixel_values"),
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                            pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
+                            image_sizes=prompt_inputs.get("image_sizes"),
                         )
             else:
                 ref_per_token_logps = None
@@ -1742,6 +1800,10 @@ class GRPOTrainer(Trainer):
             output["pixel_values"] = prompt_inputs["pixel_values"]
         if "image_grid_thw" in prompt_inputs:
             output["image_grid_thw"] = prompt_inputs["image_grid_thw"]
+        if "pixel_attention_mask" in prompt_inputs:
+            output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
+        if "image_sizes" in prompt_inputs:
+            output["image_sizes"] = prompt_inputs["image_sizes"]
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1760,6 +1822,8 @@ class GRPOTrainer(Trainer):
             logits_to_keep,
             inputs.get("pixel_values"),
             inputs.get("image_grid_thw"),
+            inputs.get("pixel_attention_mask"),
+            inputs.get("image_sizes"),
         )
 
         # compute loss and metrics using liger grpo loss
@@ -1812,10 +1876,12 @@ class GRPOTrainer(Trainer):
             compute_entropy=True,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
+            pixel_attention_mask=inputs.get("pixel_attention_mask"),
+            image_sizes=inputs.get("image_sizes"),
         )
 
         if self.top_entropy_quantile < 1.0:
-            entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
+            entropy_mask = self.get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
 
