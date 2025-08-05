@@ -223,7 +223,7 @@ class EntropyController:
         """
         new_coef = entropy_coef + (1 if entropy < self.entropy_target else -1) * self.entropy_coef_delta
         new_coef = float(max(self.entropy_coef_min, min(new_coef, self.entropy_coef_max)))
-        apply_coef = 0.0 if entropy < self.entropy_target else new_coef
+        apply_coef = new_coef if entropy <= self.entropy_target else 0.0
 
         return new_coef, apply_coef
 

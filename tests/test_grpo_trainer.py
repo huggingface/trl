@@ -254,59 +254,44 @@ class RepeatRandomSamplerTester(unittest.TestCase):
 
 
 class EntropyControlTester(unittest.TestCase):
-    def test_static_entropy_coef(self):
-        # Disable adaptive entropy control and set a static coefficient
-        ent_ctrl = EntropyController(
-            use_adaptive_entropy=False,
-            entropy_coef=-1.0,
-            entropy_coef_min=0.0,
-            entropy_coef_max=1.0,
-            entropy_coef_delta=0.01,
-            entropy_target=1.0,
-        )
-        entropies = torch.tensor([[0.1, 0.2, 0.3, 0.4, 0.5, 0.6], [0.7, 0.8, 0.9, 1.0, 1.1, 1.2]])
-        mask = torch.tensor([[1, 1, 1, 1, 1, 1], [1, 1, 1, 1, 0, 0]])
-        entropy_loss = aggregate_loss(entropies, mask, "grpo")
-        entropy_loss_coef = ent_ctrl(entropy_loss.item())
-        self.assertEqual(
-            entropy_loss_coef, -1.0, f"Expected entropy loss coefficient to be -1.0, got {entropy_loss_coef}"
-        )
-
     def test_adaptive_entropy_lower_than_tgt_entropy(self):
-        # Enable adaptive entropy control with entropy loss smaller than target entropy
+        """Test that the entropy coefficient is decreased when the entropy is lower than the target."""
         ent_ctrl = EntropyController(
-            use_adaptive_entropy=True,
-            entropy_coef=0.1,
             entropy_coef_min=0.0,
             entropy_coef_max=1.0,
             entropy_coef_delta=0.01,
             entropy_target=1.0,
         )
+        entropy_coef = 0.1
         entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
         mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
         entropy_loss = aggregate_loss(entropies, mask, "grpo")
-        entropy_loss_coef = ent_ctrl(entropy_loss.item())
+        new_entropy_coef, apply_coef = ent_ctrl.step(entropy_loss.item(), entropy_coef)
         self.assertEqual(
-            entropy_loss_coef, 0.11, f"Expected entropy loss coefficient to be 0.11, got {entropy_loss_coef}"
+            new_entropy_coef, 0.11, f"Expected entropy loss coefficient to be 0.11, got {new_entropy_coef}"
         )
+        self.assertEqual(apply_coef, 0.11, f"Expected apply coefficient to be 0.0, got {apply_coef}")
 
     def test_adaptive_entropy_higher_than_tgt_entropy(self):
-        # Enable adaptive entropy control with entropy loss smaller than target entropy
+        """Test adaptive entropy control with entropy loss larger than target entropy."""
         ent_ctrl = EntropyController(
-            use_adaptive_entropy=True,
-            entropy_coef=0.1,
             entropy_coef_min=0.0,
             entropy_coef_max=1.0,
             entropy_coef_delta=0.01,
             entropy_target=0.2,
         )
+        entropy_coef = 0.1
         entropies = torch.tensor([[0.1, 0.2, 0.3, 1.4, 0.5, 0.14], [0.5, 0.6, 0.7, 0.8, 0.9, 1.0]])
         mask = torch.tensor([[1, 1, 1, 1, 0, 0], [1, 1, 1, 1, 0, 0]])
         entropy_loss = aggregate_loss(entropies, mask, "grpo")
-        entropy_loss_coef = ent_ctrl(entropy_loss.item())
-        self.assertEqual(
-            entropy_loss_coef, 0.0, f"Expected entropy loss coefficient to be 0.0, got {entropy_loss_coef}"
+        new_entropy_coef, apply_coef = ent_ctrl.step(entropy_loss.item(), entropy_coef)
+        self.assertAlmostEqual(
+            new_entropy_coef,
+            0.09,
+            places=8,
+            msg=f"Expected entropy loss coefficient to be 0.09, got {new_entropy_coef}",
         )
+        self.assertEqual(apply_coef, 0.0, f"Expected apply coefficient to be 0.0, got {apply_coef}")
 
 
 class TruncateWithProtectedTokensTester(unittest.TestCase):
