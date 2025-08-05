@@ -94,6 +94,9 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 ## BCOTrainer
 
 [[autodoc]] BCOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## BCOConfig
 

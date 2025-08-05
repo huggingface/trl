@@ -273,6 +273,7 @@ def merge_models(config: MergeConfig, out_path: str):
         config,
         out_path=out_path,
         options=MergeOptions(
+            device="auto",
             cuda=torch.cuda.is_available(),
             copy_tokenizer=True,
             lazy_unpickle=False,
