@@ -1034,8 +1034,6 @@ class GRPOTrainer(Trainer):
         Returns:
             dict: Dictionary of {metric_name: gathered_tensor}
         """
-        if not metrics_to_gather:
-            return {}
 
         shape_groups = {}
         for name, tensor in metrics_to_gather.items():
@@ -1690,8 +1688,7 @@ class GRPOTrainer(Trainer):
 
         metrics_to_gather = {"completion_lengths": completion_lengths, "is_eos": is_eos.any(dim=1)}
 
-        gathered_metrics = self.accelerator.gather(metrics_to_gather)
-        self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
+        gathered_metrics = self.gather_metrics(metrics_to_gather)
 
         # Log completion lengths, mean, min, max
         agg_completion_lengths = gathered_metrics["completion_lengths"]
