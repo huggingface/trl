@@ -1904,7 +1904,12 @@ class GRPOTrainer(Trainer):
                         "top_p": self.top_p,
                         "top_k": -1 if self.top_k is None else self.top_k,
                         "max_new_tokens": self.max_completion_length,
+                        "min_p": 0.0 if self.min_p is None else self.min_p,
+                        "repetition_penalty": self.repetition_penalty,
                     }
+                    # Add any additional generation kwargs
+                    if self.args.generation_kwargs is not None:
+                        sampling_params.update(self.args.generation_kwargs)
 
                     with profiling_context(self, "SGLang.generate"):
                         completion_ids = self.sglang_client.generate(
@@ -1931,7 +1936,12 @@ class GRPOTrainer(Trainer):
                     "top_p": self.top_p,
                     "top_k": -1 if self.top_k is None else self.top_k,
                     "max_new_tokens": self.max_completion_length,
+                    "min_p": 0.0 if self.min_p is None else self.min_p,
+                    "repetition_penalty": self.repetition_penalty,
                 }
+                # Add any additional generation kwargs
+                if self.args.generation_kwargs is not None:
+                    sampling_params.update(self.args.generation_kwargs)
 
                 if self.sglang_tensor_parallel_size > 1:
                     # Gather prompts from all ranks in the TP group
