@@ -160,7 +160,7 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 
 <Tip warning={true}>
 
-It's highly recommended to use padding-free batching with **Flash Attention 2**. Otherwise, you may encounter batch contamination issues.
+It's highly recommended to use padding-free batching with **FlashAttention 2** or **FlashAttention 3**. Otherwise, you may encounter batch contamination issues.
 
 </Tip>
 

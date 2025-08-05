@@ -135,7 +135,7 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
 
         result = collator(examples)
 
-        # Verify that attention_mask is NOT present - this allows flash attention to use position_ids
+        # Verify that attention_mask is NOT present - this allows FlashAttention to use position_ids
         self.assertNotIn("attention_mask", result, "attention_mask should be dropped for packing with position_ids")
 
         # Verify essential keys are present
