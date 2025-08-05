@@ -18,7 +18,7 @@ import unittest
 
 import numpy as np
 import torch
-from datasets import Dataset, Image, Sequence, load_dataset, load_from_disk
+from datasets import Dataset, Image, Sequence, load_dataset
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -626,7 +626,7 @@ class SFTTrainerTester2(unittest.TestCase):
     # Special case for harmony
     def test_train_gpt_oss(self):
         # Get the dataset
-        # dataset = load_dataset("trl-internal-testing/harmony", "language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/harmony", "language_modeling", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
