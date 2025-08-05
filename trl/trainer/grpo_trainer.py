@@ -387,32 +387,6 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
         return batch
 
 
-def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
-    """
-    Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
-
-    Args:
-        entropies (`torch.Tensor`):
-            Tensor of shape (batch_size, seq_len) with per-token entropy values.
-        mask (`torch.Tensor`):
-            Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
-        threshold (`float`):
-            Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
-
-    Returns:
-        `torch.Tensor`:
-            Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
-            `False` otherwise.
-    """
-    non_pad_entropies = entropies[mask.bool()].float()
-    if non_pad_entropies.numel() == 0:
-        return torch.zeros_like(entropies, dtype=torch.bool)
-    entropy_threshold = torch.quantile(non_pad_entropies, threshold)
-    masked_entropies = entropies * mask.float()
-    entropy_mask = masked_entropies >= entropy_threshold
-    return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
-
-
 def truncate_with_protected_tokens(
     ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1133,6 +1107,35 @@ class GRPOTrainer(Trainer):
         # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
         last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
+
+    def get_high_entropy_mask(
+        self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float, accelerator=None
+    ) -> torch.Tensor:
+        """
+        Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
+
+        Args:
+            entropies (`torch.Tensor`):
+                Tensor of shape (batch_size, seq_len) with per-token entropy values.
+            mask (`torch.Tensor`):
+                Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
+            threshold (`float`):
+                Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
+
+        Returns:
+            `torch.Tensor`:
+                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
+                `False` otherwise.
+        """
+        non_pad_entropies = entropies[mask.bool()].float()
+        if non_pad_entropies.numel() == 0:
+            return torch.zeros_like(entropies, dtype=torch.bool)
+        all_non_pad_entropies = self.accelerator.gather(non_pad_entropies)
+        # Filter out any empty tensors that might result from processes with no valid tokens
+        entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
+        masked_entropies = entropies * mask.float()
+        entropy_mask = masked_entropies >= entropy_threshold
+        return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
@@ -1904,7 +1907,7 @@ class GRPOTrainer(Trainer):
         )
 
         if self.top_entropy_quantile < 1.0:
-            entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
+            entropy_mask = self.get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
 
