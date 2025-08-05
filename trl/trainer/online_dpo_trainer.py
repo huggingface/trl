@@ -14,7 +14,6 @@
 
 import os
 import textwrap
-import warnings
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
@@ -62,6 +61,7 @@ from .utils import (
     get_reward,
     prepare_deepspeed,
     truncate_right,
+    warn0,
 )
 
 
@@ -169,7 +169,7 @@ class OnlineDPOTrainer(Trainer):
         self.ref_model = ref_model
 
         if reward_model is not None and judge is not None:
-            warnings.warn(
+            warn0(
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
                 "Ignoring `judge` and using `reward_model`.",
                 UserWarning,

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import warnings
 from pathlib import Path
 from typing import Callable, Optional, Union
 
@@ -40,7 +39,7 @@ from transformers.utils import is_peft_available
 
 from ..core import PPODecorators
 from .iterative_sft_config import IterativeSFTConfig
-from .utils import generate_model_card, get_comet_experiment_url
+from .utils import generate_model_card, get_comet_experiment_url, warn0
 
 
 if is_peft_available():
@@ -127,7 +126,7 @@ class IterativeSFTTrainer(Trainer):
 
         # Model
         if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
+            warn0(
                 "You passed model_init_kwargs to the `IterativeSFTConfig`, but your model is already instantiated. "
                 "The `model_init_kwargs` will be ignored."
             )
@@ -316,7 +315,7 @@ class IterativeSFTTrainer(Trainer):
         if input_ids is None and texts is None:
             raise ValueError("Step should include `input_ids` or `texts` as keyword arguments.")
         elif input_ids is not None and texts is not None:
-            warnings.warn(
+            warn0(
                 "Both `input_ids` and `texts` argument are provided. `input_ids` will be ignored. "
                 "Please provide only one of the two.",
                 UserWarning,
