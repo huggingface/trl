@@ -907,45 +907,6 @@ class GRPOTrainer(Trainer):
                         reward_func, evaluation_mode=True, device_placement=True
                     )
 
-    def efficient_gather_metrics(self, metrics_to_gather):
-        """
-        Efficiently gather metrics by stacking compatible tensors when possible.
-
-        Args:
-            metrics_to_gather (dict): Dictionary of {metric_name: tensor} to gather
-
-        Returns:
-            dict: Dictionary of {metric_name: gathered_tensor}
-        """
-        if not metrics_to_gather:
-            return {}
-
-        shape_groups = {}
-        for name, tensor in metrics_to_gather.items():
-            key = (tuple(tensor.shape), tensor.dtype, tensor.device)
-            if key not in shape_groups:
-                shape_groups[key] = []
-            shape_groups[key].append((name, tensor))
-
-        gathered_results = {}
-
-        for (_, _, _), tensor_list in shape_groups.items():
-            if len(tensor_list) == 1:
-                name, tensor = tensor_list[0]
-                gathered_results[name] = self.accelerator.gather(tensor)
-            else:
-                names, tensors = zip(*tensor_list)
-
-                stacked_tensor = torch.stack(tensors, dim=0)
-
-                gathered_stacked = self.accelerator.gather(stacked_tensor)
-
-                unstacked_tensors = torch.unbind(gathered_stacked, dim=0)
-                for name, unstacked in zip(names, unstacked_tensors):
-                    gathered_results[name] = unstacked
-
-        return gathered_results
-
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
@@ -1062,6 +1023,48 @@ class GRPOTrainer(Trainer):
             model.enable_input_require_grads()
 
         return model
+
+    def gather_metrics(self, metrics_to_gather: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """
+        Efficiently gather metrics by stacking compatible tensors when possible.
+
+        Args:
+            metrics_to_gather (dict): Dictionary of {metric_name: tensor} to gather
+
+        Returns:
+            dict: Dictionary of {metric_name: gathered_tensor}
+        """
+        if not metrics_to_gather:
+            return {}
+
+        shape_groups = {}
+        for name, tensor in metrics_to_gather.items():
+            key = (tuple(tensor.shape), tensor.dtype, tensor.device)
+            if key not in shape_groups:
+                shape_groups[key] = []
+            shape_groups[key].append((name, tensor))
+
+        gathered_results = {}
+        world_size = self.accelerator.num_processes
+
+        for (_, _, _), tensor_list in shape_groups.items():
+            if len(tensor_list) == 1:
+                name, tensor = tensor_list[0]
+                gathered_results[name] = self.accelerator.gather(tensor)
+            else:
+                names, tensors = zip(*tensor_list)
+
+                stacked_tensor = torch.stack(tensors, dim=0)
+
+                gathered_stacked = self.accelerator.gather(stacked_tensor)
+
+                M, *rest = stacked_tensor.shape
+                gathered_stacked = gathered_stacked.view(world_size, M, *rest).transpose(0, 1)
+
+                for name, unstacked in zip(names, torch.unbind(gathered_stacked, dim=0)):
+                    gathered_results[name] = unstacked
+
+        return gathered_results
 
     @profiling_decorator
     def _get_last_hidden_state(
@@ -1905,7 +1908,7 @@ class GRPOTrainer(Trainer):
             "clip_ratio": clip_ratio,
         }
 
-        gathered_metrics = self.accelerator.gather(metrics_to_gather)
+        gathered_metrics = self.gather_metrics(metrics_to_gather)
 
         # Extract gathered metrics and update the metrics dictionary
         self._metrics[mode]["entropy"].append(gathered_metrics["entropy"].nanmean().item())
