@@ -187,6 +187,20 @@ class RepeatSampler(Sampler):
 
 
 class EntropyController:
+    """
+    This controller dynamically adjusts the entropy‐loss coefficient to keep the policy’s
+    entropy near a desired target. Let e be the current entropy and cₖ the previous coefficient; we compute
+
+        cₖ₊₁ = clip(cₖ + Δ, [entropy_coef_min, entropy_coef_max])   if e < entropy_target
+        cₖ₊₁ = clip(cₖ − Δ, [entropy_coef_min, entropy_coef_max])   otherwise
+
+    and apply αₖ = cₖ₊₁ · 𝟙[e ≤ entropy_target], so entropy regularization only kicks in when
+    the policy’s entropy has fallen below the target.
+
+    Reference:
+        Skywork Open Reasoner 1 Technical Report — https://arxiv.org/abs/2505.22312v2
+    """
+
     def __init__(
         self, entropy_coef_min: float, entropy_coef_max: float, entropy_coef_delta: float, entropy_target: float
     ):
@@ -197,21 +211,21 @@ class EntropyController:
 
     def step(self, entropy, entropy_coef):
         """
-        This method adaptively adjusts the entropy coefficient based on the current entropy.
-        Following https://github.com/SkyworkAI/Skywork-OR1/tree/main
-        Related post:
-        https://capricious-hydrogen-41c.notion.site/Skywork-Open-Reasoner-Series-1d0bc9ae823a80459b46c149e4f51680?pvs=25#1d1bc9ae823a801592a0c3891ea5328f
+        Update the entropy coefficient for the next step.
 
         Args:
             entropy (`float`): Current entropy value.
             entropy_coef (`float`): Current entropy coef.
 
         Returns:
-            `float`: Adjusted entropy coefficient.
+            new_coef: Updated coefficient cₖ₊₁
+            apply_coef: Coefficient to apply this step.
         """
-        new_entropy_coef = entropy_coef + (1 if entropy < self.entropy_target else -1) * self.entropy_coef_delta
-        new_entropy_coef = float(max(self.entropy_coef_min, min(new_entropy_coef, self.entropy_coef_max)))
-        return new_entropy_coef * (entropy < self.entropy_target)
+        new_coef = entropy_coef + (1 if entropy < self.entropy_target else -1) * self.entropy_coef_delta
+        new_coef = float(max(self.entropy_coef_min, min(new_coef, self.entropy_coef_max)))
+        apply_coef = 0.0 if entropy < self.entropy_target else new_coef
+
+        return new_coef, apply_coef
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -1948,10 +1962,10 @@ class GRPOTrainer(Trainer):
 
         if self.use_adaptive_entropy:
             world_entropy_loss = self.accelerator.reduce(entropy_loss.detach(), reduction="mean").item()
-            entropy_coef = self.entropy_ctrl.step(world_entropy_loss, self.entropy_coef)
-            self.entropy_coef = entropy_coef
+            new_coef, apply_coef = self.entropy_ctrl.step(world_entropy_loss, self.entropy_coef)
+            self.entropy_coef = new_coef
 
-        loss = policy_loss - self.entropy_coef * entropy_loss
+        loss = policy_loss - apply_coef * entropy_loss
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
