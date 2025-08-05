@@ -185,7 +185,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
 
         # For packing with position_ids, we should NOT create attention_mask as it causes
-        # flash attention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
+        # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
         if not has_packed_position_ids:
             attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
 
@@ -437,6 +437,10 @@ class SFTTrainer(Trainer):
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
+        use_flash_attention = model.config._attn_implementation in [
+            "flash_attention_2",
+            "kernels-community/vllm-flash-attn3",
+        ]
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -445,7 +449,7 @@ class SFTTrainer(Trainer):
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
                     "recommended. Please refer to the documentation to understand why this is not recommended."
                 )
-            if model.config._attn_implementation != "flash_attention_2":
+            if not use_flash_attention:
                 warnings.warn(
                     "Padding-free training is enabled, but the attention implementation is not set to "
                     "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
@@ -483,21 +487,18 @@ class SFTTrainer(Trainer):
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
                 # Using position_ids without flash_attn hurts the training
-                return_position_ids=model.config._attn_implementation == "flash_attention_2",
+                return_position_ids=use_flash_attention,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
-        if (
-            args.packing
-            and args.packing_strategy == "bfd"
-            and model.config._attn_implementation != "flash_attention_2"
-        ):
+        if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
             warnings.warn(
-                "You are using packing, but the attention implementation is not set to 'flash_attention_2'. Packing "
-                "flattens batches into a single sequence, and 'flash_attention_2' is the only known attention "
-                "mechanism that reliably supports this. Using other implementations may lead to cross-contamination "
-                "between batches. To avoid this, either disable packing by setting `packing=False`, or set "
-                "`attn_implementation='flash_attention_2'` in the model configuration."
+                "You are using packing, but the attention implementation is not set to 'flash_attention_2' or "
+                "'kernels-community/vllm-flash-attn3'. Packing flattens batches into a single sequence, and Flash "
+                "Attention is the only known attention mechanisms that reliably support this. Using other "
+                "implementations may lead to cross-contamination between batches. To avoid this, either disable "
+                "packing by setting `packing=False`, or set `attn_implementation='flash_attention_2'` or "
+                "`attn_implementation='kernels-community/vllm-flash-attn3'` in the model configuration."
             )
         if args.assistant_only_loss and not is_conversational(dataset_sample):
             raise ValueError(
@@ -821,7 +822,7 @@ class SFTTrainer(Trainer):
 
                 dataset = dataset.select_columns(columns)
 
-                # Packing adds new column "seq_lengths" needed for document aware flash attention
+                # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
