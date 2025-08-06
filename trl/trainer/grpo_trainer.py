@@ -1404,7 +1404,7 @@ class GRPOTrainer(Trainer):
             )
             prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
 
-            # The chat template sometimes inserts a single image token into the prompt text. However, when this text is 
+            # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
             # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
             # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
             # collapse them back into a single token string to match the original chat template in case it originally
@@ -1415,11 +1415,21 @@ class GRPOTrainer(Trainer):
                 escaped_img_token = re.escape(self.image_token)
                 # Search for the image token in the chat template
                 if re.search(escaped_img_token, self.processing_class.chat_template):
-                    prompts_text = [re.sub(rf"({escaped_img_token})+", self.image_token, text) for text in prompts_text]
+                    prompts_text = [
+                        re.sub(rf"({escaped_img_token})+", self.image_token, text) for text in prompts_text
+                    ]
                 else:
                     # If the chat template doesn't use the image token, we remove all instances of it + vision_end_token_id
-                    escaped_eoi_token = re.escape(self.processing_class.tokenizer.decode([self.vision_end_token_id]))
-                    prompts_text = [re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text]
+                    if self.vision_end_token_id is not None:
+                        escaped_eoi_token = re.escape(
+                            self.processing_class.tokenizer.decode([self.vision_end_token_id])
+                        )
+                        prompts_text = [
+                            re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text
+                        ]
+                    else:
+                        # If vision_end_token_id is None, just remove the image tokens
+                        prompts_text = [re.sub(rf"({escaped_img_token})+", "", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
