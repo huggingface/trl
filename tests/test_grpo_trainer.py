@@ -1865,9 +1865,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 train_dataset=dataset,
             )
 
-            if "Gemma3" in model_id:
-                trainer.vision_start_token_id = trainer.model.config.boi_token_id
-                trainer.vision_end_token_id = trainer.model.config.eoi_token_id
 
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
