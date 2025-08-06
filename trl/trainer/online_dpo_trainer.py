@@ -399,6 +399,13 @@ class OnlineDPOTrainer(Trainer):
                 if self.accelerator.num_processes > 1 and self.vllm_tensor_parallel_size > 1:
                     vllm_kwargs["distributed_executor_backend"] = "external_launcher"
 
+                # vLLM requires the environment variables to be set for distributed training.
+                os.environ["RANK"] = str(self.accelerator.process_index)
+                os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
+                os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
+                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
+                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+
                 self.llm = LLM(**vllm_kwargs)
                 self.vllm_client = None
             # vLLM specific sampling arguments
