@@ -597,7 +597,8 @@ class MergeModelCallback(TrainerCallback):
 
 class BEMACallback(TrainerCallback):
     """
-    A [`~transformers.TrainerCallback`] that implements [BEMA](https://huggingface.co/papers/2508.00180) (Bias Corrected Exponential Moving Average).
+    A [`~transformers.TrainerCallback`] that implements [BEMA](https://huggingface.co/papers/2508.00180) (Bias Corrected Exponential Moving Average) by Adam Block and Cyril Zhang.
+    Code from https://github.com/abblock/bema under MIT license.
 
     BEMA computes model weights that scale like:
         θₜ' = αₜ·(θₜ - θ₀) + EMAₜ
