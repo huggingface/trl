@@ -39,6 +39,7 @@ from trl.trainer.utils import (
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
+    substitute_special_token_in_chat_template,
 )
 
 from .testing_utils import require_rich
@@ -638,3 +639,40 @@ class TestEntropyFromLogits(unittest.TestCase):
             entropy = -(torch.exp(logps) * logps).sum(-1)
         predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
         torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
+
+
+class TestSubstituteSpecialTokenInChatTemplate(unittest.TestCase):
+    def test_single_occurrence(self):
+        texts = ["<|im_start|>Hello world"]
+        special_token = "<|im_start|>"
+        replacement = ""
+        result = substitute_special_token_in_chat_template(texts, special_token, replacement)
+        self.assertEqual(result, ["Hello world"])
+
+    def test_multiple_occurrences(self):
+        texts = ["<|im_start|><|im_start|>Hello"]
+        special_token = "<|im_start|>"
+        replacement = ""
+        result = substitute_special_token_in_chat_template(texts, special_token, replacement)
+        self.assertEqual(result, ["Hello"])
+
+    def test_no_occurrence(self):
+        texts = ["Hello world"]
+        special_token = "<|im_start|>"
+        replacement = ""
+        result = substitute_special_token_in_chat_template(texts, special_token, replacement)
+        self.assertEqual(result, ["Hello world"])
+
+    def test_with_replacement(self):
+        texts = ["<|im_start|>Hello"]
+        special_token = "<|im_start|>"
+        replacement = ">> "
+        result = substitute_special_token_in_chat_template(texts, special_token, replacement)
+        self.assertEqual(result, [">> Hello"])
+
+    def test_multiple_texts(self):
+        texts = ["<|im_start|>A", "<|im_start|><|im_start|>B", "C"]
+        special_token = "<|im_start|>"
+        replacement = ""
+        result = substitute_special_token_in_chat_template(texts, special_token, replacement)
+        self.assertEqual(result, ["A", "B", "C"])
