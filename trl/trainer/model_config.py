@@ -55,6 +55,8 @@ class ModelConfig:
             LoRA dropout.
         lora_target_modules (`Union[str, list[str]]` or `None`, *optional*, defaults to `None`):
             LoRA target modules.
+        lora_target_parameters (`Union[str, list[str]]` or `None`, *optional*, defaults to `None`):
+            List of target parameters for LoRA.
         lora_modules_to_save (`list[str]` or `None`, *optional*, defaults to `None`):
             Model layers to unfreeze & train.
         lora_task_type (`str`, *optional*, defaults to `"CAUSAL_LM"`):
@@ -128,6 +130,10 @@ class ModelConfig:
     lora_target_modules: Optional[list[str]] = field(
         default=None,
         metadata={"help": "LoRA target modules."},
+    )
+    lora_target_parameters: Optional[list[str]] = field(
+        default=None,
+        metadata={"help": "List of target parameters for LoRA."},
     )
     lora_modules_to_save: Optional[list[str]] = field(
         default=None,
