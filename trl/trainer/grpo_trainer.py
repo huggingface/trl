@@ -15,7 +15,6 @@
 import copy
 import inspect
 import os
-import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -67,6 +66,7 @@ from .utils import (
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
+    substitute_special_token_in_chat_template,
 )
 
 
@@ -575,6 +575,7 @@ class GRPOTrainer(Trainer):
         self.pad_token = tokenizer.pad_token
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
+        self.bos_token_id = tokenizer.bos_token_id
         self.image_token = getattr(processing_class, "image_token", None)
         self.image_token_id = getattr(processing_class, "image_token_id", None)
         self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
@@ -1406,19 +1407,21 @@ class GRPOTrainer(Trainer):
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
+            prompts_text = substitute_special_token_in_chat_template(prompts_text, self.pad_token, "")
 
             # The chat template inserts a single image token into the prompt text. However, when this text is later
             # tokenized, the single image token string is expanded into multiple image token IDs, depending on the
             # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
             # collapse them back into a single token string to match the original template.
             if self.image_token is not None:
-                prompts_text = [
-                    re.sub(rf"({re.escape(self.image_token)})+", self.image_token, text) for text in prompts_text
-                ]
+                prompts_text = substitute_special_token_in_chat_template(
+                    prompts_text, self.image_token, self.image_token
+                )
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
+            # VLLM will add the bos_token when it performs tokenization, so we remove it here to avoid duplication.
+            prompts_text = substitute_special_token_in_chat_template(prompts_text, self.bos_token, "")
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()

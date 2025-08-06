@@ -16,6 +16,7 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
+import re
 import warnings
 from collections import deque
 from dataclasses import dataclass, field
@@ -26,7 +27,6 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-import torch.utils.data
 from accelerate import Accelerator, PartialState
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
@@ -1574,3 +1574,18 @@ def print_prompt_completions_sample(
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
+
+
+def substitute_special_token_in_chat_template(texts: list[str], special_token: str, replacement: str) -> list[str]:
+    """
+    Substitute one or more occurences of a special token in a chat template with a given replacement string.
+
+    Args:
+        texts (`list[str]`): The prompt after applying the chat template, which may contain the special token.
+        special_token (`str`): The special token to be replaced in the chat template.
+        replacement (`str`): The string to replace the special token with.
+    Returns:
+        `list[str]`:
+            The modified chat template with the special token replaced.
+    """
+    return [re.sub(rf"^({re.escape(special_token)})+", replacement, text) for text in texts]
