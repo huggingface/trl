@@ -1865,7 +1865,6 @@ class GRPOTrainerTester(unittest.TestCase):
                 train_dataset=dataset,
             )
 
-
             previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
             trainer.train()
