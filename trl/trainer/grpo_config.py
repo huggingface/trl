@@ -15,8 +15,6 @@
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
-import transformers
-from packaging import version
 from transformers import TrainingArguments
 
 
@@ -238,8 +236,7 @@ class GRPOConfig(TrainingArguments):
             are logged.
     """
 
-    if version.parse(transformers.__version__) >= version.parse("4.51.0"):
-        _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(

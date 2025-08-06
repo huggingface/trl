@@ -7,6 +7,14 @@
 TRL is a full stack library where we provide a set of tools to train transformer language models with methods like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO), Reward Modeling, and more.
 The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
 
+## 🎉 What's New
+
+**✨ Open AI GPT OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4)! Check out the
+
+- [OpenAI Cookbook](https://cookbook.openai.com/articles/gpt-oss/fine-tune-transfomers)
+- [GPT OSS receipes](https://github.com/huggingface/gpt-oss-recipes)
+- [Our example script](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gpt_oss.py)
+
 You can also explore TRL-related models, datasets, and demos in the [TRL Hugging Face organization](https://huggingface.co/trl-lib).
 
 ## Learn
