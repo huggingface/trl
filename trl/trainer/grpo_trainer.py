@@ -1416,13 +1416,13 @@ class GRPOTrainer(Trainer):
             # (e.g. Gemma 3) and removes all image_token instances and vision_end_token_id as well, leaving only
             # the vision_start_token_id (e.g. <start_of_image>).
             if self.image_token is not None:
-                escaped_img_token = re.escape(trainer.image_token)
+                escaped_img_token = re.escape(self.image_token)
                 # Search for the image token in the chat template
-                if re.search(escaped_img_token, trainer.processing_class.chat_template):
-                    prompts_text = [re.sub(rf"({escaped_img_token})+", trainer.image_token, text) for text in prompts_text]
+                if re.search(escaped_img_token, self.processing_class.chat_template):
+                    prompts_text = [re.sub(rf"({escaped_img_token})+", self.image_token, text) for text in prompts_text]
                 else:
                     # If the chat template doesn't use the image token, we remove all instances of it + vision_end_token_id
-                    escaped_eoi_token = re.escape(trainer.processing_class.tokenizer.decode([trainer.vision_end_token_id]))
+                    escaped_eoi_token = re.escape(self.processing_class.tokenizer.decode([self.vision_end_token_id]))
                     prompts_text = [re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
