@@ -572,9 +572,9 @@ class GRPOTrainer(Trainer):
             tokenizer.pad_token = tokenizer.eos_token
 
         self.pad_token = tokenizer.pad_token
+        self.bos_token = tokenizer.bos_token if tokenizer.bos_token is not None else None
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.bos_token_id = tokenizer.bos_token_id
         self.image_token = getattr(processing_class, "image_token", None)
         self.image_token_id = getattr(processing_class, "image_token_id", None)
         self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
@@ -1416,8 +1416,11 @@ class GRPOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
+            print(f"BOS Token is {self.bos_token}")
+            print(f"Prompts text: {prompts_text}")
             # VLLM will add the bos_token when it performs tokenization, so we remove it here to avoid duplication.
-            prompts_text = substitute_special_token_in_chat_template(prompts_text, self.bos_token, "")
+            if self.bos_token is not None:
+                prompts_text = substitute_special_token_in_chat_template(prompts_text, self.bos_token, "")
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
@@ -1441,6 +1444,7 @@ class GRPOTrainer(Trainer):
                         ordered_set_of_images = None
 
                     with profiling_context(self, "vLLM.generate"):
+                        self.args.generation_kwargs["return_input_tokens"] = True
                         completion_ids = self.vllm_client.generate(
                             prompts=ordered_set_of_prompts,
                             images=ordered_set_of_images,
@@ -1516,6 +1520,7 @@ class GRPOTrainer(Trainer):
 
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
+                    print(all_outputs[0])  # Debugging output to check the generated completions
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
