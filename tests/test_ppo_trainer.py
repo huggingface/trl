@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
 
 import torch
 from datasets import load_dataset
@@ -62,119 +61,115 @@ class TestPPOTrainer(TrlTestCase):
 
     def test_basic_training(self):
         """Test basic PPO training configuration and verify model updates."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Capture initial weights
-            initial_critic_weights = {}
-            initial_policy_weights = {}
-            for name, param in self.value_model.named_parameters():
-                initial_critic_weights[name] = param.clone().detach()
-            for name, param in self.model.named_parameters():
-                initial_policy_weights[name] = param.clone().detach()
+        # Capture initial weights
+        initial_critic_weights = {}
+        initial_policy_weights = {}
+        for name, param in self.value_model.named_parameters():
+            initial_critic_weights[name] = param.clone().detach()
+        for name, param in self.model.named_parameters():
+            initial_policy_weights[name] = param.clone().detach()
 
-            # Configure training args similar to example script
-            training_args = PPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=4,
-                per_device_eval_batch_size=2,
-                num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
-                report_to="none",
-            )
+        # Configure training args similar to example script
+        training_args = PPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,
+            per_device_eval_batch_size=2,
+            num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
+            report_to="none",
+        )
 
-            # Create trainer
-            trainer = PPOTrainer(
-                args=training_args,
-                processing_class=self.tokenizer,
-                model=self.model,
-                ref_model=self.ref_model,
-                reward_model=self.reward_model,
-                value_model=self.value_model,
-                train_dataset=self.raw_dataset["train"],
-                eval_dataset=self.raw_dataset["test"],
-            )
+        # Create trainer
+        trainer = PPOTrainer(
+            args=training_args,
+            processing_class=self.tokenizer,
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+            eval_dataset=self.raw_dataset["test"],
+        )
 
-            # Train
-            trainer.train()
+        # Train
+        trainer.train()
 
-            # Check if critic weights have been updated
-            critic_weights_updated = False
-            for name, param in trainer.model.value_model.named_parameters():
-                if not torch.allclose(initial_critic_weights[name], param.to("cpu")):
-                    critic_weights_updated = True
-                    break
+        # Check if critic weights have been updated
+        critic_weights_updated = False
+        for name, param in trainer.model.value_model.named_parameters():
+            if not torch.allclose(initial_critic_weights[name], param.to("cpu")):
+                critic_weights_updated = True
+                break
 
-            # Check if policy weights have been updated
-            policy_weights_updated = False
-            for name, param in trainer.model.policy.named_parameters():
-                if not torch.allclose(initial_policy_weights[name], param.to("cpu")):
-                    policy_weights_updated = True
-                    break
+        # Check if policy weights have been updated
+        policy_weights_updated = False
+        for name, param in trainer.model.policy.named_parameters():
+            if not torch.allclose(initial_policy_weights[name], param.to("cpu")):
+                policy_weights_updated = True
+                break
 
-            self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
-            self.assertTrue(policy_weights_updated, "Policy weights were not updated during training")
+        self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
+        self.assertTrue(policy_weights_updated, "Policy weights were not updated during training")
 
     @require_peft
     def test_peft_training(self):
         """Test PPO training with PEFT configuration and verify model updates."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Capture initial weights
-            initial_critic_weights = {}
-            initial_policy_weights = {}
-            for name, param in self.value_model.named_parameters():
-                initial_critic_weights[name] = param.clone().detach()
-            for name, param in self.model.named_parameters():
-                initial_policy_weights[name] = param.clone().detach()
+        # Capture initial weights
+        initial_critic_weights = {}
+        initial_policy_weights = {}
+        for name, param in self.value_model.named_parameters():
+            initial_critic_weights[name] = param.clone().detach()
+        for name, param in self.model.named_parameters():
+            initial_policy_weights[name] = param.clone().detach()
 
-            # Configure training args
-            training_args = PPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=4,
-                per_device_eval_batch_size=2,
-                num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
-                report_to="none",
-            )
+        # Configure training args
+        training_args = PPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=4,
+            per_device_eval_batch_size=2,
+            num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
+            report_to="none",
+        )
 
-            # Configure PEFT
-            peft_config = LoraConfig(
-                r=32,
-                lora_alpha=16,
-                lora_dropout=0.05,
-                bias="none",
-                task_type="CAUSAL_LM",
-            )
+        # Configure PEFT
+        peft_config = LoraConfig(
+            r=32,
+            lora_alpha=16,
+            lora_dropout=0.05,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
 
-            # Create trainer with PEFT
-            trainer = PPOTrainer(
-                args=training_args,
-                processing_class=self.tokenizer,
-                model=self.model,
-                ref_model=None,
-                reward_model=self.reward_model,
-                value_model=self.value_model,
-                train_dataset=self.raw_dataset["train"],
-                eval_dataset=self.raw_dataset["test"],
-                peft_config=peft_config,
-            )
+        # Create trainer with PEFT
+        trainer = PPOTrainer(
+            args=training_args,
+            processing_class=self.tokenizer,
+            model=self.model,
+            ref_model=None,
+            reward_model=self.reward_model,
+            value_model=self.value_model,
+            train_dataset=self.raw_dataset["train"],
+            eval_dataset=self.raw_dataset["test"],
+            peft_config=peft_config,
+        )
 
-            # Train
-            trainer.train()
+        # Train
+        trainer.train()
 
-            # Check if critic weights have been updated
-            critic_weights_updated = False
-            for name, param in trainer.model.value_model.named_parameters():
-                if name in initial_critic_weights and not torch.allclose(
-                    initial_critic_weights[name], param.to("cpu")
-                ):
-                    critic_weights_updated = True
+        # Check if critic weights have been updated
+        critic_weights_updated = False
+        for name, param in trainer.model.value_model.named_parameters():
+            if name in initial_critic_weights and not torch.allclose(initial_critic_weights[name], param.to("cpu")):
+                critic_weights_updated = True
+                break
+
+        # Check if policy weights have been updated - for PEFT we check the LoRA weights
+        policy_weights_updated = False
+        for name, param in trainer.model.policy.named_parameters():
+            if "lora" in name.lower() and param.requires_grad:  # Only check LoRA weights
+                # New weights should be non-zero if they've been updated
+                if not torch.allclose(param, torch.zeros_like(param)):
+                    policy_weights_updated = True
                     break
 
-            # Check if policy weights have been updated - for PEFT we check the LoRA weights
-            policy_weights_updated = False
-            for name, param in trainer.model.policy.named_parameters():
-                if "lora" in name.lower() and param.requires_grad:  # Only check LoRA weights
-                    # New weights should be non-zero if they've been updated
-                    if not torch.allclose(param, torch.zeros_like(param)):
-                        policy_weights_updated = True
-                        break
-
-            self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
-            self.assertTrue(policy_weights_updated, "Policy LoRA weights were not updated during training")
+        self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
+        self.assertTrue(policy_weights_updated, "Policy LoRA weights were not updated during training")

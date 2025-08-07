@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
 
 import torch
 from datasets import load_dataset
@@ -49,48 +48,47 @@ class ORPOTrainerTester(TrlTestCase):
         ]
     )
     def test_orpo_trainer(self, name, config_name):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = ORPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                report_to="none",
-            )
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=1,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            beta=0.1,
+            report_to="none",
+        )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            if name == "qwen":
-                model = self.model
-                tokenizer = self.tokenizer
-            elif name == "t5":
-                model = self.t5_model
-                tokenizer = self.t5_tokenizer
-                training_args.is_encoder_decoder = True
+        if name == "qwen":
+            model = self.model
+            tokenizer = self.tokenizer
+        elif name == "t5":
+            model = self.t5_model
+            tokenizer = self.t5_tokenizer
+            training_args.is_encoder_decoder = True
 
-            trainer = ORPOTrainer(
-                model=model,
-                args=training_args,
-                processing_class=tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
+        trainer = ORPOTrainer(
+            model=model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+        )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.equal(param, new_param))
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.equal(param, new_param))
 
     @parameterized.expand(
         [
@@ -112,42 +110,41 @@ class ORPOTrainerTester(TrlTestCase):
             task_type="CAUSAL_LM",
         )
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = ORPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                report_to="none",
-            )
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=4,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            beta=0.1,
+            report_to="none",
+        )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            trainer = ORPOTrainer(
-                model=self.model,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                peft_config=lora_config,
-            )
+        trainer = ORPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            peft_config=lora_config,
+        )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                if "lora" in n:
-                    new_param = trainer.model.get_parameter(n)
-                    if param.sum() != 0:  # ignore 0 biases
-                        self.assertFalse(torch.equal(param, new_param))
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            if "lora" in n:
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # ignore 0 biases
+                    self.assertFalse(torch.equal(param, new_param))
 
     def test_compute_metrics(self):
         model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -159,27 +156,26 @@ class ORPOTrainerTester(TrlTestCase):
         def dummy_compute_metrics(*args, **kwargs):
             return {"test": 0.0}
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = ORPOConfig(
-                output_dir=self.tmp_dir,
-                remove_unused_columns=False,
-                per_device_train_batch_size=2,
-                do_eval=True,
-                eval_strategy="steps",
-                eval_steps=1,
-                per_device_eval_batch_size=2,
-                report_to="none",
-            )
+        training_args = ORPOConfig(
+            output_dir=self.tmp_dir,
+            remove_unused_columns=False,
+            per_device_train_batch_size=2,
+            do_eval=True,
+            eval_strategy="steps",
+            eval_steps=1,
+            per_device_eval_batch_size=2,
+            report_to="none",
+        )
 
-            trainer = ORPOTrainer(
-                model=model,
-                args=training_args,
-                processing_class=tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                compute_metrics=dummy_compute_metrics,
-            )
+        trainer = ORPOTrainer(
+            model=model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            compute_metrics=dummy_compute_metrics,
+        )
 
-            trainer.train()
+        trainer.train()
 
-            self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
+        self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)

@@ -397,7 +397,7 @@ class BCOTrainerTester(TrlTestCase):
         trainer.save_model()
 
         # assert that the model is loaded without giving OSError
-        AutoModelForCausalLM.from_pretrained(tmp_dir)
+        AutoModelForCausalLM.from_pretrained(self.tmp_dir)
 
     @require_sklearn
     def test_compute_metrics(self):

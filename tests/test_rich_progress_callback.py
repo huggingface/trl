@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
 
 import torch
 import torch.nn as nn
@@ -42,28 +41,27 @@ class TestRichProgressCallback(TrlTestCase):
         self.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 101)
 
     def test_rich_progress_callback_logging(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
-                output_dir=self.tmp_dir,
-                per_device_eval_batch_size=2,
-                per_device_train_batch_size=2,
-                num_train_epochs=4,
-                eval_strategy="steps",
-                eval_steps=1,
-                logging_strategy="steps",
-                logging_steps=1,
-                save_strategy="no",
-                report_to="none",
-                disable_tqdm=True,
-            )
-            callbacks = [RichProgressCallback()]
-            trainer = Trainer(
-                model=self.dummy_model,
-                train_dataset=self.dummy_train_dataset,
-                eval_dataset=self.dummy_val_dataset,
-                args=training_args,
-                callbacks=callbacks,
-            )
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            per_device_eval_batch_size=2,
+            per_device_train_batch_size=2,
+            num_train_epochs=4,
+            eval_strategy="steps",
+            eval_steps=1,
+            logging_strategy="steps",
+            logging_steps=1,
+            save_strategy="no",
+            report_to="none",
+            disable_tqdm=True,
+        )
+        callbacks = [RichProgressCallback()]
+        trainer = Trainer(
+            model=self.dummy_model,
+            train_dataset=self.dummy_train_dataset,
+            eval_dataset=self.dummy_val_dataset,
+            args=training_args,
+            callbacks=callbacks,
+        )
 
-            trainer.train()
-            trainer.train()
+        trainer.train()
+        trainer.train()

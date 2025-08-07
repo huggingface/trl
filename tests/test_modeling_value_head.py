@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import gc
-import tempfile
 import unittest
 
 import torch
@@ -101,10 +100,9 @@ class BaseTester:
             for model_name in self.all_model_names:
                 model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    model.save_pretrained(tmp_dir)
+                model.save_pretrained(self.tmp_dir)
 
-                    model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(self.tmp_dir)
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
@@ -117,10 +115,9 @@ class BaseTester:
             for model_name in self.all_model_names:
                 model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    model.save_pretrained(tmp_dir)
+                model.save_pretrained(self.tmp_dir)
 
-                    model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(self.tmp_dir)
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
@@ -135,11 +132,10 @@ class BaseTester:
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    trl_model.save_pretrained(tmp_dir, max_shard_size="1MB")
-                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
-                        tmp_dir
-                    )
+                trl_model.save_pretrained(self.tmp_dir, max_shard_size="1MB")
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
+                    self.tmp_dir
+                )
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
@@ -159,11 +155,10 @@ class BaseTester:
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    trl_model.save_pretrained(tmp_dir)
-                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
-                        tmp_dir
-                    )
+                trl_model.save_pretrained(self.tmp_dir)
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
+                    self.tmp_dir
+                )
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
