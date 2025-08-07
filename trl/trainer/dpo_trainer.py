@@ -1054,6 +1054,8 @@ class DPOTrainer(Trainer):
                 # for the chosen and rejected samples, respectively.
                 logits -= F.softplus(chosen_logratios) - F.softplus(rejected_logratios)
 
+        logits = logits - self.args.dpop_penalty_coef * torch.clamp(-chosen_logratios, min=0)
+
         # The beta is a temperature parameter for the DPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the
         # labels and calculates a conservative DPO loss.
