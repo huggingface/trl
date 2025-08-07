@@ -297,9 +297,10 @@ for model_id, config_class, model_class in [
         kwargs["projection_dim"] = 8
     if config_class in [LlavaConfig, LlavaNextConfig, PaliGemmaConfig]:
         vision_kwargs["projection_dim"] = 8
-    if config_class in [LlavaConfig, LlavaNextConfig]:
+    if config_class in [LlavaConfig, LlavaNextConfig, Gemma3Config]:
         vision_kwargs["image_size"] = 336
-        vision_kwargs["patch_size"] = 14
+        vision_kwargs["patch_size"] = 20
+        processor.image_processor.size = {"height": 336, "width": 336}
     if config_class in [Qwen2VLConfig, Qwen2_5_VLConfig]:
         kwargs["vision_start_token_id"] = 151652
         kwargs["vision_end_token_id"] = 151653
