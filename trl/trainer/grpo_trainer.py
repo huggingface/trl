@@ -1439,7 +1439,7 @@ class GRPOTrainer(Trainer):
                         ordered_set_of_images = None
 
                     with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
+                        completion_ids, vllm_logprobs = self.vllm_client.generate(
                             prompts=ordered_set_of_prompts,
                             images=ordered_set_of_images,
                             n=self.num_generations,
@@ -1741,6 +1741,11 @@ class GRPOTrainer(Trainer):
 
         if has_images:
             self._logs["image"].extend(gather_object(images))
+
+        vllm_logps = torch.tensor(vllm_logprobs, device=device, dtype=torch.float32)
+        logps_diff = torch.abs(vllm_logps - old_per_token_logps)
+        self._metrics[mode]["Token Probability Difference/max"].append(logps_diff.max().exp().item())
+        self._metrics[mode]["Token Probability Difference/mean"].append(logps_diff.mean().exp().item())
 
         output = {
             "prompt_ids": prompt_ids,
