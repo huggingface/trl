@@ -368,4 +368,4 @@ class OnlineDPOConfig(TrainingArguments):
 
         # Validate vLLM configuration
         if self.vllm_mode not in ["server", "colocate"]:
-            raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'")
+            raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
