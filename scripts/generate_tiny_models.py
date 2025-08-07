@@ -280,12 +280,12 @@ for model_id, config_class, model_class, suffix in [
 
 # Vision Language Models
 for model_id, config_class, model_class in [
-    ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
-    ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
-    ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
-    ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMConfig, SmolVLMForConditionalGeneration),
-    ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
-    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
+    # ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
+    # ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
+    # ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
+    # ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMConfig, SmolVLMForConditionalGeneration),
+    # ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
+    # ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
     ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLConfig, Qwen2VLForConditionalGeneration),
     ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLConfig, Qwen2_5_VLForConditionalGeneration),
 ]:
@@ -305,6 +305,7 @@ for model_id, config_class, model_class in [
         kwargs["vision_end_token_id"] = 151653
         kwargs["vision_token_id"] = 151654
         kwargs["image_token_id"] = 151655
+        kwargs["vocab_size"] = len(processor.tokenizer.vocab)
         text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [1]}
         vision_kwargs["depth"] = 4
         vision_kwargs["embed_dim"] = 64
