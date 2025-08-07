@@ -98,7 +98,7 @@ This is a minimal model built for unit tests in the [TRL](https://github.com/hug
 api = HfApi()
 
 
-def push_to_hub(model, tokenizer, prefix=None, suffix=None):
+def push_to_hub(model, tokenizer, prefix=None, suffix=None, force=False):
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
     model_card = ModelCard(content)
@@ -108,7 +108,7 @@ def push_to_hub(model, tokenizer, prefix=None, suffix=None):
     if suffix is not None:
         repo_id += f"-{suffix}"
 
-    if api.repo_exists(repo_id):
+    if api.repo_exists(repo_id) and not force:
         print(f"Model {repo_id} already exists, skipping")
     else:
         model.push_to_hub(repo_id)
@@ -302,6 +302,9 @@ for model_id, config_class, model_class in [
         vision_kwargs["patch_size"] = 14
     if config_class in [Qwen2VLConfig, Qwen2_5_VLConfig]:
         kwargs["vision_start_token_id"] = 151652
+        kwargs["vision_end_token_id"] = 151653
+        kwargs["vision_token_id"] = 151654
+        kwargs["image_token_id"] = 151655
         text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [1]}
         vision_kwargs["depth"] = 4
         vision_kwargs["embed_dim"] = 64
@@ -326,4 +329,4 @@ for model_id, config_class, model_class in [
         **kwargs,
     )
     model = model_class(config)
-    push_to_hub(model, processor, "tiny")
+    push_to_hub(model, processor, "tiny", force=True)
