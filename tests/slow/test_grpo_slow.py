@@ -14,7 +14,6 @@
 
 import gc
 import os
-import tempfile
 import warnings
 
 import numpy as np
@@ -356,205 +355,201 @@ class GRPOTrainerSlowTester(TrlTestCase):
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            config = GRPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=1,  # Minimal batch size
-                gradient_accumulation_steps=2,  # Make effective batch size 2, divisible by num_generations
-                num_generations=2,
-                max_completion_length=4,  # Very short completions to reduce memory
-                max_prompt_length=32,  # Very short prompts to reduce memory
-                use_vllm=True,  # Enable vLLM
-                vllm_mode="colocate",  # Use colocate mode to avoid server dependency
-                vllm_gpu_memory_utilization=0.05,  # Use minimal GPU memory (5%)
-                gradient_checkpointing=True,  # Enable gradient checkpointing to save memory
-                bf16=True,  # Use bfloat16 to reduce memory
-                report_to="none",
-                logging_strategy="no",
-            )
+        config = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=1,  # Minimal batch size
+            gradient_accumulation_steps=2,  # Make effective batch size 2, divisible by num_generations
+            num_generations=2,
+            max_completion_length=4,  # Very short completions to reduce memory
+            max_prompt_length=32,  # Very short prompts to reduce memory
+            use_vllm=True,  # Enable vLLM
+            vllm_mode="colocate",  # Use colocate mode to avoid server dependency
+            vllm_gpu_memory_utilization=0.05,  # Use minimal GPU memory (5%)
+            gradient_checkpointing=True,  # Enable gradient checkpointing to save memory
+            bf16=True,  # Use bfloat16 to reduce memory
+            report_to="none",
+            logging_strategy="no",
+        )
 
-            # Create a VLM processor
-            processor = AutoProcessor.from_pretrained(
-                "HuggingFaceTB/SmolVLM-Instruct", use_fast=True, padding_side="left"
-            )
+        # Create a VLM processor
+        processor = AutoProcessor.from_pretrained("HuggingFaceTB/SmolVLM-Instruct", use_fast=True, padding_side="left")
 
-            # Verify processor has both required attributes for VLM detection
-            self.assertTrue(hasattr(processor, "tokenizer"))
-            self.assertTrue(hasattr(processor, "image_processor"))
+        # Verify processor has both required attributes for VLM detection
+        self.assertTrue(hasattr(processor, "tokenizer"))
+        self.assertTrue(hasattr(processor, "image_processor"))
 
-            def dummy_reward_func(completions, **kwargs):
-                return [1.0] * len(completions)
+        def dummy_reward_func(completions, **kwargs):
+            return [1.0] * len(completions)
 
-            # Use LoRA configuration for memory efficiency
-            lora_config = LoraConfig(
-                r=4,  # Very low rank for minimal memory
-                lora_alpha=8,
-                target_modules=["q_proj", "v_proj"],  # Minimal target modules
-                lora_dropout=0.1,
-                bias="none",
-                task_type="CAUSAL_LM",
-            )
+        # Use LoRA configuration for memory efficiency
+        lora_config = LoraConfig(
+            r=4,  # Very low rank for minimal memory
+            lora_alpha=8,
+            target_modules=["q_proj", "v_proj"],  # Minimal target modules
+            lora_dropout=0.1,
+            bias="none",
+            task_type="CAUSAL_LM",
+        )
 
-            # Use 4-bit quantization for further memory reduction
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.bfloat16,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_use_double_quant=True,
-            )
+        # Use 4-bit quantization for further memory reduction
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
 
-            original_env = {}
-            required_env_vars = {
-                "RANK": "0",
-                "LOCAL_RANK": "0",
-                "WORLD_SIZE": "1",
-                "LOCAL_WORLD_SIZE": "1",
-                "MASTER_ADDR": "localhost",
-                "MASTER_PORT": "12355",
-            }
+        original_env = {}
+        required_env_vars = {
+            "RANK": "0",
+            "LOCAL_RANK": "0",
+            "WORLD_SIZE": "1",
+            "LOCAL_WORLD_SIZE": "1",
+            "MASTER_ADDR": "localhost",
+            "MASTER_PORT": "12355",
+        }
 
-            for key, value in required_env_vars.items():
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = value
+        for key, value in required_env_vars.items():
+            original_env[key] = os.environ.get(key)
+            os.environ[key] = value
 
-            try:
-                # Test VLM processor with vLLM colocate mode
-                with warnings.catch_warnings(record=True) as w:
-                    warnings.simplefilter("always")
-                    try:
-                        # Load model with quantization for memory efficiency
-                        model = AutoModelForCausalLM.from_pretrained(
-                            "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                            quantization_config=quantization_config,
-                            torch_dtype=torch.bfloat16,
+        try:
+            # Test VLM processor with vLLM colocate mode
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                try:
+                    # Load model with quantization for memory efficiency
+                    model = AutoModelForCausalLM.from_pretrained(
+                        "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                        quantization_config=quantization_config,
+                        torch_dtype=torch.bfloat16,
+                    )
+
+                    trainer = GRPOTrainer(
+                        model=model,
+                        reward_funcs=dummy_reward_func,
+                        args=config,
+                        train_dataset=dataset,
+                        processing_class=processor,  # VLM processor
+                        peft_config=lora_config,  # Use LoRA for memory efficiency
+                    )
+
+                    # Should detect VLM processor correctly and allow vLLM
+                    self.assertTrue(trainer.use_vllm, "vLLM should be enabled for VLM processors in colocate mode")
+                    self.assertEqual(trainer.vllm_mode, "colocate", "Should use colocate mode")
+
+                    # Check if signature columns were set properly
+                    if trainer._signature_columns is not None:
+                        # Should include 'image' in signature columns for VLM processors
+                        self.assertIn(
+                            "image",
+                            trainer._signature_columns,
+                            "Should include 'image' in signature columns for VLM",
                         )
 
-                        trainer = GRPOTrainer(
-                            model=model,
-                            reward_funcs=dummy_reward_func,
-                            args=config,
-                            train_dataset=dataset,
-                            processing_class=processor,  # VLM processor
-                            peft_config=lora_config,  # Use LoRA for memory efficiency
-                        )
+                    # Should not emit any warnings about VLM incompatibility
+                    incompatibility_warnings = [
+                        str(w_item.message)
+                        for w_item in w
+                        if "does not support VLMs" in str(w_item.message)
+                        or "not compatible" in str(w_item.message).lower()
+                    ]
+                    self.assertEqual(
+                        len(incompatibility_warnings),
+                        0,
+                        f"Should not emit VLM incompatibility warnings, but got: {incompatibility_warnings}",
+                    )
 
-                        # Should detect VLM processor correctly and allow vLLM
-                        self.assertTrue(trainer.use_vllm, "vLLM should be enabled for VLM processors in colocate mode")
-                        self.assertEqual(trainer.vllm_mode, "colocate", "Should use colocate mode")
+                    # Test passes if we get this far without exceptions
 
-                        # Check if signature columns were set properly
-                        if trainer._signature_columns is not None:
-                            # Should include 'image' in signature columns for VLM processors
-                            self.assertIn(
-                                "image",
-                                trainer._signature_columns,
-                                "Should include 'image' in signature columns for VLM",
-                            )
-
-                        # Should not emit any warnings about VLM incompatibility
-                        incompatibility_warnings = [
-                            str(w_item.message)
-                            for w_item in w
-                            if "does not support VLMs" in str(w_item.message)
-                            or "not compatible" in str(w_item.message).lower()
+                except Exception as e:
+                    # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
+                    if any(
+                        keyword in str(e).lower()
+                        for keyword in [
+                            "outofmemoryerror",
+                            "cuda",
+                            "memory",
+                            "insufficient",
+                            "no such device",
+                            "free memory",
+                            "gpu memory utilization",
+                            "decrease gpu memory",
                         ]
-                        self.assertEqual(
-                            len(incompatibility_warnings),
-                            0,
-                            f"Should not emit VLM incompatibility warnings, but got: {incompatibility_warnings}",
-                        )
-
-                        # Test passes if we get this far without exceptions
-
-                    except Exception as e:
-                        # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
-                        if any(
-                            keyword in str(e).lower()
-                            for keyword in [
-                                "outofmemoryerror",
-                                "cuda",
-                                "memory",
-                                "insufficient",
-                                "no such device",
-                                "free memory",
-                                "gpu memory utilization",
-                                "decrease gpu memory",
-                            ]
-                        ):
-                            self.skipTest(f"Skipping vLLM colocate test due to hardware constraints: {e}")
-                        elif "KeyError" in str(e) and "RANK" in str(e):
-                            self.skipTest(f"Skipping vLLM colocate test due to environment setup issues: {e}")
-                        elif "ValueError" in str(e) and "memory" in str(e).lower():
-                            self.skipTest(f"Skipping vLLM colocate test due to memory constraints: {e}")
-                        else:
-                            raise
-            finally:
-                # Restore original environment variables
-                for key, original_value in original_env.items():
-                    if original_value is None:
-                        os.environ.pop(key, None)
+                    ):
+                        self.skipTest(f"Skipping vLLM colocate test due to hardware constraints: {e}")
+                    elif "KeyError" in str(e) and "RANK" in str(e):
+                        self.skipTest(f"Skipping vLLM colocate test due to environment setup issues: {e}")
+                    elif "ValueError" in str(e) and "memory" in str(e).lower():
+                        self.skipTest(f"Skipping vLLM colocate test due to memory constraints: {e}")
                     else:
-                        os.environ[key] = original_value
+                        raise
+        finally:
+            # Restore original environment variables
+            for key, original_value in original_env.items():
+                if original_value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = original_value
 
-                release_memory(model, trainer)
+            release_memory(model, trainer)
 
     @require_vllm
     def test_training_vllm(self):
         """Test that training works with vLLM for generation."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=self.tmp_dir,
-                learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-                num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=8,  # reduce the completion length to reduce memory usage
-                report_to="none",
-                logging_strategy="no",
-                use_vllm=True,
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+            logging_strategy="no",
+            use_vllm=True,
+        )
+
+        try:
+            trainer = GRPOTrainer(
+                model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny models are too small for vLLM
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
             )
 
-            try:
-                trainer = GRPOTrainer(
-                    model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny models are too small for vLLM
-                    reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                    args=training_args,
-                    train_dataset=dataset,
-                )
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-                previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
 
-                trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-                self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            # Check that the params have changed
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-                # Check that the params have changed
-                for n, param in previous_trainable_params.items():
-                    new_param = trainer.model.get_parameter(n)
-                    self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
-            except Exception as e:
-                # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
-                if any(
-                    keyword in str(e).lower()
-                    for keyword in [
-                        "outofmemoryerror",
-                        "cuda",
-                        "memory",
-                        "insufficient",
-                        "no such device",
-                        "free memory",
-                        "gpu memory utilization",
-                        "decrease gpu memory",
-                    ]
-                ):
-                    self.skipTest(f"Skipping vLLM training test due to hardware constraints: {e}")
-                elif "KeyError" in str(e) and "RANK" in str(e):
-                    self.skipTest(f"Skipping vLLM training test due to environment setup issues: {e}")
-                elif "ValueError" in str(e) and "memory" in str(e).lower():
-                    self.skipTest(f"Skipping vLLM training test due to memory constraints: {e}")
-                else:
-                    raise
+        except Exception as e:
+            # If vLLM fails to initialize due to hardware constraints or other issues, that's expected
+            if any(
+                keyword in str(e).lower()
+                for keyword in [
+                    "outofmemoryerror",
+                    "cuda",
+                    "memory",
+                    "insufficient",
+                    "no such device",
+                    "free memory",
+                    "gpu memory utilization",
+                    "decrease gpu memory",
+                ]
+            ):
+                self.skipTest(f"Skipping vLLM training test due to hardware constraints: {e}")
+            elif "KeyError" in str(e) and "RANK" in str(e):
+                self.skipTest(f"Skipping vLLM training test due to environment setup issues: {e}")
+            elif "ValueError" in str(e) and "memory" in str(e).lower():
+                self.skipTest(f"Skipping vLLM training test due to memory constraints: {e}")
+            else:
+                raise
 
         release_memory(trainer.model, trainer)

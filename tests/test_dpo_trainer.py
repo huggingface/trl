@@ -183,31 +183,30 @@ class DPOTrainerTester(TrlTestCase):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                learning_rate=9e-1,
-                report_to="none",
-            )
-            trainer = DPOTrainer(
-                model=model_id,
-                args=training_args,
-                processing_class=tokenizer,
-                train_dataset=dataset,
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            learning_rate=9e-1,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model=model_id,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @parameterized.expand(
         [
@@ -230,62 +229,64 @@ class DPOTrainerTester(TrlTestCase):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                learning_rate=9e-1,
-                loss_type=loss_type,
-                report_to="none",
-            )
-            trainer = DPOTrainer(
-                model=model_id,
-                args=training_args,
-                processing_class=tokenizer,
-                train_dataset=dataset,
-            )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            learning_rate=9e-1,
+            loss_type=loss_type,
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model=model_id,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
 
-            trainer.train()
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        trainer.train()
 
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     def test_dpo_trainer_with_weighting(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                learning_rate=9e-1,
-                use_weighting=True,
-                report_to="none",
-            )
 
-            trainer = DPOTrainer(
-                model=self.model,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dataset,
-            )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            learning_rate=9e-1,
+            use_weighting=True,
+            report_to="none",
+        )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer = DPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dataset,
+        )
 
-            trainer.train()
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        trainer.train()
 
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     def test_train_with_multiple_loss_types(self):
         """
@@ -296,134 +297,129 @@ class DPOTrainerTester(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                learning_rate=9e-1,
-                loss_type=["sigmoid", "bco_pair", "sft"],
-                loss_weights=[0.8, 0.2, 1.0],
-                report_to="none",
-            )
-            trainer = DPOTrainer(
-                model=model_id,
-                args=training_args,
-                processing_class=tokenizer,
-                train_dataset=dataset,
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            learning_rate=9e-1,
+            loss_type=["sigmoid", "bco_pair", "sft"],
+            loss_weights=[0.8, 0.2, 1.0],
+            report_to="none",
+        )
+        trainer = DPOTrainer(
+            model=model_id,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
 
-            # Test that training works
-            trainer.train()
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Test that training works
+        trainer.train()
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Verify SFT loss is computed in the first test too
-            with torch.no_grad():
-                batch = next(iter(trainer.get_train_dataloader()))
-                loss, metrics = trainer.get_batch_loss_metrics(trainer.model, batch)
-                self.assertIn("nll_loss", metrics)  # SFT loss should be computed
+        # Verify SFT loss is computed in the first test too
+        with torch.no_grad():
+            batch = next(iter(trainer.get_train_dataloader()))
+            loss, metrics = trainer.get_batch_loss_metrics(trainer.model, batch)
+            self.assertIn("nll_loss", metrics)  # SFT loss should be computed
 
     def test_wrong_loss_weights_length(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            with self.assertRaises(ValueError) as context:
-                DPOConfig(
-                    output_dir=self.tmp_dir,
-                    loss_type=["sigmoid", "bco_pair"],
-                    loss_weights=[1.0, 0.5, 0.1],  # Wrong length
-                )
-            self.assertIn("Length of loss_weights list", str(context.exception))
+        with self.assertRaises(ValueError) as context:
+            DPOConfig(
+                output_dir=self.tmp_dir,
+                loss_type=["sigmoid", "bco_pair"],
+                loss_weights=[1.0, 0.5, 0.1],  # Wrong length
+            )
+        self.assertIn("Length of loss_weights list", str(context.exception))
 
     @parameterized.expand([(None,), (0.5,)])
     def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                precompute_ref_log_probs=True,
-                rpo_alpha=rpo_alpha,
-                report_to="none",
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=4,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            beta=0.1,
+            precompute_ref_log_probs=True,
+            rpo_alpha=rpo_alpha,
+            report_to="none",
+        )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-            trainer = DPOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
+        trainer = DPOTrainer(
+            model=self.model,
+            ref_model=None,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+        )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.equal(param, new_param))
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.equal(param, new_param))
 
     def test_dpo_trainer_with_ref_model_is_model(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                report_to="none",
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            report_to="none",
+        )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-            with self.assertRaises(ValueError):
-                DPOTrainer(
-                    model=self.model,
-                    ref_model=self.model,  # ref_model can't be the same as model
-                    args=training_args,
-                    processing_class=self.tokenizer,
-                    train_dataset=dummy_dataset["train"],
-                )
-
-    def test_precompute_ref_batch_size(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                precompute_ref_log_probs=True,
-                precompute_ref_batch_size=4,
-                report_to="none",
-            )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-            trainer = DPOTrainer(
+        with self.assertRaises(ValueError):
+            DPOTrainer(
                 model=self.model,
-                ref_model=self.ref_model,
+                ref_model=self.model,  # ref_model can't be the same as model
                 args=training_args,
                 processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
             )
 
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+    def test_precompute_ref_batch_size(self):
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            precompute_ref_log_probs=True,
+            precompute_ref_batch_size=4,
+            report_to="none",
+        )
 
-            trainer.train()
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        trainer = DPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+        )
 
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @require_peft
     def test_dpo_trainer_without_providing_ref_model_with_lora(self):
@@ -437,103 +433,72 @@ class DPOTrainerTester(TrlTestCase):
             task_type="CAUSAL_LM",
         )
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                precompute_ref_log_probs=True,
-                report_to="none",
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=4,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            beta=0.1,
+            precompute_ref_log_probs=True,
+            report_to="none",
+        )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
+        trainer = DPOTrainer(
+            model=self.model,
+            ref_model=None,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            peft_config=lora_config,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            if "lora" in n:
+                new_param = trainer.model.get_parameter(n)
+                if param.sum() != 0:  # ignore 0 biases
+                    self.assertFalse(torch.equal(param, new_param))
+
+    def test_dpo_trainer_padding_token_is_none(self):
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=1,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            beta=0.1,
+            report_to="none",
+        )
+
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        tokenizer.pad_token = None
+
+        with self.assertRaisesRegex(
+            ValueError,
+            expected_regex=r"`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in "
+            r"the `processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
+            r"`tokenizer.pad_token` \(e.g., `tokenizer.pad_token = tokenizer.eos_token`\) before instantiating "
+            r"the trainer.",
+        ):
             trainer = DPOTrainer(
                 model=self.model,
                 ref_model=None,
-                args=training_args,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                peft_config=lora_config,
-            )
-
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                if "lora" in n:
-                    new_param = trainer.model.get_parameter(n)
-                    if param.sum() != 0:  # ignore 0 biases
-                        self.assertFalse(torch.equal(param, new_param))
-
-    def test_dpo_trainer_padding_token_is_none(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                report_to="none",
-            )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-            tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-            tokenizer.pad_token = None
-
-            with self.assertRaisesRegex(
-                ValueError,
-                expected_regex=r"`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in "
-                r"the `processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
-                r"`tokenizer.pad_token` \(e.g., `tokenizer.pad_token = tokenizer.eos_token`\) before instantiating "
-                r"the trainer.",
-            ):
-                trainer = DPOTrainer(
-                    model=self.model,
-                    ref_model=None,
-                    args=training_args,
-                    processing_class=tokenizer,
-                    train_dataset=dummy_dataset["train"],
-                    eval_dataset=dummy_dataset["test"],
-                )
-
-                trainer.train()
-
-    def test_dpo_trainer_w_dataset_num_proc(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                dataset_num_proc=2,
-                report_to="none",
-            )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-            tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-
-            trainer = DPOTrainer(
-                model=self.model,
                 args=training_args,
                 processing_class=tokenizer,
                 train_dataset=dummy_dataset["train"],
@@ -542,78 +507,104 @@ class DPOTrainerTester(TrlTestCase):
 
             trainer.train()
 
+    def test_dpo_trainer_w_dataset_num_proc(self):
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=1,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            beta=0.1,
+            dataset_num_proc=2,
+            report_to="none",
+        )
+
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+
+        trainer = DPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+        )
+
+        trainer.train()
+
     def test_tr_dpo_trainer(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=4,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                precompute_ref_log_probs=False,
-                sync_ref_model=True,
-                ref_model_mixup_alpha=0.5,
-                ref_model_sync_steps=1,
-                report_to="none",
-            )
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=4,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            precompute_ref_log_probs=False,
+            sync_ref_model=True,
+            ref_model_mixup_alpha=0.5,
+            ref_model_sync_steps=1,
+            report_to="none",
+        )
 
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-            trainer = DPOTrainer(
+        trainer = DPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+        )
+
+        # params of the ref model as its the same as the model
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.ref_model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.equal(param, new_param))
+
+    @require_no_wandb
+    def test_dpo_trainer_generate_during_eval_no_wandb(self):
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=1,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            beta=0.1,
+            generate_during_eval=True,
+            report_to="none",
+        )
+
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            expected_regex="`generate_during_eval=True` requires Weights and Biases, MLFlow or Comet to be installed."
+            " Please install `wandb`, `mlflow` or `comet-ml` to resolve.",
+        ):
+            DPOTrainer(
                 model=self.model,
-                ref_model=self.ref_model,
+                ref_model=None,
                 args=training_args,
                 processing_class=self.tokenizer,
                 train_dataset=dummy_dataset["train"],
                 eval_dataset=dummy_dataset["test"],
             )
-
-            # params of the ref model as its the same as the model
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-            # Check that the parameters have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.ref_model.get_parameter(n)
-                if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.equal(param, new_param))
-
-    @require_no_wandb
-    def test_dpo_trainer_generate_during_eval_no_wandb(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = DPOConfig(
-                output_dir=self.tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                remove_unused_columns=False,
-                gradient_accumulation_steps=1,
-                learning_rate=9e-1,
-                eval_strategy="steps",
-                beta=0.1,
-                generate_during_eval=True,
-                report_to="none",
-            )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-            with self.assertRaisesRegex(
-                ValueError,
-                expected_regex="`generate_during_eval=True` requires Weights and Biases, MLFlow or Comet to be installed."
-                " Please install `wandb`, `mlflow` or `comet-ml` to resolve.",
-            ):
-                DPOTrainer(
-                    model=self.model,
-                    ref_model=None,
-                    args=training_args,
-                    processing_class=self.tokenizer,
-                    train_dataset=dummy_dataset["train"],
-                    eval_dataset=dummy_dataset["test"],
-                )
 
     @require_peft
     def test_dpo_lora_save(self):
