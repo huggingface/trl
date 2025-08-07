@@ -22,13 +22,15 @@ from unittest.mock import patch
 
 import yaml
 
+from .testing_utils import TrlTestCase
+
 
 @unittest.skipIf(
     sys.version_info < (3, 10),
     "Transformers' generation codebase uses a Python >3.10 syntax (`str | None`), which seems to cause the CLI tests "
     "to fail on Python <3.10.",  # let's say it's a known issue, but not expected to be fixed, because too niche
 )
-class TestCLI(unittest.TestCase):
+class TestCLI(TrlTestCase):
     def test_dpo(self):
         from trl.cli import main
 

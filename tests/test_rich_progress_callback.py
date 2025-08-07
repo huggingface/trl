@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 
 import torch
 import torch.nn as nn
@@ -22,7 +21,7 @@ from transformers import Trainer, TrainingArguments
 
 from trl.trainer.callbacks import RichProgressCallback
 
-from .testing_utils import require_rich
+from .testing_utils import TrlTestCase, require_rich
 
 
 class DummyModel(nn.Module):
@@ -35,8 +34,9 @@ class DummyModel(nn.Module):
 
 
 @require_rich
-class TestRichProgressCallback(unittest.TestCase):
+class TestRichProgressCallback(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.dummy_model = DummyModel()
         self.dummy_train_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 5)
         self.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 101)
@@ -44,7 +44,7 @@ class TestRichProgressCallback(unittest.TestCase):
     def test_rich_progress_callback_logging(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_eval_batch_size=2,
                 per_device_train_batch_size=2,
                 num_train_epochs=4,

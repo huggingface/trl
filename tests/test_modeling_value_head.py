@@ -22,6 +22,8 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, Generation
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
 
+from .testing_utils import TrlTestCase
+
 
 ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-BloomForCausalLM",
@@ -49,7 +51,7 @@ ALL_SEQ2SEQ_MODELS = [
 
 
 class BaseTester:
-    class VHeadModelTester(unittest.TestCase):
+    class VHeadModelTester(TrlTestCase):
         all_model_names = None
         trl_model_class = None
         transformers_model_class = None
@@ -188,7 +190,7 @@ class BaseTester:
                 )
 
 
-class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase):
+class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -200,6 +202,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
     def tearDown(self):
         # free memory
         gc.collect()
+        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -303,7 +306,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
                 )
 
 
-class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase):
+class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -315,6 +318,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
     def tearDown(self):
         # free memory
         gc.collect()
+        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -419,8 +423,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
             _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)
 
 
-class ReferenceModelTest(unittest.TestCase):
+class ReferenceModelTest(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model = AutoModelForCausalLMWithValueHead.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)

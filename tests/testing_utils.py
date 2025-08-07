@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import random
+import shutil
+import tempfile
 import unittest
 
 import torch
@@ -124,3 +126,13 @@ class RandomPairwiseJudge(BasePairwiseJudge):
             return [random.randint(0, len(completion) - 1) for completion in completions]
         else:
             return [random.random() for _ in range(len(prompts))]
+
+
+class TrlTestCase(unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+        super().tearDown()

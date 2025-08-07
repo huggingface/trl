@@ -15,7 +15,6 @@
 import gc
 import itertools
 import tempfile
-import unittest
 
 import pytest
 import torch
@@ -38,6 +37,7 @@ from trl.models.utils import setup_chat_format
 
 from ..testing_utils import require_bitsandbytes
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
+from .testing_utils import TrlTestCase
 
 
 if is_peft_available():
@@ -47,8 +47,9 @@ if is_peft_available():
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
-class SFTTrainerSlowTester(unittest.TestCase):
+class SFTTrainerSlowTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
         self.max_length = 128
@@ -64,6 +65,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
+        super().tearDown()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
     def test_sft_trainer_str(self, model_name, packing):
@@ -72,7 +74,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -97,7 +99,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -130,7 +132,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -166,7 +168,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -199,7 +201,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -235,7 +237,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -278,7 +280,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -315,7 +317,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -361,7 +363,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
             training_args = SFTConfig(
                 packing=packing,
                 max_length=self.max_length,
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -412,7 +414,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 logging_strategy="no",
                 report_to="none",
                 per_device_train_batch_size=2,
@@ -444,7 +446,7 @@ class SFTTrainerSlowTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
             training_args = SFTConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 activation_offloading=True,
                 report_to="none",
                 per_device_train_batch_size=2,

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 from functools import partial
 
 import torch
@@ -23,9 +22,12 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl import IterativeSFTTrainer
 
+from .testing_utils import TrlTestCase
 
-class IterativeTrainerTester(unittest.TestCase):
+
+class IterativeTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -102,7 +104,7 @@ class IterativeTrainerTester(unittest.TestCase):
                 tokenizer = self.t5_tokenizer
 
             training_args = TrainingArguments(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=2,
                 learning_rate=1e-3,

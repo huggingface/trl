@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 
 from datasets import load_dataset
 from parameterized import parameterized
@@ -23,15 +22,16 @@ from transformers.utils import is_peft_available
 
 from trl import NashMDConfig, NashMDTrainer
 
-from .testing_utils import RandomPairwiseJudge, require_llm_blender
+from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
-class TestNashMDTrainer(unittest.TestCase):
+class TestNashMDTrainer(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -43,7 +43,7 @@ class TestNashMDTrainer(unittest.TestCase):
     def test_nash_md_trainer_training(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -74,7 +74,7 @@ class TestNashMDTrainer(unittest.TestCase):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -103,7 +103,7 @@ class TestNashMDTrainer(unittest.TestCase):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -136,7 +136,7 @@ class TestNashMDTrainer(unittest.TestCase):
         lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -168,7 +168,7 @@ class TestNashMDTrainer(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=1,  # Keep small for quick test
                 max_steps=2,  # Few steps
                 learning_rate=5.0e-7,
@@ -197,7 +197,7 @@ class TestNashMDTrainer(unittest.TestCase):
     def test_nash_md_trainer_judge_training(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = NashMDConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,

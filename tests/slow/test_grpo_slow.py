@@ -15,7 +15,6 @@
 import gc
 import os
 import tempfile
-import unittest
 import warnings
 
 import numpy as np
@@ -47,6 +46,7 @@ from trl.trainer.utils import get_kbit_device_map
 
 from ..testing_utils import require_vllm
 from .testing_constants import MODELS_TO_TEST
+from .testing_utils import TrlTestCase
 
 
 if is_peft_available():
@@ -55,8 +55,9 @@ if is_peft_available():
 
 @pytest.mark.slow
 @require_torch_accelerator
-class GRPOTrainerSlowTester(unittest.TestCase):
+class GRPOTrainerSlowTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         self.eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test")
         self.max_length = 128
@@ -65,44 +66,44 @@ class GRPOTrainerSlowTester(unittest.TestCase):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
+        super().tearDown()
 
     @parameterized.expand(MODELS_TO_TEST)
     @require_liger_kernel
     def test_training_with_liger_grpo_loss(self, model_name):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                use_liger_loss=True,
-                max_completion_length=self.max_length,
-                report_to="none",
-                logging_strategy="no",
-            )
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            use_liger_loss=True,
+            max_completion_length=self.max_length,
+            report_to="none",
+            logging_strategy="no",
+        )
 
-            model = AutoModelForCausalLM.from_pretrained(model_name)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
-            trainer = GRPOTrainer(
-                model=model,
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
-                processing_class=tokenizer,
-            )
-            from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            processing_class=tokenizer,
+        )
+        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-            assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
 
-            previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
+        previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
-            trainer.train()
+        trainer.train()
 
-            for n, param in previous_trainable_params.items():
-                new_param = model.get_parameter(n)
-                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+        for n, param in previous_trainable_params.items():
+            new_param = model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
         release_memory(model, trainer)
 
@@ -112,98 +113,96 @@ class GRPOTrainerSlowTester(unittest.TestCase):
     def test_training_with_liger_grpo_loss_and_peft(self, model_name):
         from peft import LoraConfig, TaskType
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=3,
-                num_generations=3,
-                use_liger_loss=True,
-                max_completion_length=self.max_length,
-                report_to="none",
-                logging_strategy="no",
-            )
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            use_liger_loss=True,
+            max_completion_length=self.max_length,
+            report_to="none",
+            logging_strategy="no",
+        )
 
-            model = AutoModelForCausalLM.from_pretrained(model_name)
-            tokenizer = AutoTokenizer.from_pretrained(model_name)
-            tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+        model = AutoModelForCausalLM.from_pretrained(model_name)
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 
-            # Configure PEFT with LoRA
-            peft_config = LoraConfig(
-                task_type=TaskType.CAUSAL_LM,
-                inference_mode=False,
-                r=8,
-                lora_alpha=32,
-                lora_dropout=0.1,
-                target_modules=["q_proj", "v_proj"],
-            )
+        # Configure PEFT with LoRA
+        peft_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            inference_mode=False,
+            r=8,
+            lora_alpha=32,
+            lora_dropout=0.1,
+            target_modules=["q_proj", "v_proj"],
+        )
 
-            trainer = GRPOTrainer(
-                model=model,
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-                eval_dataset=self.eval_dataset,
-                processing_class=tokenizer,
-                peft_config=peft_config,
-            )
-            from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=self.train_dataset,
+            eval_dataset=self.eval_dataset,
+            processing_class=tokenizer,
+            peft_config=peft_config,
+        )
+        from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
 
-            assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
+        assert isinstance(trainer.liger_grpo_loss, LigerFusedLinearGRPOLoss)
 
-            # Verify PEFT adapter is properly initialized
-            from peft import PeftModel
+        # Verify PEFT adapter is properly initialized
+        from peft import PeftModel
 
-            self.assertTrue(isinstance(trainer.model, PeftModel), "Model should be wrapped with PEFT")
+        self.assertTrue(isinstance(trainer.model, PeftModel), "Model should be wrapped with PEFT")
 
-            # Store adapter weights before training
-            previous_trainable_params = {
-                n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
-            }
-            self.assertTrue(len(previous_trainable_params) > 0, "No trainable parameters found in PEFT model")
+        # Store adapter weights before training
+        previous_trainable_params = {
+            n: param.clone() for n, param in trainer.model.named_parameters() if param.requires_grad
+        }
+        self.assertTrue(len(previous_trainable_params) > 0, "No trainable parameters found in PEFT model")
 
-            trainer.train()
+        trainer.train()
 
-            # Verify adapter weights have changed after training
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+        # Verify adapter weights have changed after training
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
         release_memory(model, trainer)
 
     @parameterized.expand(MODELS_TO_TEST)
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                learning_rate=0.1,  # increase the learning rate to speed up the test
-                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-                num_generations=3,  # reduce the number of generations to reduce memory usage
-                max_completion_length=8,  # reduce the completion length to reduce memory usage
-                use_transformers_paged=True,  # Enable transformers paged implementation
-                report_to="none",
-                logging_strategy="no",
-            )
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            use_transformers_paged=True,  # Enable transformers paged implementation
+            report_to="none",
+            logging_strategy="no",
+        )
 
-            model = AutoModelForCausalLM.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name)
 
-            trainer = GRPOTrainer(
-                model=model,
-                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-                args=training_args,
-                train_dataset=self.train_dataset,
-            )
+        trainer = GRPOTrainer(
+            model=model,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=self.train_dataset,
+        )
 
-            previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
+        previous_trainable_params = {n: param.clone() for n, param in model.named_parameters()}
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check that the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = model.get_parameter(n)
-                self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
         release_memory(model, trainer)
 
@@ -275,69 +274,68 @@ class GRPOTrainerSlowTester(unittest.TestCase):
             # simple nonsensical reward
             return [-((len(c) - 25) ** 2) + 100 for c in completions]
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GRPOConfig(
-                output_dir=tmp_dir,
-                learning_rate=0.1,
-                per_device_train_batch_size=1,  # Minimal batch size
-                gradient_accumulation_steps=2,  # Maintain effective batch size
-                num_generations=2,
-                max_completion_length=8,  # Much shorter completions
-                max_prompt_length=None,  # Don't limit prompt length for VLM
-                bf16=True,  # Use bfloat16 precision
-                max_steps=1,  # Only do 1 training step to save time and memory
-                report_to="none",
-                logging_strategy="no",
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=1,  # Minimal batch size
+            gradient_accumulation_steps=2,  # Maintain effective batch size
+            num_generations=2,
+            max_completion_length=8,  # Much shorter completions
+            max_prompt_length=None,  # Don't limit prompt length for VLM
+            bf16=True,  # Use bfloat16 precision
+            max_steps=1,  # Only do 1 training step to save time and memory
+            report_to="none",
+            logging_strategy="no",
+        )
+        lora_config = LoraConfig(
+            task_type="CAUSAL_LM",
+            r=4,  # Much lower rank for minimal memory
+            lora_alpha=8,  # Reduced alpha proportionally
+            lora_dropout=0.1,
+            target_modules=["q_proj", "v_proj"],  # Minimal target modules
+            # For VLM models, we typically want to freeze the vision encoder
+            # and only adapt the language model parameters
+            modules_to_save=None,
+        )
+
+        try:
+            trainer = GRPOTrainer(
+                model=model,
+                processing_class=processor,
+                reward_funcs=[reward_func],
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=lora_config,
             )
-            lora_config = LoraConfig(
-                task_type="CAUSAL_LM",
-                r=4,  # Much lower rank for minimal memory
-                lora_alpha=8,  # Reduced alpha proportionally
-                lora_dropout=0.1,
-                target_modules=["q_proj", "v_proj"],  # Minimal target modules
-                # For VLM models, we typically want to freeze the vision encoder
-                # and only adapt the language model parameters
-                modules_to_save=None,
-            )
 
-            try:
-                trainer = GRPOTrainer(
-                    model=model,
-                    processing_class=processor,
-                    reward_funcs=[reward_func],
-                    args=training_args,
-                    train_dataset=dataset,
-                    peft_config=lora_config,
-                )
+            self.assertIsInstance(trainer.model, PeftModel)
 
-                self.assertIsInstance(trainer.model, PeftModel)
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-                previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+            trainer.train()
 
-                trainer.train()
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-                self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+            # Check that LoRA parameters have changed
+            # For VLM models, we're more permissive about which parameters can change
+            lora_params_changed = False
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if "lora" in n.lower():  # LoRA parameters should change
+                    if not torch.equal(param, new_param):
+                        lora_params_changed = True
 
-                # Check that LoRA parameters have changed
-                # For VLM models, we're more permissive about which parameters can change
-                lora_params_changed = False
-                for n, param in previous_trainable_params.items():
-                    new_param = trainer.model.get_parameter(n)
-                    if "lora" in n.lower():  # LoRA parameters should change
-                        if not torch.equal(param, new_param):
-                            lora_params_changed = True
+            # At least some LoRA parameters should have changed during training
+            self.assertTrue(lora_params_changed, "No LoRA parameters were updated during training.")
 
-                # At least some LoRA parameters should have changed during training
-                self.assertTrue(lora_params_changed, "No LoRA parameters were updated during training.")
-
-            except torch.OutOfMemoryError as e:
-                self.skipTest(f"Skipping VLM training test due to insufficient GPU memory: {e}")
-            except Exception as e:
-                # Check for other memory-related errors
-                if any(keyword in str(e).lower() for keyword in ["memory", "cuda", "out of memory", "insufficient"]):
-                    self.skipTest(f"Skipping VLM training test due to hardware constraints: {e}")
-                else:
-                    raise
+        except torch.OutOfMemoryError as e:
+            self.skipTest(f"Skipping VLM training test due to insufficient GPU memory: {e}")
+        except Exception as e:
+            # Check for other memory-related errors
+            if any(keyword in str(e).lower() for keyword in ["memory", "cuda", "out of memory", "insufficient"]):
+                self.skipTest(f"Skipping VLM training test due to hardware constraints: {e}")
+            else:
+                raise
 
         release_memory(model, trainer)
 
@@ -360,7 +358,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             config = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=1,  # Minimal batch size
                 gradient_accumulation_steps=2,  # Make effective batch size 2, divisible by num_generations
                 num_generations=2,
@@ -507,7 +505,7 @@ class GRPOTrainerSlowTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage

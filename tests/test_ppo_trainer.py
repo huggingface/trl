@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 
 import torch
 from datasets import load_dataset
@@ -24,13 +23,16 @@ from transformers.utils import is_peft_available
 from trl import PPOConfig, PPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
+from .testing_utils import TrlTestCase
+
 
 if is_peft_available():
     from peft import LoraConfig
 
 
-class TestPPOTrainer(unittest.TestCase):
+class TestPPOTrainer(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Set up the models and tokenizer using the test model
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -71,7 +73,7 @@ class TestPPOTrainer(unittest.TestCase):
 
             # Configure training args similar to example script
             training_args = PPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=4,
                 per_device_eval_batch_size=2,
                 num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test
@@ -124,7 +126,7 @@ class TestPPOTrainer(unittest.TestCase):
 
             # Configure training args
             training_args = PPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=4,
                 per_device_eval_batch_size=2,
                 num_ppo_epochs=2,  # Decrease number of PPO epochs to speed up test

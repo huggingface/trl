@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 
 import torch
 from datasets import Dataset, load_dataset
@@ -24,13 +23,16 @@ from transformers.utils import is_peft_available
 from trl import RewardConfig, RewardTrainer, maybe_apply_chat_template
 from trl.trainer.reward_trainer import _tokenize
 
+from .testing_utils import TrlTestCase
+
 
 if is_peft_available():
     from peft import LoraConfig, TaskType
 
 
-class RewardTrainerTester(unittest.TestCase):
+class RewardTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
@@ -39,7 +41,7 @@ class RewardTrainerTester(unittest.TestCase):
     def test_preprocessing_conversational(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
+            training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -52,7 +54,7 @@ class RewardTrainerTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
+            training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, processing_class=tokenizer, train_dataset=dummy_dataset
             )
@@ -62,7 +64,7 @@ class RewardTrainerTester(unittest.TestCase):
     def test_train_full(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -81,7 +83,7 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
             dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
             dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
-            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -106,7 +108,7 @@ class RewardTrainerTester(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
                 model=self.model,
                 args=training_args,
@@ -154,7 +156,7 @@ class RewardTrainerTester(unittest.TestCase):
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
             dummy_dataset = dummy_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": self.tokenizer})
             dummy_dataset = dummy_dataset.map(_tokenize, batched=True, fn_kwargs={"tokenizer": self.tokenizer})
-            training_args = RewardConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            training_args = RewardConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
             trainer = RewardTrainer(
                 model=self.model,
                 args=training_args,
@@ -209,7 +211,7 @@ class RewardTrainerTester(unittest.TestCase):
                 ],
             }
             dummy_dataset = Dataset.from_dict(dummy_dataset_dict)
-            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
+            training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -228,7 +230,7 @@ class RewardTrainerTester(unittest.TestCase):
     def test_tags(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_preference", split="train")
-            training_args = RewardConfig(output_dir=tmp_dir, report_to="none")
+            training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
             trainer = RewardTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )

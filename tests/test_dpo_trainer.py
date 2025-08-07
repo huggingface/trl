@@ -40,15 +40,16 @@ from transformers.testing_utils import (
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
-from .testing_utils import require_bitsandbytes, require_no_wandb
+from .testing_utils import TrlTestCase, require_bitsandbytes, require_no_wandb
 
 
 if is_vision_available():
     from PIL import Image
 
 
-class TestTokenizeRow(unittest.TestCase):
+class TestTokenizeRow(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Set up the mock tokenizer with specific behaviors
         self.tokenizer = MagicMock(spec=PreTrainedTokenizerBase)
         self.tokenizer.bos_token_id = 0
@@ -163,8 +164,9 @@ class TestTokenizeRow(unittest.TestCase):
         )
 
 
-class DPOTrainerTester(unittest.TestCase):
+class DPOTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -183,7 +185,7 @@ class DPOTrainerTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 learning_rate=9e-1,
                 report_to="none",
@@ -230,7 +232,7 @@ class DPOTrainerTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 learning_rate=9e-1,
                 loss_type=loss_type,
@@ -259,7 +261,7 @@ class DPOTrainerTester(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 learning_rate=9e-1,
                 use_weighting=True,
@@ -296,7 +298,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 learning_rate=9e-1,
                 loss_type=["sigmoid", "bco_pair", "sft"],
@@ -324,7 +326,7 @@ class DPOTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             with self.assertRaises(ValueError) as context:
                 DPOConfig(
-                    output_dir=tmp_dir,
+                    output_dir=self.tmp_dir,
                     loss_type=["sigmoid", "bco_pair"],
                     loss_weights=[1.0, 0.5, 0.1],  # Wrong length
                 )
@@ -334,7 +336,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -373,7 +375,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_trainer_with_ref_model_is_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 report_to="none",
@@ -393,7 +395,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_precompute_ref_batch_size(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 precompute_ref_log_probs=True,
                 precompute_ref_batch_size=4,
@@ -437,7 +439,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -477,7 +479,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_trainer_padding_token_is_none(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -514,7 +516,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_trainer_w_dataset_num_proc(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -543,7 +545,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_tr_dpo_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -585,7 +587,7 @@ class DPOTrainerTester(unittest.TestCase):
     def test_dpo_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -631,7 +633,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -689,7 +691,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -770,7 +772,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -824,7 +826,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -861,7 +863,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -907,7 +909,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -934,7 +936,7 @@ class DPOTrainerTester(unittest.TestCase):
                 )
 
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -964,7 +966,7 @@ class DPOTrainerTester(unittest.TestCase):
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
                 model_init_kwargs={"torch_dtype": "float16"},
@@ -985,7 +987,7 @@ class DPOTrainerTester(unittest.TestCase):
         # Now test when `torch_dtype` is provided but is wrong to either the model or the ref_model
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
                 model_init_kwargs={"torch_dtype": -1},
@@ -1007,7 +1009,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=1,
                 ref_model_init_kwargs={"torch_dtype": -1},
@@ -1037,7 +1039,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -1080,7 +1082,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -1123,7 +1125,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -1215,7 +1217,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 tools=[get_current_temperature],
             )
 
@@ -1245,7 +1247,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=9e-1,
                 per_device_train_batch_size=2,
                 padding_free=True,
@@ -1284,7 +1286,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 do_eval=True,
                 eval_strategy="steps",
@@ -1313,7 +1315,7 @@ class DPOTrainerTester(unittest.TestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 learning_rate=9e-1,
                 ld_alpha=0.5,
@@ -1353,7 +1355,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 do_eval=True,
                 eval_steps=1,
@@ -1420,7 +1422,7 @@ class DPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 max_steps=3,
                 report_to="none",
             )
@@ -1445,7 +1447,7 @@ class DPOTrainerTester(unittest.TestCase):
 
 
 @require_vision
-class DPOVisionTrainerTester(unittest.TestCase):
+class DPOVisionTrainerTester(TrlTestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),
@@ -1497,7 +1499,7 @@ class DPOVisionTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 remove_unused_columns=False,
                 learning_rate=0.01,  # increase learning rate to speed up test

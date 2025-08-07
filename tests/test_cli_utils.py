@@ -12,11 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 from dataclasses import dataclass
 from unittest.mock import mock_open, patch
 
 from trl import TrlParser
+
+from .testing_utils import TrlTestCase
 
 
 @dataclass
@@ -30,7 +31,7 @@ class InvalidDataclass:
     config: str  # This should raise an error in the TrlParser
 
 
-class TestTrlParser(unittest.TestCase):
+class TestTrlParser(TrlTestCase):
     def test_init_without_config_field(self):
         """Test initialization without 'config' field in the dataclasses."""
         parser = TrlParser(dataclass_types=[MyDataclass])

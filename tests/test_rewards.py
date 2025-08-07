@@ -16,8 +16,10 @@ import unittest
 
 from trl.rewards import think_format_reward
 
+from .testing_utils import TrlTestCase
 
-class ThinkFormatRewardTester(unittest.TestCase):
+
+class ThinkFormatRewardTester(TrlTestCase):
     def test_valid_format(self):
         completions = [
             "<think>This is my reasoning.</think>This is my answer.",  # Simple, one-line reasoning

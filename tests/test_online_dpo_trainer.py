@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 
 import pytest
 from datasets import load_dataset
@@ -24,15 +23,16 @@ from transformers.utils import is_peft_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer
 
-from .testing_utils import RandomPairwiseJudge, require_llm_blender, require_vllm
+from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
-class TestOnlineDPOTrainer(unittest.TestCase):
+class TestOnlineDPOTrainer(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -48,7 +48,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
     def test_training(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -74,7 +74,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
     def test_training_model_str(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -100,7 +100,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
     def test_training_with_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -127,7 +127,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
     def test_ref_model_is_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 report_to="none",
@@ -151,7 +151,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -181,7 +181,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -215,7 +215,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -245,7 +245,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
     def test_training_with_judge(self, config_name):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 learning_rate=5.0e-7,
@@ -279,7 +279,7 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 use_vllm=True,
                 gpu_memory_utilization=0.2,
                 report_to="none",

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 from unittest.mock import MagicMock
 
 import torch
@@ -25,13 +24,16 @@ from transformers.utils import is_peft_available
 
 from trl import PRMConfig, PRMTrainer
 
+from .testing_utils import TrlTestCase
+
 
 if is_peft_available():
     from peft import LoraConfig, TaskType
 
 
-class TestTokenizeRow(unittest.TestCase):
+class TestTokenizeRow(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Set up the mock tokenizer with specific behaviors
         self.tokenizer = MagicMock(spec=PreTrainedTokenizerBase)
         self.tokenizer.bos_token_id = 0
@@ -222,8 +224,9 @@ class TestTokenizeRow(unittest.TestCase):
         )
 
 
-class PRMTrainerTester(unittest.TestCase):
+class PRMTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForTokenClassification.from_pretrained(model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -233,7 +236,7 @@ class PRMTrainerTester(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
             training_args = PRMConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 report_to="none",
                 train_on_last_step_only=train_on_last_step_only,
             )
@@ -289,7 +292,7 @@ class PRMTrainerTester(unittest.TestCase):
                 }
             )
 
-            training_args = PRMConfig(output_dir=tmp_dir, report_to="none")
+            training_args = PRMConfig(output_dir=self.tmp_dir, report_to="none")
             trainer = PRMTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )
@@ -315,7 +318,7 @@ class PRMTrainerTester(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-            training_args = PRMConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
+            training_args = PRMConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
             trainer = PRMTrainer(
                 model=self.model,
                 args=training_args,
@@ -353,7 +356,7 @@ class PRMTrainerTester(unittest.TestCase):
     def test_tags(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
-            training_args = PRMConfig(output_dir=tmp_dir, report_to="none")
+            training_args = PRMConfig(output_dir=self.tmp_dir, report_to="none")
             trainer = PRMTrainer(
                 model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
             )

@@ -14,7 +14,6 @@
 
 import os
 import tempfile
-import unittest
 
 import torch
 import torch.nn.functional as F
@@ -24,8 +23,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from trl import GKDConfig, GKDTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
+from .testing_utils import TrlTestCase
 
-class TestGKDTrainer(unittest.TestCase):
+
+class TestGKDTrainer(TrlTestCase):
     @classmethod
     def setUpClass(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -126,8 +127,9 @@ class TestGKDTrainer(unittest.TestCase):
         self.assertEqual(new_labels.shape, new_attention_mask.shape)
 
 
-class TestGeneralizedJSDLoss(unittest.TestCase):
+class TestGeneralizedJSDLoss(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.batch_size = 2
         self.seq_length = 3
         self.vocab_size = 5
@@ -201,8 +203,9 @@ class TestGeneralizedJSDLoss(unittest.TestCase):
         self.assertAlmostEqual(loss.item(), 0, places=6)
 
 
-class GKDTrainerTester(unittest.TestCase):
+class GKDTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -216,7 +219,7 @@ class GKDTrainerTester(unittest.TestCase):
     def test_gkd_trainer(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GKDConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 dataloader_drop_last=True,
                 eval_strategy="steps",
                 max_steps=4,
@@ -245,7 +248,7 @@ class GKDTrainerTester(unittest.TestCase):
 
     def test_generation_config_init(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GKDConfig(output_dir=tmp_dir)
+            training_args = GKDConfig(output_dir=self.tmp_dir)
             dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
             trainer = GKDTrainer(

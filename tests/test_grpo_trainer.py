@@ -38,14 +38,14 @@ from trl.trainer.grpo_trainer import (
     unsplit_pixel_values_by_grid,
 )
 
-from .testing_utils import require_vllm
+from .testing_utils import TrlTestCase, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-class SplitTensorDictTester(unittest.TestCase):
+class SplitTensorDictTester(TrlTestCase):
     def test_split_equal_chunks(self):
         x = torch.arange(12).reshape(6, 2)
         y = torch.arange(6).reshape(6, 1)
@@ -73,7 +73,7 @@ class SplitTensorDictTester(unittest.TestCase):
             self.assertIsNone(result[i]["y"])
 
 
-class ShuffleSequenceDictTester(unittest.TestCase):
+class ShuffleSequenceDictTester(TrlTestCase):
     def test_shuffle_preserves_shape(self):
         x = torch.arange(6).reshape(3, 2)
         y = torch.arange(3).reshape(3, 1)
@@ -138,7 +138,7 @@ class ShuffleSequenceDictTester(unittest.TestCase):
                 self.fail("Unexpected x row in shuffled output.")
 
 
-class RepeatRandomSamplerTester(unittest.TestCase):
+class RepeatRandomSamplerTester(TrlTestCase):
     def test_sampler(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=2)
@@ -250,7 +250,7 @@ class RepeatRandomSamplerTester(unittest.TestCase):
         assert sampled[24:28] == sampled[28:32] == sampled[32:36]
 
 
-class TruncateWithProtectedTokensTester(unittest.TestCase):
+class TruncateWithProtectedTokensTester(TrlTestCase):
     def test_basic_example(self):
         """Test the basic example from the problem description."""
         prompt_ids = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
@@ -385,7 +385,7 @@ class TruncateWithProtectedTokensTester(unittest.TestCase):
         self.assertTrue(torch.equal(new_ids, expected_ids))
 
 
-class GetHighEntropyMaskTester(unittest.TestCase):
+class GetHighEntropyMaskTester(TrlTestCase):
     def get_high_entropy_mask(self, entropies, mask, threshold):
         """Helper method to test the get_high_entropy_mask functionality."""
         # Create a mock trainer with minimal setup
@@ -456,7 +456,7 @@ class GetHighEntropyMaskTester(unittest.TestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
-class SplitPixelValuesByGridTester(unittest.TestCase):
+class SplitPixelValuesByGridTester(TrlTestCase):
     def test_split_correctly_0(self):
         batch = {
             "image_grid_thw": torch.tensor([[1, 2, 2], [1, 1, 4]]),  # Products: [4, 4]
@@ -493,7 +493,7 @@ class SplitPixelValuesByGridTester(unittest.TestCase):
             split_pixel_values_by_grid(batch)
 
 
-class UnsplitPixelValuesByGridTester(unittest.TestCase):
+class UnsplitPixelValuesByGridTester(TrlTestCase):
     def test_unsplit_correctly(self):
         split = [torch.randn(4, 5), torch.randn(2, 5)]
         merged = torch.cat(split, dim=0)
@@ -510,7 +510,7 @@ class UnsplitPixelValuesByGridTester(unittest.TestCase):
         self.assertTrue(torch.equal(result["pixel_values"], original))
 
 
-class GRPOTrainerTester(unittest.TestCase):
+class GRPOTrainerTester(TrlTestCase):
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -526,7 +526,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -557,7 +557,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -588,7 +588,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -612,7 +612,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -646,7 +646,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -692,7 +692,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
@@ -740,7 +740,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -776,7 +776,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -812,7 +812,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -851,7 +851,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -890,7 +890,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,
                 per_device_train_batch_size=3,
                 num_generations=3,
@@ -935,7 +935,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -976,7 +976,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1015,7 +1015,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1045,7 +1045,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1076,7 +1076,7 @@ class GRPOTrainerTester(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1106,7 +1106,7 @@ class GRPOTrainerTester(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1144,7 +1144,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1188,7 +1188,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1221,7 +1221,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1259,7 +1259,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1295,7 +1295,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1346,7 +1346,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1385,7 +1385,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1416,7 +1416,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1447,7 +1447,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1478,7 +1478,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1509,7 +1509,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1547,7 +1547,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 num_generations=2,
                 max_completion_length=8,
@@ -1565,7 +1565,7 @@ class GRPOTrainerTester(unittest.TestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 max_completion_length=8,  # reduce the completion length to reduce memory usage
                 gradient_accumulation_steps=3,  # can be anything in this test
@@ -1628,7 +1628,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1670,7 +1670,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1707,7 +1707,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1742,7 +1742,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1775,7 +1775,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1808,7 +1808,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1839,7 +1839,7 @@ class GRPOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = GRPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
                 num_generations=3,  # reduce the number of generations to reduce memory usage

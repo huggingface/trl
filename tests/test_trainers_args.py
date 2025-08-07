@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 
 from datasets import load_dataset
 from parameterized import parameterized
@@ -42,10 +41,10 @@ from trl import (
     XPOTrainer,
 )
 
-from .testing_utils import require_sklearn
+from .testing_utils import TrlTestCase, require_sklearn
 
 
-class TrainerArgTester(unittest.TestCase):
+class TrainerArgTester(TrlTestCase):
     @require_sklearn
     def test_bco(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

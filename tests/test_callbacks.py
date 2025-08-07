@@ -15,7 +15,6 @@
 import json
 import os
 import tempfile
-import unittest
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
@@ -26,6 +25,8 @@ from transformers.utils import is_peft_available
 from tests.testing_utils import require_comet, require_mergekit
 from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
 from trl.mergekit_utils import MergeConfig
+
+from .testing_utils import TrlTestCase
 
 
 if is_peft_available():
@@ -57,8 +58,9 @@ class TrainerWithRefModel(Trainer):
         self.ref_model = ref_model
 
 
-class WinRateCallbackTester(unittest.TestCase):
+class WinRateCallbackTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -88,7 +90,7 @@ class WinRateCallbackTester(unittest.TestCase):
     def test_basic(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
                 per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
@@ -115,7 +117,7 @@ class WinRateCallbackTester(unittest.TestCase):
         # Same as before, but without the ref_model attribute. It should use the model attribute instead
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
                 per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
@@ -141,7 +143,7 @@ class WinRateCallbackTester(unittest.TestCase):
         """Test that the soft judge functionality works correctly"""
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
                 per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
@@ -192,7 +194,7 @@ class WinRateCallbackTester(unittest.TestCase):
             )
             self.model.add_adapter(peft_config)
             training_args = TrainingArguments(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
                 per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
@@ -215,8 +217,9 @@ class WinRateCallbackTester(unittest.TestCase):
             self.assertListEqual(winrate_history, self.expected_winrates)
 
 
-class LogCompletionsCallbackTester(unittest.TestCase):
+class LogCompletionsCallbackTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -238,7 +241,7 @@ class LogCompletionsCallbackTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
                 per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
@@ -276,7 +279,7 @@ class LogCompletionsCallbackTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = TrainingArguments(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 eval_strategy="steps",
                 eval_steps=2,  # evaluate every 2 steps
                 per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
@@ -311,8 +314,9 @@ class LogCompletionsCallbackTester(unittest.TestCase):
 
 
 @require_mergekit
-class MergeModelCallbackTester(unittest.TestCase):
+class MergeModelCallbackTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -320,7 +324,7 @@ class MergeModelCallbackTester(unittest.TestCase):
     def test_callback(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 num_train_epochs=1,
                 report_to="none",
                 save_strategy="steps",
@@ -343,7 +347,7 @@ class MergeModelCallbackTester(unittest.TestCase):
     def test_every_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = DPOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 num_train_epochs=1,
                 report_to="none",
                 save_strategy="steps",

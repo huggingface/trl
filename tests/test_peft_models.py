@@ -14,7 +14,6 @@
 
 import os
 import tempfile
-import unittest
 
 import torch
 from transformers import AutoModelForCausalLM
@@ -26,14 +25,17 @@ from transformers.utils import is_peft_available
 
 from trl import AutoModelForCausalLMWithValueHead
 
+from .testing_utils import TrlTestCase
+
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
 @require_peft
-class PeftModelTester(unittest.TestCase):
+class PeftModelTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.causal_lm_model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.lora_config = LoraConfig(
             r=16,

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 
 import torch
 from datasets import load_dataset
@@ -24,11 +23,12 @@ from transformers.testing_utils import require_liger_kernel, require_peft
 from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 
-from .testing_utils import require_no_wandb
+from .testing_utils import TrlTestCase, require_no_wandb
 
 
-class KTOTrainerTester(unittest.TestCase):
+class KTOTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -56,7 +56,7 @@ class KTOTrainerTester(unittest.TestCase):
     def test_kto_trainer(self, name, config_name, loss_type, pre_compute, eval_dataset):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -104,7 +104,7 @@ class KTOTrainerTester(unittest.TestCase):
     def test_kto_trainer_with_ref_model_is_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 report_to="none",
@@ -124,7 +124,7 @@ class KTOTrainerTester(unittest.TestCase):
     def test_tokenize_and_process_tokens(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -209,7 +209,7 @@ class KTOTrainerTester(unittest.TestCase):
     def test_kto_trainer_without_providing_ref_model(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -257,7 +257,7 @@ class KTOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -297,7 +297,7 @@ class KTOTrainerTester(unittest.TestCase):
     def test_kto_trainer_generate_during_eval_no_wandb(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -343,7 +343,7 @@ class KTOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 per_device_train_batch_size=2,
                 max_steps=3,
                 remove_unused_columns=False,
@@ -384,7 +384,7 @@ class KTOTrainerTester(unittest.TestCase):
         """Test KTO trainer with Liger loss enabled."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 report_to="none",
                 use_liger_loss=True,  # Enable Liger loss
             )
@@ -424,7 +424,7 @@ class KTOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = KTOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,
                 per_device_train_batch_size=2,
                 do_eval=True,

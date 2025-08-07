@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 from functools import partial
 
 import torch
@@ -27,14 +26,14 @@ from transformers.utils import is_peft_available
 from trl import BCOConfig, BCOTrainer
 from trl.trainer.bco_trainer import _process_tokens, _tokenize
 
-from .testing_utils import require_no_wandb, require_sklearn
+from .testing_utils import TrlTestCase, require_no_wandb, require_sklearn
 
 
 if is_peft_available():
     from peft import LoraConfig
 
 
-class BCOTrainerTester(unittest.TestCase):
+class BCOTrainerTester(TrlTestCase):
     @parameterized.expand([("standard_unpaired_preference"), ("conversational_unpaired_preference")])
     @require_sklearn
     def test_train(self, config_name):
@@ -47,7 +46,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 report_to="none",
@@ -84,7 +83,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 precompute_ref_log_probs=True,
@@ -122,7 +121,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 eval_strategy="steps",
                 eval_steps=3,
@@ -150,7 +149,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 report_to="none",
             )
@@ -175,7 +174,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 report_to="none",
             )
@@ -235,7 +234,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 report_to="none",
@@ -283,7 +282,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 report_to="none",
@@ -322,7 +321,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 learning_rate=0.1,  # increase the learning rate to speed up the test
                 report_to="none",
@@ -360,7 +359,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 eval_strategy="steps",
                 eval_steps=3,
@@ -393,7 +392,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 report_to="none",
             )
@@ -429,7 +428,7 @@ class BCOTrainerTester(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             training_args = BCOConfig(
-                output_dir=tmp_dir,
+                output_dir=self.tmp_dir,
                 remove_unused_columns=False,  # warning raised if not set to False
                 eval_strategy="steps",
                 eval_steps=3,
