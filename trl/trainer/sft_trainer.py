@@ -24,12 +24,13 @@ from typing import Any, Callable, Optional, TypeVar, Union
 
 import torch
 import torch.nn as nn
+import transformers
 from accelerate import PartialState
 from datasets import Dataset, IterableDataset
 from packaging import version
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
+    AutoConfig,
+    AutoProcessor,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -262,6 +263,34 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         return list(position_ids.split(example_lengths))
 
 
+@dataclass
+class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
+    """ """
+
+    processor: ProcessorMixin
+    vision_token_ids: Optional[list[int]] = None
+    return_tensors: str = "pt"
+
+    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        for example in examples:
+            for message in example["messages"]:
+                if message["role"] == "user":
+                    if isinstance(message["content"], str) and "image" in example:
+                        message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
+                        break
+
+        messages = [example["messages"] for example in examples]
+        images = [example["image"] for example in examples]
+        texts = self.processor.apply_chat_template(messages, images=images)
+        output = self.processor(images=images, text=texts, return_tensors=self.return_tensors, padding=True)
+        labels = output["input_ids"].clone()
+        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        for vision_token_id in self.vision_token_ids or []:
+            labels[labels == vision_token_id] = -100
+        output["labels"] = labels
+        return output
+
+
 class SFTTrainer(Trainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
@@ -306,9 +335,10 @@ class SFTTrainer(Trainer):
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
-            with [`~transformers.AutoTokenizer.from_pretrained`].
+            with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
+            If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -346,9 +376,7 @@ class SFTTrainer(Trainer):
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
+        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
         compute_loss_func: Optional[Callable] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
@@ -359,9 +387,9 @@ class SFTTrainer(Trainer):
         formatting_func: Optional[Callable[[dict], str]] = None,
     ):
         # Args
-        model_id = model if isinstance(model, str) else model.config._name_or_path
         if args is None:
-            model_name = model_id.split("/")[-1]
+            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model_name.split("/")[-1]
             args = SFTConfig(f"{model_name}-SFT")
         elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
             dict_args = args.to_dict()
@@ -369,29 +397,57 @@ class SFTTrainer(Trainer):
             dict_args.pop("push_to_hub_token")
             args = SFTConfig(**dict_args)
 
-        # Handle the tokenizer
+        # Model
+        model_init_kwargs = args.model_init_kwargs or {}
+        if isinstance(model, str):
+            model_id = model
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
+                pass  # torch_dtype is already a torch.dtype or "auto" or None
+            elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
+                torch_dtype = getattr(torch, torch_dtype)
+                model_init_kwargs["torch_dtype"] = torch_dtype
+            else:
+                raise ValueError(
+                    "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
+                    f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                )
+            # Disable caching if gradient checkpointing is enabled (not supported)
+            config = AutoConfig.from_pretrained(model_id)
+            architecture = getattr(transformers, config.architectures[0])
+            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+        else:
+            model_id = model.config._name_or_path
+            if args.model_init_kwargs is not None:
+                warnings.warn(
+                    "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
+                )
+
+        # Processing class
         if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_id)
+            processing_class = AutoProcessor.from_pretrained(model_id)
+
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
         if args.eos_token is not None:
             eos_token = args.eos_token
-            eos_token_id = processing_class.convert_tokens_to_ids(eos_token)
+            eos_token_id = tokenizer.convert_tokens_to_ids(eos_token)
             if eos_token_id is None:
                 raise ValueError(
                     f"The specified `eos_token` ('{eos_token}') is not found in the vocabulary of the given "
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `eos_token` exists "
                     "in the vocabulary before using it as an EOS token."
                 )
-            processing_class.eos_token_id = eos_token_id
-
-        # Model
-        if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
-                "You passed model_init_kwargs to the `SFTConfig`, but your model is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
-            )
-        if isinstance(model, str):
-            model = self._create_model_from_path(model, args)
+            tokenizer.eos_token_id = eos_token_id
 
         if args.chat_template_path is not None:
             if os.path.isfile(args.chat_template_path) and args.chat_template_path.endswith((".jinja", ".j2")):
@@ -465,17 +521,19 @@ class SFTTrainer(Trainer):
                     "to at least 2."
                 )
 
+        # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
+        # is prompt-completion, and False if the dataset format is language modeling.
         dataset_sample = next(iter(train_dataset))
         if args.completion_only_loss is None:
             self.completion_only_loss = "prompt" in dataset_sample
         else:
             self.completion_only_loss = args.completion_only_loss
 
-        if data_collator is None:
+        if data_collator is None and not self._is_vlm:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
-            pad_token = args.pad_token or processing_class.pad_token or processing_class.eos_token
-            pad_token_id = processing_class.convert_tokens_to_ids(pad_token)
+            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
+            pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
             if pad_token_id is None:
                 raise ValueError(
                     f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
@@ -489,6 +547,15 @@ class SFTTrainer(Trainer):
                 # Using position_ids without flash_attn hurts the training
                 return_position_ids=use_flash_attention,
                 pad_to_multiple_of=args.pad_to_multiple_of,
+            )
+        elif data_collator is None and self._is_vlm:
+            data_collator = DataCollatorForVisionLanguageModeling(
+                processor=processing_class,
+                vision_token_ids=[
+                    processing_class.image_token_id,
+                    model.config.vision_start_token_id,
+                    model.config.vision_end_token_id,
+                ],
             )
 
         if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
@@ -507,8 +574,12 @@ class SFTTrainer(Trainer):
             )
 
         # Dataset
-        preprocess_dataset = args.dataset_kwargs is None or not args.dataset_kwargs.get("skip_prepare_dataset", False)
-        if preprocess_dataset:
+        # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
+        # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
+        skip_prepare_dataset = (
+            args.dataset_kwargs is not None and args.dataset_kwargs.get("skip_prepare_dataset", False) or self._is_vlm
+        )
+        if not skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
                 raise ValueError(
                     "A formatting function was provided while `completion_only_loss=True`, which is incompatible. "
@@ -565,29 +636,6 @@ class SFTTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
-
-    def _create_model_from_path(self, model_path: str, args: SFTConfig) -> PreTrainedModel:
-        """Creates a model from a path or model identifier."""
-        model_init_kwargs = args.model_init_kwargs or {}
-        # Handle torch dtype
-        torch_dtype = model_init_kwargs.get("torch_dtype")
-        if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-            pass  # torch_dtype is already a torch.dtype or "auto" or None
-        elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
-            torch_dtype = getattr(torch, torch_dtype)
-            model_init_kwargs["torch_dtype"] = torch_dtype
-        else:
-            raise ValueError(
-                "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
-            )
-        # Disable caching if gradient checkpointing is enabled (not supported)
-        # if args.gradient_checkpointing:
-        #     model_init_kwargs["use_cache"] = False
-
-        # Create model
-        model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        return model
 
     def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
         """Prepares a model for PEFT training."""
@@ -842,13 +890,10 @@ class SFTTrainer(Trainer):
         # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
-            self._signature_columns = [
-                "input_ids",
-                "labels",
-                "seq_lengths",
-                "completion_mask",
-                "assistant_masks",
-            ]
+            if self._is_vlm:
+                self._signature_columns = ["messages", "image"]
+            else:
+                self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
