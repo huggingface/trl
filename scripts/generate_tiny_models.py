@@ -306,15 +306,16 @@ for model_id, config_class, model_class in [
         kwargs["vision_token_id"] = 151654
         kwargs["image_token_id"] = 151655
         kwargs["vocab_size"] = len(processor.tokenizer.vocab)
-        text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [1]}
+        text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [2]}
         vision_kwargs["depth"] = 4
         vision_kwargs["embed_dim"] = 64
-        vision_kwargs["out_hidden_size"] = 8
+    if config_class in [Qwen2_5_VLConfig]:
+        vision_kwargs["out_hidden_size"] = 16
 
     config = config_class(
         text_config=dict(
             vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
-            hidden_size=8,
+            hidden_size=16,
             num_attention_heads=4,
             num_key_value_heads=2,
             num_hidden_layers=2,
