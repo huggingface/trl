@@ -669,7 +669,10 @@ class SFTTrainerTester2(TrlTestCase):
 
         # Initialize the trainer
         training_args = SFTConfig(
-            output_dir=self.tmp_dir, model_init_kwargs={"torch_dtype": torch.float16}, report_to="none"
+            output_dir=self.tmp_dir,
+            model_init_kwargs={"torch_dtype": torch.float16},
+            learning_rate=0.1,
+            report_to="none",
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
@@ -1397,29 +1400,3 @@ class SFTTrainerTester2(TrlTestCase):
 
         for tag in ["sft", "trl"]:
             self.assertIn(tag, trainer.model.model_tags)
-
-    def test_train_with_torch_dtype(self):
-        # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
-
-        # Initialize the trainer
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir, model_init_kwargs={"torch_dtype": torch.float16}, report_to="none"
-        )
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-        )
-
-        # Save the initial parameters to compare them later
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        # Train the model
-        trainer.train()
-
-        # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        # Check the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
