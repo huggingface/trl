@@ -1034,11 +1034,7 @@ class SFTTrainerTester2(TrlTestCase):
 
         # Initialize the trainer
         training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            packing=True,
-            packing_strategy=packing_strategy,
-            max_length=10,
-            report_to="none",
+            output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset

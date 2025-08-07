@@ -129,6 +129,9 @@ class RandomPairwiseJudge(BasePairwiseJudge):
 
 
 class TrlTestCase(unittest.TestCase):
+    """
+    Base test case for TRL tests. Sets up a temporary directory for testing.
+    """
     def setUp(self):
         super().setUp()
         self.tmp_dir = tempfile.mkdtemp()
