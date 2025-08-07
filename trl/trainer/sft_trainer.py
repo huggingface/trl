@@ -335,7 +335,7 @@ class SFTTrainer(Trainer):
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`] [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
@@ -404,13 +404,17 @@ class SFTTrainer(Trainer):
             torch_dtype = model_init_kwargs.get("torch_dtype")
             if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
                 pass  # torch_dtype is already a torch.dtype or "auto" or None
-            elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
+            elif isinstance(torch_dtype, str) and torch_dtype in [
+                "bfloat16",
+                "float16",
+                "float32",
+            ]:  # it's a str and valid torch_dtype, but not "auto"
                 torch_dtype = getattr(torch, torch_dtype)
                 model_init_kwargs["torch_dtype"] = torch_dtype
             else:
                 raise ValueError(
                     "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                    f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                    f"a valid `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
             config = AutoConfig.from_pretrained(model_id)

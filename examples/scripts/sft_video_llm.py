@@ -179,7 +179,6 @@ if __name__ == "__main__":
     # Configure training args
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
-    training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config, split="train")

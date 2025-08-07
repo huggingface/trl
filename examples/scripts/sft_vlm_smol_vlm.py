@@ -31,7 +31,7 @@ accelerate launch
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --output_dir sft-smol-vlm-hf \
-    --bf16 \
+    --bf16 True \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
@@ -70,7 +70,6 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
-    training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
     ################
     # Model, Tokenizer & Processor
