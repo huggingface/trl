@@ -31,7 +31,6 @@ accelerate launch \
     --model_name_or_path=Qwen/Qwen2-VL-7B-Instruct \
     --per_device_train_batch_size=1 \
     --output_dir=video-llm-output \
-    --bf16=True \
     --tf32=True \
     --gradient_accumulation_steps=4 \
     --num_train_epochs=4 \

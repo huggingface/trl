@@ -35,7 +35,6 @@ python examples/scripts/mpo_vlm.py \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj \
     --loss_type sigmoid bco_pair sft \
     --loss_weights 0.8 0.2 1.0 \
-    --bf16 True
 """
 
 import torch
