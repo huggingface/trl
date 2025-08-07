@@ -31,7 +31,6 @@ accelerate launch
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --output_dir sft-smol-vlm-hf \
-    --bf16 True \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \

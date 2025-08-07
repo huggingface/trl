@@ -31,7 +31,6 @@ accelerate launch
     --per_device_train_batch_size 8 \
     --gradient_accumulation_steps 8 \
     --output_dir sft-llava-1.5-7b-hf \
-    --bf16 True \
     --torch_dtype bfloat16 \
     --gradient_checkpointing
 

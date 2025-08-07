@@ -42,7 +42,6 @@ python examples/scripts/bco.py \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
-    --bf16 True \
     --report_to wandb
 
 # QLoRA:
@@ -65,7 +64,6 @@ python examples/scripts/bco.py \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
-    --bf16 True \
     --use_peft \
     --load_in_4bit \
     --lora_target_modules=all-linear \
