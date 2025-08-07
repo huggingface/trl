@@ -30,7 +30,7 @@ accelerate launch \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --output_dir gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft \
-    --bf16 \
+    --bf16 True \
     --torch_dtype bfloat16 \
     --use_peft \
     --lora_target_modules all-linear \
@@ -47,7 +47,7 @@ accelerate launch \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --output_dir gemma-3-4b-it-trl-sft-MMIU-Benchmark \
-    --bf16 \
+    --bf16 True \
     --torch_dtype bfloat16 \
     --use_peft \
     --lora_target_modules all-linear

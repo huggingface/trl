@@ -35,7 +35,7 @@ python trl/scripts/kto.py \
     --output_dir=kto-aligned-model \
     --warmup_ratio 0.1 \
     --report_to wandb \
-    --bf16 \
+    --bf16 True \
     --logging_first_step
 
 # QLoRA:
@@ -51,7 +51,7 @@ python trl/scripts/kto.py \
     --output_dir=kto-aligned-model-lora \
     --warmup_ratio 0.1 \
     --report_to wandb \
-    --bf16 \
+    --bf16 True \
     --logging_first_step \
     --use_peft \
     --load_in_4bit \

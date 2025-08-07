@@ -35,7 +35,7 @@ python examples/scripts/cpo.py \
     --output_dir="gpt2-aligned-cpo" \
     --warmup_steps 150 \
     --report_to wandb \
-    --bf16 \
+    --bf16 True \
     --logging_first_step \
     --no_remove_unused_columns
 
@@ -52,7 +52,7 @@ python examples/scripts/cpo.py \
     --optim rmsprop \
     --warmup_steps 150 \
     --report_to wandb \
-    --bf16 \
+    --bf16 True \
     --logging_first_step \
     --no_remove_unused_columns \
     --use_peft \
