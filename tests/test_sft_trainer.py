@@ -1480,7 +1480,7 @@ class SFTTrainerTester2(unittest.TestCase):
     )
     def test_train_vlm(self, model_id):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen-image", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Initialize the trainer
