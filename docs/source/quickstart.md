@@ -1,88 +1,178 @@
 # Quickstart
 
-## How does it work?
+TRL is a comprehensive library for post-training foundation models using techniques like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and Proximal Policy Optimization (PPO).
 
-Fine-tuning a language model via PPO consists of roughly three steps:
+## Installation
 
-1. **Rollout**: The language model generates a response or continuation based on a query which could be the start of a sentence.
-2. **Evaluation**: The query and response are evaluated with a function, model, human feedback, or some combination of them. The important thing is that this process should yield a scalar value for each query/response pair. The optimization will aim at maximizing this value.
-3. **Optimization**: This is the most complex part. In the optimisation step the query/response pairs are used to calculate the log-probabilities of the tokens in the sequences. This is done with the model that is trained and a reference model, which is usually the pre-trained model before fine-tuning. The KL-divergence between the two outputs is used as an additional reward signal to make sure the generated responses don't deviate too far from the reference language model. The active language model is then trained with PPO.
-
-The full process is illustrated in the following figure:
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_overview.png"/>
-
-## Minimal example
-
-The following code illustrates the steps above. 
-
-```python
-# 0. imports
-import torch
-from transformers import GPT2Tokenizer
-
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
-
-
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
-tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-tokenizer.pad_token = tokenizer.eos_token
-
-# 2. initialize trainer
-ppo_config = {"mini_batch_size": 1, "batch_size": 1}
-config = PPOConfig(**ppo_config)
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer)
-
-# 3. encode a query
-query_txt = "This morning I went to the "
-query_tensor = tokenizer.encode(query_txt, return_tensors="pt").to(model.pretrained_model.device)
-
-# 4. generate model response
-generation_kwargs = {
-    "min_length": -1,
-    "top_k": 0.0,
-    "top_p": 1.0,
-    "do_sample": True,
-    "pad_token_id": tokenizer.eos_token_id,
-    "max_new_tokens": 20,
-}
-response_tensor = ppo_trainer.generate([item for item in query_tensor], return_prompt=False, **generation_kwargs)
-response_txt = tokenizer.decode(response_tensor[0])
-
-# 5. define a reward for response
-# (this could be any reward such as human feedback or output from another model)
-reward = [torch.tensor(1.0, device=model.pretrained_model.device)]
-
-# 6. train model with ppo
-train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
+```bash
+pip install trl
 ```
 
-In general, you would run steps 3-6 in a for-loop and run it on many diverse queries. You can find more realistic examples in the examples section. 
+## Quick Examples
 
-## How to use a trained model
+Get started instantly with TRL's most popular trainers. Each example runs on a single GPU and uses compact models for quick experimentation.
 
-After training a `AutoModelForCausalLMWithValueHead`, you can directly use the model in `transformers`.
-```python
+<div class="trainer-toggle">
 
-# .. Let's assume we have a trained model using `PPOTrainer` and `AutoModelForCausalLMWithValueHead`
+### SFT Trainer
 
-# push the model on the Hub
-model.push_to_hub("my-fine-tuned-model-ppo")
-
-# or save it locally
-model.save_pretrained("my-fine-tuned-model-ppo")
-
-# load the model from the Hub
-from transformers import AutoModelForCausalLM
-
-model = AutoModelForCausalLM.from_pretrained("my-fine-tuned-model-ppo")
-```
-
-You can also load your model with `AutoModelForCausalLMWithValueHead` if you want to use the value head, for example to continue training.
+**Supervised Fine-Tuning** - Perfect for instruction-following and chat models
 
 ```python
-from trl.model import AutoModelForCausalLMWithValueHead
+from trl import SFTTrainer
+from datasets import load_dataset
 
-model = AutoModelForCausalLMWithValueHead.from_pretrained("my-fine-tuned-model-ppo")
+# Minimal example - just 3 lines!
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    train_dataset=load_dataset("trl-lib/Capybara", split="train[:1000]"),
+)
+trainer.train()
 ```
+
+### DPO Trainer  
+
+**Direct Preference Optimization** - Align models using human preferences
+
+```python
+from trl import DPOTrainer
+from datasets import load_dataset
+
+# Train on preference data
+trainer = DPOTrainer(
+    model="Qwen/Qwen2.5-0.5B", 
+    train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train_prefs[:1000]"),
+)
+trainer.train()
+```
+
+### GRPO Trainer
+
+**Group Relative Policy Optimization** - Memory-efficient alternative to PPO
+
+```python
+from trl import GRPOTrainer
+from datasets import load_dataset
+
+# RLHF without a separate reward model
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    train_dataset=load_dataset("trl-lib/tldr", split="train[:1000]"),
+)
+trainer.train()
+```
+
+</div>
+
+## Command Line Interface
+
+Skip the code entirely - train directly from your terminal:
+
+```bash
+# SFT: Fine-tune on instructions
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --output_dir ./my-sft-model
+
+# DPO: Align with preferences  
+trl dpo --model_name_or_path ./my-sft-model \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --output_dir ./my-aligned-model
+```
+
+## Configuration Examples
+
+Each trainer can be customized with detailed configurations for production use:
+
+<details>
+<summary><strong>Advanced SFT Configuration</strong></summary>
+
+```python
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
+
+config = SFTConfig(
+    output_dir="./sft-qwen-chat",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,
+    learning_rate=2e-5,
+    max_steps=1000,
+    logging_steps=10,
+    save_steps=500,
+    bf16=True,  # Use bfloat16 for efficiency
+)
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    args=config,
+    train_dataset=load_dataset("trl-lib/Capybara", split="train"),
+)
+trainer.train()
+```
+</details>
+
+<details>
+<summary><strong>Advanced DPO Configuration</strong></summary>
+
+```python
+from trl import DPOTrainer, DPOConfig
+from datasets import load_dataset
+
+config = DPOConfig(
+    output_dir="./dpo-aligned-model",
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=8,
+    learning_rate=5e-7,
+    beta=0.1,  # KL penalty strength
+    max_steps=500,
+    bf16=True,
+)
+
+trainer = DPOTrainer(
+    model="./sft-qwen-chat",  # Use SFT model as base
+    args=config,
+    train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train_prefs"),
+)
+trainer.train()
+```
+</details> 
+
+## What's Next?
+
+<div class="grid">
+  
+**📚 Learn More**
+- [SFT Trainer](sft_trainer.md) - Complete SFT guide
+- [DPO Trainer](dpo_trainer.md) - Preference alignment 
+- [Training FAQ](how_to_train.md) - Common questions
+
+**🚀 Scale Up**
+- [Distributed Training](distributing_training.md) - Multi-GPU setups
+- [Memory Optimization](reducing_memory_usage.md) - Efficient training
+- [PEFT Integration](peft_integration.md) - LoRA and QLoRA
+
+**💡 Examples** 
+- [Example Scripts](../examples/) - Production-ready code
+- [Research Projects](../examples/research_projects/) - Advanced techniques
+- [Community Tutorials](community_tutorials.md) - External guides
+
+</div>
+
+## Troubleshooting
+
+**Out of Memory?** Reduce batch size and enable optimizations:
+```python
+config = SFTConfig(
+    per_device_train_batch_size=1,  # Start small
+    gradient_accumulation_steps=8,  # Maintain effective batch size
+    bf16=True,                      # Use mixed precision
+    gradient_checkpointing=True,    # Save memory
+)
+```
+
+**Loss not decreasing?** Try adjusting the learning rate:
+```python 
+config = SFTConfig(learning_rate=2e-5)  # Good starting point
+```
+
+For more help, see our [Training FAQ](how_to_train.md) or open an [issue on GitHub](https://github.com/huggingface/trl/issues).
