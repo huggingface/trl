@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.20.0.dev0"
+__version__ = "0.22.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -33,7 +33,6 @@ _import_structure = {
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
-    "environment": ["TextEnvironment", "TextHistory"],
     "extras": ["BestOfNSampler"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
@@ -127,7 +126,6 @@ if TYPE_CHECKING:
         truncate_dataset,
         unpair_preference_dataset,
     )
-    from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
     from .models import (
         SUPPORTED_ARCHITECTURES,
