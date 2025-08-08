@@ -623,7 +623,3 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
-
-        # Validate vLLM configuration
-        if self.vllm_mode not in ["server", "colocate"]:
-            raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
