@@ -1148,6 +1148,7 @@ class ProteinEmbeddingProcessor:
                     dtype=self.protein_projection.weight.dtype,
                 )
 
+
         return result
 
 
@@ -1188,6 +1189,7 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         )
 
         structure_coords = processed.get("structure_coords")
+        
         
         
         # Get input_ids and attention_mask
