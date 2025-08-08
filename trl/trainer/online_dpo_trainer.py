@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
-from accelerate.utils import is_peft_model
+from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
 from packaging import version
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -680,15 +680,15 @@ class OnlineDPOTrainer(Trainer):
 
         return self.accelerator.prepare(eval_dataloader)
 
-    def _generate_vllm(self, model, prompts, images=None):
+    def _generate_vllm(self, prompts, images=None):
         eos_token_id = self.eos_token_id
         pad_token_id = self.pad_token_id
 
         # Generate completion_ids and prompt_ids based on mode
         if self.vllm_mode == "server":
-            completion_ids, prompt_ids = self._generate_vllm_server(model, prompts, images)
+            completion_ids, prompt_ids = self._generate_vllm_server(prompts, images)
         elif self.vllm_mode == "colocate":
-            completion_ids, prompt_ids = self._generate_vllm_colocate(model, prompts, images)
+            completion_ids, prompt_ids = self._generate_vllm_colocate(prompts, images)
 
         # Shared padding, masking, and tensor conversion logic
         max_prompt_length = max(len(ids) for ids in prompt_ids)
@@ -710,18 +710,16 @@ class OnlineDPOTrainer(Trainer):
 
         return prompt_ids, prompt_mask, completion_ids, completion_mask
 
-    def _generate_vllm_server(self, model, prompts, images=None):
+    def _generate_vllm_server(self, prompts, images=None):
         """Generate completions using vLLM server mode"""
-        from accelerate.utils import broadcast_object_list, gather_object
-
         has_images = images is not None
 
         # Update vLLM server weights if needed
         if hasattr(self, "_last_loaded_step") and self.state.global_step != self._last_loaded_step:
-            self._move_model_to_vllm(model)
+            self._move_model_to_vllm()
             self._last_loaded_step = self.state.global_step
         elif not hasattr(self, "_last_loaded_step"):
-            self._move_model_to_vllm(model)
+            self._move_model_to_vllm()
             self._last_loaded_step = self.state.global_step
 
         # Gather all prompts to main process
@@ -768,10 +766,10 @@ class OnlineDPOTrainer(Trainer):
 
         return completion_ids, prompt_ids
 
-    def _generate_vllm_colocate(self, model, prompts, images=None):
+    def _generate_vllm_colocate(self, prompts, images=None):
         """Generate completions using vLLM colocate mode"""
         # Update model weights if needed
-        self._move_model_to_vllm(model)
+        self._move_model_to_vllm()
 
         if is_conversational({"prompt": prompts[0]}):
             outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
@@ -783,7 +781,7 @@ class OnlineDPOTrainer(Trainer):
 
         return completion_ids, prompt_ids
 
-    def _move_model_to_vllm(self, model):
+    def _move_model_to_vllm(self):
         """Synchronize model weights to vLLM server with support for PEFT, DeepSpeed, and FSDP"""
         # For DeepSpeed ZeRO-3 and FSDP, we need to gather all parameters before operations
         deepspeed_plugin = self.accelerator.state.deepspeed_plugin
@@ -795,12 +793,12 @@ class OnlineDPOTrainer(Trainer):
         else:
             gather_if_zero3 = nullcontext
 
-        if is_peft_model(model):
+        if is_peft_model(self.model):
             # With PEFT and FSDP/DeepSpeed ZeRO Stage 3, we must gather the full model at once before merging, as
             # merging adapters in a sharded manner is not supported.
             # TODO: does this work with FSDP?
-            with gather_if_zero3(list(model.parameters())):
-                model.merge_adapter()
+            with gather_if_zero3(list(self.model.parameters())):
+                self.model.merge_adapter()
 
                 # Update vLLM weights while parameters are gathered
                 if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
@@ -810,15 +808,15 @@ class OnlineDPOTrainer(Trainer):
                     fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
                     if fsdp_version == 1:
                         # use memory-efficient post-order traversal for FSDP
-                        self._sync_fsdp1_params_to_vllm(model)
+                        self._sync_fsdp1_params_to_vllm(self.model)
                     elif fsdp_version == 2:
-                        self._sync_fsdp2_params_to_vllm(model)
+                        self._sync_fsdp2_params_to_vllm(self.model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
-                    for name, param in model.named_parameters():
+                    for name, param in self.model.named_parameters():
                         # When using PEFT, we need to recover the original parameter name and discard some parameters
                         name = name.removeprefix("base_model.model.").replace(".base_layer", "")
-                        if model.prefix in name:
+                        if self.model.prefix in name:
                             continue
                         # When module to save, remove its prefix and discard the original module
                         if "original_module" in name:
@@ -831,7 +829,7 @@ class OnlineDPOTrainer(Trainer):
                             llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
                             llm_model.load_weights([(name, param.data)])
                 # Unmerge adapters while parameters are still gathered
-                model.unmerge_adapter()
+                self.model.unmerge_adapter()
                 # Parameters will automatically be repartitioned when exiting the context
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
@@ -839,11 +837,11 @@ class OnlineDPOTrainer(Trainer):
                 fsdp_plugin = getattr(self.accelerator.state, "fsdp_plugin", None)
                 fsdp_version = getattr(fsdp_plugin, "fsdp_version", 1) if fsdp_plugin else 1
                 if fsdp_version == 1:
-                    self._sync_fsdp1_params_to_vllm(model)  # use memory-efficient post-order traversal for FSDP
+                    self._sync_fsdp1_params_to_vllm(self.model)  # use memory-efficient post-order traversal for FSDP
                 elif fsdp_version == 2:
-                    self._sync_fsdp2_params_to_vllm(model)
+                    self._sync_fsdp2_params_to_vllm(self.model)
             else:
-                for name, param in model.named_parameters():
+                for name, param in self.model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
                     with gather_if_zero3([param]):
                         if self.vllm_mode == "server" and self.accelerator.is_main_process:
@@ -1193,7 +1191,7 @@ class OnlineDPOTrainer(Trainer):
                                 message["content"] = [{"type": "text", "text": content}]
 
         if self.args.use_vllm:
-            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(model, prompts, images)
+            prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate_vllm(prompts, images)
         else:
             prompt_ids, prompt_mask, completion_ids, completion_mask = self._generate(model, prompts, images)
 
