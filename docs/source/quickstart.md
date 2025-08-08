@@ -16,50 +16,95 @@ Get started instantly with TRL's most popular trainers. Each example runs on a s
 
 ### SFT Trainer
 
-**Supervised Fine-Tuning** - Perfect for instruction-following and chat models
+**Supervised Fine-Tuning** - Transform base models into instruction-following assistants
 
 ```python
-from trl import SFTTrainer
+from trl import SFTTrainer, SFTConfig
 from datasets import load_dataset
 
-# Minimal example - just 3 lines!
+# Real-world SFT with proper configuration
+config = SFTConfig(
+    output_dir="./qwen-chat-model",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=8,
+    learning_rate=2e-5,
+    max_steps=500,
+    bf16=True,
+    logging_steps=10,
+    save_steps=250,
+)
+
 trainer = SFTTrainer(
     model="Qwen/Qwen2.5-0.5B",
+    args=config,
     train_dataset=load_dataset("trl-lib/Capybara", split="train[:1000]"),
+    packing=True,  # Efficient sequence packing
 )
 trainer.train()
+trainer.save_model()
 ```
 
 ### DPO Trainer  
 
-**Direct Preference Optimization** - Align models using human preferences
+**Direct Preference Optimization** - Align SFT models using human preferences
 
 ```python
-from trl import DPOTrainer
+from trl import DPOTrainer, DPOConfig
 from datasets import load_dataset
 
-# Train on preference data
+# DPO requires an SFT model as base
+config = DPOConfig(
+    output_dir="./qwen-aligned",
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=16,
+    learning_rate=5e-7,  # Much lower LR for stability
+    max_steps=300,
+    bf16=True,
+    beta=0.1,  # KL penalty strength
+    logging_steps=5,
+)
+
 trainer = DPOTrainer(
-    model="Qwen/Qwen2.5-0.5B", 
-    train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train_prefs[:1000]"),
+    model="./qwen-chat-model",  # Use your SFT model
+    ref_model="Qwen/Qwen2.5-0.5B",  # Original base model
+    args=config,
+    train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train_prefs[:500]"),
 )
 trainer.train()
+trainer.save_model()
 ```
 
 ### GRPO Trainer
 
-**Group Relative Policy Optimization** - Memory-efficient alternative to PPO
+**Group Relative Policy Optimization** - RLHF without separate reward models
 
 ```python
-from trl import GRPOTrainer
+from trl import GRPOTrainer, GRPOConfig
 from datasets import load_dataset
 
-# RLHF without a separate reward model
+# Define a simple reward function (count unique chars as example)
+def reward_function(samples):
+    return [len(set(sample.lower())) / 10.0 for sample in samples]
+
+config = GRPOConfig(
+    output_dir="./qwen-grpo",
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=32,
+    learning_rate=1e-5,
+    max_steps=200,
+    bf16=True,
+    local_rollout_forward_batch_size=4,  # Generation batch size
+    response_length=128,  # Max response length
+)
+
 trainer = GRPOTrainer(
-    model="Qwen/Qwen2.5-0.5B",
-    train_dataset=load_dataset("trl-lib/tldr", split="train[:1000]"),
+    model="./qwen-chat-model",  # Start from SFT model
+    args=config,
+    train_dataset=load_dataset("trl-lib/tldr", split="train[:500]"),
+    reward_function=reward_function,
 )
 trainer.train()
+trainer.save_model()
 ```
 
 </div>
