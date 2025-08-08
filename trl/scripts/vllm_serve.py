@@ -37,6 +37,7 @@ from trl.import_utils import (
 
 import torch.nn as nn
 from transformers import AutoTokenizer, AutoModelForCausalLM, AutoModelForMaskedLM, AutoConfig
+from esm.sdk.api import ESMProtein, SamplingConfig
 
 
 # Import DNA processing components with proper error handling
@@ -113,6 +114,7 @@ def load_protein_components():
         from bioreason2.utils.protein_utils import ProteinInput as RealProteinInput
         from bioreason2.models.pl.processing_pl import PLProcessor as RealPLProcessor  
         from bioreason2.models.pl.chat_template_pl import CHAT_TEMPLATE as RealProteinCHAT_TEMPLATE
+        
         
         # ESM3 imports for protein processing
         from esm.models.esm3 import ESM3
@@ -1064,10 +1066,11 @@ class ProteinEmbeddingProcessor:
         protein_sequences: List[str],
         batch_idx_map: List[int],
         batch_size: int,
+        structure_coords: Optional[List[str]] = None,
     ) -> List[torch.Tensor]:
         """
         Process protein sequences to obtain embeddings using ESM3.
-        
+
         Args:
             protein_sequences: List of protein sequence strings
             batch_idx_map: Mapping of each sequence to its batch item
@@ -1076,8 +1079,6 @@ class ProteinEmbeddingProcessor:
         Returns:
             List of tensor embeddings for each batch item
         """
-        from esm.sdk.api import ESMProtein, SamplingConfig
-        
         # Initialize result list
         result = [[] for _ in range(batch_size)]
 
@@ -1086,16 +1087,28 @@ class ProteinEmbeddingProcessor:
             # Truncate sequence if too long
             if len(sequence) > self.max_length_protein:
                 sequence = sequence[: self.max_length_protein]
+            
+            if structure_coords is not None and structure_coords.shape[1] != 0:
+                coords = structure_coords[batch_idx_map[seq_idx]].cpu.float()
 
-            # Create ESMProtein object
-            protein = ESMProtein(sequence=sequence)
+                if coords.shape[0] == len(sequence):
+                    protein = ESMProtein(sequence=sequence, coords=coords)
+                else:
+                    if seq_idx == 0:  # Only log once to avoid spam
+                        print(
+                            f"⚠️  Length mismatch: structure ({coords.shape[0]}) vs sequence ({len(sequence)}) - using sequence only"
+                        )
+                    protein = ESMProtein(sequence=sequence)
+            else:
+                protein = ESMProtein(sequence=sequence)
+
 
             # Encode protein
             protein_tensor = self.protein_model.encode(protein)
             protein_tensor = protein_tensor.to(self.device)
 
-            # Get embeddings - same logic as ProteinLLMModel
-            with torch.set_grad_enabled(False):  # protein_model_finetune=False for inference
+            # Get embeddings - respect finetune parameter
+            with torch.set_grad_enabled(False):
                 output = self.protein_model.forward_and_sample(
                     protein_tensor,
                     SamplingConfig(return_per_residue_embeddings=True),
@@ -1108,13 +1121,16 @@ class ProteinEmbeddingProcessor:
             # Add to appropriate batch result
             result[batch_idx].append(seq_embeddings)
 
+
+        
+
         # Concatenate embeddings for each batch item
         for i in range(batch_size):
             if result[i]:
                 result[i] = torch.cat(result[i], dim=0)
             else:
                 # Empty tensor for batch items with no proteins - ensure on device
-                result[i] = torch.zeros((0, self.protein_hidden_size), device=self.protein_model.device)
+                result[i] = torch.zeros((0, self.protein_hidden_size), device=self.device)
 
         # Project all embeddings to text embedding space
         for i in range(batch_size):
@@ -1131,7 +1147,6 @@ class ProteinEmbeddingProcessor:
                     device=self.protein_projection.weight.device,
                     dtype=self.protein_projection.weight.dtype,
                 )
-
 
         return result
 
@@ -1171,6 +1186,8 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             max_length_protein=2048,
             return_tensors="pt"
         )
+
+        structure_coords = processed.get("structure_coords")
         
         
         # Get input_ids and attention_mask
@@ -1204,7 +1221,8 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             protein_embeddings = protein_processor.process_protein_embeddings(
                 protein_sequences_batch,
                 batch_idx_map,
-                batch_size
+                batch_size,
+                structure_coords=structure_coords
             )
             
             # STEP 4: Get text embeddings (EXACT same as ProteinLLMModel.generate)

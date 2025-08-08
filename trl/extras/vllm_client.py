@@ -438,11 +438,11 @@ class VLLMClient:
             weights (`torch.Tensor`):
                 Tensor containing the updated weights.
         """
-        print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
+        # print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
         if not name.startswith("text_model.") and not name.startswith("base_model.") and not name.startswith("model."):
             return
 
-        print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
+        # print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
         
         # print(f"Updating parameter '{name}' with shape {weights.shape} and dtype {weights.dtype}")
         name = name[len("text_model."):] if name.startswith("text_model.") else name
