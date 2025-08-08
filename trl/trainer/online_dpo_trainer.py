@@ -1220,18 +1220,24 @@ class OnlineDPOTrainer(Trainer):
                 return_tensors="pt",
                 **kwargs,
             )
+            # Handle DataParallel wrapped models
+            model_device = getattr(model, "device", None)
+            model_dtype = getattr(model, "dtype", None)
+            if model_device is None and hasattr(model, "module"):
+                model_device = model.module.device
+                model_dtype = model.module.dtype
             # Move vision tensors to device and convert to model dtype
             # Need to duplicate for 2 completions per prompt
             if "pixel_values" in processed:
                 vision_inputs["pixel_values"] = (
-                    processed["pixel_values"].to(model.device, dtype=model.dtype).repeat(2, 1, 1, 1)
+                    processed["pixel_values"].to(model_device, dtype=model_dtype).repeat(2, 1, 1, 1)
                 )
             if "pixel_attention_mask" in processed:
-                vision_inputs["pixel_attention_mask"] = processed["pixel_attention_mask"].to(model.device).repeat(2, 1)
+                vision_inputs["pixel_attention_mask"] = processed["pixel_attention_mask"].to(model_device).repeat(2, 1)
             if "image_sizes" in processed:
-                vision_inputs["image_sizes"] = processed["image_sizes"].to(model.device).repeat(2, 1)
+                vision_inputs["image_sizes"] = processed["image_sizes"].to(model_device).repeat(2, 1)
             if "image_grid_thw" in processed:
-                vision_inputs["image_grid_thw"] = processed["image_grid_thw"].to(model.device).repeat(2, 1)
+                vision_inputs["image_grid_thw"] = processed["image_grid_thw"].to(model_device).repeat(2, 1)
 
         logprobs = self._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs)
         with torch.no_grad():
