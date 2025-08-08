@@ -773,7 +773,7 @@ class OnlineDPOTrainer(Trainer):
 
         # Apply chat template if conversational
         if is_conversational({"prompt": prompts[0]}):
-            prompts_text = [apply_chat_template({"prompt": p}, self.processing_class)["text"] for p in prompts]
+            prompts_text = [apply_chat_template({"prompt": p}, self.processing_class)["prompt"] for p in prompts]
         else:
             prompts_text = prompts
 

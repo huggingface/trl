@@ -505,8 +505,6 @@ class OnlineDPOVisionTrainerTester(unittest.TestCase):
                 per_device_train_batch_size=1,
                 max_steps=2,
                 learning_rate=0.01,
-                max_prompt_length=None,
-                max_length=None,
                 report_to="none",
             )
             trainer = OnlineDPOTrainer(
