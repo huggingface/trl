@@ -1475,6 +1475,7 @@ class SFTTrainerTester2(unittest.TestCase):
 
     @parameterized.expand(
         [
+            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
             ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
         ]
     )
