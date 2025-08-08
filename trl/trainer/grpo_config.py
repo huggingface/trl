@@ -102,6 +102,10 @@ class GRPOConfig(TrainingArguments):
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. If set to `True`, the trainer will use vLLM for generation
             instead of the default model.generate(). Requires `vllm` to be installed.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
         vllm_mode (`str`, *optional*, defaults to `"server"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
@@ -136,10 +140,6 @@ class GRPOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
-        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
-            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
-            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
-            implementation.
 
         > Parameters that control the training
 
@@ -387,11 +387,11 @@ class GRPOConfig(TrainingArguments):
     vllm_mode: str = field(
         default="server",
         metadata={
-            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
             "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
-            "contention with training."
+            "contention with training.",
         },
     )
     vllm_model_impl: str = field(

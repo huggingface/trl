@@ -390,6 +390,7 @@ class OnlineDPOTrainer(Trainer):
 
         # Store generation parameters for later use
         self.use_vllm = args.use_vllm
+        self.num_generations = 2  # Generate 2 completions per prompt for Online DPO
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
@@ -722,28 +723,41 @@ class OnlineDPOTrainer(Trainer):
             self._move_model_to_vllm()
             self._last_loaded_step = self.state.global_step
 
+        # Apply chat template if conversational
+        if is_conversational({"prompt": prompts[0]}):
+            prompts_text = [apply_chat_template({"prompt": p}, self.processing_class)["prompt"] for p in prompts]
+        else:
+            prompts_text = prompts
         # Gather all prompts to main process
-        all_prompts = gather_object(prompts)
+        all_prompts = gather_object(prompts_text)
         if has_images:
             all_images = gather_object(images)
 
         if self.accelerator.is_main_process:
+            # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
+            # num_generations outputs for each one. This is faster than generating outputs for each duplicate
+            # prompt individually.
+            ordered_set_of_prompts = all_prompts[:: self.num_generations]
+            if has_images:
+                ordered_set_of_images = all_images[:: self.num_generations]
+            else:
+                ordered_set_of_images = None
             # Generate using vLLM client with the same approach as GRPO trainer
             completion_ids = self.vllm_client.generate(
-                prompts=all_prompts,
-                images=all_images if has_images else None,
-                n=2,  # Generate 2 completions per prompt for Online DPO
+                prompts=ordered_set_of_prompts,
+                images=ordered_set_of_images,
+                n=self.num_generations,
                 repetition_penalty=self.repetition_penalty,
                 temperature=self.temperature,
                 top_p=self.top_p,
                 top_k=-1 if self.top_k is None else self.top_k,
                 min_p=0.0 if self.min_p is None else self.min_p,
-                max_tokens=self.max_completion_length,
+                max_tokens=self.generation_config.max_tokens,
                 guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
                 generation_kwargs=self.args.generation_kwargs,
             )
             # Flatten: each prompt generates 2 completions
-            completion_ids = [comp_id for prompt_completions in completion_ids for comp_id in prompt_completions]
+            completion_ids = [[comp_id] for prompt_completions in completion_ids for comp_id in prompt_completions]
         else:
             completion_ids = [None] * (len(all_prompts) * 2)
 
@@ -758,12 +772,16 @@ class OnlineDPOTrainer(Trainer):
         completion_ids = completion_ids[process_slice]
 
         # Create prompt_ids by tokenizing locally
+        prompt_inputs = self.processing_class(
+            text=prompts_text,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            add_special_tokens=False,
+        )
         prompt_ids = []
-        for prompt in prompts:
-            inputs = self.processing_class(prompt, return_tensors="pt", add_special_tokens=True)
-            prompt_tokens = inputs["input_ids"][0].tolist()
-            prompt_ids.extend([prompt_tokens, prompt_tokens])  # 2 copies for 2 completions
-
+        for prompt_tokens in prompt_inputs["input_ids"]:
+            prompt_ids.extend([prompt_tokens.tolist(), prompt_tokens.tolist()])  # 2 copies for 2 completions
         return completion_ids, prompt_ids
 
     def _generate_vllm_colocate(self, prompts, images=None):

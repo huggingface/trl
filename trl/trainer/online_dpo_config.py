@@ -302,7 +302,7 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
     vllm_mode: str = field(
-        default="colocate",
+        default="server",
         metadata={
             "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
