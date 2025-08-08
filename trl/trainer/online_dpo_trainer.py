@@ -130,7 +130,7 @@ class OnlineDPOTrainer(Trainer):
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`, *optional*, defaults to `None`):
-            Reward functions to be used for computing the rewards (following GRPO pattern). To compute the rewards, we
+            Reward functions to be used for computing the rewards. To compute the rewards, we
             call all the reward functions with the prompts and completions and sum the rewards. Can be either:
 
             - A single reward function: Can be a string (path to model), a [`~transformers.PreTrainedModel`], or a custom
@@ -228,7 +228,7 @@ class OnlineDPOTrainer(Trainer):
         self.reward_processing_class = reward_processing_class
         self.judge = judge
 
-        # Handle reward_funcs (following GRPO pattern)
+        # Handle reward_funcs
         if reward_funcs is not None:
             # Import here to avoid circular imports
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -241,7 +241,7 @@ class OnlineDPOTrainer(Trainer):
             model_init_kwargs = args.model_init_kwargs or {}
             for i, reward_func in enumerate(reward_funcs):
                 if isinstance(reward_func, str):
-                    # Load model from string path (following GRPO pattern)
+                    # Load model from string path
                     reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
                         reward_func, num_labels=1, **model_init_kwargs
                     )
@@ -269,7 +269,7 @@ class OnlineDPOTrainer(Trainer):
                         reward_processing_class_i = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
                     if reward_processing_class_i.pad_token_id is None:
                         reward_processing_class_i.pad_token = reward_processing_class_i.eos_token
-                    # Set pad token ID on reward model config (following GRPO pattern)
+                    # Set pad token ID on reward model config
                     reward_func.config.pad_token_id = reward_processing_class_i.pad_token_id
                 self.reward_processing_classes.append(reward_processing_class_i)
         else:
@@ -277,7 +277,7 @@ class OnlineDPOTrainer(Trainer):
             self.reward_func_names = []
             self.reward_processing_classes = []
 
-        # Handle reward_weights (following GRPO pattern)
+        # Handle reward_weights
         if reward_funcs is not None:
             if args.reward_weights is not None:
                 if len(args.reward_weights) != len(self.reward_funcs):
@@ -401,7 +401,7 @@ class OnlineDPOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size
         self.vllm_model_impl = args.vllm_model_impl
 
-        # Handle pad token for processors or tokenizers (following GRPO pattern)
+        # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
             tokenizer = processing_class.tokenizer
         elif isinstance(processing_class, PreTrainedTokenizerBase):
@@ -771,10 +771,24 @@ class OnlineDPOTrainer(Trainer):
         # Update model weights if needed
         self._move_model_to_vllm()
 
+        # Apply chat template if conversational
         if is_conversational({"prompt": prompts[0]}):
-            outputs = self.llm.chat(prompts, self.generation_config, use_tqdm=False)
+            prompts_text = [apply_chat_template({"prompt": p}, self.processing_class)["text"] for p in prompts]
         else:
-            outputs = self.llm.generate(prompts, self.generation_config, use_tqdm=False)
+            prompts_text = prompts
+
+        # Prepare vLLM inputs with images if available
+        if images is not None:
+            vllm_inputs = []
+            for prompt, image in zip(prompts_text, images):
+                if image is not None:
+                    vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image}})
+                else:
+                    vllm_inputs.append(prompt)
+        else:
+            vllm_inputs = prompts_text
+
+        outputs = self.llm.generate(vllm_inputs, self.generation_config, use_tqdm=False)
 
         completion_ids = [list(output.outputs[i].token_ids) for i in range(2) for output in outputs]
         prompt_ids = [list(output.prompt_token_ids) for _ in range(2) for output in outputs]
@@ -937,7 +951,7 @@ class OnlineDPOTrainer(Trainer):
         eos_token_id = self.eos_token_id
         pad_token_id = self.pad_token_id
 
-        # Apply chat template and tokenize the input (following GRPO pattern)
+        # Apply chat template and tokenize the input
         inputs = [{"prompt": prompt} for prompt in prompts]
 
         # Add images if provided (VLM support)
@@ -948,7 +962,7 @@ class OnlineDPOTrainer(Trainer):
         # Apply chat template to get text prompts
         prompts_text = [maybe_apply_chat_template(x, self.processing_class)["prompt"] for x in inputs]
 
-        # Handle image token collapsing/removal (following GRPO pattern)
+        # Handle image token collapsing/removal
         # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
         # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
         # image size. We need to handle this properly.
@@ -974,7 +988,7 @@ class OnlineDPOTrainer(Trainer):
                         # If vision_end_token_id is None, just remove the image tokens
                         prompts_text = [re.sub(rf"({escaped_img_token})+", "", text) for text in prompts_text]
 
-        # Prepare kwargs for processing class (following GRPO pattern)
+        # Prepare kwargs for processing class
         kwargs = {}
         if images is not None:
             kwargs = {"images": [[img] for img in images]}
@@ -1083,7 +1097,7 @@ class OnlineDPOTrainer(Trainer):
 
     def _calculate_rewards_from_functions(self, prompts, completions, completion_ids_list, **reward_kwargs):
         """
-        Calculate rewards using reward functions (following GRPO pattern)
+        Calculate rewards using reward functions
         """
         device = self.accelerator.device
         rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
@@ -1176,7 +1190,7 @@ class OnlineDPOTrainer(Trainer):
         images = None
         if has_images:
             images = inputs["image"]
-            # Convert conversational prompts to include image tokens (following GRPO pattern)
+            # Convert conversational prompts to include image tokens
             for prompt in prompts:
                 if isinstance(prompt, list):
                     for message in prompt:

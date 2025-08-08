@@ -395,8 +395,9 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
             # Verify transformers generation config
             self.assertFalse(trainer.use_vllm)
-            self.assertIsNone(trainer.llm)
-            self.assertIsNone(trainer.vllm_client)
+            # When not using vLLM, these attributes should not be set
+            self.assertFalse(hasattr(trainer, "llm") and trainer.llm is not None)
+            self.assertFalse(hasattr(trainer, "vllm_client") and trainer.vllm_client is not None)
             self.assertIsNotNone(trainer.generation_config)
             self.assertEqual(trainer.generation_config.temperature, 0.8)
             self.assertEqual(trainer.generation_config.top_p, 0.9)
@@ -433,6 +434,39 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
             # Check if training loss is available
             self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    def test_training_with_reward_funcs(self, config_name):
+        def simple_reward_func(prompts, completions, completion_ids, **kwargs):
+            return [0.5 for _ in prompts]
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = OnlineDPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                learning_rate=5.0e-7,
+                eval_strategy="steps",
+                reward_weights=[0.7, 0.3],
+                report_to="none",
+            )
+            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+
+            trainer = OnlineDPOTrainer(
+                model=self.model,
+                reward_funcs=[simple_reward_func, simple_reward_func],
+                args=training_args,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+                processing_class=self.tokenizer,
+            )
+            trainer.train()
+
+            self.assertIn("train_loss", trainer.state.log_history[-1])
+            self.assertEqual(len(trainer.reward_funcs), 2)
+            self.assertIsNotNone(trainer.reward_weights)
+            self.assertAlmostEqual(trainer.reward_weights[0].item(), 0.7, places=5)
+            self.assertAlmostEqual(trainer.reward_weights[1].item(), 0.3, places=5)
 
 
 @require_vision
