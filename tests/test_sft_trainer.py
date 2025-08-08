@@ -1478,6 +1478,7 @@ class SFTTrainerTester2(unittest.TestCase):
             ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
         ]
     )
+    @require_vision
     def test_train_vlm(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
