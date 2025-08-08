@@ -474,7 +474,6 @@ class OnlineDPOTrainer(Trainer):
                     self.vllm_client.init_communicator(device=torch.cuda.current_device())
                 else:
                     self.vllm_client = None
-                self.llm = None
             elif self.vllm_mode == "colocate":
                 # vLLM dynamically adjusts the size of the key-value cache based on available GPU memory at instantiation.
                 # A larger cache size improves speed, so we would expect gpu_memory_utilization=1.
@@ -489,15 +488,12 @@ class OnlineDPOTrainer(Trainer):
                     "model_impl": self.vllm_model_impl,
                     "max_num_seqs": self.args.per_device_train_batch_size * self.vllm_tensor_parallel_size,
                     "max_model_len": args.max_length + args.max_new_tokens,  # max_length includes prompt + completion
+                    "distributed_executor_backend": "external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     "seed": self.accelerator.process_index // self.vllm_tensor_parallel_size,
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768)
                     "max_num_batched_tokens": 4096,
                 }
-
-                # Only use external_launcher if we're in a distributed environment
-                if self.accelerator.num_processes > 1 and self.vllm_tensor_parallel_size > 1:
-                    vllm_kwargs["distributed_executor_backend"] = "external_launcher"
 
                 # vLLM requires the environment variables to be set for distributed training.
                 os.environ["RANK"] = str(self.accelerator.process_index)
@@ -507,7 +503,6 @@ class OnlineDPOTrainer(Trainer):
                 os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
 
                 self.llm = LLM(**vllm_kwargs)
-                self.vllm_client = None
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
@@ -559,10 +554,6 @@ class OnlineDPOTrainer(Trainer):
             # Remove None values
             generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
             self.generation_config = GenerationConfig(**generation_kwargs)
-
-            # Not using vLLM
-            self.vllm_client = None
-            self.llm = None
 
         if self.is_deepspeed_enabled:
             if self.reward_model is not None:
