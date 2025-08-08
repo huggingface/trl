@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import re
 import textwrap
 import warnings
 from contextlib import nullcontext
@@ -324,6 +325,10 @@ class OnlineDPOTrainer(Trainer):
         self.image_token_id = getattr(processing_class, "image_token_id", None)
         self.vision_start_token_id = getattr(processing_class, "vision_start_token_id", None)
         self.vision_end_token_id = getattr(processing_class, "vision_end_token_id", None)
+        # Get the image token string for token collapsing
+        self.image_token = None
+        if self.image_token_id is not None:
+            self.image_token = tokenizer.decode([self.image_token_id])
 
         # Define the collator if not provided
         if data_collator is None:
@@ -846,6 +851,32 @@ class OnlineDPOTrainer(Trainer):
         # Apply chat template to get text prompts
         prompts_text = [maybe_apply_chat_template(x, self.processing_class)["prompt"] for x in inputs]
 
+        # Handle image token collapsing/removal (following GRPO pattern)
+        # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
+        # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
+        # image size. We need to handle this properly.
+        if self.image_token is not None and images is not None:
+            escaped_img_token = re.escape(self.image_token)
+            # Search for the image token in the chat template
+            if hasattr(self.processing_class, "chat_template") and self.processing_class.chat_template:
+                if re.search(escaped_img_token, self.processing_class.chat_template):
+                    # Collapse repeated image tokens back into a single token
+                    prompts_text = [
+                        re.sub(rf"({escaped_img_token})+", self.image_token, text) for text in prompts_text
+                    ]
+                else:
+                    # If the chat template doesn't use the image token, remove all instances
+                    if self.vision_end_token_id is not None:
+                        escaped_eoi_token = re.escape(
+                            self.processing_class.tokenizer.decode([self.vision_end_token_id])
+                        )
+                        prompts_text = [
+                            re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text
+                        ]
+                    else:
+                        # If vision_end_token_id is None, just remove the image tokens
+                        prompts_text = [re.sub(rf"({escaped_img_token})+", "", text) for text in prompts_text]
+
         # Prepare kwargs for processing class (following GRPO pattern)
         kwargs = {}
         if images is not None:
@@ -862,6 +893,9 @@ class OnlineDPOTrainer(Trainer):
         )
 
         prompt_inputs = {k: v.to(device) for k, v in prompt_inputs.items()}
+        # Convert vision inputs to model's dtype for proper computation
+        if "pixel_values" in prompt_inputs:
+            prompt_inputs["pixel_values"] = prompt_inputs["pixel_values"].to(model.dtype)
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
         prompt_ids = prompt_inputs["input_ids"].repeat(2, 1)
@@ -966,6 +1000,8 @@ class OnlineDPOTrainer(Trainer):
                 model_kwargs["pixel_attention_mask"] = vision_inputs["pixel_attention_mask"]
             if "image_sizes" in vision_inputs:
                 model_kwargs["image_sizes"] = vision_inputs["image_sizes"]
+            if "image_grid_thw" in vision_inputs:
+                model_kwargs["image_grid_thw"] = vision_inputs["image_grid_thw"]
 
         # Get the logprobs of the completions from the model
         output = model(prompt_completion_ids, **model_kwargs)
@@ -1015,13 +1051,28 @@ class OnlineDPOTrainer(Trainer):
 
         # Extract vision inputs if available for VLM support
         vision_inputs = None
-        if has_images and self.is_vision_model:
-            # For vision models, we need to gather the vision inputs from the data collator
-            # This is a simplified approach - in a full implementation, we would need to
-            # properly handle the vision inputs through the generation process
+        if has_images and self.is_vision_model and not self.args.use_vllm:
+            # For vision models with transformers generation, we need to prepare vision inputs
+            # Process the images to get vision inputs that can be passed through the forward pass
             vision_inputs = {}
-            # Note: This is a placeholder - proper vision input handling would require
-            # more complex integration with the generation process
+            kwargs = {"images": [[img] for img in images]}
+            processed = self.processing_class(
+                text=[""] * len(images),  # Dummy text for vision processing
+                return_tensors="pt",
+                **kwargs,
+            )
+            # Move vision tensors to device and convert to model dtype
+            # Need to duplicate for 2 completions per prompt
+            if "pixel_values" in processed:
+                vision_inputs["pixel_values"] = (
+                    processed["pixel_values"].to(model.device, dtype=model.dtype).repeat(2, 1, 1, 1)
+                )
+            if "pixel_attention_mask" in processed:
+                vision_inputs["pixel_attention_mask"] = processed["pixel_attention_mask"].to(model.device).repeat(2, 1)
+            if "image_sizes" in processed:
+                vision_inputs["image_sizes"] = processed["image_sizes"].to(model.device).repeat(2, 1)
+            if "image_grid_thw" in processed:
+                vision_inputs["image_grid_thw"] = processed["image_grid_thw"].to(model.device).repeat(2, 1)
 
         logprobs = self._forward(model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs)
         with torch.no_grad():
