@@ -333,4 +333,4 @@ for model_id, config_class, model_class in [
         **kwargs,
     )
     model = model_class(config)
-    push_to_hub(model, processor, "tiny", force=True)
+    push_to_hub(model, processor, "tiny")
