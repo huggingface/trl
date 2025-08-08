@@ -22,8 +22,8 @@ from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
+    AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
-    AutoModelForVision2Seq,
     AutoProcessor,
     AutoTokenizer,
     PreTrainedTokenizerBase,
@@ -1460,8 +1460,8 @@ class DPOVisionTrainerTester(TrlTestCase):
         dataset = dataset.cast_column("images", features.Sequence(features.Image()))
 
         # Instantiate the model and processor
-        model = AutoModelForVision2Seq.from_pretrained(model_id)
-        ref_model = AutoModelForVision2Seq.from_pretrained(model_id)
+        model = AutoModelForImageTextToText.from_pretrained(model_id)
+        ref_model = AutoModelForImageTextToText.from_pretrained(model_id)
         processor = AutoProcessor.from_pretrained(model_id)
 
         training_args = DPOConfig(
