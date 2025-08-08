@@ -357,6 +357,13 @@ class OnlineDPOConfig(TrainingArguments):
             "from a string."
         },
     )
+    reward_weights: Optional[list[float]] = field(
+        default=None,
+        metadata={
+            "help": "Weights for combining multiple reward functions. Must match the number of reward functions. "
+            "If None, all reward functions are equally weighted."
+        },
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16

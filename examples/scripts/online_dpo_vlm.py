@@ -80,7 +80,9 @@ python examples/scripts/online_dpo_vlm.py \
 import torch
 import transformers
 from datasets import load_dataset
-from transformers import AutoConfig, AutoProcessor, AutoModelForSequenceClassification, GenerationConfig
+from latex2sympy2_extended import NormalizationConfig
+from math_verify import LatexExtractionConfig, parse, verify
+from transformers import AutoConfig, AutoProcessor, GenerationConfig
 
 from trl import (
     LogCompletionsCallback,
@@ -93,6 +95,7 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+from trl.rewards import think_format_reward
 
 
 if __name__ == "__main__":
@@ -117,9 +120,7 @@ if __name__ == "__main__":
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
     architecture = getattr(transformers, config.architectures[0])
     model = architecture.from_pretrained(
-        model_args.model_name_or_path,
-        trust_remote_code=model_args.trust_remote_code,
-        **model_kwargs
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
 
     # For VLM online DPO, using a reward model is complex because it needs images
@@ -133,7 +134,7 @@ if __name__ == "__main__":
         model_args.model_name_or_path,
         trust_remote_code=model_args.trust_remote_code,
     )
-    if hasattr(processor, 'tokenizer'):
+    if hasattr(processor, "tokenizer"):
         processor.tokenizer.padding_side = "left"
         if processor.tokenizer.pad_token_id is None:
             processor.tokenizer.pad_token = processor.tokenizer.eos_token
@@ -181,47 +182,70 @@ if __name__ == "__main__":
     eval_dataset = dataset["test"] if training_args.eval_strategy != "no" else None
 
     ################
-    # Judge (since reward model is complex for VLMs)
+    # Reward Function for Training (same as GRPO VLM)
     ################
-    import random
-    from trl.trainer.judges import BasePairwiseJudge
-    
-    class RandomPairwiseJudge(BasePairwiseJudge):
-        """Random judge for testing - randomly prefers one completion over another."""
-        
-        def judge(self, prompts, completions_a, completions_b, shuffle=True, return_scores=False):
-            # Randomly choose winners
-            winners = [random.choice([0, 1]) for _ in range(len(prompts))]
-            
-            if return_scores:
-                # Return random scores for testing
-                scores = [(random.random(), random.random()) for _ in range(len(prompts))]
-                return winners, scores
-            return winners
-    
-    judge = RandomPairwiseJudge()
+    def accuracy_reward(completions, solution: list[str], **kwargs):
+        """Reward function that checks if the completion matches the ground truth.
+        - If both gold and prediction are parseable → use math verification.
+        - If not parseable → compare as normalized text.
+        """
+        rewards = []
+        contents = [completion[0]["content"] for completion in completions]
+        for content, sol in zip(contents, solution):
+            try:
+                gold_parsed = parse(sol, extraction_mode="first_match")
+            except Exception:
+                gold_parsed = []
+
+            if len(gold_parsed) != 0:
+                # Try parsing predicted answer too
+                try:
+                    answer_parsed = parse(
+                        content,
+                        extraction_config=[
+                            LatexExtractionConfig(
+                                normalization_config=NormalizationConfig(
+                                    nits=False,
+                                    malformed_operators=False,
+                                    basic_latex=True,
+                                    boxed="all",
+                                    units=True,
+                                ),
+                                boxed_match_priority=0,
+                                try_extract_without_anchor=False,
+                            )
+                        ],
+                        extraction_mode="first_match",
+                    )
+                    reward = float(verify(gold_parsed, answer_parsed))
+                except Exception as e:
+                    print(f"verify failed: {e}, answer: {content}, gold: {sol}")
+                    reward = None
+            else:
+                # fallback to text match
+                reward = float(content.strip().lower() == sol.strip().lower())
+
+            rewards.append(reward)
+
+        return rewards
 
     ################
     # Training
     ################
     trainer = OnlineDPOTrainer(
         model=model,
-        reward_model=reward_model,
-        judge=judge,
+        reward_funcs=[think_format_reward, accuracy_reward],  # Use same reward functions as GRPO VLM
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         processing_class=processor,
-        reward_processing_class=reward_processor,
         peft_config=get_peft_config(model_args),
     )
 
     # Add completion logging callback (from online DPO pattern)
     if training_args.eval_strategy != "no":
         generation_config = GenerationConfig(
-            max_new_tokens=training_args.max_new_tokens, 
-            do_sample=True, 
-            temperature=training_args.temperature
+            max_new_tokens=training_args.max_new_tokens, do_sample=True, temperature=training_args.temperature
         )
         completions_callback = LogCompletionsCallback(trainer, generation_config, num_prompts=8)
         trainer.add_callback(completions_callback)

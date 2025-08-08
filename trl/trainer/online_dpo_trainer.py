@@ -103,6 +103,10 @@ if is_wandb_available():
 
 logger = logging.get_logger(__name__)
 
+# What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
+# rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
+RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
 
 class OnlineDPOTrainer(Trainer):
     r"""
@@ -125,6 +129,15 @@ class OnlineDPOTrainer(Trainer):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
+        reward_funcs (`Union[RewardFunc, list[RewardFunc]]`, *optional*, defaults to `None`):
+            Reward functions to be used for computing the rewards (following GRPO pattern). To compute the rewards, we
+            call all the reward functions with the prompts and completions and sum the rewards. Can be either:
+
+            - A single reward function: Can be a string (path to model), a [`~transformers.PreTrainedModel`], or a custom
+              callable function.
+            - A list of reward functions: Must all be of compatible types.
+
+            Note: Only one of `reward_model`, `judge`, or `reward_funcs` should be provided.
         args (`OnlineDPOConfig`):
             The online DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
@@ -139,6 +152,14 @@ class OnlineDPOTrainer(Trainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
+        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
+            Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
+
+            - A single processing class: Used when `reward_funcs` contains only one reward function.
+            - A list of processing classes: Must match the order and length of the reward functions in `reward_funcs`.
+
+            If set to `None`, the tokenizer for each model-based reward function is automatically loaded using
+            [`~transformers.AutoTokenizer.from_pretrained`].
         peft_config (`dict`):
             The peft config to use for training.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -160,6 +181,7 @@ class OnlineDPOTrainer(Trainer):
         ref_model: Union[PreTrainedModel, nn.Module, None] = None,
         reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
+        reward_funcs: Optional[Union["RewardFunc", list["RewardFunc"]]] = None,
         args: Optional[OnlineDPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
@@ -168,6 +190,7 @@ class OnlineDPOTrainer(Trainer):
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
         reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
+        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         peft_config: Optional[dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
@@ -182,22 +205,94 @@ class OnlineDPOTrainer(Trainer):
 
         self.ref_model = ref_model
 
-        if reward_model is not None and judge is not None:
-            warnings.warn(
-                "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
-                "Ignoring `judge` and using `reward_model`.",
-                UserWarning,
-            )
-            judge = None
-        elif reward_model is None and judge is None:
-            raise ValueError("Either `reward_model` or `judge` must be provided.")
+        # Validate reward configuration - must have exactly one of: reward_model, judge, or reward_funcs
+        reward_configs = sum(x is not None for x in [reward_model, judge, reward_funcs])
+        if reward_configs == 0:
+            raise ValueError("One of `reward_model`, `judge`, or `reward_funcs` must be provided.")
+        elif reward_configs > 1:
+            if reward_model is not None:
+                warnings.warn(
+                    "Multiple reward configurations provided. Using `reward_model` and ignoring others.",
+                    UserWarning,
+                )
+                judge = None
+                reward_funcs = None
+            elif judge is not None:
+                warnings.warn(
+                    "Both `judge` and `reward_funcs` are provided. Using `judge` and ignoring `reward_funcs`.",
+                    UserWarning,
+                )
+                reward_funcs = None
 
         self.reward_model = reward_model
         self.reward_processing_class = reward_processing_class
         self.judge = judge
 
-        if args.missing_eos_penalty is not None and judge is not None:
-            raise ValueError("`missing_eos_penalty` is not supported when `judge` is provided.")
+        # Handle reward_funcs (following GRPO pattern)
+        if reward_funcs is not None:
+            # Import here to avoid circular imports
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+            if not isinstance(reward_funcs, list):
+                reward_funcs = [reward_funcs]
+            self.reward_func_names = []
+
+            # Process reward functions (convert strings to models, collect names)
+            model_init_kwargs = args.model_init_kwargs or {}
+            for i, reward_func in enumerate(reward_funcs):
+                if isinstance(reward_func, str):
+                    # Load model from string path (following GRPO pattern)
+                    reward_funcs[i] = AutoModelForSequenceClassification.from_pretrained(
+                        reward_func, num_labels=1, **model_init_kwargs
+                    )
+                if isinstance(reward_funcs[i], nn.Module):
+                    self.reward_func_names.append(reward_funcs[i].config._name_or_path.split("/")[-1])
+                else:
+                    self.reward_func_names.append(reward_funcs[i].__name__)
+            self.reward_funcs = reward_funcs
+
+            # Handle reward processing classes for reward_funcs
+            if reward_processing_classes is None:
+                reward_processing_classes = [None] * len(reward_funcs)
+            elif not isinstance(reward_processing_classes, list):
+                reward_processing_classes = [reward_processing_classes]
+            else:
+                if len(reward_processing_classes) != len(reward_funcs):
+                    raise ValueError(
+                        "The number of reward processing classes must match the number of reward functions."
+                    )
+
+            self.reward_processing_classes = []
+            for reward_processing_class_i, reward_func in zip(reward_processing_classes, reward_funcs):
+                if isinstance(reward_func, PreTrainedModel):
+                    if reward_processing_class_i is None:
+                        reward_processing_class_i = AutoTokenizer.from_pretrained(reward_func.config._name_or_path)
+                    if reward_processing_class_i.pad_token_id is None:
+                        reward_processing_class_i.pad_token = reward_processing_class_i.eos_token
+                    # Set pad token ID on reward model config (following GRPO pattern)
+                    reward_func.config.pad_token_id = reward_processing_class_i.pad_token_id
+                self.reward_processing_classes.append(reward_processing_class_i)
+        else:
+            self.reward_funcs = None
+            self.reward_func_names = []
+            self.reward_processing_classes = []
+
+        # Handle reward_weights (following GRPO pattern)
+        if reward_funcs is not None:
+            if args.reward_weights is not None:
+                if len(args.reward_weights) != len(self.reward_funcs):
+                    raise ValueError(
+                        f"Number of reward weights ({len(args.reward_weights)}) must match number of reward "
+                        f"functions ({len(self.reward_funcs)})"
+                    )
+                self.reward_weights = torch.tensor(args.reward_weights, dtype=torch.float32)
+            else:
+                self.reward_weights = torch.ones(len(self.reward_funcs), dtype=torch.float32)
+        else:
+            self.reward_weights = None
+
+        if args.missing_eos_penalty is not None and (judge is not None or reward_funcs is not None):
+            raise ValueError("`missing_eos_penalty` is only supported when `reward_model` is provided.")
 
         if args is None:
             raise ValueError("`args` must be provided.")
@@ -478,11 +573,24 @@ class OnlineDPOTrainer(Trainer):
                 self.ref_model = prepare_deepspeed(
                     self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
                 )
+            # Prepare reward function models for DeepSpeed
+            if self.reward_funcs is not None:
+                for i, reward_func in enumerate(self.reward_funcs):
+                    if isinstance(reward_func, PreTrainedModel):
+                        self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
         else:
             if self.ref_model is not None:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
             if self.reward_model is not None:
                 self.reward_model = self.reward_model.to(self.accelerator.device)
+            # Prepare reward function models for FSDP/regular training
+            if self.reward_funcs is not None:
+                for i, reward_func in enumerate(self.reward_funcs):
+                    if isinstance(reward_func, PreTrainedModel):
+                        # Set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
+                        self.reward_funcs[i] = self.accelerator.prepare_model(
+                            reward_func, evaluation_mode=True, device_placement=True
+                        )
 
     @property
     def beta(self):
@@ -895,7 +1003,12 @@ class OnlineDPOTrainer(Trainer):
         prompt_inputs = {k: v.to(device) for k, v in prompt_inputs.items()}
         # Convert vision inputs to model's dtype for proper computation
         if "pixel_values" in prompt_inputs:
-            prompt_inputs["pixel_values"] = prompt_inputs["pixel_values"].to(model.dtype)
+            # Handle DataParallel wrapped models
+            model_dtype = getattr(model, "dtype", None)
+            if model_dtype is None and hasattr(model, "module"):
+                model_dtype = model.module.dtype
+            if model_dtype is not None:
+                prompt_inputs["pixel_values"] = prompt_inputs["pixel_values"].to(model_dtype)
 
         # Sample 2 completions per prompt of size `max_new_tokens` from the model
         prompt_ids = prompt_inputs["input_ids"].repeat(2, 1)
@@ -978,6 +1091,52 @@ class OnlineDPOTrainer(Trainer):
             completion_ids, completion_mask = truncate_right(completion_ids, eos_token_id, pad_token_id)
 
             return prompt_ids, prompt_mask, completion_ids, completion_mask
+
+    def _calculate_rewards_from_functions(self, prompts, completions, completion_ids_list, **reward_kwargs):
+        """
+        Calculate rewards using reward functions (following GRPO pattern)
+        """
+        device = self.accelerator.device
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+
+        # Add trainer state to reward kwargs for dynamic reward shaping
+        reward_kwargs["trainer_state"] = self.state
+
+        for i, (reward_func, reward_processing_class) in enumerate(
+            zip(self.reward_funcs, self.reward_processing_classes)
+        ):
+            if isinstance(reward_func, nn.Module):  # Model-based reward function
+                # Handle conversational vs text input
+                if is_conversational({"prompt": prompts[0]}):
+                    messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
+                    texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
+                else:
+                    texts = [p + c for p, c in zip(prompts, completions)]
+
+                # Tokenize and get reward scores
+                reward_inputs = reward_processing_class(
+                    text=texts, return_tensors="pt", padding=True, padding_side="right", add_special_tokens=False
+                )
+                reward_inputs = {k: v.to(device) for k, v in reward_inputs.items()}
+
+                with torch.inference_mode():
+                    rewards_per_func[:, i] = reward_func(**reward_inputs).logits[:, 0]  # Shape (B*G,)
+            else:
+                # Custom reward function
+                output_reward_func = reward_func(
+                    prompts=prompts, completions=completions, completion_ids=completion_ids_list, **reward_kwargs
+                )
+                # Convert None values to NaN
+                output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
+                rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+        # Weight and sum across all reward functions (like in GRPO)
+        if self.reward_weights is not None:
+            total_rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+        else:
+            total_rewards = rewards_per_func.nansum(dim=1)
+
+        return total_rewards
 
     def _forward(self, model, prompt_ids, prompt_mask, completion_ids, completion_mask, vision_inputs=None):
         # Get the number of tokens to truncate from prompt
@@ -1092,8 +1251,31 @@ class OnlineDPOTrainer(Trainer):
         if is_conversational({"prompt": prompts[0]}):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
-        # Get the reward from the reward model or judge
-        if self.judge is not None:
+        # Get the reward from reward functions, judge, or reward model
+        if self.reward_funcs is not None:
+            # Use reward functions (like GRPO)
+            # First create completion_ids_list for custom reward functions
+            completion_ids_list = [completion_ids[i].tolist() for i in range(completion_ids.shape[0])]
+
+            # Extract additional fields from inputs for reward functions
+            reward_kwargs = {}
+            keys = [key for key in inputs if key not in ["prompt"]]
+            for key in keys:
+                if isinstance(inputs[key], (list, tuple)):
+                    # Repeat input fields to match number of completions (2 per prompt)
+                    reward_kwargs[key] = inputs[key] * 2
+                else:
+                    reward_kwargs[key] = inputs[key]
+
+            # Calculate rewards using reward functions
+            rewards = self._calculate_rewards_from_functions(
+                prompts=2 * prompts, completions=completions, completion_ids_list=completion_ids_list, **reward_kwargs
+            )
+
+            # Split rewards into chosen/rejected pairs
+            first_half, second_half = rewards.split(batch_size)
+            mask = first_half >= second_half
+        elif self.judge is not None:
             # Once formatted, conversational data may contain special tokens (such as <|im_start|>) that are not
             # directly understandable by the judge and could alter its judgment. To avoid this and make the judge
             # independent of the model's chat template, we use the raw conversation data, and apply our own chat
