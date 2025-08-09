@@ -47,6 +47,8 @@ from transformers import (
     GptOssForCausalLM,
     Idefics2Config,
     Idefics2ForConditionalGeneration,
+    Idefics3Config,
+    Idefics3ForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
     LlamaForSequenceClassification,
@@ -283,6 +285,7 @@ for model_id, config_class, model_class in [
     ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
     ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
     ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
+    ("HuggingFaceM4/Idefics3-8B-Llama3", Idefics3Config, Idefics3ForConditionalGeneration),
     ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMConfig, SmolVLMForConditionalGeneration),
     ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
     ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
@@ -293,7 +296,7 @@ for model_id, config_class, model_class in [
     kwargs = {}
     text_kwargs = {}
     vision_kwargs = {}
-    if config_class == PaliGemmaConfig:
+    if config_class in [PaliGemmaConfig]:
         kwargs["projection_dim"] = 8
     if config_class in [LlavaConfig, LlavaNextConfig, PaliGemmaConfig]:
         vision_kwargs["projection_dim"] = 8
@@ -324,7 +327,7 @@ for model_id, config_class, model_class in [
             **text_kwargs,
         ),
         vision_config=dict(
-            hidden_size=16,
+            hidden_size=2048,
             num_attention_heads=4,
             num_hidden_layers=2,
             intermediate_size=32,
