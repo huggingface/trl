@@ -467,6 +467,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
+        logprobs: list[list[float]]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -525,6 +526,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
+            "logprobs": 0,  # this gives us logps of only the generated token
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
@@ -550,8 +552,15 @@ def main(script_args: ScriptArguments):
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
+
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids}
+        logprobs: list[list[float]] = [
+            [next(iter(lp.values())).logprob for lp in output.logprobs]
+            for outputs in all_outputs
+            for output in outputs.outputs
+        ]
+        # return {"completion_ids": completion_ids}
+        return {"completion_ids": completion_ids, "logprobs": logprobs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str
