@@ -327,7 +327,7 @@ for model_id, config_class, model_class in [
             **text_kwargs,
         ),
         vision_config=dict(
-            hidden_size=2048,
+            hidden_size=16,
             num_attention_heads=4,
             num_hidden_layers=2,
             intermediate_size=32,
