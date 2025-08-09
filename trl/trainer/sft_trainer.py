@@ -265,28 +265,123 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
 @dataclass
 class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
-    """ """
+    """
+    Data collator for vision-language modeling tasks.
+
+    Unlike text-only datasets—where the collator typically receives pre-tokenized inputs ready for batching—
+    vision-language data processing involves converting images into pixel values. This conversion is memory- and disk-intensive,
+    making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
+    image processing on-the-fly to efficiently prepare batches.
+
+    Each input example should be a dictionary containing at least:
+    - An `"image"` key holding the image data.
+    - Either a `"messages"` key for conversational inputs or a `"text"` key for standard text inputs.
+
+    The collator outputs a dictionary including:
+    - `"input_ids"`: Tensor of token IDs.
+    - `"attention_mask"`: Tensor indicating attention mask.
+    - `"pixel_values"`: Tensor representing image pixel values.
+    - `"labels"`: Tensor for training labels.
+
+    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
+
+    Args:
+        processor (`ProcessorMixin`):
+            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin`
+            and include a `tokenizer` with a defined `pad_token_id`.
+        max_length (`int` or `None`, optional, defaults to `None`):
+            Maximum sequence length for input tokens. If `None`, no truncation is applied.
+        pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
+            If set, the sequences will be padded to a multiple of this value.
+        dataset_text_field (`str`, optional, defaults to `"text"`):
+            Name of the column that contains text data in the dataset. This parameter is only relevant for
+            [standard datasets format](dataset_formats#standard) .
+        return_tensors (`str`, optional, defaults to `"pt"`):
+            The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
+
+    Example:
+    ```python
+    >>> from trl import DataCollatorForVisionLanguageModeling
+    >>> from transformers import AutoProcessor
+    >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
+    >>> collator = DataCollatorForVisionLanguageModeling(processor)
+    >>> examples = [
+    ...     {"image": Image.open("image_0.png"), "messages": [{"role": "user", "content": "What is this?"}]},
+    ...     {"image": Image.open("image_1.png"), "messages": [{"role": "user", "content": "Describe this image."}]}
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
+                           151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,   3838,    374,
+                              419,     30, 151645,    198],
+                          [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
+                           151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,  74785,    419,
+                             2168,     13, 151645,    198]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
+     'pixel_values': tensor([[-0.9893,  0.1785,  1.5362,  ..., -0.0582,  0.8661, -0.2431],
+                             [-0.2302,  0.9522, -1.1061,  ...,  0.0555,  1.3354, -0.6412],
+                             [ 1.2150,  0.9084,  0.7041,  ...,  0.2404, -0.8403, -0.5133],
+                             ...,
+                             [ 0.6895,  0.2807,  0.2515,  ..., -0.2004, -1.2100,  0.0555],
+                             [ 0.8209, -0.9748,  1.5654,  ...,  1.6055, -0.4706,  0.5817],
+                             [-1.0915,  0.4559,  0.9230,  ...,  0.5106,  0.0982, -0.1720]]),
+     'image_grid_thw': tensor([[1, 4, 4],
+                               [1, 4, 4]]),
+     'labels': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
+                        151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,   3838,    374,
+                           419,     30, 151645,    198],
+                        [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
+                         151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,  74785,    419,
+                           2168,     13, 151645,    198]])}
+    """
 
     processor: ProcessorMixin
-    vision_token_ids: Optional[list[int]] = None
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+    dataset_text_field: str = "text"
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
-        for example in examples:
-            for message in example["messages"]:
-                if message["role"] == "user":
-                    if isinstance(message["content"], str) and "image" in example:
-                        message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
-                        break
+        images = [[example["image"]] for example in examples]
 
-        messages = [example["messages"] for example in examples]
-        images = [example["image"] for example in examples]
-        texts = self.processor.apply_chat_template(messages, images=images)
-        output = self.processor(images=images, text=texts, return_tensors=self.return_tensors, padding=True)
+        if "messages" in examples[0]:  # conversational case
+            for example in examples:
+                image_included = False
+                for message in example["messages"]:
+                    if message["role"] == "user":
+                        if isinstance(message["content"], str) and "image" in example and not image_included:
+                            message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
+                            image_included = True
+                        elif isinstance(message["content"], str) and "image" in example and image_included:
+                            message["content"] = [{"type": "text", "text": message["content"]}]
+                    if message["role"] == "assistant":
+                        if isinstance(message["content"], str):
+                            message["content"] = [{"type": "text", "text": message["content"]}]
+            messages = [example["messages"] for example in examples]
+            texts = self.processor.apply_chat_template(messages, images=images)
+        elif self.dataset_text_field in examples[0]:  # standard case
+            texts = [example[self.dataset_text_field] for example in examples]
+        else:
+            raise KeyError(
+                "The input examples must contain either 'messages' for conversational data or 'text' for standard "
+                "data."
+            )
+
+        output = self.processor(
+            images=images,
+            text=texts,
+            padding=True,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            truncation=self.max_length is not None,
+            max_length=self.max_length,
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
         labels = output["input_ids"].clone()
         labels[labels == self.processor.tokenizer.pad_token_id] = -100
-        for vision_token_id in self.vision_token_ids or []:
-            labels[labels == vision_token_id] = -100
+        # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
+        # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
+        # token definitions vary across architectures.
         output["labels"] = labels
         return output
 
@@ -465,6 +560,33 @@ class SFTTrainer(Trainer):
         else:
             added_tokens = []
 
+        # Catch some wrong configurations related to VLMs
+        if self._is_vlm and args.packing:
+            raise ValueError(
+                "Packing is not supported for vision-language models. Please set `packing=False` in the SFTConfig."
+            )
+        if self._is_vlm and args.padding_free:
+            raise ValueError(
+                "Padding-free training is yet not supported for vision-language models. Please set "
+                "`padding_free=False` in the `SFTConfig`."
+            )
+        if self._is_vlm and args.completion_only_loss:
+            raise ValueError(
+                "Completion-only loss is not yet supported for vision-language models. Please set "
+                "`completion_only_loss=False` in the `SFTConfig`."
+            )
+        if self._is_vlm and args.assistant_only_loss:
+            raise ValueError(
+                "Assistant-only loss is not yet supported for vision-language models. Please set "
+                "`assistant_only_loss=False` in the `SFTConfig`."
+            )
+        first_example = next(iter(train_dataset))
+        if self._is_vlm and "prompt" in first_example and "completion" in first_example:
+            raise ValueError(
+                "Prompt-completion datasets are not yet supported for vision-language models in `SFTTrainer`. "
+                "Please use a language-modeling type dataset instead."
+            )
+
         # PEFT configuration and model wrapping
         if peft_config is not None:
             if added_tokens:
@@ -555,11 +677,9 @@ class SFTTrainer(Trainer):
         elif data_collator is None and self._is_vlm:
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
-                vision_token_ids=[
-                    processing_class.image_token_id,
-                    model.config.vision_start_token_id,
-                    model.config.vision_end_token_id,
-                ],
+                max_length=args.max_length,
+                pad_to_multiple_of=args.pad_to_multiple_of,
+                dataset_text_field=args.dataset_text_field,
             )
 
         if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
