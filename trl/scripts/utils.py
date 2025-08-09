@@ -38,6 +38,8 @@ class ScriptArguments:
     Arguments common to all scripts.
 
     Args:
+        dataset_path (`str`):
+            Path to a local dataset.
         dataset_name (`str`):
             Dataset name.
         dataset_config (`str` or `None`, *optional*, defaults to `None`):
@@ -55,7 +57,7 @@ class ScriptArguments:
             type, inplace operation. See
             https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
-
+    dataset_path: Optional[str] = field(default=None, metadata={"help": "Dataset path."})
     dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
     dataset_config: Optional[str] = field(
         default=None,
