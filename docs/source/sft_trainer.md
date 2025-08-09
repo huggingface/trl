@@ -91,7 +91,7 @@ This section breaks down how SFT works in practice, covering the key steps: **pr
 ### Preprocessing and tokenization
 
 During training, each example is expected to contain a **text field** or a **(prompt, completion)** pair, depending on the dataset format. For more details on the expected formats, see [Dataset formats](dataset_formats).
-The `SFTTrainer` tokenizes each input using the model's tokenizer. If both prompt and completion are provided separately, they are concatenated before tokenization.
+The [`SFTTrainer`] tokenizes each input using the model's tokenizer. If both prompt and completion are provided separately, they are concatenated before tokenization.
 
 ### Computing the loss
 
@@ -289,7 +289,7 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 
 ## Training Vision Language Models
 
-`SFTTrainer` fully supports training Vision-Language Models (VLMs). To train a VLM, you need to provide a dataset with an additional `image` column containing the images to be processed. An example of such a dataset is the [LLaVA Instruct Mix](https://huggingface.co/datasets/trl-lib/llava-instruct-mix).
+[`SFTTrainer`] fully supports training Vision-Language Models (VLMs). To train a VLM, you need to provide a dataset with an additional `image` column containing the images to be processed. An example of such a dataset is the [LLaVA Instruct Mix](https://huggingface.co/datasets/trl-lib/llava-instruct-mix).
 
 ```python
 from trl import SFTConfig, SFTTrainer
