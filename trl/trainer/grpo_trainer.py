@@ -185,6 +185,48 @@ class RepeatSampler(Sampler):
         return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
 
 
+class EntropyController:
+    """
+    This controller dynamically adjusts the entropy‐loss coefficient to keep the policy’s
+    entropy near a desired target. Let e be the current entropy and cₖ the previous coefficient; we compute
+
+        cₖ₊₁ = clip(cₖ + Δ, [entropy_coef_min, entropy_coef_max])   if e < entropy_target
+        cₖ₊₁ = clip(cₖ − Δ, [entropy_coef_min, entropy_coef_max])   otherwise
+
+    and apply αₖ = cₖ₊₁ · 𝟙[e ≤ entropy_target], so entropy regularization only kicks in when
+    the policy’s entropy has fallen below the target.
+
+    Reference:
+        Skywork Open Reasoner 1 Technical Report — https://arxiv.org/abs/2505.22312v2
+    """
+
+    def __init__(
+        self, entropy_coef_min: float, entropy_coef_max: float, entropy_coef_delta: float, entropy_target: float
+    ):
+        self.entropy_coef_min = entropy_coef_min
+        self.entropy_coef_max = entropy_coef_max
+        self.entropy_coef_delta = entropy_coef_delta
+        self.entropy_target = entropy_target
+
+    def step(self, entropy, entropy_coef):
+        """
+        Update the entropy coefficient for the next step.
+
+        Args:
+            entropy (`float`): Current entropy value.
+            entropy_coef (`float`): Current entropy coef.
+
+        Returns:
+            new_coef: Updated coefficient cₖ₊₁
+            apply_coef: Coefficient to apply this step.
+        """
+        new_coef = entropy_coef + (1 if entropy < self.entropy_target else -1) * self.entropy_coef_delta
+        new_coef = float(max(self.entropy_coef_min, min(new_coef, self.entropy_coef_max)))
+        apply_coef = new_coef if entropy <= self.entropy_target else 0.0
+
+        return new_coef, apply_coef
+
+
 # torch.nanstd doesn't exist, so we define it here
 def nanstd(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -297,6 +339,19 @@ def nanmax(tensor: torch.Tensor) -> torch.Tensor:
 def identity(x):
     """Do we really need docs for this?"""
     return x
+
+
+def aggregate_loss(per_token_loss: torch.Tensor, loss_mask: torch.Tensor, loss_type: str, **kwargs) -> torch.Tensor:
+    if loss_type == "grpo":
+        loss = ((per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)).mean()
+    elif loss_type == "bnpo":
+        loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
+    elif loss_type == "dr_grpo":
+        max_completion_length = kwargs.get("max_completion_length", 1)
+        loss = (per_token_loss * loss_mask).sum() / (per_token_loss.size(0) * max_completion_length)
+    else:
+        raise ValueError(f"Unknown loss type: {loss_type}")
+    return loss
 
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
@@ -650,6 +705,17 @@ class GRPOTrainer(Trainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
+
+        # Entropy controller to adapt entropy loss coefficient
+        self.entropy_coef = args.entropy_coef
+        self.use_adaptive_entropy = args.use_adaptive_entropy
+        self.entropy_ctrl = EntropyController(
+            entropy_coef_min=args.entropy_coef_min,
+            entropy_coef_max=args.entropy_coef_max,
+            entropy_coef_delta=args.entropy_coef_delta,
+            entropy_target=args.entropy_target,
+        )
+
         if self.use_liger_loss and not self.importance_sampling_level == "token":
             raise NotImplementedError(
                 "Liger Kernels currently only support token-level importance sampling. Please set"
@@ -1905,17 +1971,27 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        if self.loss_type == "grpo":
-            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
-        elif self.loss_type == "bnpo":
-            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-        elif self.loss_type == "dr_grpo":
-            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
-        else:
-            raise ValueError(f"Unknown loss type: {self.loss_type}")
+        policy_loss = aggregate_loss(
+            per_token_loss, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
+        )
+
+        entropy_loss = aggregate_loss(
+            entropies, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
+        )
+
+        if self.use_adaptive_entropy:
+            world_entropy_loss = self.accelerator.reduce(entropy_loss.detach(), reduction="mean").item()
+            new_coef, apply_coef = self.entropy_ctrl.step(world_entropy_loss, self.entropy_coef)
+            self.entropy_coef = new_coef
+
+        loss = policy_loss - apply_coef * entropy_loss
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
+
+        self._metrics[mode]["policy_loss"].append(self.accelerator.reduce(policy_loss).item())
+        self._metrics[mode]["entropy_loss"].append(world_entropy_loss)
+        self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
         completion_token_count = completion_mask.sum().clamp(min=1.0)
 
