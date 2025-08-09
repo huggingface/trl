@@ -280,122 +280,41 @@ Alternatively, use the structured conversation format (recommended):
 
 ## Tool Calling with SFT
 
-The SFT trainer fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
+The [`SFTTrainer`] fully supports fine-tuning models with _tool calling_ capabilities. In this case, each dataset example should include:
 
 * The conversation messages, including any tool calls (`tool_calls`) and tool responses (`tool` role messages)
 * The list of available tools in the `tools` column, typically provided as JSON schemas
 
 For details on the expected dataset structure, see the [Dataset Format — Tool Calling](dataset_formats#tool-calling) section.
 
-## Extending `SFTTrainer` for Vision Language Models
+## Training Vision Language Models
 
-`SFTTrainer` does not yet inherently support vision-language data. However, we provide a guide on how to tweak the trainer to support vision-language data. Specifically, you need to use a custom data collator that is compatible with vision-language data. This guide outlines the steps to make these adjustments. For a concrete example, refer to the script [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm.py), which demonstrates how to fine-tune the LLaVA 1.5 model on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset.
+`SFTTrainer` fully supports training Vision-Language Models (VLMs). To train a VLM, you need to provide a dataset with an additional `image` column containing the images to be processed. An example of such a dataset is the [LLaVA Instruct Mix](https://huggingface.co/datasets/trl-lib/llava-instruct-mix).
 
-### Preparing the Data
-
-The data format is flexible, provided it is compatible with the custom collator that we will define later. A common approach is to use conversational data. Given that the data includes both text and images, the format needs to be adjusted accordingly. Below is an example of a conversational data format involving both text and images:
 
 ```python
-images = ["obama.png"]
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "Who is this?"},
-            {"type": "image"}
-        ]
-    },
-    {
-        "role": "assistant",
-        "content": [
-            {"type": "text", "text": "Barack Obama"}
-        ]
-    },
-    {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "What is he famous for?"}
-        ]
-    },
-    {
-        "role": "assistant",
-        "content": [
-            {"type": "text", "text": "He is the 44th President of the United States."}
-        ]
-    }
-]
-```
-
-To illustrate how this data format will be processed using the LLaVA model, you can use the following code:
-
-```python
-from transformers import AutoProcessor
-
-processor = AutoProcessor.from_pretrained("llava-hf/llava-1.5-7b-hf")
-print(processor.apply_chat_template(messages, tokenize=False))
-```
-
-The output will be formatted as follows:
-
-```txt
-Who is this? ASSISTANT: Barack Obama USER: What is he famous for? ASSISTANT: He is the 44th President of the United States. 
-```
-
-<iframe src="https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft/embed/viewer/default/train" frameborder="0" width="100%" height="560px"></iframe>
-
-### A custom collator for processing multi-modal data
-
-Unlike the default behavior of [`SFTTrainer`], processing multi-modal data is done on the fly during the data collation process. To do this, you need to define a custom collator that processes both the text and images. This collator must take a list of examples as input (see the previous section for an example of the data format) and return a batch of processed data. Below is an example of such a collator:
-
-```python
-def collate_fn(examples):
-    # Get the texts and images, and apply the chat template
-    texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
-    images = [example["images"][0] for example in examples]
-
-    # Tokenize the texts and process the images
-    batch = processor(images=images, text=texts, return_tensors="pt", padding=True)
-
-    # The labels are the input_ids, and we mask the padding tokens in the loss computation
-    labels = batch["input_ids"].clone()
-    labels[labels == processor.tokenizer.pad_token_id] = -100
-    batch["labels"] = labels
-
-    return batch
-```
-
-We can verify that the collator works as expected by running the following code:
-
-```python
+from trl import SFTTrainer, SFTConfig
 from datasets import load_dataset
 
-dataset = load_dataset("HuggingFaceH4/llava-instruct-mix-vsft", split="train")
-examples = [dataset[0], dataset[1]]  # Just two examples for the sake of the example
-collated_data = collate_fn(examples)
-print(collated_data.keys())  # dict_keys(['input_ids', 'attention_mask', 'pixel_values', 'labels'])
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-VL-3B-Instruct",
+    args=SFTConfig(max_length=None),
+    train_dataset=load_dataset("trl-lib/llava-instruct-mix", split="train"),
+)
+trainer.train()
 ```
 
-### Training the vision-language model
+<Tip>
 
-Now that we have prepared the data and defined the collator, we can proceed with training the model. To ensure that the data is not processed as text-only, we need to set a couple of arguments in the [`SFTConfig`], specifically `remove_unused_columns` and `skip_prepare_dataset` to `True` to avoid the default processing of the dataset. Below is an example of how to set up the `SFTTrainer`.
+For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`SFTConfig`]. This allows the model to process the full sequence length without truncating image tokens.
 
 ```python
-training_args.remove_unused_columns = False
-training_args.dataset_kwargs = {"skip_prepare_dataset": True}
-
-trainer = SFTTrainer(
-    model=model,
-    args=training_args,
-    data_collator=collate_fn,
-    train_dataset=train_dataset,
-    processing_class=processor,
-)
+SFTConfig(max_length=None, ...)
 ```
 
-A full example of training LLaVa 1.5 on the [HuggingFaceH4/llava-instruct-mix-vsft](https://huggingface.co/datasets/HuggingFaceH4/llava-instruct-mix-vsft) dataset can be found in the script [`examples/scripts/sft_vlm.py`](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_vlm.py).
+Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
-* [Experiment tracking](https://wandb.ai/huggingface/trl/runs/2b2c5l7s)
-* [Trained model](https://huggingface.co/HuggingFaceH4/sft-llava-1.5-7b-hf)
+</Tip>
 
 ## SFTTrainer
 
