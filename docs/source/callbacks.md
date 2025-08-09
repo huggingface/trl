@@ -19,3 +19,7 @@
 ## MergeModelCallback
 
 [[autodoc]] MergeModelCallback
+
+## BEMACallback
+
+[[autodoc]] BEMACallback
