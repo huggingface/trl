@@ -180,7 +180,74 @@ trainer = DPOTrainer(
 )
 trainer.train()
 ```
-</details> 
+</details>
+
+<details>
+<summary><strong>Advanced GRPO Configuration</strong></summary>
+
+```python
+from trl import GRPOTrainer, GRPOConfig
+from datasets import load_dataset
+
+# Advanced GRPO with vLLM integration and performance optimization
+config = GRPOConfig(
+    output_dir="./grpo-qwen-advanced",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=16,
+    learning_rate=1e-5,
+    max_steps=300,
+    bf16=True,
+    gradient_checkpointing=True,
+    
+    # GRPO-specific parameters
+    beta=0.0,  # KL penalty coefficient (0.0 disables KL divergence term)
+    epsilon=3e-4,  # PPO clipping parameter
+    local_rollout_forward_batch_size=8,  # Generation batch size
+    response_length=256,  # Max response length
+    
+    # vLLM integration for faster generation
+    use_vllm=True,
+    vllm_mode="colocate",  # Run vLLM within same process
+    
+    # Memory optimization
+    torch_dtype="bfloat16",
+    dataloader_pin_memory=False,
+)
+
+# Enhanced reward function with mathematical reasoning
+def advanced_reward_function(prompts, completions, **kwargs):
+    rewards = []
+    for prompt, completion in zip(prompts, completions):
+        reward = 0.0
+        
+        # Reward for appropriate length (not too short/long)
+        ideal_length = min(max(len(prompt) // 2, 20), 100)
+        length_penalty = abs(len(completion) - ideal_length) / ideal_length
+        reward += max(0, 1.0 - length_penalty)
+        
+        # Reward for diversity (unique characters)
+        diversity_score = len(set(completion.lower())) / max(len(completion), 1)
+        reward += diversity_score
+        
+        # Reward for coherence (no repeated phrases)
+        words = completion.lower().split()
+        if len(words) > 0:
+            unique_ratio = len(set(words)) / len(words)
+            reward += unique_ratio
+        
+        rewards.append(reward)
+    
+    return rewards
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    args=config,
+    train_dataset=load_dataset("trl-lib/tldr", split="train[:1000]"),
+    reward_funcs=advanced_reward_function,
+)
+trainer.train()
+```
+</details>
 
 ## What's Next?
 
