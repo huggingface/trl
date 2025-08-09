@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 from typing import Callable
 
 from datasets import Dataset, load_dataset
@@ -21,9 +20,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl.extras.dataset_formatting import get_formatting_func_from_dataset
 from trl.models.utils import ChatMlSpecialTokens, clone_chat_template, setup_chat_format
 
+from .testing_utils import TrlTestCase
 
-class DatasetFormattingTestCase(unittest.TestCase):
+
+class DatasetFormattingTestCase(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.llama_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.1")
         self.chatml_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
@@ -115,8 +117,9 @@ class DatasetFormattingTestCase(unittest.TestCase):
         self.assertIsNone(formatting_func)
 
 
-class SetupChatFormatTestCase(unittest.TestCase):
+class SetupChatFormatTestCase(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         # remove built-in chat_template to simulate a model having no chat_template
@@ -155,8 +158,9 @@ class SetupChatFormatTestCase(unittest.TestCase):
         )
 
 
-class CloneChatTemplateTestCase(unittest.TestCase):
+class CloneChatTemplateTestCase(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # This tokenizer doesn't have a chat_template by default
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")

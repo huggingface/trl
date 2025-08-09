@@ -13,14 +13,13 @@
 # limitations under the License.
 
 import gc
-import unittest
 
 import torch
 from transformers.utils import is_peft_available
 
 from trl.import_utils import is_diffusers_available
 
-from .testing_utils import require_diffusers
+from .testing_utils import TrlTestCase, require_diffusers
 
 
 if is_diffusers_available() and is_peft_available():
@@ -36,12 +35,13 @@ def prompt_function():
 
 
 @require_diffusers
-class DDPOTrainerTester(unittest.TestCase):
+class DDPOTrainerTester(TrlTestCase):
     """
     Test the DDPOTrainer class.
     """
 
     def setUp(self):
+        super().setUp()
         self.training_args = DDPOConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,
@@ -108,6 +108,7 @@ class DDPOTrainerWithLoRATester(DDPOTrainerTester):
     """
 
     def setUp(self):
+        super().setUp()
         self.training_args = DDPOConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,

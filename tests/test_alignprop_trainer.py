@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import gc
-import unittest
 
 import pytest
 import torch
@@ -22,7 +21,7 @@ from transformers.utils import is_peft_available
 
 from trl.import_utils import is_diffusers_available
 
-from .testing_utils import require_diffusers
+from .testing_utils import TrlTestCase, require_diffusers
 
 
 if is_diffusers_available() and is_peft_available():
@@ -39,12 +38,13 @@ def prompt_function():
 
 @pytest.mark.low_priority
 @require_diffusers
-class AlignPropTrainerTester(unittest.TestCase):
+class AlignPropTrainerTester(TrlTestCase):
     """
     Test the AlignPropTrainer class.
     """
 
     def setUp(self):
+        super().setUp()
         training_args = AlignPropConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,
