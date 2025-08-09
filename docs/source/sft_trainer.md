@@ -13,7 +13,7 @@ This post-training method was contributed by [Younes Belkada](https://huggingfac
 This example demonstrates how to train a language model using the [`SFTTrainer`] from TRL. We train a [Qwen 3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model on the [Capybara dataset](https://huggingface.co/datasets/trl-lib/Capybara), a compact, diverse multi-turn dataset to benchmark reasoning and generalization.
 
 ```python
-from trl import SFTTrainer, SFTConfig
+from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
 trainer = SFTTrainer(
@@ -241,7 +241,7 @@ Unsloth is an open‑source framework for fine‑tuning and reinforcement learni
 This example shows how to transform the [Qwen 3 0.6B Base](https://huggingface.co/Qwen/Qwen3-0.6B-Base) model into an instruction-following model using the [Capybara dataset](https://huggingface.co/datasets/trl-lib/Capybara) and a chat template from [HuggingFaceTB/SmolLM3-3B](https://huggingface.co/HuggingFaceTB/SmolLM3-3B). The SFT Trainer automatically handles tokenizer updates and special token configuration.
 
 ```python
-from trl import SFTTrainer, SFTConfig
+from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
 trainer = SFTTrainer(
@@ -291,9 +291,8 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 
 `SFTTrainer` fully supports training Vision-Language Models (VLMs). To train a VLM, you need to provide a dataset with an additional `image` column containing the images to be processed. An example of such a dataset is the [LLaVA Instruct Mix](https://huggingface.co/datasets/trl-lib/llava-instruct-mix).
 
-
 ```python
-from trl import SFTTrainer, SFTConfig
+from trl import SFTConfig, SFTTrainer
 from datasets import load_dataset
 
 trainer = SFTTrainer(
