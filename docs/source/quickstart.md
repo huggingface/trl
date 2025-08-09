@@ -1,6 +1,6 @@
 # Quickstart
 
-TRL is a comprehensive library for post-training foundation models using techniques like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and Proximal Policy Optimization (PPO).
+TRL is a comprehensive library for post-training foundation models using techniques like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and Group Relative Policy Optimization (GRPO).
 
 ## Installation
 
@@ -10,35 +10,30 @@ pip install trl
 
 ## Quick Examples
 
-Get started instantly with TRL's most popular trainers. Each example runs on a single GPU and uses compact models for quick experimentation.
+Get started instantly with TRL's most popular trainers. Each example uses compact models for quick experimentation.
 
 <div class="trainer-toggle">
 
 ### SFT Trainer
 
-**Supervised Fine-Tuning** - Transform base models into instruction-following assistants
+**Supervised Fine-Tuning**
 
 ```python
 from trl import SFTTrainer, SFTConfig
 from datasets import load_dataset
 
-# Real-world SFT with proper configuration
 config = SFTConfig(
     output_dir="./qwen-chat-model",
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=8,
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True, 
+    gradient_accumulation_steps=1,
     learning_rate=2e-5,
-    max_steps=500,
-    bf16=True,
     logging_steps=10,
-    save_steps=250,
 )
 
 trainer = SFTTrainer(
     model="Qwen/Qwen2.5-0.5B",
-    args=config,
     train_dataset=load_dataset("trl-lib/Capybara", split="train[:1000]"),
-    packing=True,  # Efficient sequence packing
 )
 trainer.train()
 trainer.save_model()
@@ -46,7 +41,7 @@ trainer.save_model()
 
 ### DPO Trainer  
 
-**Direct Preference Optimization** - Align SFT models using human preferences
+**Direct Preference Optimization**
 
 ```python
 from trl import DPOTrainer, DPOConfig
@@ -55,13 +50,12 @@ from datasets import load_dataset
 # DPO requires an SFT model as base
 config = DPOConfig(
     output_dir="./qwen-aligned",
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=16,
-    learning_rate=5e-7,  # Much lower LR for stability
-    max_steps=300,
-    bf16=True,
-    beta=0.1,  # KL penalty strength
-    logging_steps=5,
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-6,
+    beta=0.1,
+    logging_steps=10,
 )
 
 trainer = DPOTrainer(
@@ -76,7 +70,7 @@ trainer.save_model()
 
 ### GRPO Trainer
 
-**Group Relative Policy Optimization** - RLHF without separate reward models
+**Group Relative Policy Optimization**
 
 ```python
 from trl import GRPOTrainer, GRPOConfig
@@ -88,13 +82,12 @@ def reward_function(samples):
 
 config = GRPOConfig(
     output_dir="./qwen-grpo",
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=32,
-    learning_rate=1e-5,
-    max_steps=200,
-    bf16=True,
-    local_rollout_forward_batch_size=4,  # Generation batch size
-    response_length=128,  # Max response length
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-6,
+    beta=0.0, 
+    epsilon=0.2
 )
 
 trainer = GRPOTrainer(
@@ -165,12 +158,12 @@ from datasets import load_dataset
 
 config = DPOConfig(
     output_dir="./dpo-aligned-model",
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=8,
-    learning_rate=5e-7,
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-6,
     beta=0.1,  # KL penalty strength
-    max_steps=500,
-    bf16=True,
+    logging_steps=10,
 )
 
 trainer = DPOTrainer(
@@ -192,26 +185,14 @@ from datasets import load_dataset
 # Advanced GRPO with vLLM integration and performance optimization
 config = GRPOConfig(
     output_dir="./grpo-qwen-advanced",
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=16,
-    learning_rate=1e-5,
-    max_steps=300,
-    bf16=True,
+    per_device_train_batch_size=8,
     gradient_checkpointing=True,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-6,
     
     # GRPO-specific parameters
     beta=0.0,  # KL penalty coefficient (0.0 disables KL divergence term)
-    epsilon=3e-4,  # PPO clipping parameter
-    local_rollout_forward_batch_size=8,  # Generation batch size
-    response_length=256,  # Max response length
-    
-    # vLLM integration for faster generation
-    use_vllm=True,
-    vllm_mode="colocate",  # Run vLLM within same process
-    
-    # Memory optimization
-    torch_dtype="bfloat16",
-    dataloader_pin_memory=False,
+    epsilon=0.2,  # Epsilon value for clipping
 )
 
 # Enhanced reward function with mathematical reasoning
