@@ -1907,6 +1907,71 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    def test_reward_processing_classes_replication(self):
+        """Test that a single reward_processing_class is replicated for multiple reward functions."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        # Define multiple reward functions
+        def reward_func1(prompts, completions, **kwargs):
+            return [1.0] * len(prompts)
+
+        def reward_func2(prompts, completions, **kwargs):
+            return [2.0] * len(prompts)
+
+        reward_funcs = [reward_func1, reward_func2]
+
+        # Create a single processing class (tokenizer)
+        single_processing_class = AutoTokenizer.from_pretrained("gpt2")
+        single_processing_class.pad_token = single_processing_class.eos_token
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = GRPOConfig(
+                output_dir=tmp_dir,
+                max_steps=1,
+                report_to="none",
+            )
+
+            # Test 1: Single processing class for multiple reward functions
+            trainer = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_funcs,
+                reward_processing_classes=single_processing_class,  # Single object
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            # Verify that the processing classes were properly replicated
+            self.assertEqual(len(trainer.reward_processing_classes), len(reward_funcs))
+            for pc in trainer.reward_processing_classes:
+                self.assertEqual(pc, single_processing_class)
+
+            # Test 2: List with wrong length should raise ValueError
+            mismatched_processing_classes = [single_processing_class]  # Only one, but need two
+
+            with self.assertRaises(ValueError) as context:
+                GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs=reward_funcs,
+                    reward_processing_classes=mismatched_processing_classes,
+                    args=training_args,
+                    train_dataset=dataset,
+                )
+
+            self.assertIn("must match", str(context.exception))
+
+            # Test 3: Correct list length should work
+            correct_processing_classes = [single_processing_class, single_processing_class]
+
+            trainer2 = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_funcs,
+                reward_processing_classes=correct_processing_classes,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            self.assertEqual(len(trainer2.reward_processing_classes), len(reward_funcs))
+
 
 if __name__ == "__main__":
     unittest.main()
