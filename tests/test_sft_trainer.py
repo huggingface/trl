@@ -16,10 +16,9 @@ import pathlib
 import tempfile
 import unittest
 
-import numpy as np
 import pytest
 import torch
-from datasets import Dataset, Image, Sequence, load_dataset
+from datasets import Dataset, load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, is_vision_available
 from transformers.testing_utils import require_flash_attn, require_peft, require_vision
@@ -33,7 +32,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
 
 if is_vision_available():
-    from PIL import Image as PILImage
+    pass
 
 
 def formatting_prompts_func(example):
@@ -270,50 +269,6 @@ class SFTTrainerTester(unittest.TestCase):
         self.standard_prompt_completion_dataset = load_dataset(
             "trl-internal-testing/zen", "standard_prompt_completion"
         )
-
-        if is_vision_available():
-            self.dummy_vsft_instruction_dataset = Dataset.from_dict(
-                {
-                    "messages": [
-                        [
-                            {
-                                "role": "user",
-                                "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
-                            },
-                            {
-                                "role": "assistant",
-                                "content": [{"type": "text", "text": "It is random noise."}],
-                            },
-                            {
-                                "role": "user",
-                                "content": [{"type": "text", "text": "Oh ye, you are right, what is 1+1"}],
-                            },
-                            {
-                                "role": "assistant",
-                                "content": [{"type": "text", "text": "2"}],
-                            },
-                        ],
-                        [
-                            {
-                                "role": "user",
-                                "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
-                            },
-                            {
-                                "role": "assistant",
-                                "content": [{"type": "text", "text": "It is random noise."}],
-                            },
-                        ],
-                    ],
-                    "images": [
-                        [PILImage.fromarray((np.random.rand(40, 50, 3) * 255).astype("uint8")).convert("RGBA")],
-                        [PILImage.fromarray((np.random.rand(50, 60, 3) * 255).astype("uint8")).convert("RGBA")],
-                    ],
-                }
-            )
-            self.dummy_vsft_instruction_dataset.cast_column("images", Sequence(Image()))
-            self.dummy_vsft_instruction_dataset = self.dummy_vsft_instruction_dataset.cast_column(
-                "images", Sequence(Image())
-            )
 
     def test_uncorrect_data(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
