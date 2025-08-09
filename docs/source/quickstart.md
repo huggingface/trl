@@ -1,88 +1,271 @@
 # Quickstart
 
-## How does it work?
+TRL is a comprehensive library for post-training foundation models using techniques like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and Group Relative Policy Optimization (GRPO).
 
-Fine-tuning a language model via PPO consists of roughly three steps:
+## Installation
 
-1. **Rollout**: The language model generates a response or continuation based on a query which could be the start of a sentence.
-2. **Evaluation**: The query and response are evaluated with a function, model, human feedback, or some combination of them. The important thing is that this process should yield a scalar value for each query/response pair. The optimization will aim at maximizing this value.
-3. **Optimization**: This is the most complex part. In the optimisation step the query/response pairs are used to calculate the log-probabilities of the tokens in the sequences. This is done with the model that is trained and a reference model, which is usually the pre-trained model before fine-tuning. The KL-divergence between the two outputs is used as an additional reward signal to make sure the generated responses don't deviate too far from the reference language model. The active language model is then trained with PPO.
-
-The full process is illustrated in the following figure:
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_overview.png"/>
-
-## Minimal example
-
-The following code illustrates the steps above. 
-
-```python
-# 0. imports
-import torch
-from transformers import GPT2Tokenizer
-
-from trl import AutoModelForCausalLMWithValueHead, PPOConfig, PPOTrainer
-
-
-# 1. load a pretrained model
-model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
-ref_model = AutoModelForCausalLMWithValueHead.from_pretrained("gpt2")
-tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-tokenizer.pad_token = tokenizer.eos_token
-
-# 2. initialize trainer
-ppo_config = {"mini_batch_size": 1, "batch_size": 1}
-config = PPOConfig(**ppo_config)
-ppo_trainer = PPOTrainer(config, model, ref_model, tokenizer)
-
-# 3. encode a query
-query_txt = "This morning I went to the "
-query_tensor = tokenizer.encode(query_txt, return_tensors="pt").to(model.pretrained_model.device)
-
-# 4. generate model response
-generation_kwargs = {
-    "min_length": -1,
-    "top_k": 0.0,
-    "top_p": 1.0,
-    "do_sample": True,
-    "pad_token_id": tokenizer.eos_token_id,
-    "max_new_tokens": 20,
-}
-response_tensor = ppo_trainer.generate([item for item in query_tensor], return_prompt=False, **generation_kwargs)
-response_txt = tokenizer.decode(response_tensor[0])
-
-# 5. define a reward for response
-# (this could be any reward such as human feedback or output from another model)
-reward = [torch.tensor(1.0, device=model.pretrained_model.device)]
-
-# 6. train model with ppo
-train_stats = ppo_trainer.step([query_tensor[0]], [response_tensor[0]], reward)
+```bash
+pip install trl
 ```
 
-In general, you would run steps 3-6 in a for-loop and run it on many diverse queries. You can find more realistic examples in the examples section. 
+## Quick Examples
 
-## How to use a trained model
+Get started instantly with TRL's most popular trainers. Each example uses compact models for quick experimentation.
 
-After training a `AutoModelForCausalLMWithValueHead`, you can directly use the model in `transformers`.
-```python
+<div class="trainer-toggle">
 
-# .. Let's assume we have a trained model using `PPOTrainer` and `AutoModelForCausalLMWithValueHead`
+### SFT Trainer
 
-# push the model on the Hub
-model.push_to_hub("my-fine-tuned-model-ppo")
-
-# or save it locally
-model.save_pretrained("my-fine-tuned-model-ppo")
-
-# load the model from the Hub
-from transformers import AutoModelForCausalLM
-
-model = AutoModelForCausalLM.from_pretrained("my-fine-tuned-model-ppo")
-```
-
-You can also load your model with `AutoModelForCausalLMWithValueHead` if you want to use the value head, for example to continue training.
+**Supervised Fine-Tuning**
 
 ```python
-from trl.model import AutoModelForCausalLMWithValueHead
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
 
-model = AutoModelForCausalLMWithValueHead.from_pretrained("my-fine-tuned-model-ppo")
+config = SFTConfig(
+    output_dir="./qwen-chat-model",
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True, 
+    gradient_accumulation_steps=1,
+    learning_rate=2e-5,
+    logging_steps=10,
+)
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    train_dataset=load_dataset("trl-lib/Capybara", split="train[:1000]"),
+)
+trainer.train()
+trainer.save_model()
 ```
+
+### DPO Trainer  
+
+**Direct Preference Optimization**
+
+```python
+from trl import DPOTrainer, DPOConfig
+from datasets import load_dataset
+
+# DPO requires an SFT model as base
+config = DPOConfig(
+    output_dir="./qwen-aligned",
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-6,
+    beta=0.1,
+    logging_steps=10,
+)
+
+trainer = DPOTrainer(
+    model="./qwen-chat-model",  # Use your SFT model
+    ref_model="Qwen/Qwen2.5-0.5B",  # Original base model
+    args=config,
+    train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train_prefs[:500]"),
+)
+trainer.train()
+trainer.save_model()
+```
+
+### GRPO Trainer
+
+**Group Relative Policy Optimization**
+
+```python
+from trl import GRPOTrainer, GRPOConfig
+from datasets import load_dataset
+
+# Define a simple reward function (count unique chars as example)
+def reward_function(samples):
+    return [len(set(sample.lower())) / 10.0 for sample in samples]
+
+config = GRPOConfig(
+    output_dir="./qwen-grpo",
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-6,
+    beta=0.0, 
+    epsilon=0.2
+)
+
+trainer = GRPOTrainer(
+    model="./qwen-chat-model",  # Start from SFT model
+    args=config,
+    train_dataset=load_dataset("trl-lib/tldr", split="train[:500]"),
+    reward_function=reward_function,
+)
+trainer.train()
+trainer.save_model()
+```
+
+</div>
+
+## Command Line Interface
+
+Skip the code entirely - train directly from your terminal:
+
+```bash
+# SFT: Fine-tune on instructions
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --output_dir ./my-sft-model
+
+# DPO: Align with preferences  
+trl dpo --model_name_or_path ./my-sft-model \
+    --dataset_name trl-lib/ultrafeedback_binarized \
+    --output_dir ./my-aligned-model
+```
+
+## Configuration Examples
+
+Each trainer can be customized with detailed configurations for production use:
+
+<details>
+<summary><strong>Advanced SFT Configuration</strong></summary>
+
+```python
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
+
+config = SFTConfig(
+    output_dir="./sft-qwen-chat",
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=4,
+    learning_rate=2e-5,
+    max_steps=1000,
+    logging_steps=10,
+    save_steps=500,
+    bf16=True,  # Use bfloat16 for efficiency
+)
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    args=config,
+    train_dataset=load_dataset("trl-lib/Capybara", split="train"),
+)
+trainer.train()
+```
+</details>
+
+<details>
+<summary><strong>Advanced DPO Configuration</strong></summary>
+
+```python
+from trl import DPOTrainer, DPOConfig
+from datasets import load_dataset
+
+config = DPOConfig(
+    output_dir="./dpo-aligned-model",
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-6,
+    beta=0.1,  # KL penalty strength
+    logging_steps=10,
+)
+
+trainer = DPOTrainer(
+    model="./sft-qwen-chat",  # Use SFT model as base
+    args=config,
+    train_dataset=load_dataset("trl-lib/ultrafeedback_binarized", split="train_prefs"),
+)
+trainer.train()
+```
+</details>
+
+<details>
+<summary><strong>Advanced GRPO Configuration</strong></summary>
+
+```python
+from trl import GRPOTrainer, GRPOConfig
+from datasets import load_dataset
+
+# Advanced GRPO with vLLM integration and performance optimization
+config = GRPOConfig(
+    output_dir="./grpo-qwen-advanced",
+    per_device_train_batch_size=8,
+    gradient_checkpointing=True,
+    gradient_accumulation_steps=1,
+    learning_rate=1e-6,
+    
+    # GRPO-specific parameters
+    beta=0.0,  # KL penalty coefficient (0.0 disables KL divergence term)
+    epsilon=0.2,  # Epsilon value for clipping
+)
+
+# Enhanced reward function with mathematical reasoning
+def advanced_reward_function(prompts, completions, **kwargs):
+    rewards = []
+    for prompt, completion in zip(prompts, completions):
+        reward = 0.0
+        
+        # Reward for appropriate length (not too short/long)
+        ideal_length = min(max(len(prompt) // 2, 20), 100)
+        length_penalty = abs(len(completion) - ideal_length) / ideal_length
+        reward += max(0, 1.0 - length_penalty)
+        
+        # Reward for diversity (unique characters)
+        diversity_score = len(set(completion.lower())) / max(len(completion), 1)
+        reward += diversity_score
+        
+        # Reward for coherence (no repeated phrases)
+        words = completion.lower().split()
+        if len(words) > 0:
+            unique_ratio = len(set(words)) / len(words)
+            reward += unique_ratio
+        
+        rewards.append(reward)
+    
+    return rewards
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    args=config,
+    train_dataset=load_dataset("trl-lib/tldr", split="train[:1000]"),
+    reward_funcs=advanced_reward_function,
+)
+trainer.train()
+```
+</details>
+
+## What's Next?
+
+<div class="grid">
+  
+**📚 Learn More**
+- [SFT Trainer](sft_trainer.md) - Complete SFT guide
+- [DPO Trainer](dpo_trainer.md) - Preference alignment 
+- [Training FAQ](how_to_train.md) - Common questions
+
+**🚀 Scale Up**
+- [Distributed Training](distributing_training.md) - Multi-GPU setups
+- [Memory Optimization](reducing_memory_usage.md) - Efficient training
+- [PEFT Integration](peft_integration.md) - LoRA and QLoRA
+
+**💡 Examples** 
+- [Example Scripts](../examples/) - Production-ready code
+- [Research Projects](../examples/research_projects/) - Advanced techniques
+- [Community Tutorials](community_tutorials.md) - External guides
+
+</div>
+
+## Troubleshooting
+
+**Out of Memory?** Reduce batch size and enable optimizations:
+```python
+config = SFTConfig(
+    per_device_train_batch_size=1,  # Start small
+    gradient_accumulation_steps=8,  # Maintain effective batch size
+    bf16=True,                      # Use mixed precision
+    gradient_checkpointing=True,    # Save memory
+)
+```
+
+**Loss not decreasing?** Try adjusting the learning rate:
+```python 
+config = SFTConfig(learning_rate=2e-5)  # Good starting point
+```
+
+For more help, see our [Training FAQ](how_to_train.md) or open an [issue on GitHub](https://github.com/huggingface/trl/issues).
