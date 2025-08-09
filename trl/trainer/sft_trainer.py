@@ -274,7 +274,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     image processing on-the-fly to efficiently prepare batches.
 
     Each input example should be a dictionary containing at least:
-    - An `"image"` key holding the image data.
+    - An `"images"` key holding the image data.
     - Either a `"messages"` key for conversational inputs or a `"text"` key for standard text inputs.
 
     The collator outputs a dictionary including:
@@ -306,8 +306,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
     >>> collator = DataCollatorForVisionLanguageModeling(processor)
     >>> examples = [
-    ...     {"image": Image.open("image_0.png"), "messages": [{"role": "user", "content": "What is this?"}]},
-    ...     {"image": Image.open("image_1.png"), "messages": [{"role": "user", "content": "Describe this image."}]}
+    ...     {"images": [Image.open("image_0.png")], "messages": [{"role": "user", "content": "What is this?"}]},
+    ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]}
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
@@ -342,17 +342,17 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
-        images = [[example["image"]] for example in examples]
+        images = [example["images"] for example in examples]
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
                 image_included = False
                 for message in example["messages"]:
                     if message["role"] == "user":
-                        if isinstance(message["content"], str) and "image" in example and not image_included:
+                        if isinstance(message["content"], str) and not image_included:
                             message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
                             image_included = True
-                        elif isinstance(message["content"], str) and "image" in example and image_included:
+                        elif isinstance(message["content"], str) and image_included:
                             message["content"] = [{"type": "text", "text": message["content"]}]
                     if message["role"] == "assistant":
                         if isinstance(message["content"], str):
@@ -1014,7 +1014,7 @@ class SFTTrainer(Trainer):
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
             if self._is_vlm:
-                self._signature_columns = ["messages", "image"]
+                self._signature_columns = ["messages", "images"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 

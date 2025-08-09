@@ -56,7 +56,7 @@ def process_example(example):
         content = content.replace("<image>", "").strip()
         role = "user" if message["from"] == "human" else "assistant"
         messages.append({"role": role, "content": content})
-    return {"messages": messages}
+    return {"messages": messages, "images": [example["image"]]}
 
 
 def filter_long_examples(example):
@@ -81,7 +81,7 @@ The LLaVA Instruct Mix dataset is a processed version of [LLaVA Instruct Mix](ht
 - **Type**: [Language-modeling](https://huggingface.co/docs/trl/main/dataset_formats#language-modeling)
 
 Columns:
-- `"image"`: The image associated with the text.
+- `"images"`: The image associated with the text.
 - `"messages"`: A list of messages in the conversation.
 
 This structure allows models to learn from the context of the conversation, enhancing their understanding of how to generate descriptive text based on visual inputs.
@@ -97,7 +97,9 @@ if __name__ == "__main__":
 
     dataset = load_dataset("theblackcat102/llava-instruct-mix")
 
-    dataset = dataset.map(process_example, remove_columns=["conversations"], num_proc=script_args.dataset_num_proc)
+    dataset = dataset.map(
+        process_example, remove_columns=["conversations", "image"], num_proc=script_args.dataset_num_proc
+    )
     dataset = dataset.filter(filter_long_examples, num_proc=script_args.dataset_num_proc)
 
     if script_args.push_to_hub:
