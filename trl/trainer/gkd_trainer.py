@@ -63,6 +63,8 @@ class GKDTrainer(SFTTrainer):
         self,
         model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
         teacher_model: Union[PreTrainedModel, nn.Module, str] = None,
+        # Cannot be None but is optional because the prior arguments have default values
+        # and we cannot reorder them without breaking compatibility.
         args: Optional[GKDConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Dataset] = None,
@@ -77,9 +79,14 @@ class GKDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
     ):
-        # add remove_unused_columns=False to the dataclass args
+        if args is None:
+            raise ValueError("`args` must be provided and cannot be None.")
+
+        # Adds remove_unused_columns=False to the dataclass args.
+        # TODO(seungduk-yanolja): Please describe why this is necessary.
         args.remove_unused_columns = False
-        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
+        if data_collator is None:
+            data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
 
         super().__init__(
             model,
