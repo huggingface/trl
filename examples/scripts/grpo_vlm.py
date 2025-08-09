@@ -59,7 +59,6 @@ accelerate launch \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 2 \
     --num_generations 2  \
-    --bf16 True
 
 """
 

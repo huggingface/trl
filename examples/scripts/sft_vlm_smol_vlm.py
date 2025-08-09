@@ -31,7 +31,6 @@ accelerate launch
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --output_dir sft-smol-vlm-hf \
-    --bf16 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
@@ -47,7 +46,7 @@ For meta-llama/Llama-3.2-11B-Vision-Instruct, use: (requires transformers>=4.45.
 import torch
 from datasets import load_dataset
 from transformers import (
-    AutoModelForVision2Seq,
+    AutoModelForImageTextToText,
     AutoProcessor,
     Idefics3ForConditionalGeneration,
     LlavaForConditionalGeneration,
@@ -90,7 +89,7 @@ if __name__ == "__main__":
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
     )
 
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
 
