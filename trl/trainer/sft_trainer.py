@@ -511,7 +511,6 @@ class SFTTrainer(Trainer):
                     "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
                     f"a valid `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
-            # Disable caching if gradient checkpointing is enabled (not supported)
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
