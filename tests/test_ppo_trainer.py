@@ -176,3 +176,62 @@ class TestPPOTrainer(unittest.TestCase):
 
             self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
             self.assertTrue(policy_weights_updated, "Policy LoRA weights were not updated during training")
+
+    def test_generate(self):
+        """Test various configurations of the generate method in PPOTrainer."""
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            # Configure training args
+            training_args = PPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=4,
+                per_device_eval_batch_size=2,
+                num_ppo_epochs=2,
+                report_to="none",
+            )
+
+            # Create trainer
+            trainer = PPOTrainer(
+                args=training_args,
+                processing_class=self.tokenizer,
+                model=self.model,
+                ref_model=self.ref_model,
+                reward_model=self.reward_model,
+                value_model=self.value_model,
+                train_dataset=self.raw_dataset["train"],
+                eval_dataset=self.raw_dataset["test"],
+            )
+
+            query_txt = "This morning I went to the "
+            query_tensor = torch.flatten(self.tokenizer.encode(query_txt, return_tensors="pt")).to(self.model.device)
+            query_list = list(self.tokenizer.encode(query_txt, return_tensors="pt").to(self.model.device))
+
+            test_cases = [
+                # (input_type, input_data, return_logits)
+                ("tensor", query_tensor, False),
+                ("tensor", query_tensor, True),
+                ("list", query_list, False),
+                ("list", query_list, True),
+            ]
+
+            for input_type, query, return_logits in test_cases:
+                with self.subTest(input_type=input_type, return_logits=return_logits):
+                    try:
+                        response = trainer.generate(queries=query, return_logits=return_logits)
+                    except Exception:
+                        response = trainer.generate(queries=query, return_logits=return_logits)
+                    if input_type == "tensor" and return_logits is False:
+                        self.assertTrue(isinstance(response, torch.Tensor))
+                        self.assertEqual(len(response.shape), 2)
+                    elif input_type == "tensor" and return_logits is True:
+                        self.assertTrue(isinstance(response, tuple))
+                        self.assertEqual(len(response[0].shape), 2)
+                        # equal to vocab size - 1
+                        # self.assertEqual(response[1].shape ==
+                    elif input_type == "list" and return_logits is True:
+                        self.assertTrue(isinstance(response, list))
+                        self.assertTrue(isinstance(response[0], tuple))
+                        self.assertEqual(len(response), 1)
+                    elif input_type == "list" and return_logits is False:
+                        self.assertTrue(isinstance(response, list))
+                        self.assertTrue(isinstance(response[0], torch.Tensor))
