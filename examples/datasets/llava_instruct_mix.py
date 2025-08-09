@@ -12,14 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import ast
 from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import load_dataset
 from huggingface_hub import ModelCard
-from transformers import AutoTokenizer, HfArgumentParser
-from datasets import load_dataset
-import ast
+from transformers import HfArgumentParser
+
 
 @dataclass
 class ScriptArguments:
@@ -48,6 +48,7 @@ class ScriptArguments:
         metadata={"help": "Number of workers to use for dataset processing."},
     )
 
+
 def process_example(example):
     messages = []
     for message in ast.literal_eval(example["conversations"]):
@@ -56,6 +57,11 @@ def process_example(example):
         role = "user" if message["from"] == "human" else "assistant"
         messages.append({"role": role, "content": content})
     return {"messages": messages}
+
+
+def filter_long_examples(example):
+    total_length = sum(len(msg["content"]) for msg in example["messages"])
+    return total_length <= 1000
 
 
 model_card = ModelCard("""
@@ -91,14 +97,9 @@ if __name__ == "__main__":
 
     dataset = load_dataset("theblackcat102/llava-instruct-mix")
 
-    dataset = dataset.map(process_example, remove_columns=["conversations"])
+    dataset = dataset.map(process_example, remove_columns=["conversations"], num_proc=script_args.dataset_num_proc)
+    dataset = dataset.filter(filter_long_examples, num_proc=script_args.dataset_num_proc)
 
     if script_args.push_to_hub:
-        dataset.push_to_hub(script_args.repo_id)
+        dataset.push_to_hub(script_args.repo_id, num_proc=script_args.dataset_num_proc)
         model_card.push_to_hub(script_args.repo_id, repo_type="dataset")
-
-
-
-
-
-
