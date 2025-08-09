@@ -55,8 +55,6 @@
     title: Detoxifying a Language Model
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
-  - local: training_vlm_sft
-    title: Fine-tuning a Multimodal Model Using SFT (Single or Multi-Image Dataset)
   title: Examples
 - sections:
   - sections: # Sorted alphabetically

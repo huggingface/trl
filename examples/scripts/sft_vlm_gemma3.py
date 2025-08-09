@@ -140,7 +140,6 @@ def main():
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
-    training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
     ################
     # Model, Tokenizer & Processor

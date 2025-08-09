@@ -47,6 +47,8 @@ from transformers import (
     GptOssForCausalLM,
     Idefics2Config,
     Idefics2ForConditionalGeneration,
+    Idefics3Config,
+    Idefics3ForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
     LlamaForSequenceClassification,
@@ -98,7 +100,7 @@ This is a minimal model built for unit tests in the [TRL](https://github.com/hug
 api = HfApi()
 
 
-def push_to_hub(model, tokenizer, prefix=None, suffix=None):
+def push_to_hub(model, tokenizer, prefix=None, suffix=None, force=False):
     model_class_name = model.__class__.__name__
     content = MODEL_CARD.format(model_class_name=model_class_name)
     model_card = ModelCard(content)
@@ -108,7 +110,7 @@ def push_to_hub(model, tokenizer, prefix=None, suffix=None):
     if suffix is not None:
         repo_id += f"-{suffix}"
 
-    if api.repo_exists(repo_id):
+    if api.repo_exists(repo_id) and not force:
         print(f"Model {repo_id} already exists, skipping")
     else:
         model.push_to_hub(repo_id)
@@ -283,6 +285,7 @@ for model_id, config_class, model_class in [
     ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
     ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
     ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
+    ("HuggingFaceM4/Idefics3-8B-Llama3", Idefics3Config, Idefics3ForConditionalGeneration),
     ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMConfig, SmolVLMForConditionalGeneration),
     ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
     ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
@@ -293,23 +296,30 @@ for model_id, config_class, model_class in [
     kwargs = {}
     text_kwargs = {}
     vision_kwargs = {}
-    if config_class == PaliGemmaConfig:
+    if config_class in [PaliGemmaConfig]:
         kwargs["projection_dim"] = 8
     if config_class in [LlavaConfig, LlavaNextConfig, PaliGemmaConfig]:
         vision_kwargs["projection_dim"] = 8
-    if config_class in [LlavaConfig, LlavaNextConfig]:
+    if config_class in [LlavaConfig, LlavaNextConfig, Gemma3Config]:
         vision_kwargs["image_size"] = 336
-        vision_kwargs["patch_size"] = 14
+        vision_kwargs["patch_size"] = 20
+        processor.image_processor.size = {"height": 336, "width": 336}
     if config_class in [Qwen2VLConfig, Qwen2_5_VLConfig]:
         kwargs["vision_start_token_id"] = 151652
-        text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [1]}
+        kwargs["vision_end_token_id"] = 151653
+        kwargs["vision_token_id"] = 151654
+        kwargs["image_token_id"] = 151655
+        kwargs["vocab_size"] = len(processor.tokenizer.vocab)
+        text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [2]}
         vision_kwargs["depth"] = 4
         vision_kwargs["embed_dim"] = 64
+    if config_class in [Qwen2_5_VLConfig]:
+        vision_kwargs["out_hidden_size"] = 16
 
     config = config_class(
         text_config=dict(
             vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
-            hidden_size=8,
+            hidden_size=16,
             num_attention_heads=4,
             num_key_value_heads=2,
             num_hidden_layers=2,

@@ -15,7 +15,7 @@
 from dataclasses import dataclass, field
 
 import numpy as np
-from datasets import Dataset, Features, Image, Sequence, Value
+from datasets import Dataset, Features, Image, List, Sequence, Value
 from transformers import HfArgumentParser
 
 
@@ -75,9 +75,9 @@ def main(test_size, push_to_hub, repo_id):
             "If the implementation is easy to explain, it may be a good idea.",
             "Namespaces are one honking great idea -- let's do more of those!",
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    standard_language_modeling_dataset = Dataset.from_dict(data, features=Features(text=Value("string"), image=Image()))
+    standard_language_modeling_dataset = Dataset.from_dict(data, features=Features(text=Value("string"), images=List(Image())))
     standard_language_modeling_dataset = standard_language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_language_modeling_dataset.push_to_hub(repo_id, config_name="standard_language_modeling")
@@ -105,9 +105,9 @@ def main(test_size, push_to_hub, repo_id):
             "If the implementation is easy",
             "Namespaces are one honking great",
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    standard_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), image=Image()))
+    standard_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), images=List(Image())))
     standard_prompt_only_dataset = standard_prompt_only_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_prompt_only_dataset.push_to_hub(repo_id, config_name="standard_prompt_only")
@@ -156,9 +156,9 @@ def main(test_size, push_to_hub, repo_id):
             " to explain, it may be a good idea.",
             " idea -- let's do more of those!",
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    standard_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completion=Value("string"), image=Image()))
+    standard_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completion=Value("string"), images=List(Image())))
     standard_prompt_completion_dataset = standard_prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_prompt_completion_dataset.push_to_hub(repo_id, config_name="standard_prompt_completion")
@@ -228,9 +228,9 @@ def main(test_size, push_to_hub, repo_id):
             " it's probably magic.",
             " watermelon -- let's plant some!",
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    standard_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), chosen=Value("string"), rejected=Value("string"), image=Image()))
+    standard_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), chosen=Value("string"), rejected=Value("string"), images=List(Image())))
     standard_preference_dataset = standard_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_preference_dataset.push_to_hub(repo_id, config_name="standard_preference")
@@ -279,9 +279,9 @@ def main(test_size, push_to_hub, repo_id):
             "If the implementation is easy it's probably magic.",
             "Namespaces are one honking great watermelon -- let's plant some!",
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    standard_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Value("string"), rejected=Value("string"), image=Image()))
+    standard_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Value("string"), rejected=Value("string"), images=List(Image())))
     {'prompt': Value(dtype='string'), 'completions': Sequence(feature=Value(dtype='string'), length=-1), 'labels': Sequence(feature=Value(dtype='bool'), length=-1)}
     standard_implicit_prompt_preference_dataset = standard_implicit_prompt_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
@@ -332,9 +332,9 @@ def main(test_size, push_to_hub, repo_id):
             " watermelon -- let's plant some!",
         ],
         "label": [True, False, False, True, True, False, True, False, True, True, False, True, True, False, True, False, True, False, False],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    standard_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completion=Value("string"), label=Value("bool"), image=Image()))
+    standard_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completion=Value("string"), label=Value("bool"), images=List(Image())))
     standard_unpaired_preference_dataset = standard_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_unpaired_preference_dataset.push_to_hub(repo_id, config_name="standard_unpaired_preference")
@@ -403,9 +403,9 @@ def main(test_size, push_to_hub, repo_id):
             [True, True],
             [False]
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    standard_stepwise_supervision_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completions=Sequence(Value("string")), labels=Sequence(Value("bool")), image=Image()))
+    standard_stepwise_supervision_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completions=Sequence(Value("string")), labels=Sequence(Value("bool")), images=List(Image())))
     standard_stepwise_supervision_dataset = standard_stepwise_supervision_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         standard_stepwise_supervision_dataset.push_to_hub(repo_id, config_name="standard_stepwise_supervision")
@@ -433,9 +433,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}, {"role": "assistant", "content": "It means it may be a good idea."}],
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "content": "Namespaces are one honking great idea."}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_language_modeling_dataset = Dataset.from_dict(data, features=Features(messages=Message, image=Image()))
+    conversational_language_modeling_dataset = Dataset.from_dict(data, features=Features(messages=Message, images=List(Image())))
     conversational_language_modeling_dataset = conversational_language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_language_modeling_dataset.push_to_hub(repo_id, config_name="conversational_language_modeling")
@@ -463,9 +463,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}],
             [{"role": "user", "content": "Any great ideas?"}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Message, image=Image()))
+    conversational_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Message, images=List(Image())))
     conversational_prompt_only_dataset = conversational_prompt_only_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_prompt_only_dataset.push_to_hub(repo_id, config_name="conversational_prompt_only")
@@ -514,9 +514,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "content": "It means it may be a good idea."}],
             [{"role": "assistant", "content": "Namespaces are one honking great idea."}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, image=Image()))
+    conversational_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, images=List(Image())))
     conversational_prompt_completion_dataset = conversational_prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_prompt_completion_dataset.push_to_hub(repo_id, config_name="conversational_prompt_completion")
@@ -586,9 +586,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "content": "It means it's a bad idea."}],
             [{"role": "assistant", "content": "Recursion."}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, chosen=Message, rejected=Message, image=Image()))
+    conversational_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, chosen=Message, rejected=Message, images=List(Image())))
     conversational_preference_dataset = conversational_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_preference_dataset.push_to_hub(repo_id, config_name="conversational_preference")
@@ -637,9 +637,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}, {"role": "assistant", "content": "It means it's a bad idea."}],
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "content": "Recursion."}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Message, rejected=Message, image=Image()))
+    conversational_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Message, rejected=Message, images=List(Image())))
     conversational_implicit_prompt_preference_dataset = conversational_implicit_prompt_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_implicit_prompt_preference_dataset.push_to_hub(repo_id, config_name="conversational_implicit_prompt_preference")
@@ -689,9 +689,9 @@ def main(test_size, push_to_hub, repo_id):
             [{'role': 'assistant', 'content': 'Namespaces are one honking great idea.'}],
         ],
         "label": [True, True, True, False, True, True, True, False, True, False, True, False, True, False, False, True, True, True, True],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, label=Value("bool"), image=Image()))
+    conversational_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, label=Value("bool"), images=List(Image())))
     conversational_unpaired_preference_dataset = conversational_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_unpaired_preference_dataset.push_to_hub(repo_id, config_name="conversational_unpaired_preference")
