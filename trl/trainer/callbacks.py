@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import copy
+import logging
 import os
 from typing import Optional, Union
 
@@ -52,23 +53,8 @@ if is_wandb_available():
     import wandb
 
 
-def _unwrap_model(model):
-    """Helper function to unwrap model from various wrappers including DataParallel, DistributedDataParallel, DeepSpeed, and FSDP."""
-    # Handle DeepSpeed
-    if hasattr(model, "module") and hasattr(model, "engine"):
-        # DeepSpeed engine
-        return model.module
-
-    # Handle FSDP
-    if hasattr(model, "_fsdp_wrapped_module"):
-        # FSDP wrapped model
-        return model._fsdp_wrapped_module
-
-    # Handle DataParallel/DistributedDataParallel
-    if hasattr(model, "module"):
-        return model.module
-
-    return model
+# Logger for module-level logging
+logger = logging.getLogger(__name__)
 
 
 def _generate_completions(
@@ -704,10 +690,35 @@ class BEMACallback(TrainerCallback):
         self.theta0_params = []  # θ₀ buffers (on self.device)
         self.ema_params = []  # EMA buffers (on self.device)
         self.running_model = None  # a copy of the model to run BEMA on
+        self.logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _unwrap_model(model):
+        """Helper function to unwrap model from various wrappers including DataParallel, DistributedDataParallel, DeepSpeed, and FSDP."""
+        # Handle DeepSpeed
+        if hasattr(model, "module") and hasattr(model, "engine"):
+            # DeepSpeed engine
+            return model.module
+
+        # Handle FSDP
+        if hasattr(model, "_fsdp_wrapped_module"):
+            # FSDP wrapped model
+            return model._fsdp_wrapped_module
+
+        # Handle DataParallel/DistributedDataParallel
+        if hasattr(model, "module"):
+            return model.module
+
+        return model
+
+    def _log_metric(self, metrics: dict):
+        """Helper method to log metrics through trainer if available."""
+        if self.trainer is not None:
+            self.trainer.log(metrics)
 
     @torch.no_grad()
     def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        model = _unwrap_model(kwargs["model"])
+        model = self._unwrap_model(kwargs["model"])
 
         self.running_model = copy.deepcopy(model).to(self.device)
         # cache params once in a fixed order
@@ -817,10 +828,7 @@ class BEMACallback(TrainerCallback):
         """Update the reference model with the current BEMA weights."""
         if not hasattr(self.trainer, "ref_model"):
             if self.trainer is not None:
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.warning("BEMACallback: Cannot update ref_model - trainer has no ref_model attribute")
+                self.logger.warning("BEMACallback: Cannot update ref_model - trainer has no ref_model attribute")
             return
 
         try:
@@ -830,7 +838,7 @@ class BEMACallback(TrainerCallback):
             # Handle the case where ref_model is None (PEFT case)
             if self.trainer.ref_model is None:
                 # In PEFT case, ref_model is None and we need to update the base model of the main model
-                main_model = _unwrap_model(self.trainer.model)
+                main_model = self._unwrap_model(self.trainer.model)
                 if hasattr(main_model, "get_base_model"):
                     # This is a PEFT model, update the base model
                     base_model = main_model.get_base_model()
@@ -840,7 +848,7 @@ class BEMACallback(TrainerCallback):
                     self._update_model_with_bema_weights(main_model, bema_state_dict, is_peft_base=False)
             else:
                 # ref_model is provided, unwrap it and update
-                ref_model = _unwrap_model(self.trainer.ref_model)
+                ref_model = self._unwrap_model(self.trainer.ref_model)
                 if hasattr(ref_model, "get_base_model"):
                     # This is a PEFT model, update the base model
                     base_model = ref_model.get_base_model()
@@ -849,19 +857,11 @@ class BEMACallback(TrainerCallback):
                     # Regular model, update directly
                     self._update_model_with_bema_weights(ref_model, bema_state_dict, is_peft_base=False)
 
-            if self.trainer is not None:
-                self.trainer.log({"bema_ref_model_updated": True})
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.info("BEMACallback: Updated reference model with BEMA weights")
+            self._log_metric({"bema_ref_model_updated": True})
+            self.logger.info("BEMACallback: Updated reference model with BEMA weights")
         except Exception as e:
-            if self.trainer is not None:
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.error(f"BEMACallback: Failed to update reference model: {e}")
-                logger.error(f"Error details: {type(e).__name__}: {str(e)}")
+            self.logger.error(f"BEMACallback: Failed to update reference model: {e}")
+            self.logger.error(f"Error details: {type(e).__name__}: {str(e)}")
 
     def _update_model_with_bema_weights(self, model, bema_state_dict, is_peft_base=False):
         """Helper method to update a model with BEMA weights, handling PEFT and distributed scenarios."""
@@ -890,11 +890,5 @@ class BEMACallback(TrainerCallback):
             final_state_dict = self.running_model.state_dict()
             path = f"{args.output_dir}/bema.pt"
             torch.save(final_state_dict, path)
-            if self.trainer is not None:
-                self.trainer.log({"bema_saved": True, "bema_path": path})
-            else:
-                # Fallback logging if no trainer is provided
-                import logging
-
-                logger = logging.getLogger(__name__)
-                logger.info(f"Saved BEMA model to {path}")
+            self._log_metric({"bema_saved": True, "bema_path": path})
+            self.logger.info(f"Saved BEMA model to {path}")
