@@ -388,7 +388,7 @@ class BEMACallbackTester(unittest.TestCase):
         dataset["train"] = dataset["train"].select(range(8))
 
         def tokenize_function(examples):
-            out = self.tokenizer(examples["prompt"], padding="max_length", max_length=16, truncation=True)
+            out = self.tokenizer(examples["text"], padding="max_length", max_length=16, truncation=True)
             out["labels"] = out["input_ids"].copy()
             return out
 
