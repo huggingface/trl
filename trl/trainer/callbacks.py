@@ -598,16 +598,16 @@ class BEMACallback(TrainerCallback):
     Code from https://github.com/abblock/bema under MIT license.
 
     BEMA computes model weights that scale like:
-        θₜ' = αₜ·(θₜ - θ₀) + EMAₜ
+        \\theta_t' = \\alpha_t \\cdot (\\theta_t - \\theta_0) + \\text{EMA}_t
 
-    where θₜ is the current model weights, θ₀ is a snapshot of the model weights at the first update_after step,
-    EMAₜ is the exponential moving average of the model weights, and αₜ is a scaling factor that decays with the
-    number of steps t as αₜ = (1 + γ·t)⁻ᵉᵗᵃ.
+    where \\theta_t is the current model weights, \\theta_0 is a snapshot of the model weights at the first update_after step,
+    \\text{EMA}_t is the exponential moving average of the model weights, and \\alpha_t is a scaling factor that decays with the
+    number of steps t as \\alpha_t = (1 + \\gamma \\cdot t)^{-\\eta}.
 
     The EMA is computed as:
-        EMAₜ = βₜ·θₜ + (1 - βₜ)·EMAₜ₋₁
+        \\text{EMA}_t = \\beta_t \\cdot \\theta_t + (1 - \\beta_t) \\cdot \\text{EMA}_{t-1}
 
-    where βₜ is a decay factor that decays with the number of steps t as βₜ = (1 + γ·t)⁻ᵉᵐᵃ.
+    where \\beta_t is a decay factor that decays with the number of steps t as \\beta_t = (1 + \\gamma \\cdot t)^{-\\text{ema}}.
 
     Args:
         trainer (`Trainer`, *optional*, defaults to `None`):
@@ -615,13 +615,13 @@ class BEMACallback(TrainerCallback):
         update_freq (`int`, *optional*, defaults to `100`):
             How often to update the BEMA weights (in steps).
         ema_power (`float`, *optional*, defaults to `0.5`):
-            Power for the EMA decay factor βₜ = (1 + γ·t)⁻ᵉᵐᵃ.
+            Power for the EMA decay factor \\beta_t = (1 + \\gamma \\cdot t)^{-\\text{ema}}.
         eta_power (`float`, *optional*, defaults to `0.2`):
-            Power for the BEMA scaling factor αₜ = (1 + γ·t)⁻ᵉᵗᵃ.
+            Power for the BEMA scaling factor \\alpha_t = (1 + \\gamma \\cdot t)^{-\\eta}.
         update_after (`int`, *optional*, defaults to `0`):
             Number of steps to wait before starting to update the BEMA weights.
         scaling_lag (`int`, *optional*, defaults to `10`):
-            Number of steps to lag the scaling factor αₜ.
+            Number of steps to lag the scaling factor \\alpha_t.
         ema_gamma (`float`, *optional*, defaults to `1.0`):
             Initial value for the EMA decay factor.
         min_ema_multiplier (`float`, *optional*, defaults to `0.0`):
