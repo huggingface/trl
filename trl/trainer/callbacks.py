@@ -54,9 +54,6 @@ if is_wandb_available():
 
 def _unwrap_model(model):
     """Helper function to unwrap model from various wrappers including DataParallel, DistributedDataParallel, DeepSpeed, and FSDP."""
-    if model is None:
-        return None
-
     # Handle DeepSpeed
     if hasattr(model, "module") and hasattr(model, "engine"):
         # DeepSpeed engine
