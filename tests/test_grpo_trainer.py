@@ -1907,8 +1907,8 @@ class GRPOTrainerTester(unittest.TestCase):
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    def test_reward_processing_classes_replication(self):
-        """Test that a single reward_processing_class is replicated for multiple reward functions."""
+    def test_reward_processing_classes_validation(self):
+        """Test that reward_processing_classes validation works correctly."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         # Define multiple reward functions
@@ -1931,19 +1931,18 @@ class GRPOTrainerTester(unittest.TestCase):
                 report_to="none",
             )
 
-            # Test 1: Single processing class for multiple reward functions
-            trainer = GRPOTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                reward_funcs=reward_funcs,
-                reward_processing_classes=single_processing_class,  # Single object
-                args=training_args,
-                train_dataset=dataset,
-            )
+            # Test 1: Single processing class for multiple reward functions should raise error
+            with self.assertRaises(ValueError) as context:
+                GRPOTrainer(
+                    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                    reward_funcs=reward_funcs,
+                    reward_processing_classes=single_processing_class,  # Single object
+                    args=training_args,
+                    train_dataset=dataset,
+                )
 
-            # Verify that the processing classes were properly replicated
-            self.assertEqual(len(trainer.reward_processing_classes), len(reward_funcs))
-            for pc in trainer.reward_processing_classes:
-                self.assertEqual(pc, single_processing_class)
+            self.assertIn("When using multiple reward functions", str(context.exception))
+            self.assertIn("must provide a list", str(context.exception))
 
             # Test 2: List with wrong length should raise ValueError
             mismatched_processing_classes = [single_processing_class]  # Only one, but need two
@@ -1971,6 +1970,20 @@ class GRPOTrainerTester(unittest.TestCase):
             )
 
             self.assertEqual(len(trainer2.reward_processing_classes), len(reward_funcs))
+
+            # Test 4: Single processing class for single reward function should work
+            single_reward_func = [reward_func1]
+
+            trainer3 = GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=single_reward_func,
+                reward_processing_classes=single_processing_class,  # Single object for single reward func
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            self.assertEqual(len(trainer3.reward_processing_classes), 1)
+            self.assertEqual(trainer3.reward_processing_classes[0], single_processing_class)
 
 
 if __name__ == "__main__":
