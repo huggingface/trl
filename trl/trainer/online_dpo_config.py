@@ -65,6 +65,10 @@ class OnlineDPOConfig(TrainingArguments):
             Whether to disable dropout in the model and reference model.
         use_vllm (`bool`, *optional*, defaults to `False`):
             Whether to use vLLM for generating completions. Requires vLLM to be installed (`pip install vllm`).
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
         gpu_memory_utilization (`float`, *optional*, defaults to `0.55`):
             The vLLM memory utilization. The default value is 0.55.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -86,6 +90,12 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
             "will be interpreted as ratio of total training steps."
+        },
+    )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
     bf16: Optional[bool] = field(
@@ -162,6 +172,14 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to use vLLM for generating completions. Requires vLLM to be installed "
             "(`pip install vllm`)."
+        },
+    )
+    vllm_model_impl: str = field(
+        default="vllm",
+        metadata={
+            "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
+            "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
+            "model implementation."
         },
     )
     gpu_memory_utilization: Optional[float] = field(

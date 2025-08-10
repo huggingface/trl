@@ -11,7 +11,7 @@ Section under construction. Feel free to contribute!
 Sequence lengths in the dataset can vary widely. When data is batched, sequences are padded to match the longest one in the batch, which can cause high memory usage, even if most sequences are relatively short.
 
 <div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png" alt="Truncation prompt completion" width="600"/>
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png" alt="Truncation prompt-completion" width="600"/>
 </div>
 
 To reduce memory usage, it's important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
@@ -22,7 +22,7 @@ To reduce memory usage, it's important to truncate sequences to a reasonable len
 DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
 
 <div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="Truncation prompt completion" width="600"/>
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="Truncation prompt-completion" width="600"/>
 </div>
 
 To set the truncation parameters, use the following code snippet:
@@ -60,6 +60,14 @@ training_args = SFTConfig(..., max_length=...)
 
 </hfoption>
 </hfoptions>
+
+### How to choose the `max_length` value?
+
+If `max_length` is too small, a significant portion of your tokens will be discarded and won't contribute to training. If it's too large, memory usage can spike, potentially leading to OOM (Out-Of-Memory) errors. Without packing or padding-free, a large `max_length` may also result in inefficient training, as many tokens will be padding.
+
+To help you choose an appropriate value, we provide a utility to visualize the sequence length distribution in your dataset.
+
+<iframe src="https://trl-lib-dataset-length-profiler.hf.space" frameborder="0" width="100%" height="1000"></iframe>
 
 ## Packing
 
@@ -152,7 +160,7 @@ Padding-free batching is an alternative approach for reducing memory usage. In t
 
 <Tip warning={true}>
 
-It's highly recommended to use padding-free batching with **Flash Attention 2**. Otherwise, you may encounter batch contamination issues.
+It's highly recommended to use padding-free batching with **FlashAttention 2** or **FlashAttention 3**. Otherwise, you may encounter batch contamination issues.
 
 </Tip>
 

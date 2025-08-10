@@ -17,6 +17,7 @@
 # This script is meant to be run when adding new tiny model to the TRL library.
 
 from huggingface_hub import HfApi, ModelCard
+from torch import nn
 from transformers import (
     AutoProcessor,
     AutoTokenizer,
@@ -42,6 +43,8 @@ from transformers import (
     GPT2LMHeadModel,
     GPTNeoXConfig,
     GPTNeoXForCausalLM,
+    GptOssConfig,
+    GptOssForCausalLM,
     Idefics2Config,
     Idefics2ForConditionalGeneration,
     LlamaConfig,
@@ -71,6 +74,8 @@ from transformers import (
     Qwen3ForSequenceClassification,
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
+    SmolVLMConfig,
+    SmolVLMForConditionalGeneration,
     T5Config,
     T5ForConditionalGeneration,
 )
@@ -111,6 +116,42 @@ def push_to_hub(model, tokenizer, prefix=None, suffix=None):
         model_card.push_to_hub(repo_id)
 
 
+def init_weights_tiny_model(model):
+    """
+    Initialize tiny test models to avoid NaNs from uninitialized weights.
+
+    Uses safe defaults:
+      - Linear/Conv1d: Xavier uniform (weights), zero (biases)
+      - Embedding: Normal(0, 0.02)
+      - LayerNorm: Ones (weights), zero (biases)
+
+    Args:
+        model: PyTorch model (modified in-place)
+    """
+    for module in model.modules():
+        if isinstance(module, nn.Linear):
+            # Attention/MLP projections → Xavier or Normal
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+            nn.init.xavier_uniform_(module.weight)
+
+        elif isinstance(module, nn.Embedding):
+            # Token embeddings → GPT-style Normal
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+        elif isinstance(module, nn.LayerNorm):
+            # LayerNorm weights always 1, bias 0
+            nn.init.ones_(module.weight)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+
+        elif isinstance(module, nn.Conv1d):
+            # Convolutional layers → Xavier or Normal
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+            nn.init.xavier_uniform_(module.weight)
+
+
 # Decoder models
 for model_id, config_class, model_class, suffix in [
     ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),
@@ -146,11 +187,13 @@ for model_id, config_class, model_class, suffix in [
         intermediate_size=32,
     )
     model = model_class(config)
+    init_weights_tiny_model(model)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
 # MoE models
 for model_id, config_class, model_class, suffix in [
     ("Qwen/Qwen3-30B-A3B", Qwen3MoeConfig, Qwen3MoeForCausalLM, None),
+    ("openai/gpt-oss-20b", GptOssConfig, GptOssForCausalLM, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
@@ -164,6 +207,7 @@ for model_id, config_class, model_class, suffix in [
         num_experts_per_tok=2,
     )
     model = model_class(config)
+    init_weights_tiny_model(model)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
 
@@ -239,6 +283,7 @@ for model_id, config_class, model_class in [
     ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
     ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
     ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
+    ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMConfig, SmolVLMForConditionalGeneration),
     ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
     ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
     ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLConfig, Qwen2VLForConditionalGeneration),
