@@ -384,7 +384,7 @@ class BEMACallbackTester(unittest.TestCase):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer.pad_token = self.tokenizer.eos_token
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
         dataset["train"] = dataset["train"].select(range(8))
 
         def tokenize_function(examples):
