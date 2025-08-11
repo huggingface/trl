@@ -34,9 +34,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
     AutoModelForCausalLM,
-    BaseImageProcessor,
     DataCollator,
-    FeatureExtractionMixin,
     GenerationConfig,
     PreTrainedModel,
     PreTrainedTokenizerBase,
@@ -144,11 +142,11 @@ class OnlineDPOTrainer(Trainer):
             The data collator to use for training. If None is specified, the default data collator
             (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+        train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
@@ -184,11 +182,9 @@ class OnlineDPOTrainer(Trainer):
         reward_funcs: Optional[Union[RewardFunc, list[RewardFunc]]] = None,
         args: Optional[OnlineDPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
-        eval_dataset: Optional[Union[Dataset, dict[str, Dataset], "datasets.Dataset"]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
+        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
+        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
+        processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
         reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         peft_config: Optional[dict] = None,

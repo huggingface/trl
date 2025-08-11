@@ -27,7 +27,7 @@ pip install math_verify
 # For Qwen/Qwen2.5-VL-3B-Instruct
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/online_dpo_vlm.py \
+    examples/scripts/dpo_online_vlm.py \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --reward_model_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir online-dpo-Qwen2.5-VL-3B-Instruct \
@@ -46,7 +46,7 @@ pip install num2words
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/online_dpo_vlm.py \
+    examples/scripts/dpo_online_vlm.py \
     --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --reward_model_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --output_dir online-dpo-SmolVLM2-2.2B-Instruct \
