@@ -41,7 +41,6 @@ accelerate launch \
     --log_completions \
     --per_device_train_batch_size 8 \
     --num_generations 8 \
-    --bf16 True \
     --importance_sampling_level sequence \
     --epsilon 3e-4 \
     --epsilon_high 4e-4 \
