@@ -184,13 +184,6 @@ class ScriptArguments:
         },
     )
 
-    dataset_mixture: Optional[DatasetMixtureConfig] = field(
-        default=None,
-        metadata={
-            "help": "Configuration for creating dataset mixtures.",
-        },
-    )
-
 
 def init_zero_verbose():
     """
