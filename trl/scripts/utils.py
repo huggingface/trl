@@ -381,7 +381,7 @@ def get_git_commit_hash(package_name):
 
 def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
     """
-    Load a dataset or a mixture of datasets based on the configuration.
+    Load a mixture of datasets based on the configuration.
 
     Args:
         mixture_config (`DatasetMixtureConfig`):
