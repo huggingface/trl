@@ -19,11 +19,14 @@ import logging
 import os
 import subprocess
 import sys
+import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any, Optional, Union
 
+import datasets
 import yaml
+from datasets import DatasetDict, concatenate_datasets
 from transformers import HfArgumentParser
 from transformers.hf_argparser import DataClass, DataClassType
 from transformers.utils import is_rich_available
@@ -34,21 +37,54 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DatasetConfig:
-    """Configuration for a dataset in a mixture."""
+    """
 
-    id: str
-    config: Optional[str] = None
+    Args:
+
+        path (`str`):
+            Path or name of the dataset.
+        name (`str`, *optional*, defaults to `None`):
+            Defining the name of the dataset configuration.
+        data_dir (`str`, *optional*, defaults to `None`):
+            Defining the `data_dir` of the dataset configuration. If specified for the generic builders(csv, text
+            etc.) or the Hub datasets and `data_files` is `None`, the behavior is equal to passing
+            `os.path.join(data_dir, **)` as `data_files` to reference all the files in a directory.
+        data_files (`str` or `Sequence` or `Mapping`, *optional*, defaults to `None`):
+            Path(s) to source data file(s).
+        split (`str`, *optional*, defaults to `"train"`):
+            Which split of the data to load.
+        columns (`list[str]`, *optional*, defaults to `None`):
+            List of column names to select from the dataset. If `None`, all columns are selected.
+    """
+
+    path: str
+    name: Optional[str] = None
+    data_dir: Optional[str] = None
+    data_files: Optional[Union[str, list[str], dict[str, str]]] = None
     split: str = "train"
     columns: Optional[list[str]] = None
-    weight: Optional[float] = None
 
 
 @dataclass
 class DatasetMixtureConfig:
-    """Configuration for a mixture of datasets."""
+    """
+    Configuration for a mixture of datasets.
+
+    Args:
+        datasets (`list[DatasetConfig]`):
+            List of dataset configurations to include in the mixture.
+        streaming (`bool`, *optional*, defaults to `False`):
+            Whether to stream the datasets. If `True`, the datasets will be loaded in streaming mode.
+        seed (`int` or `None`, *optional*, defaults to `None`):
+            Seed for random operations, such as splitting the dataset into train and test sets.
+        test_split_size (`float` or `None`, *optional*, defaults to `None`):
+            Size of the test split. Refer to the `test_size` parameter in the [`~datasets.train_test_split`] function
+            for more details. If `None`, the dataset will not be split into train and test sets.
+    """
 
     datasets: list[DatasetConfig]
-    seed: int = 0
+    streaming: bool = False
+    seed: Optional[int] = None
     test_split_size: Optional[float] = None
 
 
@@ -58,35 +94,26 @@ class ScriptArguments:
     Arguments common to all scripts.
 
     Args:
-        dataset_name (`str`):
-            Dataset name.
+        dataset_name (`str`, or `None`, *optional*, defaults to `None`):
+            Path or name of the dataset to load. If `dataset_mixture` is provided, this will be ignored.
         dataset_config (`str` or `None`, *optional*, defaults to `None`):
             Dataset configuration name. Corresponds to the `name` argument of the [`~datasets.load_dataset`] function.
+            If `dataset_mixture` is provided, this will be ignored.
+        dataset_data_dir (`str` or `None`, *optional*, defaults to `None`):
+            Dataset data directory. Corresponds to the `data_dir` argument of the [`~datasets.load_dataset`] function.
+            If `dataset_mixture` is provided, this will be ignored.
+        dataset_data_files (`str`, `list[str]`, or `dict[str, str]`, *optional*, defaults to `None`):
+            Path(s) to source data file(s). Corresponds to the `data_files` argument of the [`~datasets.load_dataset`]
+            function. If `dataset_mixture` is provided, this will be ignored.
         dataset_train_split (`str`, *optional*, defaults to `"train"`):
-            Dataset split to use for training.
+            Dataset split to use for training. If `dataset_mixture` is provided, this will be ignored.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
-            Dataset split to use for evaluation.
+            Dataset split to use for evaluation. If `dataset_mixture` is provided, this will be ignored.
         dataset_streaming (`bool`, *optional*, defaults to `False`):
-            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode.
+            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If `dataset_mixture`
+            is provided, this will be ignored.
         dataset_mixture (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Configuration for creating dataset mixtures with advanced options.
-            Format:
-            dataset_mixture:
-                datasets:
-                - id: dataset_id_1
-                    config: config_name
-                    columns:
-                    - col1
-                    - col2
-                    weight: 0.5
-                - id: dataset_id_2
-                    config: config_name
-                    columns:
-                    - col1
-                    - col2
-                    weight: 0.5
-                seed: 42
-                test_split_size: 0.1
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
@@ -95,23 +122,41 @@ class ScriptArguments:
             https://github.com/huggingface/transformers/issues/22482#issuecomment-1595790992.
     """
 
-    dataset_name: Optional[str] = field(default=None, metadata={"help": "Dataset name."})
+    dataset_name: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Path or name of the dataset to load. If `dataset_mixture` is provided, this will be ignored."
+        },
+    )
     dataset_config: Optional[str] = field(
         default=None,
         metadata={
             "help": "Dataset configuration name. Corresponds to the `name` argument of the `datasets.load_dataset` "
-            "function."
+            "function. If `dataset_mixture` is provided, this will be ignored."
         },
     )
-    dataset_train_split: str = field(default="train", metadata={"help": "Dataset split to use for training."})
-    dataset_test_split: str = field(default="test", metadata={"help": "Dataset split to use for evaluation."})
+    dataset_train_split: str = field(
+        default="train",
+        metadata={
+            "help": "Dataset split to use for training. If `dataset_mixture` is provided, this will be ignored."
+        },
+    )
+    dataset_test_split: str = field(
+        default="test",
+        metadata={
+            "help": "Dataset split to use for evaluation. If `dataset_mixture` is provided, this will be ignored."
+        },
+    )
     dataset_streaming: bool = field(
         default=False,
-        metadata={"help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode."},
+        metadata={
+            "help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If "
+            "`dataset_mixture` is provided, this will be ignored."
+        },
     )
     dataset_mixture: Optional[dict[str, Any]] = field(
         default=None,
-        metadata={"help": "Configuration for creating dataset mixtures with advanced options like shuffling."},
+        metadata={"help": "Configuration for creating dataset mixtures."},
     )
     gradient_checkpointing_use_reentrant: bool = field(
         default=False,
@@ -180,7 +225,6 @@ def init_zero_verbose():
     Uses Rich if available, falls back otherwise.
     """
     import logging
-    import warnings
 
     FORMAT = "%(message)s"
 
@@ -372,3 +416,66 @@ def get_git_commit_hash(package_name):
             return None
     except Exception as e:
         return f"Error: {str(e)}"
+
+
+def get_dataset(args: ScriptArguments) -> DatasetDict:
+    """
+    Load a dataset or a mixture of datasets based on the configuration.
+
+    Args:
+        args (`ScriptArguments`):
+            Script arguments containing dataset configuration.
+
+    Returns:
+        `DatasetDict`:
+            The loaded datasets.
+
+    Example:
+    ```python
+    >>> from trl import get_dataset, ScriptArguments
+    ```
+    """
+    if args.dataset_name and args.dataset_mixture:
+        logger.warning(
+            "Both `dataset_path` and `dataset_mixture` are provided. `dataset_mixture` will be used for loading "
+            "datasets and `dataset_path` will be ignored.",
+        )
+    elif args.dataset_name and not args.dataset_mixture:
+        logger.info(f"Loading dataset: {args.dataset_name}")
+        return datasets.load_dataset(args.dataset_name, args.dataset_config)
+    elif args.dataset_mixture and not args.dataset_name:
+        logger.info(f"Creating dataset mixture with {len(args.dataset_mixture.datasets)} datasets")
+        datasets_list = []
+        for dataset_config in args.dataset_mixture.datasets:
+            logger.info(f"Loading dataset for mixture: {dataset_config.path} (config name: {dataset_config.name})")
+            dataset = datasets.load_dataset(
+                path=dataset_config.path,
+                name=dataset_config.name,
+                data_dir=dataset_config.data_dir,
+                data_files=dataset_config.data_files,
+                split=dataset_config.split,
+                streaming=args.dataset_mixture.streaming,
+            )
+            if dataset_config.columns is not None:
+                dataset = dataset.select_columns(dataset_config.columns)
+            datasets_list.append(dataset)
+
+        if datasets_list:
+            combined_dataset = concatenate_datasets(datasets_list)
+            logger.info(f"Created dataset mixture with {len(combined_dataset)} examples")
+
+            if args.dataset_mixture.test_split_size is not None:
+                logger.info(
+                    f"Spliting dataset into train and test sets with test size: {args.dataset_mixture.test_split_size}"
+                )
+                combined_dataset = combined_dataset.train_test_split(
+                    test_size=args.dataset_mixture.test_split_size, seed=args.dataset_mixture.seed
+                )
+                return combined_dataset
+            else:
+                return DatasetDict({"train": combined_dataset})
+        else:
+            raise ValueError("No datasets were loaded from the mixture configuration")
+
+    else:
+        raise ValueError("Either `dataset_name` or `dataset_mixture` must be provided")
