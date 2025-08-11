@@ -43,7 +43,7 @@ For meta-llama/Llama-3.2-11B-Vision-Instruct, use: (requires transformers>=4.45.
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForImageTextToText, AutoProcessor, LlavaForConditionalGeneration
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from trl import (
     ModelConfig,
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
-    training_args.remove_unused_columns = False
+    training_args.max_length = None
 
     ################
     # Model, Tokenizer & Processor
@@ -86,30 +86,6 @@ if __name__ == "__main__":
     )
 
     ################
-    # Create a data collator to encode text and image pairs
-    ################
-    def collate_fn(examples):
-        # Get the texts and images, and apply the chat template
-        texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
-        images = [example["images"] for example in examples]
-        if isinstance(model, LlavaForConditionalGeneration):
-            # LLava1.5 does not support multiple images
-            images = [image[0] for image in images]
-
-        # Tokenize the texts and process the images
-        batch = processor(images=images, text=texts, return_tensors="pt", padding=True)
-
-        # The labels are the input_ids, and we mask the padding tokens in the loss computation
-        labels = batch["input_ids"].clone()
-        labels[labels == processor.tokenizer.pad_token_id] = -100  #
-        # Ignore the image token index in the loss computation (model specific)
-        image_token_id = processor.tokenizer.convert_tokens_to_ids(processor.image_token)
-        labels[labels == image_token_id] = -100
-        batch["labels"] = labels
-
-        return batch
-
-    ################
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
@@ -120,10 +96,8 @@ if __name__ == "__main__":
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        data_collator=collate_fn,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=processor,
         peft_config=get_peft_config(model_args),
     )
 
