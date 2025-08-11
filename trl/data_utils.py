@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import logging
+
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from itertools import takewhile
@@ -25,8 +25,6 @@ import pyarrow.types
 from datasets import Dataset, DatasetDict
 from transformers import PreTrainedTokenizerBase
 
-
-logger = logging.getLogger(__name__)
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
