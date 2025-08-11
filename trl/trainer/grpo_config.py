@@ -15,8 +15,6 @@
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
-import transformers
-from packaging import version
 from transformers import TrainingArguments
 
 
@@ -224,8 +222,7 @@ class GRPOConfig(TrainingArguments):
             are logged.
     """
 
-    if version.parse(transformers.__version__) >= version.parse("4.51.0"):
-        _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -237,6 +234,12 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
             "will be interpreted as ratio of total training steps."
+        },
+    )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
     bf16: Optional[bool] = field(
