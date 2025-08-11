@@ -85,7 +85,7 @@ class DatasetMixtureConfig:
             for more details. If `None`, the dataset will not be split into train and test sets.
     """
 
-    datasets: list[dict] = field(
+    datasets: list[DatasetConfig] = field(
         default_factory=list,
         metadata={"help": "List of dataset configurations to include in the mixture."},
     )
