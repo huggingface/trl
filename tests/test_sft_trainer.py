@@ -35,7 +35,7 @@ from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
 
 if is_vision_available():
     from PIL import Image as PILImage
@@ -1472,3 +1472,119 @@ class SFTTrainerTester2(unittest.TestCase):
             for n, param in previous_trainable_params.items():
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @require_peft
+    def test_prompt_encoder_different_virtual_token_counts(self):
+        """Test that mean_token_accuracy is properly calculated with different virtual token counts"""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        for num_virtual_tokens in [8, 32, 64]:
+            peft_config = PromptEncoderConfig(
+                task_type=TaskType.CAUSAL_LM, num_virtual_tokens=num_virtual_tokens, encoder_hidden_size=128
+            )
+
+            training_args = SFTConfig(
+                output_dir=f"./test_output_{num_virtual_tokens}",
+                per_device_train_batch_size=1,
+                max_steps=1,
+                report_to="none",
+                dataset_text_field="text",
+            )
+
+            trainer = SFTTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                args=training_args,
+                train_dataset=dataset,
+                peft_config=peft_config,
+            )
+
+            # Save initial parameters to check they change during training
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            # Check that training completed successfully
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that training metrics include expected keys
+            last_log = trainer.state.log_history[-1]
+            self.assertIn("train_loss", last_log)
+            self.assertIn("num_tokens", last_log)
+            self.assertIn("mean_token_accuracy", last_log)
+
+            # Verify that mean_token_accuracy is a valid number (should be between 0 and 1)
+            mean_token_accuracy = last_log["mean_token_accuracy"]
+            self.assertIsInstance(mean_token_accuracy, (int, float))
+            self.assertGreaterEqual(mean_token_accuracy, 0.0)
+            self.assertLessEqual(mean_token_accuracy, 1.0)
+
+            # Check that some parameters have changed (indicating training occurred)
+            param_changed = False
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                # Ensure both tensors are on the same device for comparison
+                if param.device != new_param.device:
+                    param = param.to(new_param.device)
+                if not torch.allclose(param, new_param):
+                    param_changed = True
+                    break
+
+            self.assertTrue(param_changed, "At least one parameter should have changed during training")
+
+    @require_peft
+    def test_prompt_encoder_with_peft_model(self):
+        """Test that mean_token_accuracy is properly calculated when using a pre-converted PeftModel"""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # First convert the model to a PEFT model with PromptEncoder
+        base_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        peft_config = PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=16, encoder_hidden_size=128)
+        peft_model = get_peft_model(base_model, peft_config)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = SFTConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=1,
+                max_steps=2,
+                report_to="none",
+                dataset_text_field="text",
+            )
+
+            trainer = SFTTrainer(
+                model=peft_model,
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            # Verify model is a PeftModel
+            self.assertIsInstance(trainer.model, PeftModel)
+
+            # Save initial parameters to check they change during training (after trainer creation)
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            # Check that training completed successfully
+            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+            # Check that training metrics include expected keys
+            last_log = trainer.state.log_history[-1]
+            self.assertIn("train_loss", last_log)
+            self.assertIn("num_tokens", last_log)
+            self.assertIn("mean_token_accuracy", last_log)
+
+            # Verify that mean_token_accuracy is a valid number (should be between 0 and 1)
+            mean_token_accuracy = last_log["mean_token_accuracy"]
+            self.assertIsInstance(mean_token_accuracy, (int, float))
+            self.assertGreaterEqual(mean_token_accuracy, 0.0)
+            self.assertLessEqual(mean_token_accuracy, 1.0)
+
+            # Check that some parameters have changed (indicating training occurred)
+            param_changed = False
+            for n, param in previous_trainable_params.items():
+                new_param = trainer.model.get_parameter(n)
+                if not torch.allclose(param, new_param):
+                    param_changed = True
+                    break
+
+            self.assertTrue(param_changed, "At least one parameter should have changed during training")

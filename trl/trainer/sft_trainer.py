@@ -406,6 +406,7 @@ class SFTTrainer(Trainer):
             added_tokens = []
 
         # PEFT configuration and model wrapping
+        self.num_virtual_tokens = None
         if peft_config is not None:
             if added_tokens:
                 # Ensure that the added tokens are trainable
@@ -615,6 +616,7 @@ class SFTTrainer(Trainer):
 
         # Create PEFT model
         if peft_config is not None:
+            self.num_virtual_tokens = getattr(peft_config, "num_virtual_tokens", None)
             if (
                 version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
                 and getattr(model, "is_loaded_in_4bit", False)
@@ -623,6 +625,12 @@ class SFTTrainer(Trainer):
                 model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
             else:
                 model = get_peft_model(model, peft_config)
+        elif hasattr(model, "peft_config") and model.peft_config:
+            # Model is already a PeftModel, extract num_virtual_tokens from config
+            active_adapter = getattr(model, "active_adapter", "default")
+            if active_adapter in model.peft_config:
+                peft_config_obj = model.peft_config[active_adapter]
+                self.num_virtual_tokens = getattr(peft_config_obj, "num_virtual_tokens", None)
 
         # Handle bf16 casting for 4-bit models
         if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
@@ -876,21 +884,14 @@ class SFTTrainer(Trainer):
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
-            # Handle PEFT models with virtual tokens (e.g., PromptEncoder)
-            # Check if logits and labels have different sequence lengths
-            if shift_logits.shape[1] != shift_labels.shape[1]:
-                # For PEFT models with virtual tokens, we need to align the dimensions
-                # Virtual tokens are typically prepended, so we skip them in logits
-                num_virtual_tokens = shift_logits.shape[1] - shift_labels.shape[1]
-                if num_virtual_tokens > 0:
-                    shift_logits = shift_logits[:, num_virtual_tokens:, :]
-                else:
-                    # This shouldn't happen, but handle it gracefully
-                    warnings.warn(
-                        f"Unexpected dimension mismatch: logits have {shift_logits.shape[1]} tokens "
-                        f"but labels have {shift_labels.shape[1]} tokens. Skipping token accuracy computation."
-                    )
-                    return (loss, outputs) if return_outputs else loss
+            # Handle PEFT models with virtual tokens (e.g., for PromptEncoder)
+            # Check if logits and labels differ by the number of virtual tokens
+            if (
+                self.num_virtual_tokens is not None
+                and shift_logits.shape[1] - shift_labels.shape[1] == self.num_virtual_tokens
+            ):
+                # Virtual tokens are prepended, so we skip them in logits
+                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
             # Get predictions
             predictions = shift_logits.argmax(dim=-1)
