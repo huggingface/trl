@@ -295,7 +295,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             If set, the sequences will be padded to a multiple of this value.
         dataset_text_field (`str`, optional, defaults to `"text"`):
             Name of the column that contains text data in the dataset. This parameter is only relevant for
-            [standard datasets format](dataset_formats#standard) .
+            [standard datasets format](dataset_formats#standard).
         return_tensors (`str`, optional, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
 
