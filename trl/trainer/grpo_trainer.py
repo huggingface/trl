@@ -579,6 +579,20 @@ class GRPOTrainer(Trainer):
         self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
         self.vision_end_token_id = getattr(model.config, "vision_end_token_id", None)
 
+        # Pre-compile regex patterns for better performance
+        self._compiled_regexes = {}
+        if self.pad_token:
+            escaped_pad_token = re.escape(self.pad_token)
+            self._compiled_regexes['pad_token_pattern'] = re.compile(rf"^({escaped_pad_token})+")
+
+        if self.image_token:
+            escaped_img_token = re.escape(self.image_token)
+            self._compiled_regexes['img_token_pattern'] = re.compile(rf"({escaped_img_token})+")
+            self._compiled_regexes['img_token_search'] = re.compile(escaped_img_token)
+            self._escaped_img_token = escaped_img_token
+
+        self._vision_end_token_pattern = None
+
         # Reward functions
         if not isinstance(reward_funcs, list):
             reward_funcs = [reward_funcs]
@@ -890,6 +904,15 @@ class GRPOTrainer(Trainer):
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
             self._signature_columns = ["prompt", "image"]
+
+    def _get_vision_end_token_pattern(self):
+        """Lazily compile the vision end token pattern when needed."""
+        if self._vision_end_token_pattern is None and self.vision_end_token_id is not None:
+            escaped_eoi_token = re.escape(
+                self.processing_class.tokenizer.decode([self.vision_end_token_id])
+            )
+            self._vision_end_token_pattern = re.compile(rf"({self._escaped_img_token})+{escaped_eoi_token}")
+        return self._vision_end_token_pattern
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -1404,7 +1427,10 @@ class GRPOTrainer(Trainer):
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
+            # Use pre-compiled regex pattern for removing leading pad tokens
+            if self.pad_token and 'pad_token_pattern' in self._compiled_regexes:
+                pad_pattern = self._compiled_regexes['pad_token_pattern']
+                prompts_text = [pad_pattern.sub("", text) for text in prompts_text]
 
             # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
             # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
@@ -1414,24 +1440,26 @@ class GRPOTrainer(Trainer):
             # (e.g. Gemma 3) and removes all image_token instances and vision_end_token_id as well, leaving only
             # the vision_start_token_id (e.g. <start_of_image>).
             if self.image_token is not None:
-                escaped_img_token = re.escape(self.image_token)
+                # Use pre-compiled patterns for better performance
+                img_search_pattern = self._compiled_regexes['img_token_search']
+                img_pattern = self._compiled_regexes['img_token_pattern']
+
                 # Search for the image token in the chat template
-                if re.search(escaped_img_token, self.processing_class.chat_template):
+                if img_search_pattern.search(self.processing_class.chat_template):
                     prompts_text = [
-                        re.sub(rf"({escaped_img_token})+", self.image_token, text) for text in prompts_text
+                        img_pattern.sub(self.image_token, text) for text in prompts_text
                     ]
                 else:
                     # If the chat template doesn't use the image token, we remove all instances of it + vision_end_token_id
                     if self.vision_end_token_id is not None:
-                        escaped_eoi_token = re.escape(
-                            self.processing_class.tokenizer.decode([self.vision_end_token_id])
-                        )
-                        prompts_text = [
-                            re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text
-                        ]
+                        vision_end_pattern = self._get_vision_end_token_pattern()
+                        if vision_end_pattern:
+                            prompts_text = [
+                                vision_end_pattern.sub("", text) for text in prompts_text
+                            ]
                     else:
                         # If vision_end_token_id is None, just remove the image tokens
-                        prompts_text = [re.sub(rf"({escaped_img_token})+", "", text) for text in prompts_text]
+                        prompts_text = [img_pattern.sub("", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
