@@ -21,7 +21,6 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
-import datasets
 import jinja2
 import torch
 import torch.nn as nn
@@ -77,7 +76,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model
+    from peft import PeftConfig, PeftModel, get_peft_model
 
 if is_apex_available():
     from apex import amp
@@ -158,8 +157,8 @@ class OnlineDPOTrainer(Trainer):
 
             If set to `None`, the tokenizer for each model-based reward function is automatically loaded using
             [`~transformers.AutoTokenizer.from_pretrained`].
-        peft_config (`dict`):
-            The peft config to use for training.
+        peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
             metric values.
@@ -187,7 +186,7 @@ class OnlineDPOTrainer(Trainer):
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
         reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
-        peft_config: Optional[dict] = None,
+        peft_config: Optional["PeftConfig"] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
