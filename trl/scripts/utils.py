@@ -120,17 +120,17 @@ class ScriptArguments:
 
     Args:
         dataset_name (`str`, or `None`, *optional*, defaults to `None`):
-            Path or name of the dataset to load. If `dataset_mixture` is provided, this will be ignored.
+            Path or name of the dataset to load. If `datasets` is provided, this will be ignored.
         dataset_config (`str` or `None`, *optional*, defaults to `None`):
             Dataset configuration name. Corresponds to the `name` argument of the [`~datasets.load_dataset`] function.
-            If `dataset_mixture` is provided, this will be ignored.
+            If `datasets` is provided, this will be ignored.
         dataset_train_split (`str`, *optional*, defaults to `"train"`):
-            Dataset split to use for training. If `dataset_mixture` is provided, this will be ignored.
+            Dataset split to use for training. If `datasets` is provided, this will be ignored.
         dataset_test_split (`str`, *optional*, defaults to `"test"`):
-            Dataset split to use for evaluation. If `dataset_mixture` is provided, this will be ignored.
+            Dataset split to use for evaluation. If `datasets` is provided, this will be ignored.
         dataset_streaming (`bool`, *optional*, defaults to `False`):
-            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If `dataset_mixture`
-            is provided, this will be ignored.
+            Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If `datasets` is
+            provided, this will be ignored.
         gradient_checkpointing_use_reentrant (`bool`, *optional*, defaults to `False`):
             Whether to apply `use_reentrant` for gradient checkpointing.
         ignore_bias_buffers (`bool`, *optional*, defaults to `False`):
@@ -141,34 +141,28 @@ class ScriptArguments:
 
     dataset_name: Optional[str] = field(
         default=None,
-        metadata={
-            "help": "Path or name of the dataset to load. If `dataset_mixture` is provided, this will be ignored."
-        },
+        metadata={"help": "Path or name of the dataset to load. If `datasets` is provided, this will be ignored."},
     )
     dataset_config: Optional[str] = field(
         default=None,
         metadata={
             "help": "Dataset configuration name. Corresponds to the `name` argument of the `datasets.load_dataset` "
-            "function. If `dataset_mixture` is provided, this will be ignored."
+            "function. If `datasets` is provided, this will be ignored."
         },
     )
     dataset_train_split: str = field(
         default="train",
-        metadata={
-            "help": "Dataset split to use for training. If `dataset_mixture` is provided, this will be ignored."
-        },
+        metadata={"help": "Dataset split to use for training. If `datasets` is provided, this will be ignored."},
     )
     dataset_test_split: str = field(
         default="test",
-        metadata={
-            "help": "Dataset split to use for evaluation. If `dataset_mixture` is provided, this will be ignored."
-        },
+        metadata={"help": "Dataset split to use for evaluation. If `datasets` is provided, this will be ignored."},
     )
     dataset_streaming: bool = field(
         default=False,
         metadata={
             "help": "Whether to stream the dataset. If True, the dataset will be loaded in streaming mode. If "
-            "`dataset_mixture` is provided, this will be ignored."
+            "`datasets` is provided, this will be ignored."
         },
     )
     gradient_checkpointing_use_reentrant: bool = field(
