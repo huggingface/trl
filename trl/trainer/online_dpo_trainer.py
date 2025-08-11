@@ -181,7 +181,7 @@ class OnlineDPOTrainer(Trainer):
         ref_model: Union[PreTrainedModel, nn.Module, None] = None,
         reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
-        reward_funcs: Optional[Union["RewardFunc", list["RewardFunc"]]] = None,
+        reward_funcs: Optional[Union[RewardFunc, list[RewardFunc]]] = None,
         args: Optional[OnlineDPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset, "datasets.Dataset"]] = None,
