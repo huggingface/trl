@@ -1428,9 +1428,8 @@ class GRPOTrainer(Trainer):
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
             # Use pre-compiled regex pattern for removing leading pad tokens
-            if self.pad_token and 'pad_token_pattern' in self._compiled_regexes:
-                pad_pattern = self._compiled_regexes['pad_token_pattern']
-                prompts_text = [pad_pattern.sub("", text) for text in prompts_text]
+            pad_pattern = self._compiled_regexes['pad_token_pattern']
+            prompts_text = [pad_pattern.sub("", text) for text in prompts_text]
 
             # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
             # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
