@@ -1485,8 +1485,6 @@ class SFTTrainerTester2(unittest.TestCase):
 
             training_args = SFTConfig(
                 output_dir=f"./test_output_{num_virtual_tokens}",
-                per_device_train_batch_size=1,
-                max_steps=1,
                 report_to="none",
                 dataset_text_field="text",
             )
