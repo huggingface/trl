@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import tempfile
+import unittest
 from dataclasses import dataclass
 from unittest.mock import mock_open, patch
 
-from trl import TrlParser
+from datasets import DatasetDict, load_dataset
+
+from trl import DatasetMixtureConfig, TrlParser, get_dataset
+from trl.scripts.utils import DatasetConfig
 
 from .testing_utils import TrlTestCase
 
@@ -263,3 +268,162 @@ class TestTrlParser(TrlTestCase):
             # Check that config values were applied to the subparser
             self.assertEqual(result_args[0].arg1, 2)  # Default from config
             self.assertEqual(result_args[0].arg2, "config_value")  # Default from config
+
+
+class TestGetDataset(unittest.TestCase):
+    def test_single_dataset_with_config(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")]
+        )
+        result = get_dataset(mixture_config)
+        expected = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        self.assertEqual(expected["train"][:], result["train"][:])
+
+    def test_single_dataset_preference_config(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_preference")]
+        )
+        result = get_dataset(mixture_config)
+        expected = load_dataset("trl-internal-testing/zen", "standard_preference")
+        self.assertEqual(expected["train"][:], result["train"][:])
+
+    def test_single_dataset_streaming(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")],
+            streaming=True,
+        )
+        result = get_dataset(mixture_config)
+        expected = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        self.assertEqual(expected["train"].to_list(), list(result["train"]))
+
+    def test_dataset_mixture_basic(self):
+        dataset_config1 = DatasetConfig(
+            path="trl-internal-testing/zen", name="standard_prompt_completion", split="train", columns=["prompt"]
+        )
+        dataset_config2 = DatasetConfig(
+            path="trl-internal-testing/zen", name="standard_preference", split="train", columns=["prompt"]
+        )
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config1, dataset_config2])
+        result = get_dataset(mixture_config)
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        train_dataset = result["train"]
+        self.assertEqual(train_dataset.column_names, ["prompt"])
+        prompts = train_dataset["prompt"]
+        expected_first_half = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        self.assertEqual(prompts[: len(prompts) // 2], expected_first_half["prompt"])
+        expected_second_half = load_dataset("trl-internal-testing/zen", "standard_prompt_completion", split="train")
+        self.assertEqual(prompts[len(prompts) // 2 :], expected_second_half["prompt"])
+
+    def test_dataset_mixture_with_weights(self):
+        dataset_config1 = DatasetConfig(
+            path="trl-internal-testing/zen", name="standard_prompt_completion", split="train[:50%]", columns=["prompt"]
+        )
+        dataset_config2 = DatasetConfig(
+            path="trl-internal-testing/zen", name="standard_preference", split="train[:50%]", columns=["prompt"]
+        )
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config1, dataset_config2])
+        result = get_dataset(mixture_config)
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        train_dataset = result["train"]
+        self.assertEqual(train_dataset.column_names, ["prompt"])
+        prompts = train_dataset["prompt"]
+        expected_first_half = load_dataset("trl-internal-testing/zen", "standard_preference", split="train[:50%]")
+        self.assertEqual(prompts[: len(prompts) // 2], expected_first_half["prompt"])
+        expected_second_half = load_dataset(
+            "trl-internal-testing/zen", "standard_prompt_completion", split="train[:50%]"
+        )
+        self.assertEqual(prompts[len(prompts) // 2 :], expected_second_half["prompt"])
+
+    def test_dataset_mixture_with_test_split(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")],
+            test_split_size=2,
+        )
+        result = get_dataset(mixture_config)
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        self.assertIn("test", result)
+        self.assertEqual(len(result["train"]), 15)
+        self.assertEqual(len(result["test"]), 2)
+
+    def test_empty_dataset_mixture_raises_error(self):
+        mixture_config = DatasetMixtureConfig(datasets=[])
+
+        with self.assertRaises(ValueError) as context:
+            get_dataset(mixture_config)
+
+        self.assertIn("No datasets were loaded", str(context.exception))
+
+    def test_mixture_multiple_different_configs(self):
+        dataset_config1 = DatasetConfig(
+            path="trl-internal-testing/zen", name="conversational_preference", split="train", columns=["prompt"]
+        )
+        dataset_config2 = DatasetConfig(
+            path="trl-internal-testing/zen", name="conversational_prompt_only", split="test"
+        )
+        mixture_config = DatasetMixtureConfig(datasets=[dataset_config1, dataset_config2])
+        result = get_dataset(mixture_config)
+        self.assertIsInstance(result, DatasetDict)
+        self.assertIn("train", result)
+        self.assertGreater(len(result["train"]), 0)
+
+    def test_trlparser_parses_yaml_config_correctly(self):
+        # Prepare YAML content exactly like your example
+        yaml_content = """
+        datasets:
+        - path: trl-internal-testing/zen
+          name: standard_prompt_only
+        - path: trl-internal-testing/zen
+          name: standard_preference
+          columns:
+          - prompt
+        """
+
+        # Write YAML to a temporary file
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+            tmpfile.write(yaml_content)
+            tmpfile.flush()
+            parser = TrlParser((DatasetMixtureConfig,))
+            args = parser.parse_args_and_config(args=["--config", tmpfile.name])[0]
+
+        # Assert that we got DatasetMixtureConfig instance
+        self.assertIsInstance(args, DatasetMixtureConfig)
+
+        # Assert datasets list length
+        self.assertEqual(len(args.datasets), 2)
+
+        # Check first dataset
+        dataset_config1 = args.datasets[0]
+        self.assertIsInstance(dataset_config1, DatasetConfig)
+        self.assertEqual(dataset_config1.path, "trl-internal-testing/zen")
+        self.assertEqual(dataset_config1.name, "standard_prompt_only")
+        self.assertIsNone(dataset_config1.columns)  # No columns specified
+
+        # Check second dataset
+        dataset_config2 = args.datasets[1]
+        self.assertIsInstance(dataset_config2, DatasetConfig)
+        self.assertEqual(dataset_config2.path, "trl-internal-testing/zen")
+        self.assertEqual(dataset_config2.name, "standard_preference")
+        self.assertEqual(dataset_config2.columns, ["prompt"])  # Columns specified
+
+    def test_trlparser_parses_yaml_and_loads_dataset(self):
+        # Prepare YAML content exactly like your example
+        yaml_content = """
+        datasets:
+        - path: trl-internal-testing/zen
+          name: standard_language_modeling
+        """
+
+        # Write YAML to a temporary file
+        with tempfile.NamedTemporaryFile("w+", suffix=".yaml") as tmpfile:
+            tmpfile.write(yaml_content)
+            tmpfile.flush()
+            parser = TrlParser((DatasetMixtureConfig,))
+            args = parser.parse_args_and_config(args=["--config", tmpfile.name])[0]
+
+        # Load the dataset using get_dataset
+        result = get_dataset(args)
+        expected = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        self.assertEqual(expected["train"][:], result["train"][:])
