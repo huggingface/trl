@@ -285,6 +285,15 @@ class TestGetDataset(unittest.TestCase):
         expected = load_dataset("trl-internal-testing/zen", "standard_preference")
         self.assertEqual(expected["train"][:], result["train"][:])
 
+    def test_single_dataset_streaming(self):
+        mixture_config = DatasetMixtureConfig(
+            datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")],
+            streaming=True,
+        )
+        result = get_dataset(mixture_config)
+        expected = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+        self.assertEqual(expected["train"].to_list(), list(result["train"]))
+
     def test_dataset_mixture_basic(self):
         dataset_config1 = DatasetConfig(
             path="trl-internal-testing/zen", name="standard_prompt_completion", split="train", columns=["prompt"]

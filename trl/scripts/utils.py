@@ -425,7 +425,8 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
 
     if datasets_list:
         combined_dataset = concatenate_datasets(datasets_list)
-        logger.info(f"Created dataset mixture with {len(combined_dataset)} examples")
+        if isinstance(combined_dataset, datasets.Dataset):  # IterableDataset does not have a length
+            logger.info(f"Created dataset mixture with {len(combined_dataset)} examples")
 
         if mixture_config.test_split_size is not None:
             logger.info(f"Spliting dataset into train and test sets with test size: {mixture_config.test_split_size}")
