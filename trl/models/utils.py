@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 import torch
 import torch.nn as nn
+from accelerate.utils import is_peft_model
 from packaging import version
 from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, TrainingArguments
 from transformers.utils import is_peft_available
@@ -28,10 +29,10 @@ from transformers.utils import is_peft_available
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
 
-SUPPORTED_ARCHITECTURES = (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-)
+if is_peft_available():
+    import peft
+    from peft import PeftConfig, PeftModel, get_peft_model, is_peft_model, prepare_model_for_kbit_training
+
 
 if TYPE_CHECKING:
     from accelerate import Accelerator
@@ -40,9 +41,10 @@ if TYPE_CHECKING:
     from torch.nn.parallel.distributed import DistributedDataParallel
 
 
-if is_peft_available():
-    import peft
-    from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
+SUPPORTED_ARCHITECTURES = (
+    AutoModelForCausalLMWithValueHead,
+    AutoModelForSeq2SeqLMWithValueHead,
+)
 
 
 # TODO: Add Abstract Base Class if more formats are added
@@ -323,6 +325,9 @@ def unwrap_model_for_generation(
     ```
     """
     unwrapped_model = accelerator.unwrap_model(model)
+    is_gradient_checkpointing = unwrapped_model.is_gradient_checkpointing
+    if is_gradient_checkpointing:
+        unwrapped_model.gradient_checkpointing_disable()
     if accelerator.state.deepspeed_plugin is not None and accelerator.state.deepspeed_plugin.zero_stage == 3:
         if not gather_deepspeed3_params:
             yield accelerator.unwrap_model(model)
@@ -335,6 +340,8 @@ def unwrap_model_for_generation(
                 add_hooks(model)
     else:
         yield unwrapped_model
+    if is_gradient_checkpointing:
+        unwrapped_model.gradient_checkpointing_enable()
 
 
 def prepare_deepspeed(model: "Module", accelerator: "Accelerator"):
@@ -461,6 +468,13 @@ def enable_gradient_checkpointing(
     model: PreTrainedModel, gradient_checkpointing_kwargs: Optional[dict]
 ) -> PreTrainedModel:
     """Enables gradient checkpointing for the model."""
+    # Enable gradient checkpointing on the base model for PEFT
+    if is_peft_model(model):
+        model.base_model.gradient_checkpointing_enable()
+    # Enable gradient checkpointing for non-PEFT models
+    else:
+        model.gradient_checkpointing_enable()
+
     gradient_checkpointing_kwargs = gradient_checkpointing_kwargs or {}
     use_reentrant = (
         "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
@@ -494,7 +508,12 @@ def prepare_peft_model(
 ) -> PreTrainedModel:
     """Prepares a model for PEFT training."""
     if not is_peft_available():
-        raise ImportError("To use PeftModel, you need to install the `peft` library.")
+        raise ImportError("PEFT is required to use a peft model. Run `pip install peft`.")
+
+    # If the model is already a PeftModel, we need to merge and unload it.
+    # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
+    if isinstance(model, PeftModel) and peft_config is not None:
+        model = model.merge_and_unload()
 
     # Handle quantized models (QLoRA)
     is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
