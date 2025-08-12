@@ -23,13 +23,23 @@ import argparse
 import importlib
 import os
 import sys
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
+from transformers import AutoModelForSequenceClassification
 
-from trl import GRPOConfig, GRPOTrainer, ModelConfig, ScriptArguments, TrlParser, get_peft_config
+from trl import (
+    DatasetMixtureConfig,
+    GRPOConfig,
+    GRPOTrainer,
+    ModelConfig,
+    ScriptArguments,
+    TrlParser,
+    get_dataset,
+    get_peft_config,
+)
 from trl.rewards import think_format_reward
 
 
@@ -68,22 +78,11 @@ class GRPOScriptArguments(ScriptArguments):
     )
 
 
-def main(script_args, training_args, model_args):
-    # Load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-
+def main(script_args, training_args, model_args, dataset_args):
     # Get the reward models and functions
     reward_funcs = []
     if script_args.reward_model_name_or_path:
-        reward_model = AutoModelForSequenceClassification.from_pretrained(
-            script_args.reward_model_name_or_path, trust_remote_code=model_args.trust_remote_code, num_labels=1
-        )
-        reward_funcs.append(reward_model)
+        reward_funcs.append(script_args.reward_model_name_or_path)
 
     if script_args.reward_funcs:
         for func_name in script_args.reward_funcs:
@@ -102,16 +101,27 @@ def main(script_args, training_args, model_args):
                 )
 
     # Load the dataset
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    if dataset_args.datasets and script_args.dataset_name:
+        warnings.warn(
+            "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
+            "dataset and `dataset_name` will be ignored."
+        )
+    elif dataset_args.datasets and not script_args.dataset_name:
+        dataset = get_dataset(dataset_args)
+    elif not dataset_args.datasets and script_args.dataset_name:
+        dataset = load_dataset(
+            script_args.dataset_name, name=script_args.dataset_config, streaming=dataset_args.dataset_streaming
+        )
+    else:
+        raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
     # Initialize the GRPO trainer
     trainer = GRPOTrainer(
-        model=model,
+        model=model_args.model_name_or_path,
         reward_funcs=reward_funcs,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
@@ -125,7 +135,7 @@ def main(script_args, training_args, model_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
-    dataclass_types = (GRPOScriptArguments, GRPOConfig, ModelConfig)
+    dataclass_types = (GRPOScriptArguments, GRPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("grpo", help="Run the GRPO training script", dataclass_types=dataclass_types)
     else:
@@ -135,5 +145,10 @@ def make_parser(subparsers: argparse._SubParsersAction = None):
 
 if __name__ == "__main__":
     parser = make_parser()
-    script_args, training_args, model_args = parser.parse_args_and_config()
-    main(script_args, training_args, model_args)
+    # When using the trl cli, this script may be run with additional arguments, corresponding accelerate arguments.
+    # To ensure that their parsing does not interfere with the script arguments, parse the arguments with
+    # `return_remaining_strings=True`, then ignore the remaining strings.
+    script_args, training_args, model_args, dataset_args, _ = parser.parse_args_and_config(
+        return_remaining_strings=True
+    )
+    main(script_args, training_args, model_args, dataset_args)
