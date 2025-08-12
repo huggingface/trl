@@ -28,7 +28,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification
 
 from trl import (
     DatasetMixtureConfig,
