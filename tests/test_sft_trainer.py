@@ -1486,7 +1486,6 @@ class SFTTrainerTester2(unittest.TestCase):
             training_args = SFTConfig(
                 output_dir=f"./test_output_{num_virtual_tokens}",
                 report_to="none",
-                dataset_text_field="text",
             )
 
             trainer = SFTTrainer(
