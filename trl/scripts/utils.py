@@ -407,7 +407,8 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
 
     Returns:
         `DatasetDict`:
-            The loaded datasets.
+            Combined dataset(s) from the mixture configuration, with optional train/test split if `test_split_size` is
+            set.
 
     Example:
     ```python
