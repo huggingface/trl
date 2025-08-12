@@ -131,7 +131,7 @@ def main(script_args, training_args, model_args, dataset_args):
         dataset = get_dataset(dataset_args)
     elif not dataset_args.datasets and script_args.dataset_name:
         dataset = load_dataset(
-            script_args.dataset_name, name=script_args.dataset_config, streaming=dataset_args.dataset_streaming
+            script_args.dataset_name, name=script_args.dataset_config, streaming=script_args.dataset_streaming
         )
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
