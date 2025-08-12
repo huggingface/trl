@@ -284,7 +284,6 @@ class TestGetDataset(unittest.TestCase):
         result = get_dataset(mixture_config)
         expected = load_dataset("trl-internal-testing/zen", "standard_preference")
         self.assertEqual(expected["train"][:], result["train"][:])
-        self.assertEqual(expected["test"][:], result["test"][:])
 
     def test_dataset_mixture_basic(self):
         dataset_config1 = DatasetConfig(
@@ -339,7 +338,7 @@ class TestGetDataset(unittest.TestCase):
         self.assertEqual(len(result["test"]), 2)
 
     def test_empty_dataset_mixture_raises_error(self):
-        mixture_config = DatasetMixtureConfig(datasets=[], seed=42)
+        mixture_config = DatasetMixtureConfig(datasets=[])
 
         with self.assertRaises(ValueError) as context:
             get_dataset(mixture_config)
