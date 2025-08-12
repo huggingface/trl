@@ -119,9 +119,7 @@ def main(script_args, training_args, model_args, dataset_args):
         # TODO: source should be passed as an argument
         model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
 
-    ################
-    # Dataset
-    ################
+    # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         warnings.warn(
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
@@ -136,9 +134,7 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    ################
-    # Training
-    ################
+    # Initialize the SFT trainer
     trainer = SFTTrainer(
         model=model,
         args=training_args,
@@ -148,9 +144,10 @@ def main(script_args, training_args, model_args, dataset_args):
         peft_config=get_peft_config(model_args),
     )
 
+    # Train the model
     trainer.train()
 
-    # Save and push to hub
+    # Save and push to Hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)

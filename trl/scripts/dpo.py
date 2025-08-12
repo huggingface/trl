@@ -121,9 +121,7 @@ def main(script_args, training_args, model_args, dataset_args):
             name for name, buffer in model.named_buffers() if buffer.dtype == torch.bool
         ]
 
-    ################
-    # Dataset
-    ################
+    # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         warnings.warn(
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
@@ -138,9 +136,7 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    ##########
-    # Training
-    ################
+    # Initialize the DPO trainer
     trainer = DPOTrainer(
         model,
         ref_model,
@@ -151,6 +147,7 @@ def main(script_args, training_args, model_args, dataset_args):
         peft_config=peft_config,
     )
 
+    # Train the model
     trainer.train()
 
     if training_args.eval_strategy != "no":
@@ -158,7 +155,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.log_metrics("eval", metrics)
         trainer.save_metrics("eval", metrics)
 
-    # Save and push to hub
+    # Save and push to Hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)

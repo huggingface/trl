@@ -128,10 +128,10 @@ def main(script_args, training_args, model_args, dataset_args):
         peft_config=get_peft_config(model_args),
     )
 
-    # Train and push the model to the Hub
+    # Train the model
     trainer.train()
 
-    # Save and push to hub
+    # Save and push to Hub
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
