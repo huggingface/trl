@@ -57,8 +57,8 @@ from .utils import (
     get_comet_experiment_url,
     get_position_ids_from_packed_seq_lengths,
     pad,
-    peft_module_casting_to_bf16,
 )
+
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel

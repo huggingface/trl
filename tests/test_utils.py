@@ -643,7 +643,7 @@ class TestEntropyFromLogits(TrlTestCase):
         torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
 
 
-class TestGetPositionIdsFromPackedSeqLengths(unittest.TestCase):
+class TestGetPositionIdsFromPackedSeqLengths(TrlTestCase):
     def test_single_example_single_doc(self):
         batch_seq_lengths = [[5]]
         result = get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
