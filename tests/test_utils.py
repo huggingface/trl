@@ -36,6 +36,7 @@ from trl.trainer.utils import (
     flush_right,
     generate_model_card,
     get_peft_config,
+    get_position_ids_from_packed_seq_lengths,
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
@@ -638,3 +639,25 @@ class TestEntropyFromLogits(unittest.TestCase):
             entropy = -(torch.exp(logps) * logps).sum(-1)
         predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
         torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)
+
+
+class TestGetPositionIdsFromPackedSeqLengths(unittest.TestCase):
+    def test_single_example_single_doc(self):
+        batch_seq_lengths = [[5]]
+        result = get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 1)
+        self.assertTrue(torch.equal(result[0], torch.arange(5)))
+
+    def test_single_example_multiple_docs(self):
+        batch_seq_lengths = [[3, 2]]
+        result = get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 1)
+        # First doc: 0,1,2; second doc: 0,1
+        self.assertTrue(torch.equal(result[0], torch.tensor([0,1,2,0,1])))
+
+    def test_multiple_examples(self):
+        batch_seq_lengths = [[2, 2], [3]]
+        result = get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 2)
+        self.assertTrue(torch.equal(result[0], torch.tensor([0,1,0,1])))
+        self.assertTrue(torch.equal(result[1], torch.arange(3)))

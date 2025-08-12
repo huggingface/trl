@@ -54,7 +54,13 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager
 from .sft_config import SFTConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad, peft_module_casting_to_bf16
+from .utils import (
+    generate_model_card, 
+    get_comet_experiment_url, 
+    pad, 
+    peft_module_casting_to_bf16,
+    get_position_ids_from_packed_seq_lengths
+)
 
 
 if is_peft_available():
@@ -191,7 +197,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
         if self.return_position_ids:
             if "seq_lengths" in examples[0]:
-                position_ids = self._convert_seq_lengths_to_position_ids(
+                position_ids = get_position_ids_from_packed_seq_lengths(
                     [example["seq_lengths"] for example in examples]
                 )
             else:
@@ -248,19 +254,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
                 output["labels"][assistant_masks == 0] = -100
         return output
-
-    @staticmethod
-    def _convert_seq_lengths_to_position_ids(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
-        example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
-        batch_seq_lengths = torch.tensor(
-            [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
-        )
-        position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
-        position_ids[0] = 0
-        position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
-        position_ids = position_ids.cumsum(0)
-        return list(position_ids.split(example_lengths))
-
 
 class SFTTrainer(Trainer):
     """
