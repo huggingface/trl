@@ -12,15 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import dataclasses
 import itertools
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
+import torch
 import torch.nn as nn
 from packaging import version
-from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer
+from transformers import AddedToken, AutoTokenizer, PreTrainedModel, PreTrainedTokenizer, TrainingArguments
+from transformers.utils import is_peft_available
 
 from .modeling_value_head import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead
 
@@ -35,6 +38,11 @@ if TYPE_CHECKING:
     from deepspeed.runtime.engine import DeepSpeedEngine
     from torch.nn import Module
     from torch.nn.parallel.distributed import DistributedDataParallel
+
+
+if is_peft_available():
+    import peft
+    from peft import PeftConfig, get_peft_model, prepare_model_for_kbit_training
 
 
 # TODO: Add Abstract Base Class if more formats are added
@@ -447,3 +455,83 @@ class _ForwardRedirection:
 
     def on_after_outer_forward(self, wrapper_module: nn.Module, original_module: nn.Module) -> None:
         pass
+
+
+def enable_gradient_checkpointing(
+    model: PreTrainedModel, gradient_checkpointing_kwargs: Optional[dict]
+) -> PreTrainedModel:
+    """Enables gradient checkpointing for the model."""
+    gradient_checkpointing_kwargs = gradient_checkpointing_kwargs or {}
+    use_reentrant = (
+        "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
+    )
+
+    if use_reentrant:
+        if hasattr(model, "enable_input_require_grads"):
+            model.enable_input_require_grads()
+        else:
+
+            def make_inputs_require_grad(module, input, output):
+                output.requires_grad_(True)
+
+            model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+
+    return model
+
+
+def peft_module_casting_to_bf16(model):
+    for name, module in model.named_modules():
+        if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
+            module = module.to(torch.float32)
+        elif any(x in name for x in ["lm_head", "embed_tokens", "wte", "wpe"]):
+            if hasattr(module, "weight"):
+                if module.weight.dtype == torch.float32:
+                    module = module.to(torch.bfloat16)
+
+
+def prepare_peft_model(
+    model: PreTrainedModel, peft_config: Optional["PeftConfig"], args: TrainingArguments
+) -> PreTrainedModel:
+    """Prepares a model for PEFT training."""
+    if not is_peft_available():
+        raise ImportError("To use PeftModel, you need to install the `peft` library.")
+
+    # Handle quantized models (QLoRA)
+    is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
+
+    is_sharded_qlora = False
+    if getattr(model, "is_loaded_in_4bit", False):
+        # Check if model is sharded (FSDP/DS-Zero3)
+        for _, param in model.named_parameters():
+            if param.__class__.__name__ == "Params4bit":
+                is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
+                break
+
+    # Prepare model for kbit training if needed
+    if is_qlora and not is_sharded_qlora:
+        model = prepare_model_for_kbit_training(
+            model,
+            use_gradient_checkpointing=args.gradient_checkpointing,
+            gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
+        )
+        # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
+        args = dataclasses.replace(args, gradient_checkpointing=False)
+    elif args.gradient_checkpointing:
+        model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
+
+    # Create PEFT model
+    if peft_config is not None:
+        if (
+            version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
+            and getattr(model, "is_loaded_in_4bit", False)
+            and is_sharded_qlora
+        ):
+            model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
+        else:
+            model = get_peft_model(model, peft_config)
+
+    # Handle bf16 casting for 4-bit models
+    if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
+        peft_module_casting_to_bf16(model)
+
+    return model
