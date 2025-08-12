@@ -700,10 +700,12 @@ class SFTTrainer(Trainer):
 
                 dataset = dataset.map(_func, batched=False, **map_kwargs)
 
+            is_dataset_conversational = False
             if not is_processed:
                 # Convert the dataset to ChatML if needed
                 first_example = next(iter(dataset))
                 if is_conversational_from_value(first_example):
+                    is_dataset_conversational = True
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
                     column_names = next(iter(dataset)).keys()
@@ -732,6 +734,8 @@ class SFTTrainer(Trainer):
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
                     )
+                else:
+                    is_dataset_conversational = True
 
                 # Tokenize the dataset
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -740,7 +744,7 @@ class SFTTrainer(Trainer):
                 def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
                     if "prompt" in example:  # prompt-completion case
                         output = {}
-                        if is_conversational(example):
+                        if is_dataset_conversational:
                             prompt_ids = processing_class.apply_chat_template(
                                 example["prompt"],
                                 tools=example.get("tools"),
@@ -776,7 +780,7 @@ class SFTTrainer(Trainer):
                         output["completion_mask"] = completion_mask
 
                     else:  # language modeling case
-                        if is_conversational(example):
+                        if is_dataset_conversational:
                             processed = processing_class.apply_chat_template(
                                 example["messages"],
                                 return_dict=True,
@@ -873,28 +877,29 @@ class SFTTrainer(Trainer):
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
         if "labels" in inputs and not self.args.use_liger_kernel:
-            shift_logits = outputs.logits[..., :-1, :].contiguous()
-            shift_labels = inputs["labels"][..., 1:].contiguous()
+            with torch.no_grad():
+                shift_logits = outputs.logits[..., :-1, :].contiguous()
+                shift_labels = inputs["labels"][..., 1:].contiguous()
 
-            # Get predictions
-            predictions = shift_logits.argmax(dim=-1)
+                # Get predictions
+                predictions = shift_logits.argmax(dim=-1)
 
-            # Create mask for non-padding tokens (assuming ignore_index is -100)
-            mask = shift_labels != -100
+                # Create mask for non-padding tokens (assuming ignore_index is -100)
+                mask = shift_labels != -100
 
-            # Calculate accuracy only on non-padding tokens
-            correct_predictions = (predictions == shift_labels) & mask
-            total_tokens = mask.sum()
-            correct_tokens = correct_predictions.sum()
+                # Calculate accuracy only on non-padding tokens
+                correct_predictions = (predictions == shift_labels) & mask
+                total_tokens = mask.sum()
+                correct_tokens = correct_predictions.sum()
 
-            # Gather the correct_tokens and total_tokens across all processes
-            correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-            total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+                # Gather the correct_tokens and total_tokens across all processes
+                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
+                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
 
-            # Compute the mean token accuracy and log it
-            total_sum = total_tokens.sum()
-            accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+                # Compute the mean token accuracy and log it
+                total_sum = total_tokens.sum()
+                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
+                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
 
@@ -912,7 +917,7 @@ class SFTTrainer(Trainer):
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
 
-        logs = {**logs, **metrics}
+        logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
 
