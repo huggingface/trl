@@ -669,7 +669,7 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
+                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss, is_dataset_conversational):
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_dataset_conversational:
@@ -727,6 +727,7 @@ class SFTTrainer(Trainer):
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
                             output = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
+                        output["is_dataset_conversational"] = is_dataset_conversational
                     return output
 
                 dataset = dataset.map(
@@ -735,6 +736,7 @@ class SFTTrainer(Trainer):
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
                         "assistant_only_loss": args.assistant_only_loss,
+                        "is_dataset_conversational": is_dataset_conversational,
                     },
                     **map_kwargs,
                 )
