@@ -84,7 +84,7 @@ class DatasetMixtureConfig:
         test_split_size (`float` or `None`, *optional*, defaults to `None`):
             Size of the test split. Refer to the `test_size` parameter in the [`~datasets.train_test_split`] function
             for more details. If `None`, the dataset will not be split into train and test sets.
-    
+
     Usage:
         When using the CLI, you can add the following section to your YAML config file:
 
