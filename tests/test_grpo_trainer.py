@@ -1809,7 +1809,12 @@ class GRPOTrainerTester(unittest.TestCase):
             self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
             # Check that the params have changed
+            # Because of the way the tiny models are initialized, the gradient does not flow properly through the
+            # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
+            params_to_skip = ("model.visual.",)
             for n, param in previous_trainable_params.items():
+                if n.startswith(params_to_skip):
+                    continue
                 new_param = trainer.model.get_parameter(n)
                 self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
