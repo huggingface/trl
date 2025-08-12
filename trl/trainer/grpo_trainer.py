@@ -583,12 +583,12 @@ class GRPOTrainer(Trainer):
         self._compiled_regexes = {}
         if self.pad_token:
             escaped_pad_token = re.escape(self.pad_token)
-            self._compiled_regexes['pad_token_pattern'] = re.compile(rf"^({escaped_pad_token})+")
+            self._compiled_regexes["pad_token_pattern"] = re.compile(rf"^({escaped_pad_token})+")
 
         if self.image_token:
             escaped_img_token = re.escape(self.image_token)
-            self._compiled_regexes['img_token_pattern'] = re.compile(rf"({escaped_img_token})+")
-            self._compiled_regexes['img_token_search'] = re.compile(escaped_img_token)
+            self._compiled_regexes["img_token_pattern"] = re.compile(rf"({escaped_img_token})+")
+            self._compiled_regexes["img_token_search"] = re.compile(escaped_img_token)
             self._escaped_img_token = escaped_img_token
 
         self._vision_end_token_pattern = None
@@ -908,9 +908,7 @@ class GRPOTrainer(Trainer):
     def _get_vision_end_token_pattern(self):
         """Lazily compile the vision end token pattern when needed."""
         if self._vision_end_token_pattern is None and self.vision_end_token_id is not None:
-            escaped_eoi_token = re.escape(
-                self.processing_class.tokenizer.decode([self.vision_end_token_id])
-            )
+            escaped_eoi_token = re.escape(self.processing_class.tokenizer.decode([self.vision_end_token_id]))
             self._vision_end_token_pattern = re.compile(rf"({self._escaped_img_token})+{escaped_eoi_token}")
         return self._vision_end_token_pattern
 
@@ -1428,7 +1426,7 @@ class GRPOTrainer(Trainer):
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
             # Use pre-compiled regex pattern for removing leading pad tokens
-            pad_pattern = self._compiled_regexes['pad_token_pattern']
+            pad_pattern = self._compiled_regexes["pad_token_pattern"]
             prompts_text = [pad_pattern.sub("", text) for text in prompts_text]
 
             # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
@@ -1440,22 +1438,18 @@ class GRPOTrainer(Trainer):
             # the vision_start_token_id (e.g. <start_of_image>).
             if self.image_token is not None:
                 # Use pre-compiled patterns for better performance
-                img_search_pattern = self._compiled_regexes['img_token_search']
-                img_pattern = self._compiled_regexes['img_token_pattern']
+                img_search_pattern = self._compiled_regexes["img_token_search"]
+                img_pattern = self._compiled_regexes["img_token_pattern"]
 
                 # Search for the image token in the chat template
                 if img_search_pattern.search(self.processing_class.chat_template):
-                    prompts_text = [
-                        img_pattern.sub(self.image_token, text) for text in prompts_text
-                    ]
+                    prompts_text = [img_pattern.sub(self.image_token, text) for text in prompts_text]
                 else:
                     # If the chat template doesn't use the image token, we remove all instances of it + vision_end_token_id
                     if self.vision_end_token_id is not None:
                         vision_end_pattern = self._get_vision_end_token_pattern()
                         if vision_end_pattern:
-                            prompts_text = [
-                                vision_end_pattern.sub("", text) for text in prompts_text
-                            ]
+                            prompts_text = [vision_end_pattern.sub("", text) for text in prompts_text]
                     else:
                         # If vision_end_token_id is None, just remove the image tokens
                         prompts_text = [img_pattern.sub("", text) for text in prompts_text]
