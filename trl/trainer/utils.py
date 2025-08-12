@@ -1541,6 +1541,7 @@ def print_prompt_completions_sample(
     │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
     │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
     ╰──────────────────────────────────────────────────────────────────╯
+    ```
     """
     if not is_rich_available():
         raise ImportError(
