@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import contextlib
-import dataclasses
 import os
 import warnings
 from collections import defaultdict
@@ -26,7 +25,6 @@ import torch
 import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset, IterableDataset
-from packaging import version
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -52,7 +50,7 @@ from ..data_utils import (
     pack_dataset,
     truncate_dataset,
 )
-from ..models import clone_chat_template, get_act_offloading_ctx_manager
+from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
 from .utils import (
     generate_model_card,
@@ -62,10 +60,8 @@ from .utils import (
     peft_module_casting_to_bf16,
 )
 
-
 if is_peft_available():
-    import peft
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, PeftModel
 
 if is_wandb_available():
     import wandb
@@ -425,7 +421,7 @@ class SFTTrainer(Trainer):
                         peft_config.modules_to_save.append("lm_head")
 
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = self._prepare_peft_model(model, peft_config, args)
+            model = prepare_peft_model(model, peft_config, args)
 
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
@@ -581,75 +577,6 @@ class SFTTrainer(Trainer):
 
         # Create model
         model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        return model
-
-    def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
-        """Prepares a model for PEFT training."""
-        if not is_peft_available():
-            raise ImportError("To use PeftModel, you need to install the `peft` library.")
-
-        # Handle quantized models (QLoRA)
-        is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
-
-        is_sharded_qlora = False
-        if getattr(model, "is_loaded_in_4bit", False):
-            # Check if model is sharded (FSDP/DS-Zero3)
-            for _, param in model.named_parameters():
-                if param.__class__.__name__ == "Params4bit":
-                    is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
-                    break
-
-        # Prepare model for kbit training if needed
-        if is_qlora and not is_sharded_qlora:
-            model = self._prepare_model_for_kbit_training(model, args)
-            # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
-            args = dataclasses.replace(args, gradient_checkpointing=False)
-        elif args.gradient_checkpointing:
-            model = self._enable_gradient_checkpointing(model, args)
-
-        # Create PEFT model
-        if peft_config is not None:
-            if (
-                version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
-                and getattr(model, "is_loaded_in_4bit", False)
-                and is_sharded_qlora
-            ):
-                model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
-            else:
-                model = get_peft_model(model, peft_config)
-
-        # Handle bf16 casting for 4-bit models
-        if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
-            peft_module_casting_to_bf16(model)
-
-        return model
-
-    def _prepare_model_for_kbit_training(self, model: PreTrainedModel, args: SFTConfig) -> PreTrainedModel:
-        """Prepares a quantized model for kbit training."""
-        prepare_model_kwargs = {
-            "use_gradient_checkpointing": args.gradient_checkpointing,
-            "gradient_checkpointing_kwargs": args.gradient_checkpointing_kwargs or {},
-        }
-
-        return prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-
-    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: SFTConfig) -> PreTrainedModel:
-        """Enables gradient checkpointing for the model."""
-        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
-        use_reentrant = (
-            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-        )
-
-        if use_reentrant:
-            if hasattr(model, "enable_input_require_grads"):
-                model.enable_input_require_grads()
-            else:
-
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
         return model
 
     def _prepare_dataset(

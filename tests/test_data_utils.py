@@ -35,8 +35,10 @@ from trl.data_utils import (
     unpair_preference_dataset,
 )
 
+from .testing_utils import TrlTestCase
 
-class IsConversationalTester(unittest.TestCase):
+
+class IsConversationalTester(TrlTestCase):
     conversational_examples = [
         {  # Language modeling
             "messages": [
@@ -146,7 +148,7 @@ class IsConversationalTester(unittest.TestCase):
         self.assertFalse(is_conversational(example))
 
 
-class IsConversationalFromValueTester(unittest.TestCase):
+class IsConversationalFromValueTester(TrlTestCase):
     def test_positive_1(self):
         example = {
             "conversations": [
@@ -170,7 +172,7 @@ class IsConversationalFromValueTester(unittest.TestCase):
         self.assertFalse(is_conversational_from_value(example))
 
 
-class ApplyChatTemplateTester(unittest.TestCase):
+class ApplyChatTemplateTester(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
         "trl-internal-testing/tiny-DbrxForCausalLM",
@@ -318,7 +320,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         self.assertNotIn("get_current_temperature", result_without_tools["prompt"])
 
 
-class ApplyChatTemplateHarmonyTester(unittest.TestCase):
+class ApplyChatTemplateHarmonyTester(TrlTestCase):
     def test_language_modeling(self):
         messages = {
             "messages": [
@@ -522,7 +524,7 @@ class ApplyChatTemplateHarmonyTester(unittest.TestCase):
         self.assertTrue(output["label"])
 
 
-class UnpairPreferenceDatasetTester(unittest.TestCase):
+class UnpairPreferenceDatasetTester(TrlTestCase):
     paired_dataset = Dataset.from_dict(
         {
             "prompt": ["The sky is", "The sun is"],
@@ -596,7 +598,7 @@ class UnpairPreferenceDatasetTester(unittest.TestCase):
         )
 
 
-class ExtractPromptTester(unittest.TestCase):
+class ExtractPromptTester(TrlTestCase):
     example_implicit_prompt_conversational = {
         "chosen": [
             {"role": "user", "content": "What color is the sky?"},
@@ -686,7 +688,7 @@ class ExtractPromptTester(unittest.TestCase):
         )
 
 
-class TestPackDatasetWrapped(unittest.TestCase):
+class TestPackDatasetWrapped(TrlTestCase):
     def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
@@ -717,7 +719,7 @@ class TestPackDatasetWrapped(unittest.TestCase):
         self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
 
 
-class TestPackDatasetBfd(unittest.TestCase):
+class TestPackDatasetBfd(TrlTestCase):
     def test_simple(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
@@ -765,7 +767,7 @@ class TestPackDatasetBfd(unittest.TestCase):
         self.assertEqual(dataset.to_dict(), expected_output)
 
 
-class TestTruncateExamples(unittest.TestCase):
+class TestTruncateExamples(TrlTestCase):
     def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
@@ -812,7 +814,7 @@ class TestTruncateExamples(unittest.TestCase):
         self.assertEqual(dataset.to_dict(), expected_output)
 
 
-class TestMaybeConvertToChatML(unittest.TestCase):
+class TestMaybeConvertToChatML(TrlTestCase):
     def test_with_conversations_key(self):
         # Particular case where the key is "conversations": we rename it to "messages"
         example = {

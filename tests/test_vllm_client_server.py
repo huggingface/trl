@@ -15,7 +15,6 @@
 import os
 import signal
 import subprocess
-import unittest
 
 import psutil
 import pytest
@@ -25,10 +24,10 @@ from transformers.testing_utils import require_torch_multi_accelerator, torch_de
 from trl.extras.vllm_client import VLLMClient
 from trl.scripts.vllm_serve import chunk_list
 
-from .testing_utils import require_3_accelerators
+from .testing_utils import TrlTestCase, require_3_accelerators
 
 
-class TestChunkList(unittest.TestCase):
+class TestChunkList(TrlTestCase):
     def test_even_split(self):
         self.assertEqual(chunk_list([1, 2, 3, 4, 5, 6], 2), [[1, 2, 3], [4, 5, 6]])
 
@@ -56,7 +55,7 @@ class TestChunkList(unittest.TestCase):
 
 @pytest.mark.slow
 @require_torch_multi_accelerator
-class TestVLLMClientServer(unittest.TestCase):
+class TestVLLMClientServer(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
@@ -135,7 +134,7 @@ class TestVLLMClientServer(unittest.TestCase):
 # Same as above but using base_url to instantiate the client.
 @pytest.mark.slow
 @require_torch_multi_accelerator
-class TestVLLMClientServerBaseURL(unittest.TestCase):
+class TestVLLMClientServerBaseURL(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
@@ -213,7 +212,7 @@ class TestVLLMClientServerBaseURL(unittest.TestCase):
 
 @pytest.mark.slow
 @require_3_accelerators
-class TestVLLMClientServerTP(unittest.TestCase):
+class TestVLLMClientServerTP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
@@ -276,7 +275,7 @@ class TestVLLMClientServerTP(unittest.TestCase):
 
 @pytest.mark.slow
 @require_3_accelerators
-class TestVLLMClientServerDP(unittest.TestCase):
+class TestVLLMClientServerDP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
@@ -339,7 +338,7 @@ class TestVLLMClientServerDP(unittest.TestCase):
 
 @pytest.mark.slow
 @require_torch_multi_accelerator
-class TestVLLMClientServerDeviceParameter(unittest.TestCase):
+class TestVLLMClientServerDeviceParameter(TrlTestCase):
     """Test the device parameter functionality in init_communicator."""
 
     model_id = "Qwen/Qwen2.5-1.5B"
