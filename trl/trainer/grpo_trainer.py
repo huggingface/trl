@@ -352,7 +352,7 @@ def truncate_with_protected_tokens(
     protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
 
     def process_sequence(ids, mask):
-        # Create boolean masks - vectorized approach to avoid .item() calls
+        # Create boolean masks
         is_protected = torch.isin(ids, protected_tokens_tensor)
         is_non_protected = ~is_protected
 
