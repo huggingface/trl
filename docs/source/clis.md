@@ -247,8 +247,8 @@ trl sft --config sft_config.yaml
 # dpo_config.yaml
 model_name_or_path: Qwen/Qwen2.5-0.5B
 datasets:
-  - path: TODO
-  - path: TODO
+  - path: BAAI/Infinity-Preference
+  - path: argilla/Capybara-Preferences
 ```
 
 Launch with:
