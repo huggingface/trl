@@ -78,8 +78,6 @@ class DatasetMixtureConfig:
             List of dataset configurations to include in the mixture.
         streaming (`bool`, *optional*, defaults to `False`):
             Whether to stream the datasets. If `True`, the datasets will be loaded in streaming mode.
-        seed (`int` or `None`, *optional*, defaults to `None`):
-            Seed for random operations, such as splitting the dataset into train and test sets.
         test_split_size (`float` or `None`, *optional*, defaults to `None`):
             Size of the test split. Refer to the `test_size` parameter in the [`~datasets.train_test_split`] function
             for more details. If `None`, the dataset will not be split into train and test sets.
@@ -92,10 +90,6 @@ class DatasetMixtureConfig:
     streaming: bool = field(
         default=False,
         metadata={"help": "Whether to stream the datasets. If True, the datasets will be loaded in streaming mode."},
-    )
-    seed: Optional[int] = field(
-        default=None,
-        metadata={"help": "Seed for random operations, such as splitting the dataset into train and test sets."},
     )
     test_split_size: Optional[float] = field(
         default=None,
@@ -432,9 +426,7 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
 
         if mixture_config.test_split_size is not None:
             logger.info(f"Spliting dataset into train and test sets with test size: {mixture_config.test_split_size}")
-            combined_dataset = combined_dataset.train_test_split(
-                test_size=mixture_config.test_split_size, seed=mixture_config.seed
-            )
+            combined_dataset = combined_dataset.train_test_split(test_size=mixture_config.test_split_size)
             return combined_dataset
         else:
             return DatasetDict({"train": combined_dataset})
