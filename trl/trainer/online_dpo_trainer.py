@@ -272,7 +272,7 @@ class OnlineDPOTrainer(Trainer):
             self.reward_weights = None
 
         if args.missing_eos_penalty is not None and (judge is not None or reward_funcs is not None):
-            raise ValueError("`missing_eos_penalty` is only supported when `reward_model` is provided.")
+            raise ValueError("`missing_eos_penalty` is only supported when `reward_funcs` is provided.")
 
         if args is None:
             raise ValueError("`args` must be provided.")
