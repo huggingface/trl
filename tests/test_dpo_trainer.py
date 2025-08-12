@@ -1132,7 +1132,6 @@ class DPOTrainerTester(unittest.TestCase):
                 eval_strategy="steps",
                 dpop_penalty_coef=1.0,
                 report_to="none",
-                bf16=False,
             )
 
             dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
