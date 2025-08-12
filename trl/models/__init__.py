@@ -26,6 +26,7 @@ _import_structure = {
         "clone_chat_template",
         "prepare_deepspeed",
         "prepare_fsdp",
+        "prepare_peft_model",
         "setup_chat_format",
         "unwrap_model_for_generation",
     ],
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
         clone_chat_template,
         prepare_deepspeed,
         prepare_fsdp,
+        prepare_peft_model,
         setup_chat_format,
         unwrap_model_for_generation,
     )
