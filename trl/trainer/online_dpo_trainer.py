@@ -47,7 +47,7 @@ from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, loggi
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
-from ..models import create_reference_model
+from ..models import create_reference_model, prepare_peft_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
@@ -66,7 +66,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model
+    from peft import PeftModel
 
 if is_apex_available():
     from apex import amp
@@ -218,22 +218,8 @@ class OnlineDPOTrainer(Trainer):
                 )
         self.is_encoder_decoder = model.config.is_encoder_decoder
 
-        # Convert to PEFT model if peft_config is provided
-        if peft_config is not None:
-            # Check if PEFT is available
-            if not is_peft_available():
-                raise ImportError(
-                    "PEFT is not available and passed `peft_config`. Please install PEFT with "
-                    "`pip install peft` to use it."
-                )
-
-            # If the model is already a PeftModel, we need to merge and unload it.
-            # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-            if isinstance(model, PeftModel):
-                model = model.merge_and_unload()
-
-            # Get peft model with the given config
-            model = get_peft_model(model, peft_config)
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+            model = prepare_peft_model(model, peft_config, args)
 
         # Disable dropout in the model and reference model
         if args.disable_dropout:

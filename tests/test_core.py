@@ -12,19 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
 import torch
 
 from trl.core import masked_mean, masked_var, masked_whiten
 
+from .testing_utils import TrlTestCase
 
-class CoreTester(unittest.TestCase):
+
+class CoreTester(TrlTestCase):
     """
     A wrapper class for testing core utils functions
     """
 
     def setUp(self):
+        super().setUp()
         self.test_input = torch.Tensor([1, 2, 3, 4])
         self.test_mask = torch.Tensor([0, 1, 1, 0])
         self.test_input_unmasked = self.test_input[1:3]

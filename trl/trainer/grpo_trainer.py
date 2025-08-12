@@ -31,7 +31,6 @@ import torch.utils.data
 import transformers
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -55,7 +54,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
-from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
@@ -71,7 +70,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, get_peft_model
+    from peft import PeftConfig, PeftModel
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
@@ -548,14 +547,8 @@ class GRPOTrainer(Trainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        if peft_config is not None:
-            if not is_peft_available():
-                raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
-            model = get_peft_model(model, peft_config)
-
-        # Enable gradient checkpointing if requested
-        if args.gradient_checkpointing:
-            model = self._enable_gradient_checkpointing(model, args)
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+            model = prepare_peft_model(model, peft_config, args)
 
         # Processing class
         if processing_class is None:
@@ -768,13 +761,14 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                if args.vllm_server_base_url is not None:
-                    base_url = args.vllm_server_base_url
-                else:
-                    base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+            if self.vllm_mode == "server":
+                if self.accelerator.is_main_process:
+                    if args.vllm_server_base_url is not None:
+                        base_url = args.vllm_server_base_url
+                    else:
+                        base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+                    self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
             elif self.vllm_mode == "colocate":
                 # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have
@@ -821,6 +815,8 @@ class GRPOTrainer(Trainer):
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                 )
+            else:
+                raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
@@ -922,13 +918,10 @@ class GRPOTrainer(Trainer):
         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
             dataloader_params["sampler"] = self._get_train_sampler()
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            if version.parse(transformers.__version__) >= version.parse("4.52.0"):
-                # from transformers 4.52.0, the `seed_worker` requires the `num_workers` and `rank` arguments
-                dataloader_params["worker_init_fn"] = partial(
-                    seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
-                )
-            else:
-                dataloader_params["worker_init_fn"] = seed_worker
+            dataloader_params["worker_init_fn"] = partial(
+                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+            )
+
             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
@@ -977,28 +970,6 @@ class GRPOTrainer(Trainer):
             seed=self.args.seed,
         )
 
-    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
-        """Enables gradient checkpointing for the model."""
-        # Ensure use_cache is disabled
-        model.config.use_cache = False
-
-        # Enable gradient checkpointing on the base model for PEFT
-        if is_peft_model(model):
-            model.base_model.gradient_checkpointing_enable()
-        # Enable gradient checkpointing for non-PEFT models
-        else:
-            model.gradient_checkpointing_enable()
-
-        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
-        use_reentrant = (
-            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-        )
-
-        if use_reentrant:
-            model.enable_input_require_grads()
-
-        return model
-
     @profiling_decorator
     def _get_last_hidden_state(
         self,
@@ -1034,6 +1005,8 @@ class GRPOTrainer(Trainer):
         if "logits_to_keep" in self.model_kwarg_keys:
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+        model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
         last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
         # Exclude the last value: it corresponds to the next token pred
@@ -1112,6 +1085,8 @@ class GRPOTrainer(Trainer):
             if "logits_to_keep" in self.model_kwarg_keys:
                 # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
                 model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+            model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
             logits = model(**model_inputs).logits
             # Exclude the last value: it corresponds to the next token pred
@@ -1408,14 +1383,32 @@ class GRPOTrainer(Trainer):
             )
             prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
 
-            # The chat template inserts a single image token into the prompt text. However, when this text is later
-            # tokenized, the single image token string is expanded into multiple image token IDs, depending on the
+            # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
+            # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
             # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
-            # collapse them back into a single token string to match the original template.
+            # collapse them back into a single token string to match the original chat template in case it originally
+            # applies it. Otherwise, it assumes that the chat template uses only vision_start_token_id to indicate images
+            # (e.g. Gemma 3) and removes all image_token instances and vision_end_token_id as well, leaving only
+            # the vision_start_token_id (e.g. <start_of_image>).
             if self.image_token is not None:
-                prompts_text = [
-                    re.sub(rf"({re.escape(self.image_token)})+", self.image_token, text) for text in prompts_text
-                ]
+                escaped_img_token = re.escape(self.image_token)
+                # Search for the image token in the chat template
+                if re.search(escaped_img_token, self.processing_class.chat_template):
+                    prompts_text = [
+                        re.sub(rf"({escaped_img_token})+", self.image_token, text) for text in prompts_text
+                    ]
+                else:
+                    # If the chat template doesn't use the image token, we remove all instances of it + vision_end_token_id
+                    if self.vision_end_token_id is not None:
+                        escaped_eoi_token = re.escape(
+                            self.processing_class.tokenizer.decode([self.vision_end_token_id])
+                        )
+                        prompts_text = [
+                            re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text
+                        ]
+                    else:
+                        # If vision_end_token_id is None, just remove the image tokens
+                        prompts_text = [re.sub(rf"({escaped_img_token})+", "", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:

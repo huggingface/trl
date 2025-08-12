@@ -13,9 +13,7 @@
 # limitations under the License.
 
 import contextlib
-import dataclasses
 import os
-import warnings
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -26,7 +24,6 @@ import torch
 import torch.nn as nn
 from accelerate import PartialState
 from datasets import Dataset, IterableDataset
-from packaging import version
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -52,14 +49,13 @@ from ..data_utils import (
     pack_dataset,
     truncate_dataset,
 )
-from ..models import clone_chat_template, get_act_offloading_ctx_manager
+from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad, peft_module_casting_to_bf16, warn0
+from .utils import generate_model_card, get_comet_experiment_url, pad, warn0
 
 
 if is_peft_available():
-    import peft
-    from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftConfig, PeftModel
 
 if is_wandb_available():
     import wandb
@@ -185,7 +181,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
 
         # For packing with position_ids, we should NOT create attention_mask as it causes
-        # flash attention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
+        # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
         if not has_packed_position_ids:
             attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
 
@@ -418,7 +414,7 @@ class SFTTrainer(Trainer):
 
                 # Ensure that the lm_head is trainable
                 if peft_config.modules_to_save is None or "lm_head" not in peft_config.modules_to_save:
-                    warnings.warn(
+                    warn0(
                         "Cloning chat template added new tokens to the tokenizer, but 'lm_head' is not in PEFT's "
                         "`modules_to_save`. As a result, the model may not learn to generate outputs with these new "
                         "tokens, leading to degraded generation quality. To fix this, add "
@@ -431,12 +427,16 @@ class SFTTrainer(Trainer):
                         peft_config.modules_to_save.append("lm_head")
 
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = self._prepare_peft_model(model, peft_config, args)
+            model = prepare_peft_model(model, peft_config, args)
 
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
+        use_flash_attention = model.config._attn_implementation in [
+            "flash_attention_2",
+            "kernels-community/vllm-flash-attn3",
+        ]
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -445,7 +445,7 @@ class SFTTrainer(Trainer):
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
                     "recommended. Please refer to the documentation to understand why this is not recommended."
                 )
-            if model.config._attn_implementation != "flash_attention_2":
+            if not use_flash_attention:
                 warn0(
                     "Padding-free training is enabled, but the attention implementation is not set to "
                     "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
@@ -483,21 +483,18 @@ class SFTTrainer(Trainer):
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
                 # Using position_ids without flash_attn hurts the training
-                return_position_ids=model.config._attn_implementation == "flash_attention_2",
+                return_position_ids=use_flash_attention,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
-        if (
-            args.packing
-            and args.packing_strategy == "bfd"
-            and model.config._attn_implementation != "flash_attention_2"
-        ):
+        if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
             warn0(
-                "You are using packing, but the attention implementation is not set to 'flash_attention_2'. Packing "
-                "flattens batches into a single sequence, and 'flash_attention_2' is the only known attention "
-                "mechanism that reliably supports this. Using other implementations may lead to cross-contamination "
-                "between batches. To avoid this, either disable packing by setting `packing=False`, or set "
-                "`attn_implementation='flash_attention_2'` in the model configuration."
+                "You are using packing, but the attention implementation is not set to 'flash_attention_2' or "
+                "'kernels-community/vllm-flash-attn3'. Packing flattens batches into a single sequence, and Flash "
+                "Attention is the only known attention mechanisms that reliably support this. Using other "
+                "implementations may lead to cross-contamination between batches. To avoid this, either disable "
+                "packing by setting `packing=False`, or set `attn_implementation='flash_attention_2'` or "
+                "`attn_implementation='kernels-community/vllm-flash-attn3'` in the model configuration."
             )
         if args.assistant_only_loss and not is_conversational(dataset_sample):
             raise ValueError(
@@ -588,75 +585,6 @@ class SFTTrainer(Trainer):
         model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
         return model
 
-    def _prepare_peft_model(self, model: PreTrainedModel, peft_config: Any, args: SFTConfig) -> PreTrainedModel:
-        """Prepares a model for PEFT training."""
-        if not is_peft_available():
-            raise ImportError("To use PeftModel, you need to install the `peft` library.")
-
-        # Handle quantized models (QLoRA)
-        is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
-
-        is_sharded_qlora = False
-        if getattr(model, "is_loaded_in_4bit", False):
-            # Check if model is sharded (FSDP/DS-Zero3)
-            for _, param in model.named_parameters():
-                if param.__class__.__name__ == "Params4bit":
-                    is_sharded_qlora = param.data.device.type in {"cpu", "meta"}
-                    break
-
-        # Prepare model for kbit training if needed
-        if is_qlora and not is_sharded_qlora:
-            model = self._prepare_model_for_kbit_training(model, args)
-            # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
-            args = dataclasses.replace(args, gradient_checkpointing=False)
-        elif args.gradient_checkpointing:
-            model = self._enable_gradient_checkpointing(model, args)
-
-        # Create PEFT model
-        if peft_config is not None:
-            if (
-                version.parse(peft.__version__) >= version.parse("0.12")  # autocast_adapter_dtype introduced in 0.12
-                and getattr(model, "is_loaded_in_4bit", False)
-                and is_sharded_qlora
-            ):
-                model = get_peft_model(model, peft_config, autocast_adapter_dtype=False)
-            else:
-                model = get_peft_model(model, peft_config)
-
-        # Handle bf16 casting for 4-bit models
-        if args.bf16 and getattr(model, "is_loaded_in_4bit", False) and not is_sharded_qlora:
-            peft_module_casting_to_bf16(model)
-
-        return model
-
-    def _prepare_model_for_kbit_training(self, model: PreTrainedModel, args: SFTConfig) -> PreTrainedModel:
-        """Prepares a quantized model for kbit training."""
-        prepare_model_kwargs = {
-            "use_gradient_checkpointing": args.gradient_checkpointing,
-            "gradient_checkpointing_kwargs": args.gradient_checkpointing_kwargs or {},
-        }
-
-        return prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-
-    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: SFTConfig) -> PreTrainedModel:
-        """Enables gradient checkpointing for the model."""
-        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
-        use_reentrant = (
-            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-        )
-
-        if use_reentrant:
-            if hasattr(model, "enable_input_require_grads"):
-                model.enable_input_require_grads()
-            else:
-
-                def make_inputs_require_grad(module, input, output):
-                    output.requires_grad_(True)
-
-                model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
-
-        return model
-
     def _prepare_dataset(
         self,
         dataset: Union[Dataset, IterableDataset],
@@ -683,7 +611,7 @@ class SFTTrainer(Trainer):
         with PartialState().main_process_first():
             # Apply the formatting function if any
             if formatting_func is not None and is_processed:
-                warnings.warn(
+                warn0(
                     "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
                     "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
                     "`formatting_func` or pass a dataset that is not already processed.",
@@ -697,18 +625,7 @@ class SFTTrainer(Trainer):
                 def _func(example):
                     return {"text": formatting_func(example)}
 
-                try:
-                    dataset = dataset.map(_func, batched=False, **map_kwargs)
-                except Exception as e:
-                    warnings.warn(
-                        f"Failed to apply the formatting function due to the following error: {e}. This may be "
-                        "because the function is designed for batched input. Please update it to process one example "
-                        "at a time (i.e., accept and return a single example). For now, we will attempt to apply the "
-                        "function in batched mode, but note that batched formatting is deprecated and will be removed "
-                        "in version 0.21.",
-                        DeprecationWarning,
-                    )
-                    dataset = dataset.map(_func, batched=True, **map_kwargs)
+                dataset = dataset.map(_func, batched=False, **map_kwargs)
 
             if not is_processed:
                 # Convert the dataset to ChatML if needed
@@ -774,7 +691,7 @@ class SFTTrainer(Trainer):
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            warnings.warn(
+                            warn0(
                                 "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
                                 "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
                                 "token handling. Verify that the tokenizer is processing text consistently."
@@ -832,7 +749,7 @@ class SFTTrainer(Trainer):
 
                 dataset = dataset.select_columns(columns)
 
-                # Packing adds new column "seq_lengths" needed for document aware flash attention
+                # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
