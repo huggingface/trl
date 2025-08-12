@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
-import unittest
 from functools import partial
 
 import torch
@@ -23,9 +21,12 @@ from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokeni
 
 from trl import IterativeSFTTrainer
 
+from .testing_utils import TrlTestCase
 
-class IterativeTrainerTester(unittest.TestCase):
+
+class IterativeTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -78,40 +79,39 @@ class IterativeTrainerTester(unittest.TestCase):
         ]
     )
     def test_iterative_step_from_tensor(self, model_name, input_name):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # initialize dataset
-            if input_name == "tensor":
-                dummy_dataset = self._init_tensor_dummy_dataset()
-                inputs = {
-                    "input_ids": dummy_dataset["input_ids"],
-                    "attention_mask": dummy_dataset["attention_mask"],
-                    "labels": dummy_dataset["labels"],
-                }
-            else:
-                dummy_dataset = self._init_textual_dummy_dataset()
-                inputs = {
-                    "texts": dummy_dataset["texts"],
-                    "texts_labels": dummy_dataset["texts_labels"],
-                }
+        # initialize dataset
+        if input_name == "tensor":
+            dummy_dataset = self._init_tensor_dummy_dataset()
+            inputs = {
+                "input_ids": dummy_dataset["input_ids"],
+                "attention_mask": dummy_dataset["attention_mask"],
+                "labels": dummy_dataset["labels"],
+            }
+        else:
+            dummy_dataset = self._init_textual_dummy_dataset()
+            inputs = {
+                "texts": dummy_dataset["texts"],
+                "texts_labels": dummy_dataset["texts_labels"],
+            }
 
-            if model_name == "qwen":
-                model = self.model
-                tokenizer = self.tokenizer
-            else:
-                model = self.t5_model
-                tokenizer = self.t5_tokenizer
+        if model_name == "qwen":
+            model = self.model
+            tokenizer = self.tokenizer
+        else:
+            model = self.t5_model
+            tokenizer = self.t5_tokenizer
 
-            training_args = TrainingArguments(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=2,
-                learning_rate=1e-3,
-                report_to="none",
-            )
-            iterative_trainer = IterativeSFTTrainer(model=model, args=training_args, processing_class=tokenizer)
-            iterative_trainer.optimizer.zero_grad = partial(iterative_trainer.optimizer.zero_grad, set_to_none=False)
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=2,
+            learning_rate=1e-3,
+            report_to="none",
+        )
+        iterative_trainer = IterativeSFTTrainer(model=model, args=training_args, processing_class=tokenizer)
+        iterative_trainer.optimizer.zero_grad = partial(iterative_trainer.optimizer.zero_grad, set_to_none=False)
 
-            iterative_trainer.step(**inputs)
+        iterative_trainer.step(**inputs)
 
-            for param in iterative_trainer.model.parameters():
-                self.assertIsNotNone(param.grad)
+        for param in iterative_trainer.model.parameters():
+            self.assertIsNotNone(param.grad)
