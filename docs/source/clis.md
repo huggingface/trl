@@ -219,6 +219,49 @@ trl dpo --config dpo_config.yaml
 </hfoption>
 </hfoptions>
 
+### Using dataset mixtures
+
+You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training on diverse data sources or when you want to mix different types of data.
+
+<hfoptions id="accelerate_config">
+<hfoption id="SFT">
+
+```yaml
+# sft_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: stanfordnlp/imdb
+  - path: roneneldan/TinyStories
+```
+
+Launch with:
+
+```bash
+trl sft --config sft_config.yaml
+```
+
+</hfoption>
+<hfoption id="DPO">
+
+```yaml
+# dpo_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: TODO
+  - path: TODO
+```
+
+Launch with:
+
+```bash
+trl dpo --config dpo_config.yaml
+```
+
+</hfoption>
+</hfoptions>
+
+To see all the available keywords for defining dataset mixtures, refer to the [`scripts.utils.DatasetConfig`] and [`DatasetMixtureConfig`] classes.
+
 ## Getting the System Information
 
 You can get the system information by running the following command:

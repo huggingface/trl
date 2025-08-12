@@ -14,3 +14,11 @@
 ## get_dataset
 
 [[autodoc]] get_dataset
+
+## DatasetConfig
+
+[[autodoc]] scripts.utils.DatasetConfig
+
+## DatasetMixtureConfig
+
+[[autodoc]] DatasetMixtureConfig
