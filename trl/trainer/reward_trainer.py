@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -52,6 +51,7 @@ from .utils import (
     get_comet_experiment_url,
     log_table_to_comet_experiment,
     print_rich_table,
+    warn0,
 )
 
 
@@ -166,7 +166,7 @@ class RewardTrainer(Trainer):
                 except FrozenInstanceError:
                     args = replace(args, remove_unused_columns=False)
                 # warn users
-                warnings.warn(
+                warn0(
                     "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,

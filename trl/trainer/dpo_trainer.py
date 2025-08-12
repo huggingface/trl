@@ -16,7 +16,6 @@ import inspect
 import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -73,6 +72,7 @@ from .utils import (
     pad_to_length,
     peft_module_casting_to_bf16,
     selective_log_softmax,
+    warn0,
 )
 
 
@@ -298,7 +298,7 @@ class DPOTrainer(Trainer):
             )
 
         if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
+            warn0(
                 "You passed model_init_kwargs to the `DPOConfig`, but your model is already instantiated. "
                 "The `model_init_kwargs` will be ignored."
             )
@@ -306,7 +306,7 @@ class DPOTrainer(Trainer):
             model = self._create_model_from_path(model, args)
 
         if args.ref_model_init_kwargs is not None and not isinstance(ref_model, str):
-            warnings.warn(
+            warn0(
                 "You passed ref_model_init_kwargs to the `DPOConfig`, but your ref_model is already instantiated. "
                 "The `ref_model_init_kwargs` will be ignored."
             )
@@ -385,7 +385,7 @@ class DPOTrainer(Trainer):
 
         if args.padding_free:
             if model.config._attn_implementation != "flash_attention_2":
-                warnings.warn(
+                warn0(
                     "Padding-free training is enabled, but the attention implementation is not set to "
                     "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
                     "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
@@ -394,7 +394,7 @@ class DPOTrainer(Trainer):
                     "attention mechanism can handle flattened sequences."
                 )
             if args.per_device_train_batch_size == 1:
-                warnings.warn(
+                warn0(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
@@ -414,7 +414,7 @@ class DPOTrainer(Trainer):
         self.use_weighting = args.use_weighting
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            warn0(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
