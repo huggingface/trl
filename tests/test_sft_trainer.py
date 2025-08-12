@@ -451,6 +451,7 @@ class SFTTrainerTester(TrlTestCase):
         self.assertEqual(len(trainer.train_dataset["input_ids"]), len(self.conversational_lm_dataset["train"]))
         self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
+
 # This new tester aims to replace the first one at some point
 class SFTTrainerTester2(TrlTestCase):
     @parameterized.expand(
