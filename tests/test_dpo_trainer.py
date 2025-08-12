@@ -1448,7 +1448,7 @@ class DPOTrainerTester(unittest.TestCase):
 class DPOVisionTrainerTester(unittest.TestCase):
     @parameterized.expand(
         [
-            ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),
+            # ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),  # device issue from transformers
             # ("trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",),
             ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
             ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
