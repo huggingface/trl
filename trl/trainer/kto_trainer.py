@@ -16,7 +16,6 @@ import inspect
 import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from operator import itemgetter
@@ -726,7 +725,7 @@ class KTOTrainer(Trainer):
                 und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
 
                 if not (des_weight_in_range or und_weight_in_range):
-                    warnings.warn(
+                    warn0(
                         "You have different amounts of desirable/positive and undesirable/negative examples but the "
                         "weights on the desirable and undesirable losses don't seem to be in an ideal range. Based "
                         f"on your data, we recommend EITHER "
