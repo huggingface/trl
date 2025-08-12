@@ -100,7 +100,7 @@ class OnlineDPOConfig(TrainingArguments):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-        vllm_mode (`str`, *optional*, defaults to `"colocate"`):
+        vllm_mode (`str`, *optional*, defaults to `"server"`):
             Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `"server"` or
             `"colocate"`.
 

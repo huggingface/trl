@@ -68,7 +68,7 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_comet_experiment_url,
-    get_reward,
+    # get_reward,
     pad,
     prepare_deepspeed,
     truncate_right,
@@ -122,8 +122,6 @@ class OnlineDPOTrainer(Trainer):
         ref_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
             The reference model to use for training. If None is specified, the reference model will be created from the
             model.
-        reward_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
-            The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`, *optional*, defaults to `None`):
@@ -134,7 +132,7 @@ class OnlineDPOTrainer(Trainer):
               callable function.
             - A list of reward functions: Must all be of compatible types.
 
-            Note: Only one of `reward_model`, `judge`, or `reward_funcs` should be provided.
+            Note: Only one of `judge`, or `reward_funcs` should be provided.
         args (`OnlineDPOConfig`):
             The online DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
@@ -176,7 +174,6 @@ class OnlineDPOTrainer(Trainer):
         self,
         model: Union[PreTrainedModel, nn.Module, str],
         ref_model: Union[PreTrainedModel, nn.Module, None] = None,
-        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
         reward_funcs: Optional[Union[RewardFunc, list[RewardFunc]]] = None,
         args: Optional[OnlineDPOConfig] = None,
@@ -184,7 +181,6 @@ class OnlineDPOTrainer(Trainer):
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
-        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         peft_config: Optional["PeftConfig"] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
@@ -200,27 +196,17 @@ class OnlineDPOTrainer(Trainer):
 
         self.ref_model = ref_model
 
-        # Validate reward configuration - must have exactly one of: reward_model, judge, or reward_funcs
-        reward_configs = sum(x is not None for x in [reward_model, judge, reward_funcs])
+        # Validate reward configuration - must have exactly one of: judge, or reward_funcs
+        reward_configs = sum(x is not None for x in [judge, reward_funcs])
         if reward_configs == 0:
-            raise ValueError("One of `reward_model`, `judge`, or `reward_funcs` must be provided.")
+            raise ValueError("One of `judge` or `reward_funcs` must be provided.")
         elif reward_configs > 1:
-            if reward_model is not None:
-                warnings.warn(
-                    "Multiple reward configurations provided. Using `reward_model` and ignoring others.",
-                    UserWarning,
-                )
-                judge = None
-                reward_funcs = None
-            elif judge is not None:
+            if judge is not None:
                 warnings.warn(
                     "Both `judge` and `reward_funcs` are provided. Using `judge` and ignoring `reward_funcs`.",
                     UserWarning,
                 )
                 reward_funcs = None
-
-        self.reward_model = reward_model
-        self.reward_processing_class = reward_processing_class
         self.judge = judge
 
         # Handle reward_funcs
@@ -327,10 +313,7 @@ class OnlineDPOTrainer(Trainer):
         if peft_config is not None:
             # Check if PEFT is available
             if not is_peft_available():
-                raise ImportError(
-                    "PEFT is not available and passed `peft_config`. Please install PEFT with "
-                    "`pip install peft` to use it."
-                )
+                raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
 
             # If the model is already a PeftModel, we need to merge and unload it.
             # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
@@ -339,6 +322,10 @@ class OnlineDPOTrainer(Trainer):
 
             # Get peft model with the given config
             model = get_peft_model(model, peft_config)
+
+        # Enable gradient checkpointing if requested
+        if args.gradient_checkpointing:
+            model = self._enable_gradient_checkpointing(model, args)
 
         # Disable dropout in the model and reference model
         if args.disable_dropout:
@@ -360,8 +347,10 @@ class OnlineDPOTrainer(Trainer):
             self.ref_model.eval()
 
         # Disable the gradient and set the reward model in eval mode
-        if self.reward_model is not None:
-            self.reward_model.eval()
+        if reward_funcs is not None:
+            for reward_func in reward_funcs:
+                if isinstance(reward_func, PreTrainedModel):
+                    reward_func.eval()
 
         self.max_length = args.max_length
 
@@ -378,7 +367,7 @@ class OnlineDPOTrainer(Trainer):
             "val/contain_eos_token": [],
             "beta": [],
         }
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             self.stats["objective/rlhf_reward"] = []
             self.stats["objective/scores_margin"] = []
             self.stats["objective/scores"] = []
@@ -552,10 +541,6 @@ class OnlineDPOTrainer(Trainer):
             self.generation_config = GenerationConfig(**generation_kwargs)
 
         if self.is_deepspeed_enabled:
-            if self.reward_model is not None:
-                self.reward_model = prepare_deepspeed(
-                    self.reward_model, args.per_device_train_batch_size, args.fp16, args.bf16
-                )
             if self.ref_model is not None:
                 self.ref_model = prepare_deepspeed(
                     self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
@@ -568,8 +553,6 @@ class OnlineDPOTrainer(Trainer):
         else:
             if self.ref_model is not None:
                 self.ref_model = self.ref_model.to(self.accelerator.device)
-            if self.reward_model is not None:
-                self.reward_model = self.reward_model.to(self.accelerator.device)
             # Prepare reward function models for FSDP/regular training
             if self.reward_funcs is not None:
                 for i, reward_func in enumerate(self.reward_funcs):
@@ -675,6 +658,28 @@ class OnlineDPOTrainer(Trainer):
                 self._eval_dataloaders = {dataloader_key: eval_dataloader}
 
         return self.accelerator.prepare(eval_dataloader)
+
+    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: OnlineDPOConfig) -> PreTrainedModel:
+        """Enables gradient checkpointing for the model."""
+        # Ensure use_cache is disabled
+        model.config.use_cache = False
+
+        # Enable gradient checkpointing on the base model for PEFT
+        if is_peft_model(model):
+            model.base_model.gradient_checkpointing_enable()
+        # Enable gradient checkpointing for non-PEFT models
+        else:
+            model.gradient_checkpointing_enable()
+
+        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
+        use_reentrant = (
+            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
+        )
+
+        if use_reentrant:
+            model.enable_input_require_grads()
+
+        return model
 
     def _generate_vllm(self, prompts, images=None):
         eos_token_id = self.eos_token_id
@@ -1273,7 +1278,7 @@ class OnlineDPOTrainer(Trainer):
         if is_conversational({"prompt": prompts[0]}):
             completions = [[{"role": "assistant", "content": completion}] for completion in completions]
 
-        # Get the reward from reward functions, judge, or reward model
+        # Get the reward from reward functions, judge
         if self.reward_funcs is not None:
             # Use reward functions (like GRPO)
             # First create completion_ids_list for custom reward functions
@@ -1316,6 +1321,7 @@ class OnlineDPOTrainer(Trainer):
             # when rank == 0, it means the first completion is the best
             # when rank == 1, it means the second completion is the best
             mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=device)
+        """
         else:
             # The reward model may not have the same chat template or tokenizer as the model, so we need to use the
             # raw data (string), apply the chat template (if needed), and tokenize it with the reward processing class.
@@ -1354,7 +1360,7 @@ class OnlineDPOTrainer(Trainer):
 
             # Get the indices of the chosen and rejected examples
             mask = first_half >= second_half
-
+        """
         batch_range = torch.arange(batch_size, device=device)
         chosen_indices = batch_range + (~mask * batch_size)
         rejected_indices = batch_range + (mask * batch_size)
@@ -1389,12 +1395,12 @@ class OnlineDPOTrainer(Trainer):
         loss = losses.mean()
 
         # Log everything
-        if self.reward_model is not None:
-            scores_margin = scores[chosen_indices] - scores[rejected_indices]
-            self.stats["objective/scores_margin"].append(
-                self.accelerator.gather_for_metrics(scores_margin.mean()).mean().item()
-            )
-            self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(scores.mean()).mean().item())
+        # if self.reward_funcs is not None:
+        #    scores_margin = scores[chosen_indices] - scores[rejected_indices]
+        #    self.stats["objective/scores_margin"].append(
+        #        self.accelerator.gather_for_metrics(scores_margin.mean()).mean().item()
+        #    )
+        #    self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(scores.mean()).mean().item())
         self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
         self.stats["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logprobs_sum).mean().item())
         self.stats["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logprobs_sum).mean().item())
@@ -1407,9 +1413,9 @@ class OnlineDPOTrainer(Trainer):
         self.stats["objective/non_score_reward"].append(
             self.accelerator.gather_for_metrics(mean_non_score_reward).mean().item()
         )
-        if self.reward_model is not None:
-            rlhf_reward = scores + non_score_reward
-            self.stats["objective/rlhf_reward"].append(self.accelerator.gather_for_metrics(rlhf_reward).mean().item())
+        # if self.reward_model is not None:
+        #    rlhf_reward = scores + non_score_reward
+        #    self.stats["objective/rlhf_reward"].append(self.accelerator.gather_for_metrics(rlhf_reward).mean().item())
         mean_entropy = -logprobs.sum(1).mean()
         self.stats["objective/entropy"].append(self.accelerator.gather_for_metrics(mean_entropy).mean().item())
         chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)

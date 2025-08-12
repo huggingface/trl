@@ -39,7 +39,9 @@ accelerate launch \
     --use_vllm \
     --vllm_mode server \
     --use_peft \
-    --lora_target_modules "q_proj", "v_proj"
+    --lora_target_modules "q_proj", "v_proj" \
+    --per_device_train_batch_size 1 \
+    --gradient_accumulation_steps 2
 
 # For HuggingFaceTB/SmolVLM2-2.2B-Instruct
 pip install num2words
