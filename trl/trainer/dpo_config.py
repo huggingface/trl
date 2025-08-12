@@ -420,11 +420,11 @@ class DPOConfig(TrainingArguments):
         default=0.0,
         metadata={
             "help": "the hyperparameter from the DPOP paper (https://arxiv.org/pdf/2402.13228) "
-                    "to address the reduction of the model's likelihood of chosen example in using DPO loss. "
-                    "It controls the weighting of the penalty term max(0, log(ref_chosen_prob/policy_chosen_prob)) "
-                    "in the log-sigmoid to maintain likelihood of the chosen example. "
-                    "A high value of this parameter penalizes more on the reward reduction of chosen example. "
-                    "If `0.0`, no penalty is applied"
+            "to address the reduction of the model's likelihood of chosen example in using DPO loss. "
+            "It controls the weighting of the penalty term max(0, log(ref_chosen_prob/policy_chosen_prob)) "
+            "in the log-sigmoid to maintain likelihood of the chosen example. "
+            "A high value of this parameter penalizes more on the reward reduction of chosen example. "
+            "If `0.0`, no penalty is applied"
         },
     )
     loss_weights: Optional[list[float]] = field(

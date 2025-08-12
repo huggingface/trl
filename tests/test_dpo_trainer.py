@@ -1114,6 +1114,49 @@ class DPOTrainerTester(unittest.TestCase):
             )
             self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
 
+    def test_dpop_loss(self):
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        # lora model
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = DPOConfig(
+                output_dir=tmp_dir,
+                per_device_train_batch_size=2,
+                max_steps=3,
+                remove_unused_columns=False,
+                gradient_accumulation_steps=4,
+                learning_rate=9e-1,
+                eval_strategy="steps",
+                dpop_penalty_coef=1.0,
+                report_to="none",
+                bf16=False,
+            )
+
+            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+            # dpo train lora model with a lora config
+            trainer = DPOTrainer(
+                model=model,
+                ref_model=None,
+                args=training_args,
+                processing_class=tokenizer,
+                train_dataset=dummy_dataset["train"],
+                eval_dataset=dummy_dataset["test"],
+            )
+
+            # Fake chosen and rejected log probs
+            policy_chosen_logps = torch.FloatTensor([410.0, 0.1])
+            policy_rejected_logps = torch.FloatTensor([95.5, 0.2])
+            reference_chosen_logps = torch.FloatTensor([-610.0, -0.1])
+            reference_rejected_logps = torch.FloatTensor([5.5, 0.5])
+            losses, _, _ = trainer.dpo_loss(
+                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+            )
+            self.assertTrue(torch.isfinite(losses).cpu().numpy().all())
+
     def test_dpo_trainer_use_logits_to_keep(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
