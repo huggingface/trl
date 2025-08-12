@@ -35,7 +35,6 @@ python examples/scripts/orpo.py \
     --output_dir="gpt2-aligned-orpo" \
     --warmup_steps 150 \
     --report_to wandb \
-    --bf16 \
     --logging_first_step \
     --no_remove_unused_columns
 
@@ -52,7 +51,6 @@ python examples/scripts/orpo.py \
     --optim rmsprop \
     --warmup_steps 150 \
     --report_to wandb \
-    --bf16 \
     --logging_first_step \
     --no_remove_unused_columns \
     --use_peft \
