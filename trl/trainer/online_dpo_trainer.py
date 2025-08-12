@@ -33,6 +33,8 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, IterableDataset
 from transformers import (
     AutoModelForCausalLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
     DataCollator,
     GenerationConfig,
     PreTrainedModel,
@@ -211,9 +213,6 @@ class OnlineDPOTrainer(Trainer):
 
         # Handle reward_funcs
         if reward_funcs is not None:
-            # Import here to avoid circular imports
-            from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
             if not isinstance(reward_funcs, list):
                 reward_funcs = [reward_funcs]
             self.reward_func_names = []
