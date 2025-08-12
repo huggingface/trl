@@ -653,11 +653,11 @@ class TestGetPositionIdsFromPackedSeqLengths(unittest.TestCase):
         result = get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
         self.assertEqual(len(result), 1)
         # First doc: 0,1,2; second doc: 0,1
-        self.assertTrue(torch.equal(result[0], torch.tensor([0,1,2,0,1])))
+        self.assertTrue(torch.equal(result[0], torch.tensor([0, 1, 2, 0, 1])))
 
     def test_multiple_examples(self):
         batch_seq_lengths = [[2, 2], [3]]
         result = get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
         self.assertEqual(len(result), 2)
-        self.assertTrue(torch.equal(result[0], torch.tensor([0,1,0,1])))
+        self.assertTrue(torch.equal(result[0], torch.tensor([0, 1, 0, 1])))
         self.assertTrue(torch.equal(result[1], torch.arange(3)))

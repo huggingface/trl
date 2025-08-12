@@ -55,11 +55,11 @@ from ..data_utils import (
 from ..models import clone_chat_template, get_act_offloading_ctx_manager
 from .sft_config import SFTConfig
 from .utils import (
-    generate_model_card, 
-    get_comet_experiment_url, 
-    pad, 
+    generate_model_card,
+    get_comet_experiment_url,
+    get_position_ids_from_packed_seq_lengths,
+    pad,
     peft_module_casting_to_bf16,
-    get_position_ids_from_packed_seq_lengths
 )
 
 
@@ -254,6 +254,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
                 output["labels"][assistant_masks == 0] = -100
         return output
+
 
 class SFTTrainer(Trainer):
     """

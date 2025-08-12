@@ -1580,11 +1580,12 @@ def print_prompt_completions_sample(
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
 
+
 def get_position_ids_from_packed_seq_lengths(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
     """
     Get position IDs for packed sequences.
     Args:
-        batch_seq_lengths (list[list[int]]): A list of lists containing the lengths of each 
+        batch_seq_lengths (list[list[int]]): A list of lists containing the lengths of each
             individual document in the packed batch.
     Return:
         list[torch.Tensor]: A list of tensors containing the position IDs for each packed sequence.
@@ -1592,9 +1593,7 @@ def get_position_ids_from_packed_seq_lengths(batch_seq_lengths: list[list[int]])
     # Get lengths per row
     example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
     # Flat list of lengths
-    batch_seq_lengths = torch.tensor(
-        [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
-    )
+    batch_seq_lengths = torch.tensor([seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths])
     position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
     position_ids[0] = 0
     # Reset position ids to 0 at the start of each sequence
