@@ -326,3 +326,11 @@ Only use `max_length` when you've verified that truncation won't remove image to
 ## SFTConfig
 
 [[autodoc]] SFTConfig
+
+## DataCollatorForLanguageModeling
+
+[[autodoc]] trainer.sft_trainer.DataCollatorForLanguageModeling
+
+## DataCollatorForVisionLanguageModeling
+
+[[autodoc]] trainer.sft_trainer.DataCollatorForVisionLanguageModeling
