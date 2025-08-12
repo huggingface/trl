@@ -26,9 +26,8 @@ from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
 
-from ..testing_utils import require_bitsandbytes
+from ..testing_utils import TrlTestCase, require_bitsandbytes
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
-from .testing_utils import TrlTestCase
 
 
 if is_peft_available():

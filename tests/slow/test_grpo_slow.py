@@ -43,9 +43,8 @@ from transformers.utils import is_peft_available
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.utils import get_kbit_device_map
 
-from ..testing_utils import require_vllm
+from ..testing_utils import TrlTestCase, require_vllm
 from .testing_constants import MODELS_TO_TEST
-from .testing_utils import TrlTestCase
 
 
 if is_peft_available():
