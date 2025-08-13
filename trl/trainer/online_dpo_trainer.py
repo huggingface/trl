@@ -59,7 +59,7 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
-from ..models import create_reference_model
+from ..models import create_reference_model, prepare_peft_model
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
@@ -78,7 +78,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel, get_peft_model
+    from peft import PeftModel
 
 if is_apex_available():
     from apex import amp
@@ -308,19 +308,8 @@ class OnlineDPOTrainer(Trainer):
         self.is_encoder_decoder = model.config.is_encoder_decoder
         self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
 
-        # Convert to PEFT model if peft_config is provided
-        if peft_config is not None:
-            # Check if PEFT is available
-            if not is_peft_available():
-                raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
-
-            # If the model is already a PeftModel, we need to merge and unload it.
-            # Further information here: https://huggingface.co/docs/trl/dpo_trainer#reference-model-considerations-with-peft
-            if isinstance(model, PeftModel):
-                model = model.merge_and_unload()
-
-            # Get peft model with the given config
-            model = get_peft_model(model, peft_config)
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+            model = prepare_peft_model(model, peft_config, args)
 
         # Enable gradient checkpointing if requested
         if args.gradient_checkpointing:
