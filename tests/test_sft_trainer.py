@@ -29,7 +29,7 @@ from .testing_utils import TrlTestCase
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
 
 
 def formatting_prompts_func(example):
@@ -1360,8 +1360,8 @@ class SFTTrainerTester2(TrlTestCase):
                 # This parameter is not updated, not sure why at this point.
                 continue
             self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
-            
-     @require_peft
+
+    @require_peft
     def test_prompt_encoder_different_virtual_token_counts(self):
         """Test that mean_token_accuracy is properly calculated with different virtual token counts"""
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
