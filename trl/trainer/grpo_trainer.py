@@ -2032,6 +2032,7 @@ class GRPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent(
             """\
             @article{zhihong2024deepseekmath,
