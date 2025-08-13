@@ -270,7 +270,7 @@ class OnlineDPOTrainer(Trainer):
         else:
             self.reward_weights = None
 
-        if args.missing_eos_penalty is not None and (judge is not None or reward_funcs is not None):
+        if args.missing_eos_penalty is not None and reward_funcs is None:
             raise ValueError("`missing_eos_penalty` is only supported when `reward_funcs` is provided.")
 
         if args is None:
@@ -1283,6 +1283,10 @@ class OnlineDPOTrainer(Trainer):
             rewards = self._calculate_rewards_from_functions(
                 prompts=2 * prompts, completions=completions, completion_ids_list=completion_ids_list, **reward_kwargs
             )
+
+            # Apply missing EOS penalty if configured
+            if self.args.missing_eos_penalty is not None:
+                rewards[~contain_eos_token] -= self.args.missing_eos_penalty
 
             # Split rewards into chosen/rejected pairs
             first_half, second_half = rewards.split(batch_size)
