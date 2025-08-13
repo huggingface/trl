@@ -294,6 +294,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         self.assertIn("train_loss", trainer.state.log_history[-1])
 
+    @require_vllm
     def test_training_with_vllm_colocate(self):
         """Test vLLM colocate mode with our refactored implementation"""
         model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
