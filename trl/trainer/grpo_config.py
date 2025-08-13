@@ -617,8 +617,8 @@ class GRPOConfig(TrainingArguments):
             # Just ensure the value is divisible by the global batch size
             if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
                 raise ValueError(
-                    f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
-                    f"({self.per_device_eval_batch_size * num_processes})."
+                    f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
+                    f"divisible by num_generations ({self.num_generations})."
                 )
 
         # The generation batch must contain full prompt groups (no partials), so it must be divisible by
