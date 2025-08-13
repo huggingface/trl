@@ -718,7 +718,7 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     >>> is_conversational_from_value(example)
     False
 
-    >>> example = {"conversations": "The sky is"})
+    >>> example = {"conversations": "The sky is"}
     >>> is_conversational_from_value(example)
     False
     ```

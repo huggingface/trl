@@ -76,11 +76,12 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
 
     Example:
     ```python
-    >>> [{
-    ...     "a": {"aa": None,
-    ...           "ab": 1},
-    ...     "b": "my_string",
-    ... }]
+    >>> [
+    ...     {
+    ...         "a": {"aa": None, "ab": 1},
+    ...         "b": "my_string",
+    ...     }
+    ... ]
     >>> remove_none_values(example)
     [{'a': {'ab': 1}, 'b': 'my_string'}]
     ```
@@ -284,15 +285,15 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Args:
         processor (`ProcessorMixin`):
-            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin`
-            and include a `tokenizer` with a defined `pad_token_id`.
+            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin` and
+            include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int` or `None`, optional, defaults to `None`):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         dataset_text_field (`str`, optional, defaults to `"text"`):
-            Name of the column that contains text data in the dataset. This parameter is only relevant for
-            [standard datasets format](dataset_formats#standard).
+            Name of the column that contains text data in the dataset. This parameter is only relevant for [standard
+            datasets format](dataset_formats#standard).
         return_tensors (`str`, optional, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
 
@@ -300,11 +301,12 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     ```python
     >>> from trl import DataCollatorForVisionLanguageModeling
     >>> from transformers import AutoProcessor
+
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
     >>> collator = DataCollatorForVisionLanguageModeling(processor)
     >>> examples = [
     ...     {"images": [Image.open("image_0.png")], "messages": [{"role": "user", "content": "What is this?"}]},
-    ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]}
+    ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
