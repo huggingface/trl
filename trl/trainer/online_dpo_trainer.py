@@ -78,7 +78,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftModel
+    from peft import PeftConfig, PeftModel
 
 if is_apex_available():
     from apex import amp
