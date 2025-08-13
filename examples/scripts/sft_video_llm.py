@@ -27,7 +27,7 @@
 Example usage:
 accelerate launch \
     --config_file deepspeed_zero2.yaml \
-    sft_video_llm.py \
+    examples/scripts/sft_video_llm.py \
     --dataset_name mfarre/simplevideoshorts \
     --video_cache_dir "/optional/path/to/cache/" \
     --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
