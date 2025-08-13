@@ -15,6 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",

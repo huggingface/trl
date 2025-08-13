@@ -18,35 +18,35 @@
 #     "peft",
 #     "wandb",
 #     "qwen-vl-utils",
+#     "torchvision",
 # ]
 # ///
 
 """
 Example usage:
 accelerate launch \
-    --config_file=deepspeed_zero2.yaml \
+    --config_file deepspeed_zero2.yaml \
     sft_video_llm.py \
-    --dataset_name=mfarre/simplevideoshorts \
-    --video_cache_dir="/optional/path/to/cache/" \
-    --model_name_or_path=Qwen/Qwen2-VL-7B-Instruct \
-    --per_device_train_batch_size=1 \
-    --output_dir=video-llm-output \
-    --tf32=True \
-    --gradient_accumulation_steps=4 \
-    --num_train_epochs=4 \
-    --optim="adamw_torch_fused" \
-    --log_level="debug" \
-    --log_level_replica="debug" \
-    --save_strategy="steps" \
-    --save_steps=300 \
-    --learning_rate=8e-5 \
-    --max_grad_norm=0.3 \
-    --warmup_ratio=0.1 \
-    --lr_scheduler_type="cosine" \
-    --report_to="wandb" \
-    --push_to_hub=False \
-    --torch_dtype=bfloat16 \
-    --gradient_checkpointing=True
+    --dataset_name mfarre/simplevideoshorts \
+    --video_cache_dir "/optional/path/to/cache/" \
+    --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
+    --per_device_train_batch_size 1 \
+    --output_dir video-llm-output \
+    --tf32 True \
+    --gradient_accumulation_steps 4 \
+    --num_train_epochs 4 \
+    --optim adamw_torch_fused \
+    --log_level debug \
+    --log_level_replica debug \
+    --save_strategy steps \
+    --save_steps 300 \
+    --learning_rate 8e-5 \
+    --max_grad_norm 0.3 \
+    --warmup_ratio 0.1 \
+    --lr_scheduler_type cosine \
+    --push_to_hub False \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing True
 """
 
 import json

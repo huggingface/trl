@@ -26,12 +26,10 @@ Total Batch size = 128 = 4 (num_gpus) * 8 (per_device_batch) * 4 (accumulation s
 Feel free to reduce batch size or increasing truncated_rand_backprop_min to a higher value to reduce memory usage.
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/scripts/alignprop.py \
-    --num_epochs=20 \
-    --train_gradient_accumulation_steps=4 \
-    --sample_num_steps=50 \
-    --train_batch_size=8 \
-    --tracker_project_name="stable_diffusion_training" \
-    --log_with="wandb"
+    --num_epochs 20 \
+    --train_gradient_accumulation_steps 4 \
+    --sample_num_steps 50 \
+    --train_batch_size 8 \
 
 """
 

@@ -25,37 +25,35 @@ Run the KTO training script with the commands below. In general, the optimal con
 # Full training:
 python trl/scripts/kto.py \
     --dataset_name trl-lib/kto-mix-14k \
-    --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
+    --model_name_or_path trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 16 \
     --num_train_epochs 1 \
     --learning_rate 5e-7 \
-    --lr_scheduler_type=cosine \
+    --lr_scheduler_type cosine \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
-    --output_dir=kto-aligned-model \
+    --output_dir kto-aligned-model \
     --warmup_ratio 0.1 \
-    --report_to wandb \
     --logging_first_step
 
 # QLoRA:
 python trl/scripts/kto.py \
     --dataset_name trl-lib/kto-mix-14k \
-    --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
+    --model_name_or_path trl-lib/qwen1.5-1.8b-sft \
     --per_device_train_batch_size 8 \
     --num_train_epochs 1 \
     --learning_rate 5e-7 \
-    --lr_scheduler_type=cosine \
+    --lr_scheduler_type cosine \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
-    --output_dir=kto-aligned-model-lora \
+    --output_dir kto-aligned-model-lora \
     --warmup_ratio 0.1 \
-    --report_to wandb \
     --logging_first_step \
     --use_peft \
     --load_in_4bit \
-    --lora_target_modules=all-linear \
-    --lora_r=16 \
-    --lora_alpha=16
+    --lora_target_modules all-linear \
+    --lora_r 16 \
+    --lora_alpha 16
 """
 
 from datasets import load_dataset

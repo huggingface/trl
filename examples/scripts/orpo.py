@@ -26,36 +26,34 @@ In general, the optimal configuration for ORPO will be similar to that of DPO wi
 # regular:
 python examples/scripts/orpo.py \
     --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
+    --model_name_or_path gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
     --learning_rate 8e-6 \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
-    --output_dir="gpt2-aligned-orpo" \
+    --output_dir "gpt2-aligned-orpo" \
     --warmup_steps 150 \
-    --report_to wandb \
     --logging_first_step \
     --no_remove_unused_columns
 
 # peft:
 python examples/scripts/orpo.py \
     --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
+    --model_name_or_path gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
     --learning_rate 8e-5 \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
-    --output_dir="gpt2-lora-aligned-orpo" \
+    --output_dir "gpt2-lora-aligned-orpo" \
     --optim rmsprop \
     --warmup_steps 150 \
-    --report_to wandb \
     --logging_first_step \
     --no_remove_unused_columns \
     --use_peft \
-    --lora_r=16 \
-    --lora_alpha=16
+    --lora_r 16 \
+    --lora_alpha 16
 """
 
 from datasets import load_dataset

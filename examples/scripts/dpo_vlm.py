@@ -34,8 +34,7 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --lora_target_modules=all-linear \
-    --report_to wandb
+    --lora_target_modules all-linear
 ```
 
 With dataset streaming:
@@ -53,8 +52,7 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --lora_target_modules=all-linear \
-    --report_to wandb
+    --lora_target_modules all-linear
 ```
 """
 
