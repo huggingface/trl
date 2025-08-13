@@ -15,7 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
-#     "Pillow>=9.4.0",
+#     "diffusers",
 # ]
 # ///
 
