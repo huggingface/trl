@@ -303,6 +303,9 @@ for model_id, model_class in [
     config.vision_config.num_attention_heads = 4
     config.vision_config.num_key_value_heads = 2
 
+    if isinstance(config, (Qwen2VLConfig)):
+        config.vision_config.depth = 2
+
     if isinstance(config, (Qwen2VLConfig, Qwen2_5_VLConfig)):
         config.text_config.rope_scaling["mrope_section"] = [2]
 
@@ -314,4 +317,4 @@ for model_id, model_class in [
 
     model = model_class(config).to(dtype=torch.bfloat16)
 
-    push_to_hub(model, processor, "tiny", force=True)
+    push_to_hub(model, processor, "tiny")
