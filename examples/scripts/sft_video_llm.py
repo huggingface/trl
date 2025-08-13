@@ -19,6 +19,7 @@
 #     "wandb",
 #     "qwen-vl-utils",
 #     "torchvision",
+#     "bitsandbytes",
 # ]
 # ///
 
