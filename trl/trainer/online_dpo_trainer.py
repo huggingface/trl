@@ -70,7 +70,6 @@ from .utils import (
     empty_cache,
     generate_model_card,
     get_comet_experiment_url,
-    # get_reward,
     pad,
     prepare_deepspeed,
     truncate_right,
@@ -730,7 +729,6 @@ class OnlineDPOTrainer(Trainer):
                 ordered_set_of_images = all_images[:: self.num_generations]
             else:
                 ordered_set_of_images = None
-            # Generate using vLLM client with the same approach as GRPO trainer
             completion_ids = self.vllm_client.generate(
                 prompts=ordered_set_of_prompts,
                 images=ordered_set_of_images,
@@ -1139,7 +1137,7 @@ class OnlineDPOTrainer(Trainer):
                 output_reward_func = [reward if reward is not None else torch.nan for reward in output_reward_func]
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
-        # Weight and sum across all reward functions (like in GRPO)
+        # Weight and sum across all reward functions
         if self.reward_weights is not None:
             total_rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
         else:
@@ -1191,7 +1189,7 @@ class OnlineDPOTrainer(Trainer):
         prompts = inputs["prompt"]
         batch_size = len(prompts)
 
-        # Handle images for VLM support (following GRPO trainer pattern)
+        # Handle images for VLM support
         has_images = "image" in inputs
         images = None
         if has_images:
@@ -1268,7 +1266,6 @@ class OnlineDPOTrainer(Trainer):
 
         # Get the reward from reward functions, judge
         if self.reward_funcs is not None:
-            # Use reward functions (like GRPO)
             # First create completion_ids_list for custom reward functions
             completion_ids_list = [completion_ids[i].tolist() for i in range(completion_ids.shape[0])]
 
@@ -1309,46 +1306,7 @@ class OnlineDPOTrainer(Trainer):
             # when rank == 0, it means the first completion is the best
             # when rank == 1, it means the second completion is the best
             mask = torch.tensor([rank == 0 for rank in ranks_of_first_completion], device=device)
-        """
-        else:
-            # The reward model may not have the same chat template or tokenizer as the model, so we need to use the
-            # raw data (string), apply the chat template (if needed), and tokenize it with the reward processing class.
-            prompts = 2 * prompts  # repeat the prompt: [prompt0, prompt1] -> [prompt0, prompt1, prompt0, prompt1]
-            if is_conversational({"prompt": prompts[0]}):
-                examples = [{"prompt": p, "completion": c} for p, c in zip(prompts, completions)]
-                examples = [apply_chat_template(example, self.reward_processing_class) for example in examples]
-                prompts = [example["prompt"] for example in examples]
-                completions = [example["completion"] for example in examples]
 
-            # Tokenize the prompts
-            prompts_ids = self.reward_processing_class(
-                prompts, padding=True, return_tensors="pt", padding_side="left"
-            )["input_ids"].to(device)
-            context_length = prompts_ids.shape[1]
-
-            # Tokenize the completions
-            completions_ids = self.reward_processing_class(
-                completions, padding=True, return_tensors="pt", padding_side="right"
-            )["input_ids"].to(device)
-
-            # Concatenate the prompts and completions and get the reward
-            prompt_completion_ids = torch.cat((prompts_ids, completions_ids), dim=1)
-            with torch.inference_mode():
-                _, scores, _ = get_reward(
-                    self.reward_model, prompt_completion_ids, self.reward_processing_class.pad_token_id, context_length
-                )
-
-                # Filter completion. Ensure that the sample contains stop_token_id
-                # Completions not passing that filter will receive a lower score.
-                if self.args.missing_eos_penalty is not None:
-                    scores[~contain_eos_token] -= self.args.missing_eos_penalty
-
-            # Split the scores in 2 (the prompts of the first half are the same as the second half)
-            first_half, second_half = scores.split(batch_size)
-
-            # Get the indices of the chosen and rejected examples
-            mask = first_half >= second_half
-        """
         batch_range = torch.arange(batch_size, device=device)
         chosen_indices = batch_range + (~mask * batch_size)
         rejected_indices = batch_range + (mask * batch_size)
