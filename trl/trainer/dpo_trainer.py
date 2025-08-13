@@ -532,9 +532,6 @@ class DPOTrainer(Trainer):
                 "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
                 f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
             )
-        # Disable caching if gradient checkpointing is enabled (not supported)
-        # if args.gradient_checkpointing:
-        #     model_init_kwargs["use_cache"] = False
 
         # Create model
         model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
