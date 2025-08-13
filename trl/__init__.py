@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.19.0.dev0"
+__version__ = "0.22.0.dev0"
 
 from typing import TYPE_CHECKING
 
@@ -20,7 +20,7 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 
 _import_structure = {
-    "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
+    "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -30,11 +30,9 @@ _import_structure = {
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
         "pack_dataset",
-        "pack_examples",
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
-    "environment": ["TextEnvironment", "TextHistory"],
     "extras": ["BestOfNSampler"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
@@ -57,7 +55,6 @@ _import_structure = {
         "BCOTrainer",
         "CPOConfig",
         "CPOTrainer",
-        "DataCollatorForCompletionOnlyLM",
         "DPOConfig",
         "DPOTrainer",
         "FDivergenceConstants",
@@ -126,11 +123,9 @@ if TYPE_CHECKING:
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
         pack_dataset,
-        pack_examples,
         truncate_dataset,
         unpair_preference_dataset,
     )
-    from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
     from .models import (
         SUPPORTED_ARCHITECTURES,
@@ -141,7 +136,7 @@ if TYPE_CHECKING:
         create_reference_model,
         setup_chat_format,
     )
-    from .scripts import ScriptArguments, TrlParser, init_zero_verbose
+    from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
@@ -154,7 +149,6 @@ if TYPE_CHECKING:
         BCOTrainer,
         CPOConfig,
         CPOTrainer,
-        DataCollatorForCompletionOnlyLM,
         DPOConfig,
         DPOTrainer,
         FDivergenceConstants,

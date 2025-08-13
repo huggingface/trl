@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+#     "wandb",
+#     "qwen-vl-utils",
+# ]
+# ///
+
 """
 Example usage:
 accelerate launch \
@@ -22,7 +31,6 @@ accelerate launch \
     --model_name_or_path=Qwen/Qwen2-VL-7B-Instruct \
     --per_device_train_batch_size=1 \
     --output_dir=video-llm-output \
-    --bf16=True \
     --tf32=True \
     --gradient_accumulation_steps=4 \
     --num_train_epochs=4 \
@@ -53,7 +61,7 @@ import wandb
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
-from transformers import AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
 
@@ -170,7 +178,6 @@ if __name__ == "__main__":
     # Configure training args
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
     training_args.remove_unused_columns = False
-    training_args.dataset_kwargs = {"skip_prepare_dataset": True}
 
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config, split="train")
@@ -197,7 +204,7 @@ if __name__ == "__main__":
         quantization_config=bnb_config,
     )
 
-    model = AutoModelForVision2Seq.from_pretrained(model_args.model_name_or_path, **model_kwargs)
+    model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     peft_config = LoraConfig(
         task_type="CAUSAL_LM",
@@ -232,7 +239,7 @@ if __name__ == "__main__":
         train_dataset=prepared_dataset,
         data_collator=collate_fn,
         peft_config=peft_config,
-        tokenizer=processor.tokenizer,
+        processing_class=processor,
     )
 
     # Train model

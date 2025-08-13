@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -38,6 +37,11 @@ class SFTConfig(TrainingArguments):
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string.
+        chat_template_path (`str` or `None`, *optional*, defaults to `None`):
+            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
+            or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
+            ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
+            embedding layer is resized accordingly.
 
         > Parameters that control the data preprocessing
 
@@ -45,7 +49,8 @@ class SFTConfig(TrainingArguments):
             Name of the column that contains text data in the dataset.
         dataset_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
-            `skip_prepare_dataset`.
+            `skip_prepare_dataset`. When the model is a VLM, `skip_prepare_dataset` is automatically treated as `True`
+            regardless of the provided value, since preprocessing is done on the fly.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         eos_token (`str` or `None`, *optional*, defaults to `None`):
@@ -60,14 +65,14 @@ class SFTConfig(TrainingArguments):
         packing (`bool`, *optional*, defaults to `False`):
             Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
             padding. Uses `max_length` to define sequence length.
-        packing_strategy (`str`, *optional*, defaults to `"ffd"`):
-            Strategy for packing sequences. Can be either `"ffd"` (first-fit decreasing, default), or `"wrapped"`.
+        packing_strategy (`str`, *optional*, defaults to `"bfd"`):
+            Strategy for packing sequences. Can be either `"bfd"` (best-fit decreasing, default), or `"wrapped"`.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
-            supported with the `flash_attention_2` attention implementation, which can efficiently handle the flattened
-            batch structure. When packing is enabled with strategy `"ffd"`, padding-free is enabled, regardless of the
-            value of this parameter.
+            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
+            packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
+            parameter.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         eval_packing (`bool` or `None`, *optional*, defaults to `None`):
@@ -99,21 +104,27 @@ class SFTConfig(TrainingArguments):
     logging_steps: float = field(
         default=10,
         metadata={
-            "help": (
-                "Log every X updates steps. Should be an integer or a float in range `[0,1)`. "
-                "If smaller than 1, will be interpreted as ratio of total training steps."
-            )
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
         },
     )
-    bf16: bool = field(
+    gradient_checkpointing: bool = field(
         default=True,
         metadata={
-            "help": (
-                "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
-                "architecture or using CPU (use_cpu) or Ascend NPU. This is an experimental API and it may change."
-            )
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
+        },
+    )
+    # Note: In transformers>=4.54.0, `average_tokens_across_devices` defaults to True. Overriding this setting is only
+    # needed for earlier versions. Once we require transformers>=4.54.0, this line can be safely removed.
+    # See https://github.com/huggingface/transformers/pull/39395
     average_tokens_across_devices: bool = field(
         default=True,
         metadata={
@@ -130,6 +141,15 @@ class SFTConfig(TrainingArguments):
             "the `SFTTrainer` is provided as a string."
         },
     )
+    chat_template_path: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
+            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
+            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
+            "that the model's embedding layer is resized accordingly."
+        },
+    )
 
     # Parameters that control the data preprocessing
     dataset_text_field: str = field(
@@ -140,7 +160,9 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
-            "`skip_prepare_dataset`."
+            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
+            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
+            "since preprocessing is done on the fly."
         },
     )
     dataset_num_proc: Optional[int] = field(
@@ -176,9 +198,9 @@ class SFTConfig(TrainingArguments):
         },
     )
     packing_strategy: str = field(
-        default="ffd",
+        default="bfd",
         metadata={
-            "help": "Strategy for packing sequences. Can be either `'ffd'` (first-fit decreasing, default), or "
+            "help": "Strategy for packing sequences. Can be either `'bfd'` (best-fit decreasing, default), or "
             "`'wrapped'`."
         },
     )
@@ -186,10 +208,10 @@ class SFTConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
-            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, "
-            "this is only supported with the `flash_attention_2` attention implementation, which can efficiently "
-            "handle the flattened batch structure. When packing is enabled with strategy `'ffd'`, padding-free is "
-            "enabled, regardless of the value of this parameter."
+            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
+            "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
+            "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
+            "value of this parameter."
         },
     )
     pad_to_multiple_of: Optional[int] = field(
@@ -229,20 +251,6 @@ class SFTConfig(TrainingArguments):
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
-    # Deprecated parameters
-    max_seq_length: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "This parameter is deprecated and will be removed in version 0.20.0. Use `max_length` instead."
-        },
-    )
-
     def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
         super().__post_init__()
-
-        if self.max_seq_length is not None:
-            warnings.warn(
-                "`max_seq_length` is deprecated and will be removed in version 0.20.0. Use `max_length` instead.",
-                DeprecationWarning,
-            )
-            self.max_length = self.max_seq_length

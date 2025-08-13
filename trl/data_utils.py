@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from itertools import takewhile
@@ -74,6 +73,7 @@ def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
     tokenizer: PreTrainedTokenizerBase,
     tools: Optional[list[Union[dict, Callable]]] = None,
+    **template_kwargs,
 ) -> dict[str, str]:
     r"""
     Apply a chat template to a conversational example along with the schema for a list of functions in `tools`.
@@ -95,7 +95,7 @@ def apply_chat_template(
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
-        messages = tokenizer.apply_chat_template(example["messages"], tools=tools, tokenize=False)
+        messages = tokenizer.apply_chat_template(example["messages"], tools=tools, tokenize=False, **template_kwargs)
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
@@ -114,13 +114,14 @@ def apply_chat_template(
             continue_final_message=continue_final_message,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
+            **template_kwargs,
         )
 
     # Apply the chat template to the entire prompt + completion
     if "prompt" in example:  # explicit prompt and prompt-completion case
         if "chosen" in example:
             prompt_chosen = tokenizer.apply_chat_template(
-                example["prompt"] + example["chosen"], tools=tools, tokenize=False
+                example["prompt"] + example["chosen"], tools=tools, tokenize=False, **template_kwargs
             )
             # DeepSeek-R1 inserts a <think> token when using `add_generation_prompt`, which can cause discrepancies
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
@@ -130,23 +131,25 @@ def apply_chat_template(
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = tokenizer.apply_chat_template(
-                example["prompt"] + example["rejected"], tools=tools, tokenize=False
+                example["prompt"] + example["rejected"], tools=tools, tokenize=False, **template_kwargs
             )
             # Handle DeepSeek-R1 <think> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
-                example["prompt"] + example["completion"], tools=tools, tokenize=False
+                example["prompt"] + example["completion"], tools=tools, tokenize=False, **template_kwargs
             )
             # Handle DeepSeek-R1 <think> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
-            chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False)
+            chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False, **template_kwargs)
         if "rejected" in example:
-            rejected = tokenizer.apply_chat_template(example["rejected"], tools=tools, tokenize=False)
+            rejected = tokenizer.apply_chat_template(
+                example["rejected"], tools=tools, tokenize=False, **template_kwargs
+            )
 
     # Extract the completion by removing the prompt part from the prompt-completion string
     output = {}
@@ -170,6 +173,7 @@ def maybe_apply_chat_template(
     example: dict[str, list[dict[str, str]]],
     tokenizer: PreTrainedTokenizerBase,
     tools: Optional[list[Union[dict, Callable]]] = None,
+    **template_kwargs: Any,
 ) -> dict[str, str]:
     r"""
     If the example is in a conversational format, apply a chat template to it.
@@ -192,7 +196,9 @@ def maybe_apply_chat_template(
             Tokenizer to apply the chat template with.
         tools (`list[Union[dict, Callable]]` or `None`, *optional*, defaults to `None`):
             A list of tools (callable functions) that will be accessible to the model. If the template does not support
-            function calling, this argument will have no effect
+            function calling, this argument will have no effect.
+        **template_kwargs (`Any`, *optional*):
+            Additional kwargs to pass to the template renderer. Will be accessible by the chat template.
 
     Returns:
         `dict[str, str]`:
@@ -220,7 +226,7 @@ def maybe_apply_chat_template(
     ```
     """
     if is_conversational(example):
-        return apply_chat_template(example, tokenizer, tools)
+        return apply_chat_template(example, tokenizer, tools, **template_kwargs)
     else:
         return example
 
@@ -441,47 +447,6 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
     return extract_prompt({"chosen": example["chosen"], "rejected": example["rejected"]})
 
 
-def pack_examples(examples: dict[str, list[list]], seq_length: int) -> dict[str, list[list]]:
-    """
-    Pack examples into chunks of size `seq_length`.
-
-    Args:
-        examples (`dict[str, list[list]]`):
-            Dictionary of examples with keys as strings and values as lists of lists.
-        seq_length (`int`):
-            Maximum sequence length.
-
-    Returns:
-        `dict[str, list[list]]`: Dictionary of examples with keys as strings and values as lists of lists.
-
-    Example:
-
-    ```python
-    >>> from trl import pack_examples
-
-    >>> examples = {
-    ...     "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-    ...     "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-    ... }
-    >>> pack_examples(examples, seq_length=5)
-    {'input_ids': [[1, 2, 3, 4, 5], [6, 7, 8]], 'attention_mask': [[0, 1, 1, 0, 0], [1, 1, 1]]}
-
-    >>> pack_examples(examples, seq_length=2)
-    {'input_ids': [[1, 2], [3, 4], [5, 6], [7, 8]], 'attention_mask': [[0, 1], [1, 0], [0, 1], [1, 1]]}
-    ```
-    """
-    warnings.warn(
-        "`pack_examples` is deprecated and will be removed in version 0.20.0. Use `pack_dataset` with a dataset "
-        "instead.",
-        DeprecationWarning,
-    )
-    # Join  all the values into a single list
-    examples = {k: sum(v, []) for k, v in examples.items()}
-    # Split the values into chunks of size seq_length
-    examples = {k: [v[i : i + seq_length] for i in range(0, len(v), seq_length)] for k, v in examples.items()}
-    return examples
-
-
 class _SegmentTree:
     """
     A segment tree data structure that, when initialized as `_SegmentTree(maxval)`, efficiently finds the next larger
@@ -525,14 +490,8 @@ class _SegmentTree:
         return self.tree[i]
 
 
-def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
-    """Pack sequences in a pyarrow Table using First Fit Decreasing strategy."""
-    # Add position_ids to the examples
-    input_ids = examples["input_ids"]
-    position_ids_python = [list(range(len(sequence))) for sequence in input_ids.to_pylist()]
-    position_ids_array = pa.array(position_ids_python, type=examples["input_ids"].type)
-    examples = examples.append_column("position_ids", position_ids_array)
-
+def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
+    """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
@@ -545,7 +504,9 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
 
     ids = np.arange(len(examples))
     assert list_column_idx is not None
-    lengths = pc.make_struct(pc.list_value_length(examples[list_column_idx]).combine_chunks(), ids)
+    lengths = pc.list_value_length(examples[list_column_idx]).combine_chunks()
+    examples = examples.append_column("seq_lengths", lengths)  # Allows us to later construct `position_ids`
+    lengths = pc.make_struct(lengths, ids)
     lengths = lengths.sort("descending", by=0)
 
     segment_tree = _SegmentTree(seq_length)
@@ -577,15 +538,22 @@ def _pack_ffd(examples: pa.Table, seq_length: int) -> pa.Table:
     offsets = np.array([0] + [bin["length"] for bin in bins])
     offsets = np.cumsum(offsets)
 
+    assert all(
+        column.num_chunks == 1 for column in examples.columns
+    )  # `pc.take` returns a ChunkedArray with a single chunk
+
+    lengths = examples["seq_lengths"].chunks[0]
+    examples = examples.drop_columns("seq_lengths")
+    lengths = pa.ListArray.from_arrays(np.cumsum([0] + [len(bin["ids"]) for bin in bins], dtype=np.int32), lengths)
+
     columns = []
     for column in examples.columns:
-        assert len(column.chunks) == 1  # `pc.take` returns a ChunkedArray with a single chunk
         column = column.chunks[0]
         if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
             dtype = column.offsets.type.to_pandas_dtype()
             column = type(column).from_arrays(offsets.astype(dtype), column.values)
         columns.append(column)
-    return pa.Table.from_arrays(columns, names=examples.column_names)
+    return pa.Table.from_arrays(columns + [lengths], names=examples.column_names + ["seq_lengths"])
 
 
 def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
@@ -607,7 +575,7 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
 
 
 def pack_dataset(
-    dataset: DatasetType, seq_length: int, strategy: str = "ffd", map_kwargs: Optional[dict[str, Any]] = None
+    dataset: DatasetType, seq_length: int, strategy: str = "bfd", map_kwargs: Optional[dict[str, Any]] = None
 ) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
@@ -617,10 +585,10 @@ def pack_dataset(
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
-        strategy (`str`, *optional*, defaults to `"ffd"`):
+        strategy (`str`, *optional*, defaults to `"bfd"`):
             Packing strategy to use. Can be either:
 
-            - `"ffd"` (First Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
+            - `"bfd"` (Best Fit Decreasing): Slower but preserves sequence boundaries. Sequences are never cut in the
                 middle.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
@@ -641,7 +609,7 @@ def pack_dataset(
     ...     "attention_mask": [[1, 1, 0], [1, 0], [1, 0, 0], [1]],
     ... }
     >>> dataset = Dataset.from_dict(examples)
-    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="ffd")
+    >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
     {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
      'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
@@ -651,12 +619,12 @@ def pack_dataset(
         map_kwargs = {}
     # Fast packing with pyarrow
     dataset = dataset.with_format("arrow")
-    if strategy == "ffd":
-        dataset = dataset.map(_pack_ffd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
+    if strategy == "bfd":
+        dataset = dataset.map(_pack_bfd, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     elif strategy == "wrapped":
         dataset = dataset.map(_pack_wrapped, batched=True, fn_kwargs={"seq_length": seq_length}, **map_kwargs)
     else:
-        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'ffd' or 'wrapped'.")
+        raise ValueError(f"Invalid packing strategy: {strategy}. Use 'bfd' or 'wrapped'.")
     dataset = dataset.with_format(None)
     return dataset
 

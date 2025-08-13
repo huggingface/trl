@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 """
 Run the CPO training script with the following command with some example arguments.
 In general, the optimal configuration for CPO will be similar to that of DPO:
@@ -28,7 +35,6 @@ python examples/scripts/cpo.py \
     --output_dir="gpt2-aligned-cpo" \
     --warmup_steps 150 \
     --report_to wandb \
-    --bf16 \
     --logging_first_step \
     --no_remove_unused_columns
 
@@ -45,7 +51,6 @@ python examples/scripts/cpo.py \
     --optim rmsprop \
     --warmup_steps 150 \
     --report_to wandb \
-    --bf16 \
     --logging_first_step \
     --no_remove_unused_columns \
     --use_peft \

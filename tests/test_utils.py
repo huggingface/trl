@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import textwrap
-import unittest
 from io import StringIO
 from unittest.mock import patch
 
@@ -31,6 +30,7 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
     decode_and_strip_padding,
+    entropy_from_logits,
     flush_left,
     flush_right,
     generate_model_card,
@@ -40,14 +40,14 @@ from trl.trainer.utils import (
     selective_log_softmax,
 )
 
-from .testing_utils import require_rich
+from .testing_utils import TrlTestCase, require_rich
 
 
 if is_peft_available():
     from peft import LoraConfig
 
 
-class TestPad(unittest.TestCase):
+class TestPad(TrlTestCase):
     def test_pad_1_dim_left(self):
         x = torch.tensor([1, 2, 3])
         y = torch.tensor([4, 5])
@@ -132,7 +132,7 @@ class TestPad(unittest.TestCase):
 
 
 @require_peft
-class TestGetPEFTConfig(unittest.TestCase):
+class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
         """Test that when use_peft is False, the function returns None."""
         model_args = ModelConfig(use_peft=False)
@@ -165,8 +165,9 @@ class TestGetPEFTConfig(unittest.TestCase):
             self.assertEqual(getattr(peft_config, arg), value)
 
 
-class TestDecodeAndStripPadding(unittest.TestCase):
+class TestDecodeAndStripPadding(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
     def test_example_with_padding(self):
@@ -180,7 +181,7 @@ class TestDecodeAndStripPadding(unittest.TestCase):
         self.assertEqual(decoded, ["Hello", "Hello"])
 
 
-class TestGenerateModelCard(unittest.TestCase):
+class TestGenerateModelCard(TrlTestCase):
     def test_full(self):
         model_card = generate_model_card(
             base_model="username/my_base_model",
@@ -226,8 +227,9 @@ class TestGenerateModelCard(unittest.TestCase):
         self.assertIn("My Trainer", card_text)
 
 
-class TestDataCollatorForChatML(unittest.TestCase):
+class TestDataCollatorForChatML(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Initialize the tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         if self.tokenizer.pad_token is None:
@@ -322,8 +324,9 @@ class TestDataCollatorForChatML(unittest.TestCase):
         )
 
 
-class TestBatchGeneration(unittest.TestCase):
+class TestBatchGeneration(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Initialize the tokenizer
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -381,7 +384,7 @@ class TestBatchGeneration(unittest.TestCase):
         self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
 
 
-class TestComputeAccuracy(unittest.TestCase):
+class TestComputeAccuracy(TrlTestCase):
     def test_token_classification_task(self):
         eval_pred = (
             np.array(
@@ -448,7 +451,7 @@ class TestComputeAccuracy(unittest.TestCase):
         self.assertEqual(str(cm.warning), expected_warning)
 
 
-class TestFlushLeft(unittest.TestCase):
+class TestFlushLeft(TrlTestCase):
     def test_basic_case(self):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         tensor1 = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 0, 0]])
@@ -492,7 +495,7 @@ class TestFlushLeft(unittest.TestCase):
         self.assertTrue(torch.equal(new_mask, expected_mask))
 
 
-class TestFlushRight(unittest.TestCase):
+class TestFlushRight(TrlTestCase):
     def test_basic_case(self):
         mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
         tensor1 = torch.tensor([[2, 3, 4, 0, 0], [0, 0, 5, 6, 0]])
@@ -536,7 +539,7 @@ class TestFlushRight(unittest.TestCase):
         self.assertTrue(torch.equal(new_mask, expected_mask))
 
 
-class TestSelectiveLogSoftmax(unittest.TestCase):
+class TestSelectiveLogSoftmax(TrlTestCase):
     @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
     def test_selective_log_softmax(self, dtype):
         """Test selective_log_softmax with logits of different dtypes"""
@@ -558,7 +561,7 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
 
 
 @require_rich
-class TestPrintPromptCompletionsSample(unittest.TestCase):
+class TestPrintPromptCompletionsSample(TrlTestCase):
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
@@ -608,3 +611,24 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
                 """),
         ]  # docstyle-ignore
         self.assertIn(output, possible_outputs)
+
+
+class TestEntropyFromLogits(TrlTestCase):
+    @parameterized.expand(
+        [
+            (dtype, chunk_size)
+            for dtype in (torch.float64, torch.float32, torch.float16, torch.bfloat16)
+            for chunk_size in (1, 16)
+        ]
+    )
+    def test_entropy_from_logits(self, dtype, chunk_size):
+        batch_size, seq_len, vocab_size = 64, 384, 768
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+        if dtype in (torch.float64, torch.float32):
+            p = logits.softmax(-1)
+            entropy = -torch.sum(p * p.log(), dim=-1)
+        else:
+            logps = logits.log_softmax(dim=-1)
+            entropy = -(torch.exp(logps) * logps).sum(-1)
+        predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
+        torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)

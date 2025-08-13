@@ -162,16 +162,17 @@ This constant is recommended to be the maximum completion length. To use this fo
 - `reward`: The overall average reward after applying reward weights.
 - `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
-- `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero. 
-- `clip_ratio/region_mean`: The ratio of token probabilities where the GRPO objective is clipped to stay within the trust region:
+- `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
+- `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
+- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:
 $$
 \text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
 $$
 A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
-- `clip_ratio/low_mean`: The average ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/low_min`: The minimum ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/high_mean`: The average ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
-- `clip_ratio/high_max`: The maximum ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
 
@@ -228,7 +229,7 @@ training_args = GRPOConfig(
 
 Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
 
-We provide a [small script](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
+We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
 
 <iframe
 	src="https://trl-lib-recommend-vllm-memory.hf.space"
@@ -238,6 +239,12 @@ We provide a [small script](https://huggingface.co/spaces/trl-lib/recommend-vllm
 ></iframe>
 
 If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
+
+</Tip>
+
+<Tip>
+
+By default, GRPO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, but you can override these values by setting the environment variables accordingly.
 
 </Tip>
 
@@ -325,6 +332,7 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
      - `prompts` (contains the prompts),
      - `completions` (contains the generated completions),
      - `completions_ids` (contains the tokenized completions),
+     - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
      - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
@@ -515,13 +523,77 @@ trainer = GRPOTrainer(
     ...,
 )
 ```
+
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+## Vision-Language Model (VLM) Training
+
+GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
+
+### Supported Models
+
+Tested with:
+
+- **Gemma3** — e.g., `google/gemma-3-4b-it`
+- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
+- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
+- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
+- **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
+  
+<Tip>
+Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+</Tip>
+
+### Quick Start
+
+Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+
+```bash
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/grpo_vlm.py \
+  --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
+  --output_dir grpo-Qwen2.5-VL-3B-Instruct \
+  --learning_rate 1e-5 \
+  --gradient_checkpointing \
+  --torch_dtype bfloat16 \
+  --max_prompt_length 2048 \
+  --max_completion_length 1024 \
+  --use_vllm \
+  --vllm_mode colocate \
+  --use_peft \
+  --lora_target_modules "q_proj", "v_proj" \
+  --log_completions
+```
+
+### Configuration Tips
+
+<Tip warning={true}>
+VLM training may fail if image tokens are truncated. We highly recommend to disable truncation by setting `max_prompt_length` to `None`.
+</Tip>
+
+- Use LoRA on vision-language projection layers
+- Enable 4-bit quantization to reduce memory usage
+- VLMs are memory-intensive — start with smaller batch sizes
+- Most models are compatible with vLLM (`server` and `colocate` modes)
+
+### Dataset Format
+
+Each training sample should include:
+
+- `prompt`: Text formatted via the processor's chat template
+- `image`: A single image (PIL or NumPy array)
+
+The trainer automatically handles image-to-tensor conversion via the model’s image processor.
+
 ## GRPOTrainer
 
 [[autodoc]] GRPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## GRPOConfig
 

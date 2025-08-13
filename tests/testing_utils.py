@@ -13,6 +13,8 @@
 # limitations under the License.
 
 import random
+import shutil
+import tempfile
 import unittest
 
 import torch
@@ -101,7 +103,7 @@ def require_3_accelerators(test_case):
     """
     torch_accelerator_module = getattr(torch, torch_device, torch.cuda)
     return unittest.skipUnless(
-        torch_accelerator_module.device_count() > 3, f"test requires at least 3 {torch_device}s"
+        torch_accelerator_module.device_count() >= 3, f"test requires at least 3 {torch_device}s"
     )(test_case)
 
 
@@ -124,3 +126,17 @@ class RandomPairwiseJudge(BasePairwiseJudge):
             return [random.randint(0, len(completion) - 1) for completion in completions]
         else:
             return [random.random() for _ in range(len(prompts))]
+
+
+class TrlTestCase(unittest.TestCase):
+    """
+    Base test case for TRL tests. Sets up a temporary directory for testing.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+        super().tearDown()

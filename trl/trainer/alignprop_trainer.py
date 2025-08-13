@@ -14,10 +14,10 @@
 
 import os
 import textwrap
+import warnings
 from collections import defaultdict
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
-from warnings import warn
 
 import torch
 from accelerate import Accelerator
@@ -66,8 +66,12 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         sd_pipeline: DDPOStableDiffusionPipeline,
         image_samples_hook: Optional[Callable[[Any, Any, Any], Any]] = None,
     ):
+        warnings.warn(
+            "AlignPropTrainer is deprecated and will be removed in version 0.23.0.",
+            DeprecationWarning,
+        )
         if image_samples_hook is None:
-            warn("No image_samples_hook provided; no images will be logged")
+            warnings.warn("No image_samples_hook provided; no images will be logged")
 
         self.prompt_fn = prompt_function
         self.reward_fn = reward_function
@@ -453,7 +457,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="AlignProp",
             trainer_citation=citation,

@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 """
 Run the BCO training script with the commands below. In general, the optimal configuration for BCO will be similar to that of KTO.
 
@@ -35,7 +42,6 @@ python examples/scripts/bco.py \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
-    --bf16 \
     --report_to wandb
 
 # QLoRA:
@@ -58,7 +64,6 @@ python examples/scripts/bco.py \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
-    --bf16 \
     --use_peft \
     --load_in_4bit \
     --lora_target_modules=all-linear \
