@@ -18,6 +18,8 @@
 #     "peft",
 #     "diffusers>=0.18.0",
 #     "einops",
+#     "scikit-learn",
+#     "joblib",
 # ]
 # ///
 
@@ -43,7 +45,7 @@ python examples/scripts/bco.py \
     --max_prompt_length 1536 \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
-    --warmup_ratio 0.1 \
+    --warmup_ratio 0.1
 
 # QLoRA:
 python examples/scripts/bco.py \
