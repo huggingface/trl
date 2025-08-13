@@ -22,7 +22,7 @@
 """
 Usage:
 
-python examples/scripts/dpo_online.py \
+python examples/scripts/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
@@ -34,7 +34,7 @@ python examples/scripts/dpo_online.py \
     --missing_eos_penalty 1.0
 
 With LoRA:
-python examples/scripts/dpo_online.py \
+python examples/scripts/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
