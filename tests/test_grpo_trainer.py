@@ -1890,6 +1890,90 @@ class GRPOTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
+    def test_mismatched_reward_processing_classes_length(self):
+        """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        # Use two reward models
+        reward_models = [
+            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "trl-internal-testing/tiny-Qwen3ForSequenceClassification",
+        ]
+
+        # Create a single processing class (tokenizer)
+        single_processing_class = AutoTokenizer.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        )
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+
+        with self.assertRaises(ValueError) as context:
+            GRPOTrainer(
+                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                reward_funcs=reward_models,
+                reward_processing_classes=single_processing_class,  # only one, but need two
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+        self.assertIn("must match", str(context.exception))
+
+    def test_correct_reward_processing_classes_list(self):
+        """Test that correct list of reward_processing_classes works properly."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        # Use two reward models
+        reward_models = [
+            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            "trl-internal-testing/tiny-Qwen3ForSequenceClassification",
+        ]
+
+        # Create processing classes
+        processing_class1 = AutoTokenizer.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        )
+        processing_class2 = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForSequenceClassification")
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+
+        # Correct list length should work
+        correct_processing_classes = [processing_class1, processing_class2]
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_models,
+            reward_processing_classes=correct_processing_classes,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        self.assertEqual(len(trainer.reward_processing_classes), len(reward_models))
+
+    def test_single_reward_model_with_single_processing_class(self):
+        """Test that single reward model with single processing class works."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        # Use single reward model
+        reward_model = "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+
+        # Create a single processing class (tokenizer)
+        single_processing_class = AutoTokenizer.from_pretrained(
+            "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
+        )
+
+        training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
+
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=reward_model,
+            reward_processing_classes=single_processing_class,  # single object for single reward model
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        self.assertEqual(len(trainer.reward_processing_classes), 1)
+        self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
+
 
 if __name__ == "__main__":
     unittest.main()
