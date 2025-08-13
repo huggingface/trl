@@ -17,6 +17,7 @@
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
 #     "Pillow>=9.4.0",
+#     "torchvision",
 # ]
 # ///
 
