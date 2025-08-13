@@ -603,20 +603,12 @@ class GRPOTrainer(Trainer):
         if reward_processing_classes is None:
             reward_processing_classes = [None] * len(reward_funcs)
         elif not isinstance(reward_processing_classes, list):
-            # Single processing class is only valid for single reward function
-            if len(reward_funcs) > 1:
-                raise ValueError(
-                    f"When using multiple reward functions ({len(reward_funcs)}), "
-                    f"you must provide a list of reward processing classes, one for each reward function. "
-                    f"Received a single reward processing class instead."
-                )
             reward_processing_classes = [reward_processing_classes]
-        else:
-            if len(reward_processing_classes) != len(reward_funcs):
-                raise ValueError(
-                    f"The number of reward processing classes ({len(reward_processing_classes)}) must match "
-                    f"the number of reward functions ({len(reward_funcs)})."
-                )
+        if len(reward_processing_classes) != len(reward_funcs):
+            raise ValueError(
+                f"The number of reward processing classes ({len(reward_processing_classes)}) must match the number of "
+                f"reward functions ({len(reward_funcs)})."
+            )
 
         for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
             if isinstance(reward_func, PreTrainedModel):
