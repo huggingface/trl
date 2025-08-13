@@ -22,7 +22,15 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
 from tests.testing_utils import require_comet, require_mergekit
-from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
+from trl import (
+    BasePairwiseJudge,
+    BEMACallback,
+    DPOConfig,
+    DPOTrainer,
+    LogCompletionsCallback,
+    MergeModelCallback,
+    WinRateCallback,
+)
 from trl.mergekit_utils import MergeConfig
 
 from .testing_utils import TrlTestCase
@@ -380,144 +388,143 @@ class BEMACallbackTester(TrlTestCase):
         self.dataset = dataset.map(tokenize_function, batched=True)
 
     def test_basic(self):
-        """Test that BEMACallback initializes and runs without errors."""        
-          training_args = TrainingArguments(
-              output_dir=tmp_dir,
-              num_train_epochs=1,
-              per_device_train_batch_size=2,
-              report_to="none",
-              save_strategy="no",
-          )
-          trainer = Trainer(
-              model=self.model,
-              args=training_args,
-              train_dataset=self.dataset["train"],
-              processing_class=self.tokenizer,
-          )
-          bema_callback = BEMACallback(
-              update_freq=2,
-              ema_power=0.5,
-              eta_power=0.2,
-              update_after=0,
-              device="cpu",
-          )
-          trainer.add_callback(bema_callback)
-          trainer.train()
+        """Test that BEMACallback initializes and runs without errors."""
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            report_to="none",
+            save_strategy="no",
+        )
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+        )
+        bema_callback = BEMACallback(
+            update_freq=2,
+            ema_power=0.5,
+            eta_power=0.2,
+            update_after=0,
+            device="cpu",
+        )
+        trainer.add_callback(bema_callback)
+        trainer.train()
 
-          # Check that the BEMA model was saved
-          bema_path = os.path.join(tmp_dir, "bema.pt")
-          self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
+        # Check that the BEMA model was saved
+        bema_path = os.path.join(self.tmp_dir, "bema.pt")
+        self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
 
     def test_update_after(self):
         """Test that BEMA callback respects the update_after parameter."""
-          training_args = TrainingArguments(
-              output_dir=tmp_dir,
-              num_train_epochs=1,
-              per_device_train_batch_size=2,
-              report_to="none",
-              save_strategy="no",
-          )
-          trainer = Trainer(
-              model=self.model,
-              args=training_args,
-              train_dataset=self.dataset["train"],
-              processing_class=self.tokenizer,
-          )
-          bema_callback = BEMACallback(
-              update_freq=1,
-              ema_power=0.5,
-              eta_power=0.2,
-              update_after=5,  # Start updating after 5 steps
-              device="cpu",
-          )
-          trainer.add_callback(bema_callback)
-          trainer.train()
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            report_to="none",
+            save_strategy="no",
+        )
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+        )
+        bema_callback = BEMACallback(
+            update_freq=1,
+            ema_power=0.5,
+            eta_power=0.2,
+            update_after=5,  # Start updating after 5 steps
+            device="cpu",
+        )
+        trainer.add_callback(bema_callback)
+        trainer.train()
 
-          # Check that the BEMA model was saved
-          bema_path = os.path.join(tmp_dir, "bema.pt")
-          self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
+        # Check that the BEMA model was saved
+        bema_path = os.path.join(self.tmp_dir, "bema.pt")
+        self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
 
     def test_different_devices(self):
         """Test that BEMA callback works with different device settings."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = TrainingArguments(
-                output_dir=tmp_dir,
-                num_train_epochs=1,
-                per_device_train_batch_size=2,
-                report_to="none",
-                save_strategy="no",
-            )
-            trainer = Trainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dataset["train"],
-                processing_class=self.tokenizer,
-            )
-            bema_callback = BEMACallback(
-                update_freq=2,
-                ema_power=0.5,
-                eta_power=0.2,
-                device="cpu",  # Explicitly use CPU
-            )
-            trainer.add_callback(bema_callback)
-            trainer.train()
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            report_to="none",
+            save_strategy="no",
+        )
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+        )
+        bema_callback = BEMACallback(
+            update_freq=2,
+            ema_power=0.5,
+            eta_power=0.2,
+            device="cpu",  # Explicitly use CPU
+        )
+        trainer.add_callback(bema_callback)
+        trainer.train()
 
-            # Check that the BEMA model was saved
-            bema_path = os.path.join(tmp_dir, "bema.pt")
-            self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
+        # Check that the BEMA model was saved
+        bema_path = os.path.join(self.tmp_dir, "bema.pt")
+        self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
 
     def test_ema_power_negative(self):
         """Test that BEMA callback works when ema_power is negative (no EMA, just BEMA)."""
-          training_args = TrainingArguments(
-              output_dir=tmp_dir,
-              num_train_epochs=1,
-              per_device_train_batch_size=2,
-              report_to="none",
-              save_strategy="no",
-          )
-          trainer = Trainer(
-              model=self.model,
-              args=training_args,
-              train_dataset=self.dataset["train"],
-              processing_class=self.tokenizer,
-          )
-          bema_callback = BEMACallback(
-              update_freq=2,
-              ema_power=-1.0,  # Negative ema_power
-              eta_power=0.2,
-              device="cpu",
-          )
-          trainer.add_callback(bema_callback)
-          trainer.train()
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            report_to="none",
+            save_strategy="no",
+        )
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+        )
+        bema_callback = BEMACallback(
+            update_freq=2,
+            ema_power=-1.0,  # Negative ema_power
+            eta_power=0.2,
+            device="cpu",
+        )
+        trainer.add_callback(bema_callback)
+        trainer.train()
 
-          # Check that the BEMA model was saved
-          bema_path = os.path.join(tmp_dir, "bema.pt")
-          self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
+        # Check that the BEMA model was saved
+        bema_path = os.path.join(self.tmp_dir, "bema.pt")
+        self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
 
     def test_eta_power_negative(self):
         """Test that BEMA callback works when eta_power is negative (no BEMA, just EMA)."""
-          training_args = TrainingArguments(
-              output_dir=tmp_dir,
-              num_train_epochs=1,
-              per_device_train_batch_size=2,
-              report_to="none",
-              save_strategy="no",
-          )
-          trainer = Trainer(
-              model=self.model,
-              args=training_args,
-              train_dataset=self.dataset["train"],
-              processing_class=self.tokenizer,
-          )
-          bema_callback = BEMACallback(
-              update_freq=2,
-              ema_power=0.5,
-              eta_power=-1.0,  # Negative eta_power
-              device="cpu",
-          )
-          trainer.add_callback(bema_callback)
-          trainer.train()
+        training_args = TrainingArguments(
+            output_dir=self.tmp_dir,
+            num_train_epochs=1,
+            per_device_train_batch_size=2,
+            report_to="none",
+            save_strategy="no",
+        )
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+        )
+        bema_callback = BEMACallback(
+            update_freq=2,
+            ema_power=0.5,
+            eta_power=-1.0,  # Negative eta_power
+            device="cpu",
+        )
+        trainer.add_callback(bema_callback)
+        trainer.train()
 
-          # Check that the BEMA model was saved
-          bema_path = os.path.join(tmp_dir, "bema.pt")
-          self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
+        # Check that the BEMA model was saved
+        bema_path = os.path.join(self.tmp_dir, "bema.pt")
+        self.assertTrue(os.path.exists(bema_path), "BEMA model was not saved")
