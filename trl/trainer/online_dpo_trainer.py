@@ -1383,12 +1383,13 @@ class OnlineDPOTrainer(Trainer):
         loss = losses.mean()
 
         # Log everything
-        # if self.reward_funcs is not None:
-        #    scores_margin = scores[chosen_indices] - scores[rejected_indices]
-        #    self.stats["objective/scores_margin"].append(
-        #        self.accelerator.gather_for_metrics(scores_margin.mean()).mean().item()
-        #    )
-        #    self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(scores.mean()).mean().item())
+        if self.reward_funcs is not None:
+            # When using reward_funcs, we have rewards instead of scores
+            scores_margin = rewards[chosen_indices] - rewards[rejected_indices]
+            self.stats["objective/scores_margin"].append(
+                self.accelerator.gather_for_metrics(scores_margin.mean()).mean().item()
+            )
+            self.stats["objective/scores"].append(self.accelerator.gather_for_metrics(rewards.mean()).mean().item())
         self.stats["val/contain_eos_token"].append(contain_eos_token.float().mean().item())
         self.stats["logps/chosen"].append(self.accelerator.gather_for_metrics(chosen_logprobs_sum).mean().item())
         self.stats["logps/rejected"].append(self.accelerator.gather_for_metrics(rejected_logprobs_sum).mean().item())
@@ -1401,9 +1402,10 @@ class OnlineDPOTrainer(Trainer):
         self.stats["objective/non_score_reward"].append(
             self.accelerator.gather_for_metrics(mean_non_score_reward).mean().item()
         )
-        # if self.reward_model is not None:
-        #    rlhf_reward = scores + non_score_reward
-        #    self.stats["objective/rlhf_reward"].append(self.accelerator.gather_for_metrics(rlhf_reward).mean().item())
+        if self.reward_funcs is not None:
+            # Calculate RLHF reward by combining rewards with non_score_reward
+            rlhf_reward = rewards + non_score_reward
+            self.stats["objective/rlhf_reward"].append(self.accelerator.gather_for_metrics(rlhf_reward).mean().item())
         mean_entropy = -logprobs.sum(1).mean()
         self.stats["objective/entropy"].append(self.accelerator.gather_for_metrics(mean_entropy).mean().item())
         chosen_rewards = self.beta * (chosen_logprobs_sum - chosen_ref_logprobs_sum)
