@@ -579,21 +579,36 @@ class MergeModelCallback(TrainerCallback):
 
 
 class BEMACallback(TrainerCallback):
-    """
-    A [`~transformers.TrainerCallback`] that implements [BEMA](https://huggingface.co/papers/2508.00180) (Bias Corrected Exponential Moving Average) by [Adam Block](https://huggingface.co/abblock) and [Cyril Zhang](https://huggingface.co/cyrilzhang).
-    Code from https://github.com/abblock/bema under MIT license.
+    r"""
+    A [`~transformers.TrainerCallback`] that implements [BEMA](https://huggingface.co/papers/2508.00180) (Bias
+    Corrected Exponential Moving Average) by [Adam Block](https://huggingface.co/abblock) and [Cyril
+    Zhang](https://huggingface.co/cyrilzhang). Code from https://github.com/abblock/bema under MIT license.
 
     BEMA computes model weights that scale like:
-        \\theta_t' = \\alpha_t \\cdot (\\theta_t - \\theta_0) + \\text{EMA}_t
 
-    where \\theta_t is the current model weights, \\theta_0 is a snapshot of the model weights at the first update_after step,
-    \\text{EMA}_t is the exponential moving average of the model weights, and \\alpha_t is a scaling factor that decays with the
-    number of steps t as \\alpha_t = (1 + \\gamma \\cdot t)^{-\\eta}.
+    $$
+    \theta_t' = \alpha_t \cdot (\theta_t - \theta_0) + \text{EMA}_t
+    $$
+
+    where  \\( theta_t \\) is the current model weights,  \\( \theta_0 \\) is a snapshot of the model weights at the
+    first update_after step,  \\( \text{EMA}_t  \\) is the exponential moving average of the model weights, and
+    \(( \\alpha_t \\) is a scaling factor that decays with the number of steps t as
+
+    $$
+    \alpha_t = (1 + \gamma \cdot t)^{-\eta}.
+    $$
 
     The EMA is computed as:
-        \\text{EMA}_t = \\beta_t \\cdot \\theta_t + (1 - \\beta_t) \\cdot \\text{EMA}_{t-1}
 
-    where \\beta_t is a decay factor that decays with the number of steps t as \\beta_t = (1 + \\gamma \\cdot t)^{-\\text{ema}}.
+    $$
+    \text{EMA}_t = \beta_t \cdot \theta_t + (1 - \beta_t) \cdot \text{EMA}_{t-1}
+    $$
+
+    where  \\( \beta_t \\) is a decay factor that decays with the number of steps  \\( t \\) as
+
+    $$
+    \beta_t = (1 + \gamma \cdot t)^{-\text{EMA}}.
+    $$
 
     Args:
         trainer (`Trainer`, *optional*, defaults to `None`):
@@ -667,7 +682,7 @@ class BEMACallback(TrainerCallback):
         ref_model_update_freq: int = 100,
         ref_model_update_after: int = 0,
     ):
-        # user-provided hyperparams
+        # User-provided hyperparams
         self.trainer = trainer
         self.update_freq = update_freq
         self.ema_power = ema_power
@@ -683,7 +698,7 @@ class BEMACallback(TrainerCallback):
         self.ref_model_update_freq = ref_model_update_freq
         self.ref_model_update_after = ref_model_update_after
 
-        # internal state
+        # Internal state
         self.initialized = False
         self.param_names = []  # references to training model params
         self.thetat_params = []  # references to training model params
