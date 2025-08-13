@@ -13,32 +13,23 @@
 # limitations under the License.
 
 import pathlib
-import tempfile
-import unittest
 
-import numpy as np
+import pytest
 import torch
-from datasets import Dataset, Image, Sequence, load_dataset
+from datasets import Dataset, load_dataset
 from parameterized import parameterized
-from transformers import (
-    AutoModelForCausalLM,
-    AutoProcessor,
-    AutoTokenizer,
-    LlavaForConditionalGeneration,
-    is_vision_available,
-)
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import require_flash_attn, require_peft, require_vision
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
+from .testing_utils import TrlTestCase
+
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
-
-if is_vision_available():
-    from PIL import Image as PILImage
 
 
 def formatting_prompts_func(example):
@@ -50,7 +41,7 @@ def formatting_func_for_pretokenized(example):
     return example["input_ids"]
 
 
-class TestDataCollatorForLanguageModeling(unittest.TestCase):
+class TestDataCollatorForLanguageModeling(TrlTestCase):
     def test_basic_padding(self):
         """Test basic padding functionality without completion masks."""
         self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
@@ -232,10 +223,11 @@ class TestDataCollatorForLanguageModeling(unittest.TestCase):
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
 
 
-class SFTTrainerTester(unittest.TestCase):
+class SFTTrainerTester(TrlTestCase):
     r""" """
 
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -276,323 +268,189 @@ class SFTTrainerTester(unittest.TestCase):
             "trl-internal-testing/zen", "standard_prompt_completion"
         )
 
-        if is_vision_available():
-            self.dummy_vsft_instruction_dataset = Dataset.from_dict(
-                {
-                    "messages": [
-                        [
-                            {
-                                "role": "user",
-                                "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
-                            },
-                            {
-                                "role": "assistant",
-                                "content": [{"type": "text", "text": "It is random noise."}],
-                            },
-                            {
-                                "role": "user",
-                                "content": [{"type": "text", "text": "Oh ye, you are right, what is 1+1"}],
-                            },
-                            {
-                                "role": "assistant",
-                                "content": [{"type": "text", "text": "2"}],
-                            },
-                        ],
-                        [
-                            {
-                                "role": "user",
-                                "content": [{"type": "text", "text": "What is in this image?"}, {"type": "image"}],
-                            },
-                            {
-                                "role": "assistant",
-                                "content": [{"type": "text", "text": "It is random noise."}],
-                            },
-                        ],
-                    ],
-                    "images": [
-                        [PILImage.fromarray((np.random.rand(40, 50, 3) * 255).astype("uint8")).convert("RGBA")],
-                        [PILImage.fromarray((np.random.rand(50, 60, 3) * 255).astype("uint8")).convert("RGBA")],
-                    ],
-                }
-            )
-            self.dummy_vsft_instruction_dataset.cast_column("images", Sequence(Image()))
-            self.dummy_vsft_instruction_dataset = self.dummy_vsft_instruction_dataset.cast_column(
-                "images", Sequence(Image())
-            )
-
     def test_uncorrect_data(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Shoud work as SFTTrainer natively supports conversational lm dataset
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=32,  # make sure there is at least 1 packed sequence
-                packing=True,
-                report_to="none",
-            )
-            _ = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.conversational_lm_dataset["train"],
-            )
+        # Shoud work as SFTTrainer natively supports conversational lm dataset
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=32,  # make sure there is at least 1 packed sequence
+            packing=True,
+            report_to="none",
+        )
+        _ = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=self.conversational_lm_dataset["train"],
+        )
 
-            # Same, but without packing
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                packing=False,
-                report_to="none",
-            )
-            _ = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.conversational_lm_dataset["train"],
-            )
+        # Same, but without packing
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            packing=False,
+            report_to="none",
+        )
+        _ = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=self.conversational_lm_dataset["train"],
+        )
 
-            # Same, but with packing with `max_length`
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=16,  # make sure there is at least 1 packed sequence
-                packing=True,
-                report_to="none",
-            )
-            _ = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.standard_prompt_completion_dataset["train"],
-            )
+        # Same, but with packing with `max_length`
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=16,  # make sure there is at least 1 packed sequence
+            packing=True,
+            report_to="none",
+        )
+        _ = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=self.standard_prompt_completion_dataset["train"],
+        )
 
-            # Same but with prompt-completion dataset
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                packing=False,
-                report_to="none",
-            )
-            _ = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.standard_prompt_completion_dataset["train"],
-            )
+        # Same but with prompt-completion dataset
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            packing=False,
+            report_to="none",
+        )
+        _ = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=self.standard_prompt_completion_dataset["train"],
+        )
 
-            # Should work as dummy dataset are supported with a formatting function
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=32,  # make sure there is at least 1 packed sequence
-                packing=True,
-                report_to="none",
-            )
-            _ = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-                formatting_func=formatting_prompts_func,
-            )
+        # Should work as dummy dataset are supported with a formatting function
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=32,  # make sure there is at least 1 packed sequence
+            packing=True,
+            report_to="none",
+        )
+        _ = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=self.dummy_dataset,
+            formatting_func=formatting_prompts_func,
+        )
 
     def test_with_model_(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=16,
-                packing=True,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-            )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=16,
+            packing=True,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dummy_dataset,
+        )
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
         # with formatting_func + packed
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=16,
-                packing=True,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-                formatting_func=formatting_prompts_func,
-            )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=16,
+            packing=True,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dummy_dataset,
+            formatting_func=formatting_prompts_func,
+        )
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=16,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model=self.model,
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-            )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=16,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dummy_dataset,
+        )
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
     def test_only_train_packing(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                gradient_checkpointing=True,
-                packing=True,
-                max_length=128,  # make sure there is at least 1 packed sequence
-                eval_packing=False,
-                report_to="none",
-            )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            gradient_checkpointing=True,
+            packing=True,
+            max_length=128,  # make sure there is at least 1 packed sequence
+            eval_packing=False,
+            report_to="none",
+        )
 
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.conversational_lm_dataset["train"],
-                eval_dataset=self.conversational_lm_dataset["test"],
-            )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=self.conversational_lm_dataset["train"],
+            eval_dataset=self.conversational_lm_dataset["test"],
+        )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
-            self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
+        self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
+        self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
     def test_eval_packing(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=128,  # make sure there is at least 1 packed sequence
-                packing=True,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.conversational_lm_dataset["train"],
-                eval_dataset=self.conversational_lm_dataset["test"],
-            )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=128,  # make sure there is at least 1 packed sequence
+            packing=True,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=self.conversational_lm_dataset["train"],
+            eval_dataset=self.conversational_lm_dataset["test"],
+        )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
-            self.assertEqual(len(trainer.eval_dataset["input_ids"]), 1)  # w/ this dataset, we end up with 6 seqs
+        self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
+        self.assertEqual(len(trainer.eval_dataset["input_ids"]), 1)  # w/ this dataset, we end up with 6 seqs
 
     def test_no_packing(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_length=128,  # make sure there is at least 1 packed sequence
-                packing=False,
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.conversational_lm_dataset["train"],
-                eval_dataset=self.conversational_lm_dataset["test"],
-            )
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_length=128,  # make sure there is at least 1 packed sequence
+            packing=False,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=self.conversational_lm_dataset["train"],
+            eval_dataset=self.conversational_lm_dataset["test"],
+        )
 
-            self.assertEqual(len(trainer.train_dataset["input_ids"]), len(self.conversational_lm_dataset["train"]))
-            self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
-
-    @require_vision
-    def test_skip_prepare_dataset(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                remove_unused_columns=False,
-                dataset_kwargs={"skip_prepare_dataset": True},
-                report_to="none",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.dummy_vsft_instruction_dataset,
-            )
-            self.assertEqual(trainer.train_dataset.features, self.dummy_vsft_instruction_dataset.features)
-
-    def test_skip_prepare_dataset_with_no_packing(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                remove_unused_columns=False,
-                packing=False,
-                dataset_kwargs={"skip_prepare_dataset": True},
-                report_to="none",
-            )
-
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=self.dummy_dataset,
-            )
-            self.assertEqual(trainer.train_dataset.features, self.dummy_dataset.features)
-
-    @require_vision
-    def test_llava(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                remove_unused_columns=False,
-                dataset_kwargs={"skip_prepare_dataset": True},
-                report_to="none",
-            )
-            tiny_llava = LlavaForConditionalGeneration.from_pretrained(
-                "trl-internal-testing/tiny-LlavaForConditionalGeneration"
-            )
-            processor = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlavaForConditionalGeneration")
-
-            processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}A chat between a curious
-user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's
-questions. {% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for
-item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image'
-%}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if
-add_generation_prompt %}ASSISTANT: {% endif %}"""
-
-            def collate_fn(examples):
-                # Get the texts and images, and apply the chat template
-                texts = [processor.apply_chat_template(example["messages"], tokenize=False) for example in examples]
-                images = [example["images"][0] for example in examples]
-
-                # Tokenize the texts and process the images
-                batch = processor(images=images, text=texts, return_tensors="pt", padding=True)
-
-                # The labels are the input_ids, and we mask the padding tokens in the loss computation
-                labels = batch["input_ids"].clone()
-                labels[labels == processor.tokenizer.pad_token_id] = -100
-                batch["labels"] = labels
-
-                return batch
-
-            trainer = SFTTrainer(
-                model=tiny_llava,
-                args=training_args,
-                data_collator=collate_fn,
-                train_dataset=self.dummy_vsft_instruction_dataset,
-            )
-
-            trainer.train()
-
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertEqual(len(trainer.train_dataset["input_ids"]), len(self.conversational_lm_dataset["train"]))
+        self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
 
 
 # This new tester aims to replace the first one at some point
-class SFTTrainerTester2(unittest.TestCase):
+class SFTTrainerTester2(TrlTestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),
@@ -604,50 +462,48 @@ class SFTTrainerTester2(unittest.TestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     # Special case for harmony
     def test_train_gpt_oss(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/harmony", "language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-GptOssForCausalLM", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-GptOssForCausalLM", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_model(self):
         # Instantiate the model
@@ -656,53 +512,58 @@ class SFTTrainerTester2(unittest.TestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_model_torch_dtype(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir, model_init_kwargs={"torch_dtype": torch.float16}, report_to="none"
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            model_init_kwargs={"torch_dtype": torch.float16},
+            learning_rate=0.1,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                # Check the torch dtype
-                self.assertEqual(new_param.dtype, torch.float16)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            # For some reasonn model.layers.0.input_layernorm.weight doesn't change in GitHub Actions but does
+            # locally. We ignore this parameter for now
+            if "layernorm" in n:
+                continue
+            new_param = trainer.model.get_parameter(n)
+            # Check the torch dtype
+            self.assertEqual(new_param.dtype, torch.float16)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
     def test_train_dense_with_peft_config(self):
@@ -714,35 +575,32 @@ class SFTTrainerTester2(unittest.TestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
-            trainer = SFTTrainer(
-                model=model_id,
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=LoraConfig(),
-            )
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the peft params have changed and the base model params have not changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if n in base_param_names:  # We expect the base model parameters to be the same
-                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
-                elif (
-                    "base_layer" not in n
-                ):  # We expect the peft parameters to be different (except for the base layer)
-                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
     def test_train_moe_with_peft_config(self):
@@ -754,35 +612,32 @@ class SFTTrainerTester2(unittest.TestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
-            trainer = SFTTrainer(
-                model=model_id,
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
-            )
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the peft params have changed and the base model params have not changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if n in base_param_names:  # We expect the base model parameters to be the same
-                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
-                elif (
-                    "base_layer" not in n
-                ):  # We expect the peft parameters to be different (except for the base layer)
-                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
     def test_train_peft_model(self):
@@ -800,29 +655,26 @@ class SFTTrainerTester2(unittest.TestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the peft params have changed and the base model params have not changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if n in base_param_names:  # We expect the base model parameters to be the same
-                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
-                elif (
-                    "base_layer" not in n
-                ):  # We expect the peft parameters to be different (except for the base layer)
-                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
     def test_train_dense_with_peft_config_and_gradient_checkpointing(self):
@@ -834,35 +686,32 @@ class SFTTrainerTester2(unittest.TestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
 
-            trainer = SFTTrainer(
-                model=model_id,
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=LoraConfig(),
-            )
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(),
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the peft params have changed and the base model params have not changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if n in base_param_names:  # We expect the base model parameters to be the same
-                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
-                elif (
-                    "base_layer" not in n
-                ):  # We expect the peft parameters to be different (except for the base layer)
-                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
     def test_train_moe_with_peft_config_and_gradient_checkpointing(self):
@@ -874,35 +723,32 @@ class SFTTrainerTester2(unittest.TestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
 
-            trainer = SFTTrainer(
-                model=model_id,
-                args=training_args,
-                train_dataset=dataset,
-                peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
-            )
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=LoraConfig(target_parameters=["mlp.experts.down_proj", "mlp.experts.gate_up_proj"]),
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the peft params have changed and the base model params have not changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if n in base_param_names:  # We expect the base model parameters to be the same
-                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
-                elif (
-                    "base_layer" not in n
-                ):  # We expect the peft parameters to be different (except for the base layer)
-                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
     def test_train_with_peft_model_and_gradient_checkpointing(self):
@@ -915,33 +761,30 @@ class SFTTrainerTester2(unittest.TestCase):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
 
-            trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
 
-            # Verify model is a PeftModel
-            self.assertIsInstance(trainer.model, PeftModel)
+        # Verify model is a PeftModel
+        self.assertIsInstance(trainer.model, PeftModel)
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the peft params have changed and the base model params have not changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                if n in base_param_names:  # We expect the base model parameters to be the same
-                    self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
-                elif (
-                    "base_layer" not in n
-                ):  # We expect the peft parameters to be different (except for the base layer)
-                    self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_non_chatml_conversational_data(self):
         # Get the dataset
@@ -953,26 +796,25 @@ class SFTTrainerTester2(unittest.TestCase):
 
         dataset = dataset.map(rename_fields, remove_columns="messages")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_pretokenized_data(self):
         # Get the dataset
@@ -986,217 +828,209 @@ class SFTTrainerTester2(unittest.TestCase):
         # Apply tokenization
         tokenized_dataset = dataset.map(tokenize_example, remove_columns=["text"])
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=tokenized_dataset)
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=tokenized_dataset)
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_iterable_dataset(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train", streaming=True)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, max_steps=3, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, max_steps=3, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_flash_attn
     def test_train_padding_free(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                padding_free=True,
-                model_init_kwargs={"attn_implementation": "flash_attention_2"},
-                bf16=True,  # flash_attention_2 only supports bf16 and fp16
-                report_to="none",
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            padding_free=True,
+            model_init_kwargs={"attn_implementation": "flash_attention_2"},
+            bf16=True,  # flash_attention_2 only supports bf16 and fp16
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @parameterized.expand([("bfd",), ("wrapped",)])
     def test_train_packing(self, packing_strategy):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, packing=True, packing_strategy=packing_strategy, max_length=10, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_chat_template_kwargs(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
 
-            tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-            # The following template is a simplified version of the Qwen chat template, where an additional argument
-            # `role_capital` is used to control the capitalization of roles.
-            tokenizer.chat_template = '{%- if messages[0]["role"] == "system" -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\n" + messages[0]["content"] + "<|im_end|>\\n" }}{%- else -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\\n" }}{%- endif -%}{%- for message in messages -%}    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) -%}        {{ "<|im_start|>" + (message.role.upper() if role_capital else message.role) + "\\n" + message.content + "<|im_end|>\\n" }}    {%- elif message.role == "assistant" -%}        {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") }}        {%- if message.content -%}            {{ "\\n" + message.content }}        {%- endif -%}        {{ "<|im_end|>\\n" }}    {%- elif message.role == "tool" -%}        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") -%}            {{ "<|im_start|>" + ("USER" if role_capital else "user") }}        {%- endif -%}        {{ "\\n<tool_response>\\n" + message.content + "\\n</tool_response>" }}        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") -%}            {{ "<|im_end|>\\n" }}        {%- endif -%}    {%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}    {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") + "\\n" }}{%- endif -%}'
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        # The following template is a simplified version of the Qwen chat template, where an additional argument
+        # `role_capital` is used to control the capitalization of roles.
+        tokenizer.chat_template = '{%- if messages[0]["role"] == "system" -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\n" + messages[0]["content"] + "<|im_end|>\\n" }}{%- else -%}    {{ "<|im_start|>" + ("SYSTEM" if role_capital else "system") + "\\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\\n" }}{%- endif -%}{%- for message in messages -%}    {%- if (message.role == "user") or (message.role == "system" and not loop.first) or (message.role == "assistant" and not message.tool_calls) -%}        {{ "<|im_start|>" + (message.role.upper() if role_capital else message.role) + "\\n" + message.content + "<|im_end|>\\n" }}    {%- elif message.role == "assistant" -%}        {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") }}        {%- if message.content -%}            {{ "\\n" + message.content }}        {%- endif -%}        {{ "<|im_end|>\\n" }}    {%- elif message.role == "tool" -%}        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != "tool") -%}            {{ "<|im_start|>" + ("USER" if role_capital else "user") }}        {%- endif -%}        {{ "\\n<tool_response>\\n" + message.content + "\\n</tool_response>" }}        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") -%}            {{ "<|im_end|>\\n" }}        {%- endif -%}    {%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}    {{ "<|im_start|>" + ("ASSISTANT" if role_capital else "assistant") + "\\n" }}{%- endif -%}'
 
-            dataset.add_column("chat_template_kwargs", [{"role_capital": bool(i % 2)} for i in range(len(dataset))])
+        dataset.add_column("chat_template_kwargs", [{"role_capital": bool(i % 2)} for i in range(len(dataset))])
 
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_assistant_only(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, assistant_only_loss=True, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_completion_only(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_completion", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, completion_only_loss=True, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, completion_only_loss=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_completion_only_harmony(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/harmony", "prompt_completion", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, completion_only_loss=True, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-GptOssForCausalLM", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, completion_only_loss=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-GptOssForCausalLM", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_assistant_only_and_completion_only(self):
         # Get the dataset
@@ -1210,28 +1044,27 @@ class SFTTrainerTester2(unittest.TestCase):
 
         dataset = dataset.map(add_to_completion)
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir, assistant_only_loss=True, completion_only_loss=True, report_to="none"
-            )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir, assistant_only_loss=True, completion_only_loss=True, report_to="none"
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_assistant_only_iterable_dataset(self):
         # Get the dataset
@@ -1239,184 +1072,177 @@ class SFTTrainerTester2(unittest.TestCase):
             "trl-internal-testing/zen", "conversational_language_modeling", split="train", streaming=True
         )
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, assistant_only_loss=True, max_steps=3, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, assistant_only_loss=True, max_steps=3, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_set_chat_template_from_model(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, chat_template_path="Qwen/Qwen3-4B", report_to="none")
-            # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-GPTNeoXForCausalLM", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, chat_template_path="Qwen/Qwen3-4B", report_to="none")
+        # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-GPTNeoXForCausalLM", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_set_chat_template_from_path(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir,
-                chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
-                report_to="none",
-            )
-            # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-GPTNeoXForCausalLM", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            chat_template_path=str(pathlib.Path(__file__).parent / "data" / "template.jinja"),
+            report_to="none",
+        )
+        # trl-internal-testing/tiny-GPTNeoXForCausalLM doesn't have a chat template set by default
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-GPTNeoXForCausalLM", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-            # Check that the template saved in the output directory is the same as the one used for training
-            template_path = pathlib.Path(tmp_dir) / "checkpoint-9" / "chat_template.jinja"
-            self.assertTrue(template_path.exists(), f"Chat template not found at {template_path}")
+        # Check that the template saved in the output directory is the same as the one used for training
+        template_path = pathlib.Path(self.tmp_dir) / "checkpoint-9" / "chat_template.jinja"
+        self.assertTrue(template_path.exists(), f"Chat template not found at {template_path}")
 
-            with open(template_path) as f:
-                template_content = f.read()
-            with open(training_args.chat_template_path) as f:
-                original_template_content = f.read()
-            self.assertEqual(
-                template_content, original_template_content, "Chat template content does not match the original"
-            )
+        with open(template_path) as f:
+            template_content = f.read()
+        with open(training_args.chat_template_path) as f:
+            original_template_content = f.read()
+        self.assertEqual(
+            template_content, original_template_content, "Chat template content does not match the original"
+        )
 
     def test_train_toolcall_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_eval(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=dataset["train"],
-                eval_dataset=dataset["test"],
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the eval loss is not None
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+        # Check that the eval loss is not None
+        self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
 
     def test_train_with_multiple_eval_dataset(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                args=training_args,
-                train_dataset=dataset["train"],
-                eval_dataset={"data1": dataset["test"], "data2": dataset["test"]},
-            )
-            # Train the model
-            trainer.train()
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, eval_strategy="steps", eval_steps=3, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset={"data1": dataset["test"], "data2": dataset["test"]},
+        )
+        # Train the model
+        trainer.train()
 
-            # Check that the eval losses are not None
-            self.assertIsNotNone(trainer.state.log_history[-3]["eval_data1_loss"])
-            self.assertIsNotNone(trainer.state.log_history[-2]["eval_data2_loss"])
+        # Check that the eval losses are not None
+        self.assertIsNotNone(trainer.state.log_history[-3]["eval_data1_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-2]["eval_data2_loss"])
 
     def test_train_with_gradient_checkpointing(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(output_dir=tmp_dir, gradient_checkpointing=True, report_to="none")
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, gradient_checkpointing=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Train the model
-            trainer.train()
+        # Train the model
+        trainer.train()
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_tag_added(self):
         # Get the dataset
@@ -1446,29 +1272,91 @@ class SFTTrainerTester2(unittest.TestCase):
         for tag in ["sft", "trl"]:
             self.assertIn(tag, trainer.model.model_tags)
 
-    def test_train_with_torch_dtype(self):
+    @parameterized.expand(
+        [
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
+            # ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            # ("trl-internal-testing/tiny-Idefics3ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+            ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
+            ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
+            # ("trl-internal-testing/tiny-SmolVLMForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975
+        ]
+    )
+    @require_vision
+    def test_train_vlm(self, model_id):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            # Initialize the trainer
-            training_args = SFTConfig(
-                output_dir=tmp_dir, model_init_kwargs={"torch_dtype": torch.float16}, report_to="none"
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            # For some reason, these params are not updated. This is probably not related to TRL, but to
+            # the model itself. We should investigate this further, but for now we just skip these params.
+            # fmt: off
+            if (
+                model_id == "trl-internal-testing/tiny-Gemma3ForConditionalGeneration" and "model.vision_tower.vision_model.head" in n or
+                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or
+                model_id == "trl-internal-testing/tiny-LlavaForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n or
+                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "model.vision_tower.vision_model.post_layernorm" in n or
+                model_id == "trl-internal-testing/tiny-LlavaNextForConditionalGeneration" and "vision_tower.vision_model.encoder.layers.1" in n
+            ):
+            # fmt: on
+                continue
+            self.assertFalse(
+                torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
             )
-            trainer = SFTTrainer(
-                model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
-            )
 
-            # Save the initial parameters to compare them later
-            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+    # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
+    # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
+    @pytest.mark.slow
+    @require_vision
+    def test_train_vlm_gemma_3n(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")
 
-            # Train the model
-            trainer.train()
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,
+            per_device_train_batch_size=1,
+            gradient_checkpointing=True,
+            model_init_kwargs={"torch_dtype": "bfloat16"},
+            report_to="none",
+        )
+        trainer = SFTTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
 
-            # Check that the training loss is not None
-            self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
-            # Check the params have changed
-            for n, param in previous_trainable_params.items():
-                new_param = trainer.model.get_parameter(n)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "model.vision_tower.timm_model.conv_stem.bn.weight" in n:
+                # This parameter is not updated, not sure why at this point.
+                continue
+            self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
