@@ -265,8 +265,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     """
     Data collator for vision-language modeling tasks.
 
-    Unlike text-only datasets—where the collator typically receives pre-tokenized inputs ready for batching—
-    vision-language data processing involves converting images into pixel values. This conversion is memory- and disk-intensive,
+    Unlike text-only datasets—where the collator typically receives pre-tokenized inputs ready for batching,
+    vision-language data processing involves converting images into pixel values. This conversion is disk-intensive,
     making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
     image processing on-the-fly to efficiently prepare batches.
 
@@ -496,11 +496,7 @@ class SFTTrainer(Trainer):
             torch_dtype = model_init_kwargs.get("torch_dtype")
             if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
                 pass  # torch_dtype is already a torch.dtype or "auto" or None
-            elif isinstance(torch_dtype, str) and torch_dtype in [
-                "bfloat16",
-                "float16",
-                "float32",
-            ]:  # it's a str and valid torch_dtype, but not "auto"
+            elif isinstance(torch_dtype, str) and torch_dtype in ["bfloat16", "float16", "float32"]:
                 torch_dtype = getattr(torch, torch_dtype)
                 model_init_kwargs["torch_dtype"] = torch_dtype
             else:

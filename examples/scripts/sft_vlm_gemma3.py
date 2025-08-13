@@ -60,7 +60,7 @@ import torch
 from datasets import DatasetDict, load_dataset
 from huggingface_hub import hf_hub_download, list_repo_files
 from PIL import Image
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import AutoModelForImageTextToText
 
 from trl import (
     ModelConfig,
@@ -139,7 +139,7 @@ def main():
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
-    training_args.remove_unused_columns = False
+    training_args.max_length = None
 
     ################
     # Model, Tokenizer & Processor
@@ -155,43 +155,9 @@ def main():
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-    processor.tokenizer.padding_side = "right"
-
     model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-
-    def collate_fn(examples):
-        texts = [
-            processor.apply_chat_template(example["messages"], tokenize=False, add_generation_prompt=False).strip()
-            for example in examples
-        ]
-        if "images" in examples[0]:  # single-image
-            images = [[img.convert("RGB") for img in example["images"]] for example in examples]
-        else:  # multi-image
-            images = [process_vision_info(example["messages"]) for example in examples]
-
-        # Tokenize the texts and process the images
-        batch = processor(
-            images=images, text=texts, return_tensors="pt", padding=True
-        )  # Encode texts and images into tensors
-
-        # The labels are the input_ids, and we mask the padding tokens in the loss computation
-        labels = batch["input_ids"].clone()  # Clone input IDs for labels
-        # Mask image tokens
-        image_token_id = [
-            processor.tokenizer.convert_tokens_to_ids(processor.tokenizer.special_tokens_map["boi_token"])
-        ]
-        # Mask tokens for not being used in the loss computation
-        labels[labels == processor.tokenizer.pad_token_id] = -100
-        labels[labels == image_token_id] = -100
-        labels[labels == 262144] = -100
-
-        batch["labels"] = labels
-        return batch  # Return the prepared batch
 
     ################
     # Dataset
@@ -206,10 +172,8 @@ def main():
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        data_collator=collate_fn,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=processor,
         peft_config=get_peft_config(model_args),
     )
 
@@ -219,8 +183,6 @@ def main():
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-        if trainer.accelerator.is_main_process:
-            processor.push_to_hub(training_args.hub_model_id)
 
 
 if __name__ == "__main__":

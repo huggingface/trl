@@ -18,7 +18,7 @@ import pytest
 import torch
 from datasets import Dataset, load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoTokenizer, is_vision_available
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import require_flash_attn, require_peft, require_vision
 from transformers.utils import is_peft_available
 
@@ -30,9 +30,6 @@ from .testing_utils import TrlTestCase
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel, get_peft_model
-
-if is_vision_available():
-    pass
 
 
 def formatting_prompts_func(example):
