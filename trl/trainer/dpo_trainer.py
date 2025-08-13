@@ -1549,7 +1549,7 @@ class DPOTrainer(Trainer):
                 loss_mask = loss_mask[:, -logits_to_keep:]
 
         if logits.shape[:2] != labels.shape[:2]:
-            # for llava, the returned logits include the image tokens (placed before the text tokens)
+            # for LLaVA, the returned logits include the image tokens (placed before the text tokens)
             seq_len = labels.shape[1]
             logits = logits[:, -seq_len:]
 
