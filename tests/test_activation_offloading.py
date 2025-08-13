@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
 import torch
 from torch import nn
@@ -22,12 +21,14 @@ from transformers.utils import is_peft_available
 
 from trl.models.activation_offloading import NoOpManager, OffloadActivations
 
+from .testing_utils import TrlTestCase
+
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
-class TestActivationOffloading(unittest.TestCase):
+class TestActivationOffloading(TrlTestCase):
     @require_torch_accelerator
     @require_peft
     def test_offloading_with_peft_models(self) -> None:
