@@ -595,7 +595,7 @@ class GRPOConfig(TrainingArguments):
         # The current default effective batch size
         if self.generation_batch_size is None and self.steps_per_generation is None:
             self.steps_per_generation = self.gradient_accumulation_steps
-            self.generation_batch_size = self.per_device_train_batch_size * num_processes * self.steps_per_generation
+            self.generation_batch_size = self.per_device_train_batch_size * num_processes
         elif self.generation_batch_size is not None and self.steps_per_generation is None:
             # Just ensure the value is divisible by the global batch size
             if self.generation_batch_size % (self.per_device_train_batch_size * num_processes) != 0:
