@@ -615,7 +615,7 @@ class GRPOConfig(TrainingArguments):
 
         if self.do_eval and self.eval_strategy != "no":
             # Just ensure the value is divisible by the global batch size
-            if self.num_generations != (self.per_device_eval_batch_size * num_processes):
+            if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
                 raise ValueError(
                     f"generation_batch_size ({self.generation_batch_size}) must be divisible by the global batch size "
                     f"({self.per_device_eval_batch_size * num_processes})."
