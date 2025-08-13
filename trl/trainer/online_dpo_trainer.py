@@ -475,6 +475,8 @@ class OnlineDPOTrainer(Trainer):
                 os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
 
                 self.llm = LLM(**vllm_kwargs)
+            else:
+                raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
