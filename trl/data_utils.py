@@ -453,15 +453,22 @@ class _SegmentTree:
     value for a given input within the range [1, maxval].
 
     See [Fewer Truncations Improve Language Modeling](https://arxiv.org/abs/2404.10830) for more details.
+    
+    Fix: Properly handle non-power-of-2 values by rounding up to the next power of 2 for the tree size.
+    This ensures that the search method works correctly for all seq_length values.
     """
 
     def __init__(self, maxval: int):
         self.maxval = maxval
-        self.tree = [0] * (2 * maxval)
+        # For non-power-of-2 values, we need to round up to the next power of 2 for the tree size
+        self.tree_size = 1
+        while self.tree_size < maxval:
+            self.tree_size <<= 1
+        self.tree = [0] * (2 * self.tree_size)
 
     def add(self, val):
         assert 0 < val <= self.maxval
-        i = self.maxval + val - 1
+        i = self.tree_size + val - 1
         self.tree[i] = val
         while i > 1:
             i >>= 1
@@ -471,7 +478,7 @@ class _SegmentTree:
 
     def remove(self, val):
         assert 0 < val <= self.maxval
-        i = self.maxval + val - 1
+        i = self.tree_size + val - 1
         self.tree[i] = 0
         while i > 1:
             i >>= 1
@@ -482,7 +489,7 @@ class _SegmentTree:
     def search(self, val):
         assert 0 < val <= self.maxval
         i = 1
-        while i < self.maxval:
+        while i < self.tree_size:
             if self.tree[i << 1] >= val:
                 i = i << 1
             else:
@@ -491,7 +498,11 @@ class _SegmentTree:
 
 
 def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
-    """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
+    """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy.
+    
+    Fix: Ensure segment tree properly handles non-power-of-2 seq_length values by using a correctly
+    sized tree. This allows proper bin packing for all seq_length values, not just powers of 2.
+    """
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
@@ -517,16 +528,24 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     bins: list[dict] = []
     for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
         space = segment_tree.search(length)
-
-        if space < seq_length:
+        
+        # Handle case where search returns 0 (no suitable bin found)
+        # This can happen with certain seq_length values
+        if space == 0 or length > space:
+            # Create a new bin for this sequence
+            bin = {"ids": [], "length": 0}
+            bins.append(bin)
+        elif space_to_bin[space]:
+            # Use existing bin with exactly this amount of space
             bin = space_to_bin[space].popleft()
         else:
+            # Create a new bin
             bin = {"ids": [], "length": 0}
             bins.append(bin)
 
         bin["ids"].append(idx)
         bin["length"] += length
-        if space < seq_length and not space_to_bin[space]:
+        if space_to_bin[space] and not space_to_bin[space]:
             segment_tree.remove(space)
 
         space = space - length
