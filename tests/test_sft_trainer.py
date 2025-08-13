@@ -1376,7 +1376,6 @@ class SFTTrainerTester2(TrlTestCase):
                 per_device_train_batch_size=1,
                 max_steps=1,
                 report_to="none",
-                dataset_text_field="text",
             )
 
             trainer = SFTTrainer(
@@ -1434,7 +1433,6 @@ class SFTTrainerTester2(TrlTestCase):
             per_device_train_batch_size=1,
             max_steps=2,
             report_to="none",
-            dataset_text_field="text",
         )
 
         trainer = SFTTrainer(
