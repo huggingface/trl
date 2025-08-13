@@ -16,9 +16,11 @@
 # `trl-internal-testing` organization.
 # This script is meant to be run when adding new tiny model to the TRL library.
 
+import torch
 from huggingface_hub import HfApi, ModelCard
 from torch import nn
 from transformers import (
+    AutoConfig,
     AutoProcessor,
     AutoTokenizer,
     BartConfig,
@@ -35,7 +37,6 @@ from transformers import (
     FalconMambaForCausalLM,
     Gemma2Config,
     Gemma2ForCausalLM,
-    Gemma3Config,
     Gemma3ForConditionalGeneration,
     GemmaConfig,
     GemmaForCausalLM,
@@ -47,20 +48,17 @@ from transformers import (
     GptOssForCausalLM,
     Idefics2Config,
     Idefics2ForConditionalGeneration,
-    Idefics3Config,
     Idefics3ForConditionalGeneration,
+    InternVLForConditionalGeneration,
     LlamaConfig,
     LlamaForCausalLM,
     LlamaForSequenceClassification,
-    LlavaConfig,
     LlavaForConditionalGeneration,
-    LlavaNextConfig,
     LlavaNextForConditionalGeneration,
     MistralConfig,
     MistralForCausalLM,
     OPTConfig,
     OPTForCausalLM,
-    PaliGemmaConfig,
     PaliGemmaForConditionalGeneration,
     Phi3Config,
     Phi3ForCausalLM,
@@ -76,7 +74,6 @@ from transformers import (
     Qwen3ForSequenceClassification,
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
-    SmolVLMConfig,
     SmolVLMForConditionalGeneration,
     T5Config,
     T5ForConditionalGeneration,
@@ -181,7 +178,7 @@ for model_id, config_class, model_class, suffix in [
     revision = "refs/pr/14" if model_id == "Qwen/Qwen3-8B" else "main"  # chat template with {% generation %}
     tokenizer = AutoTokenizer.from_pretrained(model_id, revision=revision)
     config = config_class(
-        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        vocab_size=len(tokenizer.vocab),
         hidden_size=8,
         num_attention_heads=4,
         num_key_value_heads=2,
@@ -199,7 +196,7 @@ for model_id, config_class, model_class, suffix in [
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
-        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        vocab_size=len(tokenizer.vocab),
         hidden_size=8,
         num_attention_heads=4,
         num_key_value_heads=2,
@@ -216,7 +213,7 @@ for model_id, config_class, model_class, suffix in [
 # Two slightly bigger models, required for vLLM testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
 config = Qwen2Config(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    vocab_size=len(tokenizer.vocab),
     hidden_size=128,  # increase hidden size so that hidden_size // num_attention_heads = 32, required for vLLM
     num_attention_heads=4,
     num_key_value_heads=2,
@@ -228,7 +225,7 @@ push_to_hub(model, tokenizer, "small", "2.5")
 
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 config = Qwen3Config(
-    vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+    vocab_size=len(tokenizer.vocab),
     hidden_size=128,  # increase hidden size so that hidden_size // num_attention_heads = 32, required for vLLM
     num_attention_heads=4,
     num_key_value_heads=2,
@@ -246,7 +243,7 @@ for model_id, config_class, model_class, suffix in [
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
-        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        vocab_size=len(tokenizer.vocab),
         hidden_size=8,
         num_attention_heads=4,
         num_key_value_heads=2,
@@ -265,7 +262,7 @@ for model_id, config_class, model_class, suffix in [
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = config_class(
-        vocab_size=tokenizer.vocab_size + len(tokenizer.added_tokens_encoder.keys()),
+        vocab_size=len(tokenizer.vocab),
         d_model=16,
         encoder_layers=2,
         decoder_layers=2,
@@ -281,59 +278,40 @@ for model_id, config_class, model_class, suffix in [
 
 
 # Vision Language Models
-for model_id, config_class, model_class in [
-    ("google/gemma-3-4b-it", Gemma3Config, Gemma3ForConditionalGeneration),
-    ("google/paligemma-3b-pt-224", PaliGemmaConfig, PaliGemmaForConditionalGeneration),
-    ("HuggingFaceM4/idefics2-8b", Idefics2Config, Idefics2ForConditionalGeneration),
-    ("HuggingFaceM4/Idefics3-8B-Llama3", Idefics3Config, Idefics3ForConditionalGeneration),
-    ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMConfig, SmolVLMForConditionalGeneration),
-    ("llava-hf/llava-1.5-7b-hf", LlavaConfig, LlavaForConditionalGeneration),
-    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextConfig, LlavaNextForConditionalGeneration),
-    ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLConfig, Qwen2VLForConditionalGeneration),
-    ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLConfig, Qwen2_5_VLForConditionalGeneration),
+for model_id, model_class in [
+    ("google/gemma-3-4b-it", Gemma3ForConditionalGeneration),
+    ("google/paligemma-3b-pt-224", PaliGemmaForConditionalGeneration),
+    ("HuggingFaceM4/idefics2-8b", Idefics2ForConditionalGeneration),
+    ("HuggingFaceM4/Idefics3-8B-Llama3", Idefics3ForConditionalGeneration),
+    ("HuggingFaceTB/SmolVLM2-2.2B-Instruct", SmolVLMForConditionalGeneration),
+    ("llava-hf/llava-1.5-7b-hf", LlavaForConditionalGeneration),
+    ("llava-hf/llava-v1.6-mistral-7b-hf", LlavaNextForConditionalGeneration),
+    ("OpenGVLab/InternVL3-8B-hf", InternVLForConditionalGeneration),
+    ("Qwen/Qwen2-VL-2B-Instruct", Qwen2VLForConditionalGeneration),
+    ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLForConditionalGeneration),
 ]:
     processor = AutoProcessor.from_pretrained(model_id)
-    kwargs = {}
-    text_kwargs = {}
-    vision_kwargs = {}
-    if config_class in [PaliGemmaConfig]:
-        kwargs["projection_dim"] = 8
-    if config_class in [LlavaConfig, LlavaNextConfig, PaliGemmaConfig]:
-        vision_kwargs["projection_dim"] = 8
-    if config_class in [LlavaConfig, LlavaNextConfig, Gemma3Config]:
-        vision_kwargs["image_size"] = 336
-        vision_kwargs["patch_size"] = 20
-        processor.image_processor.size = {"height": 336, "width": 336}
-    if config_class in [Qwen2VLConfig, Qwen2_5_VLConfig]:
-        kwargs["vision_start_token_id"] = 151652
-        kwargs["vision_end_token_id"] = 151653
-        kwargs["vision_token_id"] = 151654
-        kwargs["image_token_id"] = 151655
-        kwargs["vocab_size"] = len(processor.tokenizer.vocab)
-        text_kwargs["rope_scaling"] = {"type": "mrope", "mrope_section": [2]}
-        vision_kwargs["depth"] = 4
-        vision_kwargs["embed_dim"] = 64
-    if config_class in [Qwen2_5_VLConfig]:
-        vision_kwargs["out_hidden_size"] = 16
+    config = AutoConfig.from_pretrained(model_id)
 
-    config = config_class(
-        text_config=dict(
-            vocab_size=processor.tokenizer.vocab_size + len(processor.tokenizer.added_tokens_encoder),
-            hidden_size=16,
-            num_attention_heads=4,
-            num_key_value_heads=2,
-            num_hidden_layers=2,
-            intermediate_size=32,
-            **text_kwargs,
-        ),
-        vision_config=dict(
-            hidden_size=16,
-            num_attention_heads=4,
-            num_hidden_layers=2,
-            intermediate_size=32,
-            **vision_kwargs,
-        ),
-        **kwargs,
-    )
-    model = model_class(config)
-    push_to_hub(model, processor, "tiny")
+    config.text_config.num_hidden_layers = 2
+    config.text_config.hidden_size = 16
+    config.text_config.num_attention_heads = 4
+    config.text_config.num_key_value_heads = 2
+
+    config.vision_config.num_hidden_layers = 2
+    config.vision_config.hidden_size = 16
+    config.vision_config.num_attention_heads = 4
+    config.vision_config.num_key_value_heads = 2
+
+    if isinstance(config, (Qwen2VLConfig, Qwen2_5_VLConfig)):
+        config.text_config.rope_scaling["mrope_section"] = [2]
+
+    if isinstance(config, (Qwen2_5_VLConfig)):
+        config.vision_config.out_hidden_size = 16
+
+    if isinstance(config, Idefics2Config):
+        config.perceiver_config.hidden_size = 16
+
+    model = model_class(config).to(dtype=torch.bfloat16)
+
+    push_to_hub(model, processor, "tiny", force=True)
