@@ -98,10 +98,6 @@ if __name__ == "__main__":
     dataset = load_dataset(
         script_args.dataset_name,
         name=script_args.dataset_config,
-        split={
-            "train": f"{script_args.dataset_train_split}[:1%]",
-            "test": f"{script_args.dataset_test_split}[:1%]"
-        },
         streaming=script_args.dataset_streaming,
     )
     train_dataset = dataset[script_args.dataset_train_split]
