@@ -20,7 +20,7 @@
 # ///
 
 """
-Train Gemma-3 on the HuggingFaceH4/llava-instruct-mix-vsft dataset (single-image).
+Train Gemma 3 on the HuggingFaceH4/llava-instruct-mix-vsft dataset (single-image).
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
@@ -28,14 +28,13 @@ accelerate launch \
     --dataset_name HuggingFaceH4/llava-instruct-mix-vsft \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 1 \
-    --output_dir gemma-3-4b-it-trl-sft-llava-instruct-mix-vsft \
+    --output_dir Gemma-3-4B-SFT-MMIU \
     --torch_dtype bfloat16 \
     --use_peft \
     --lora_target_modules all-linear \
     --attn_implementation eager
 
-Train Gemma-3 on the FanqingM/MMIU-Benchmark dataset (multi-image).
+Train Gemma 3 on the FanqingM/MMIU-Benchmark dataset (multi-image).
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
@@ -44,8 +43,7 @@ accelerate launch \
     --dataset_train_split test \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 1 \
-    --output_dir gemma-3-4b-it-trl-sft-MMIU-Benchmark \
+    --output_dir Gemma-3-4B-SFT-MMIU \
     --torch_dtype bfloat16 \
     --use_peft \
     --lora_target_modules all-linear
@@ -119,7 +117,7 @@ def format_data(samples: dict[str, any]) -> dict[str, list]:
 
 
 # For multi-image example
-def prepare_dataset(dataset: DatasetDict, dataset_name: str, dataset_train_split: str) -> DatasetDict:
+def prepare_dataset(dataset: DatasetDict, dataset_name: str) -> DatasetDict:
     all_files = list_repo_files(dataset_name, repo_type="dataset")
     zip_files = [f for f in all_files if f.endswith(".zip")]
 
@@ -164,7 +162,7 @@ def main():
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
     if script_args.dataset_name == "FanqingM/MMIU-Benchmark":
-        dataset = prepare_dataset(dataset, script_args.dataset_name, script_args.dataset_train_split)
+        dataset = prepare_dataset(dataset, script_args.dataset_name)
 
     ################
     # Training
