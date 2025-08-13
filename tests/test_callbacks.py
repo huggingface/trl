@@ -374,6 +374,7 @@ class MergeModelCallbackTester(TrlTestCase):
 
 class BEMACallbackTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer.pad_token = self.tokenizer.eos_token
