@@ -806,12 +806,13 @@ class OnlineDPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{guo2024direct,
-            title = {{Direct Language Model Alignment from Online AI Feedback}}, author = {Shangmin Guo and Biao Zhang
-            and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas
-            Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel}, year = 2024, eprint =
-            {arXiv:2402.04792}
+            title        = {{Direct Language Model Alignment from Online AI Feedback}},
+            author       = {Shangmin Guo and Biao Zhang and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel},
+            year         = 2024,
+            eprint       = {arXiv:2402.04792}
         }""")
 
         model_card = generate_model_card(

@@ -17,19 +17,24 @@ from collections.abc import Callable
 
 
 def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int) -> Callable:
+    # docstyle-ignore
     r"""
     Reward function that penalizes overlong completions. It is used to penalize overlong completions, but not to reward
     shorter completions. Reference: Eq. (13) from the DAPO paper (https://huggingface.co/papers/2503.14476)
 
-    $$ R_{\text{length}}(y) = \begin{cases} 0, & |y| \le L_{\max} - L_{\text{cache}} \\ \dfrac{(L_{\max} -
-    L_{\text{cache}}) - |y|}{L_{\text{cache}}}, & L_{\max} - L_{\text{cache}} < |y| \le L_{\max} \\ -1, & L_{\max} <
-    |y| \end{cases} $$
+    $$
+    R_{\text{length}}(y) = \begin{cases}
+    0, & |y| \le L_{\max} - L_{\text{cache}} \\
+    \dfrac{(L_{\max} - L_{\text{cache}}) - |y|}{L_{\text{cache}}}, & L_{\max} - L_{\text{cache}} < |y| \le L_{\max} \\
+    -1, & L_{\max} < |y|
+    \end{cases}
+    $$
 
     Args:
         max_completion_len (`int`):
-            Maximum length of the completion, \( L_{\max} \).
+            Maximum length of the completion,  \( L_{\max} \).
         soft_punish_cache (`int`):
-            Minimum length of the completion, \( L_{\text{cache}} \). If set to `0`, no minimum length is applied.
+            Minimum length of the completion,  \( L_{\text{cache}} \). If set to `0`, no minimum length is applied.
 
     Example:
     ```python

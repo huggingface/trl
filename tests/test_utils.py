@@ -574,13 +574,19 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
 
         output = mock_stdout.getvalue()
 
+        # docstyle-ignore
         expected_output = textwrap.dedent("""\
-        ╭────────────────────── Step 42 ───────────────────────╮ │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┓
-        │ │ ┃ Prompt ┃ Completion ┃ Correctness ┃ Format ┃ │ │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━┩ │ │
-        │ The sky is │ blue. │ 0.12 │ 0.79 │ │ │ ├────────────┼──────────────┼─────────────┼────────┤ │ │ │ The sun is
-        │ in the sky. │ 0.46 │ 0.10 │ │ │ └────────────┴──────────────┴─────────────┴────────┘ │
-        ╰──────────────────────────────────────────────────────╯
-        """)  # docstyle-ignore
+        ╭──────────────────────────── Step 42 ─────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────╯
+        """)
+
         self.assertEqual(output, expected_output)
 
     @patch("sys.stdout", new_callable=StringIO)
@@ -594,6 +600,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
         output = mock_stdout.getvalue()
 
+        # docstyle-ignore
         possible_outputs = [
             textwrap.dedent("""\
             ╭────────────────── Step 10 ──────────────────╮
@@ -604,12 +611,17 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
             │ └────────┴────────────┴───────┴───────────┘ │
             ╰─────────────────────────────────────────────╯
                 """),
+            # docstyle-ignore
             textwrap.dedent("""\
-                ╭──────────── Step 10 ────────────╮ │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┓ │ │ ┃ Prompt ┃ Completion ┃ Score
-                ┃ │ │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━┩ │ │ │ B │ 2 │ 0.20 │ │ │ └────────┴────────────┴───────┘ │
-                ╰─────────────────────────────────╯
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ A      │ 1          │  0.20 │      0.40 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
                 """),
-        ]  # docstyle-ignore
+        ]
         self.assertIn(output, possible_outputs)
 
 

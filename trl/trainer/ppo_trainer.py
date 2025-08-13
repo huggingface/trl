@@ -796,11 +796,13 @@ class PPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{mziegler2019fine-tuning,
-            title = {{Fine-Tuning Language Models from Human Preferences}}, author = {Daniel M. Ziegler and Nisan
-            Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and
-            Geoffrey Irving}, year = 2019, eprint = {arXiv:1909.08593}
+            title        = {{Fine-Tuning Language Models from Human Preferences}},
+            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
+            year         = 2019,
+            eprint       = {arXiv:1909.08593}
         }""")
 
         model_card = generate_model_card(

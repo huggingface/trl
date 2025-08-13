@@ -444,11 +444,13 @@ class AlignPropTrainer(PyTorchModelHubMixin):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{prabhudesai2024aligning,
-            title = {{Aligning Text-to-Image Diffusion Models with Reward Backpropagation}}, author = {Mihir
-            Prabhudesai and Anirudh Goyal and Deepak Pathak and Katerina Fragkiadaki}, year = 2024, eprint =
-            {arXiv:2310.03739}
+            title        = {{Aligning Text-to-Image Diffusion Models with Reward Backpropagation}},
+            author       = {Mihir Prabhudesai and Anirudh Goyal and Deepak Pathak and Katerina Fragkiadaki},
+            year         = 2024,
+            eprint       = {arXiv:2310.03739}
         }""")
 
         model_card = generate_model_card(

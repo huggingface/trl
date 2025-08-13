@@ -646,12 +646,15 @@ class DDPOTrainer(PyTorchModelHubMixin):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{black2024training,
-            title = {{Training Diffusion Models with Reinforcement Learning}}, author = {Kevin Black and Michael Janner
-            and Yilun Du and Ilya Kostrikov and Sergey Levine}, year = 2024, booktitle = {The Twelfth International
-            Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024}, publisher =
-            {OpenReview.net}, url = {https://openreview.net/forum?id=YCWjhGrJFD},
+            title        = {{Training Diffusion Models with Reinforcement Learning}},
+            author       = {Kevin Black and Michael Janner and Yilun Du and Ilya Kostrikov and Sergey Levine},
+            year         = 2024,
+            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=YCWjhGrJFD},
         }""")
 
         model_card = generate_model_card(

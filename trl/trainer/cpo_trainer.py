@@ -1089,13 +1089,15 @@ class CPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{xu2024contrastive,
-            title = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine
-            Translation}}, author = {Haoran Xu and Amr Sharaf and Yunmo Chen and Weiting Tan and Lingfeng Shen and
-            Benjamin Van Durme and Kenton Murray and Young Jin Kim}, year = 2024, booktitle = {Forty-first
-            International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024}, publisher =
-            {OpenReview.net}, url = {https://openreview.net/forum?id=51iwkioZpn}
+            title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
+            author       = {Haoran Xu and Amr Sharaf and Yunmo Chen and Weiting Tan and Lingfeng Shen and Benjamin Van Durme and Kenton Murray and Young Jin Kim},
+            year         = 2024,
+            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=51iwkioZpn}
         }""")
 
         model_card = generate_model_card(

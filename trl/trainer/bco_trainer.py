@@ -1520,10 +1520,13 @@ class BCOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{jung2024binary,
-            title = {{Binary Classifier Optimization for Large Language Model Alignment}}, author = {Seungjae Jung and
-            Gunsoo Han and Daniel Wontae Nam and Kyoung{-}Woon On}, year = 2024, eprint = {arXiv:2404.04656}
+            title        = {{Binary Classifier Optimization for Large Language Model Alignment}},
+            author       = {Seungjae Jung and Gunsoo Han and Daniel Wontae Nam and Kyoung{-}Woon On},
+            year         = 2024,
+            eprint       = {arXiv:2404.04656}
         }""")
 
         model_card = generate_model_card(

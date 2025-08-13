@@ -2035,9 +2035,10 @@ class GRPOTrainer(Trainer):
         citation = textwrap.dedent(
             """\
             @article{zhihong2024deepseekmath,
-                title = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}}, author
-                = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y.
-                K. Li and Y. Wu and Daya Guo}, year = 2024, eprint = {arXiv:2402.03300},
+                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
+                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
+                year         = 2024,
+                eprint       = {arXiv:2402.03300},
             }
             """
         )
