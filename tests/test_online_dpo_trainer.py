@@ -62,12 +62,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         trainer = OnlineDPOTrainer(
             model=self.model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             processing_class=self.tokenizer,
-            reward_processing_class=self.reward_tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
         )
         trainer.train()
 
@@ -87,12 +87,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         trainer = OnlineDPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             processing_class=self.tokenizer,
-            reward_processing_class=self.reward_tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
         )
         trainer.train()
 
@@ -113,12 +113,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
         trainer = OnlineDPOTrainer(
             model=self.model,
             ref_model=self.ref_model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             processing_class=self.tokenizer,
-            reward_processing_class=self.reward_tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
         )
         trainer.train()
 
@@ -139,11 +139,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
             OnlineDPOTrainer(
                 model=self.model,
                 ref_model=self.model,  # ref_model can't be the same as model
-                reward_model=self.reward_model,
+                reward_funcs=self.reward_model,
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
                 processing_class=self.tokenizer,
-                reward_processing_class=self.reward_tokenizer,
+                reward_processing_classes=self.reward_tokenizer,
             )
 
     @require_peft
@@ -161,12 +161,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         trainer = OnlineDPOTrainer(
             model=self.model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             processing_class=self.tokenizer,
-            reward_processing_class=self.reward_tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
             peft_config=lora_config,
         )
 
@@ -191,12 +191,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
         trainer = OnlineDPOTrainer(
             model=self.model,
             ref_model=self.ref_model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             processing_class=self.tokenizer,
-            reward_processing_class=self.reward_tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
             peft_config=lora_config,
         )
 
@@ -223,12 +223,12 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         trainer = OnlineDPOTrainer(
             model=model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             processing_class=self.tokenizer,
-            reward_processing_class=self.reward_tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
             peft_config=lora_train_config,
         )
 
@@ -283,11 +283,11 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
         trainer = OnlineDPOTrainer(
             model=model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             train_dataset=dummy_dataset["train"],
             processing_class=tokenizer,
-            reward_processing_class=self.reward_tokenizer,
+            reward_processing_classes=self.reward_tokenizer,
         )
         trainer.train()
 
