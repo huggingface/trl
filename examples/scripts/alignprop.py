@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "diffusers",
+#     "torchvision",
 # ]
 # ///
 
