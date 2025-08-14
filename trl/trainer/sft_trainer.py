@@ -887,13 +887,29 @@ class SFTTrainer(Trainer):
 
                     else:  # language modeling case
                         if is_conversational(examples):
-                            processed = processing_class.apply_chat_template(
-                                examples["messages"],
-                                return_dict=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
-                                tools=examples.get("tools"),
-                                **examples.get("chat_template_kwargs", {}),
-                            )
+                            if examples.get("tools") is not None:
+                                processed = processing_class.apply_chat_template(
+                                    examples["messages"],
+                                    return_dict=True,
+                                    return_assistant_tokens_mask=assistant_only_loss,
+                                    **examples.get("chat_template_kwargs", {}),
+                                )
+                            else:
+                                # We can't batch process a dataset with tools, because each row
+                                # may have different tools associated with it.
+                                processed = defaultdict(list)
+                                for message, tools in zip(examples["messages"], examples.get("tools")):
+                                    processed_message = processing_class.apply_chat_template(
+                                        message,
+                                        return_dict=True,
+                                        return_assistant_tokens_mask=assistant_only_loss,
+                                        tools=tools,
+                                        **examples.get("chat_template_kwargs", {}),
+                                    )
+                                    processed["messages"].append(processed_message["messages"])
+                                    if "assistant_masks" in processed_message:
+                                        processed["assistant_masks"].append(processed_message["assistant_masks"])
+
                             if "assistant_masks" in processed:
                                 is_assistant_token_present = [
                                     1 in assistant_mask for assistant_mask in processed["assistant_masks"]
