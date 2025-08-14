@@ -62,7 +62,7 @@ from huggingface_hub import run_uv_job
 run_uv_job(
     "sft.py",
     flavor="a10g-small",
-    image="pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
+    image="pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel"
 )
 ```
 
@@ -114,20 +114,25 @@ Dependencies are specified at the top of the script using this structure:
 
 When you run the UV script, these dependencies are automatically installed. In the example above, `trl` and `peft` would be installed before the script runs.
 
-You can also provide dependencies directly in the run command:
+You can also provide dependencies directly in the `uv run` command:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
 
+Using the `--with` flag.
+
 ```bash
 hf jobs uv run \
     --flavor a10g-small \
-    --dependencies transformers torch \
+    --with transformers \
+    --with torch \
     "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" 
 ```
 
 </hfoption>
 <hfoption id="python">
+
+Using the `dependencies` argument.
 
 ```python
 from huggingface_hub import run_uv_job
@@ -150,32 +155,7 @@ HF Jobs allows you to select a specific hardware configuration using the `--flav
 
 You can always check the latest list of supported hardware flavors [here](https://huggingface.co/docs/hub/en/spaces-config-reference).
 
-Example usage:
-
-<hfoptions id="script_type">
-<hfoption id="bash">
-
-```bash
-hf jobs uv run \
-    --flavor a10g-small \
-    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" 
-```
-
-</hfoption>
-<hfoption id="python">
-
-```python
-from huggingface_hub import run_uv_job
-run_uv_job(
-    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py",
-    flavor="a10g-small"
-)
-```
-
-</hfoption>
-</hfoptions>
-
-By default, jobs have a **30-minute timeout**, after which they will automatically stop. For long-running tasks like training, you can increase the timeout using the `--timeout` flag. Supported time units are:
+By default, jobs have a **30-minute timeout**, after which they will automatically stop. For long-running tasks like training, you can increase the timeout as needed. Supported time units are:
 
 - `s`: seconds
 - `m`: minutes
@@ -187,6 +167,8 @@ Example with a 2-hour timeout:
 <hfoptions id="script_type">
 <hfoption id="bash">
 
+Using the `--timeout` flag:
+
 ```bash
 hf jobs uv run \
     --timeout 2h \
@@ -196,6 +178,8 @@ hf jobs uv run \
 
 </hfoption>
 <hfoption id="python">
+
+Using the `timeout` argument:
 
 ```python
 from huggingface_hub import run_uv_job
@@ -210,13 +194,16 @@ run_uv_job(
 
 ### Environment Variables, Secrets and Token
 
-You can pass environment variables, secrets, and your auth token to your jobs using the `--env`, `--secrets`, and/or `--token` options.
+You can pass environment variables, secrets, and your auth token to your jobs. 
 
 <hfoptions id="script_type">
 <hfoption id="bash">
 
+Using the `--env`, `--secrets`, and/or `--token` options.
+
 ```bash
-hf jobs uv run \             
+hf jobs uv run \
+    trl/scripts/sft.py \
     --flavor a100-large \
     --env FOO=foo \
     --env BAR=bar \
@@ -228,10 +215,13 @@ hf jobs uv run \
 </hfoption>
 <hfoption id="python">
 
+
+Using the `env`, `secrets`, and/or `token` arguments.
+
 ```python
 from huggingface_hub import run_uv_job
 run_uv_job(
-    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py",
+    "trl/scripts/sft.py",
     env={"FOO": "foo", "BAR": "bar"},
     secrets={"MY_SECRET": "psswrd"},
     token="hf..."
@@ -241,7 +231,6 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-
 ## Training a Model with HF Jobs
 
 TRL example scripts are fully UV-compatible, so you can run a training procedure directly with HF Jobs. You can customize the training by passing the usual script arguments along with hardware and secrets options.
@@ -250,7 +239,7 @@ TRL example scripts are fully UV-compatible, so you can run a training procedure
 <hfoption id="bash">
 
 ```bash
-hf jobs uv run \             
+hf jobs uv run \
     --flavor a100-large \
     --secrets HF_TOKEN \
     "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" \
@@ -304,7 +293,8 @@ run_uv_job(
 
 After launching a job, you can track its progress on the [Jobs page](https://huggingface.co/settings/jobs). Additionally, HF Jobs provides CLI and Python commands to check status, view logs, or cancel a job.
 
-**Checking status**
+<hfoptions id="script_type">
+<hfoption id="bash">
 
 ```bash
 # List your jobs
@@ -323,8 +313,12 @@ hf jobs logs job_id
 hf jobs cancel job_id
 ```
 
+</hfoption>
+<hfoption id="python">
+
+
 ```python
-from huggingface_hub import list_jobs
+from huggingface_hub import list_jobs, inspect_job, fetch_job_logs, cancel_job
 
 # List your jobs
 jobs = list_jobs()
@@ -344,6 +338,8 @@ for log in fetch_job_logs(job_id=job_id):
 cancel_job(job_id=job_id)
 ```
 
+</hfoption>
+</hfoptions>
 
 ## Best Practices and Tips
 
