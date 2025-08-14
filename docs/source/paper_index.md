@@ -28,7 +28,7 @@ training_args = GRPOConfig(
 
 ## EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
 
-**📜 Paper**: https://arxiv.org/abs/2508.00180
+**📜 Paper**: https://huggingface.co/papers/2508.00180
 
 Bias-Corrected Exponential Moving Average (BEMA) improves the stability and efficiency of language model fine-tuning by reducing stochasticity and eliminating bias. To use BEMA with SFT as described in the paper, you can use the [`BEMACallback`]:
 
