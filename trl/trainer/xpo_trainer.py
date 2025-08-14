@@ -74,7 +74,7 @@ class XPOTrainer(OnlineDPOTrainer):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        reward_model (`transformers.PreTrainedModel`):
+        reward_funcs (`transformers.PreTrainedModel`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
@@ -111,7 +111,7 @@ class XPOTrainer(OnlineDPOTrainer):
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
         ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_model: Optional[nn.Module] = None,
+        reward_funcs: Optional[nn.Module] = None,
         judge: Optional[BasePairwiseJudge] = None,
         args: Optional[XPOConfig] = None,
         data_collator: Optional[Callable] = None,
@@ -130,13 +130,13 @@ class XPOTrainer(OnlineDPOTrainer):
             model=model,
             ref_model=ref_model,
             judge=judge,
-            reward_model=reward_model,
+            reward_funcs=reward_funcs,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_class=processing_class,  # for now, XPOTrainer can't use any reward model
+            reward_processing_classes=processing_class,  # for now, XPOTrainer can't use any reward model
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -166,7 +166,8 @@ class XPOTrainer(OnlineDPOTrainer):
             "alpha": [],
             "beta": [],
         }
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
+            self.reward_funcs = self.reward_funcs[0] # only support one reward function / reward model for XPOTrainer
             # Replace "scores" by "model_scores" and "ref_scores"
             self.stats["objective/model_scores"] = []
             self.stats["objective/ref_scores"] = []
@@ -238,10 +239,10 @@ class XPOTrainer(OnlineDPOTrainer):
     def _compute_rewards(self, model_data, ref_data, context_length):
         with torch.no_grad():
             _, model_scores, _ = get_reward(
-                self.reward_model, model_data["input_ids"], self.processing_class.pad_token_id, context_length
+                self.reward_funcs, model_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
             _, ref_scores, _ = get_reward(
-                self.reward_model, ref_data["input_ids"], self.processing_class.pad_token_id, context_length
+                self.reward_funcs, ref_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
 
         # Apply EOS penalty if needed
@@ -384,7 +385,7 @@ class XPOTrainer(OnlineDPOTrainer):
         self.stats["loss/xpo"].append(gather_mean(xpo_losses))
 
         # Log scores
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             self.stats["objective/model_scores"].append(gather_mean(model_scores))
             self.stats["objective/ref_scores"].append(gather_mean(ref_scores))
             self.stats["objective/scores_margin"].append(gather_mean(model_scores - ref_scores))
@@ -473,7 +474,7 @@ class XPOTrainer(OnlineDPOTrainer):
         model_data, ref_data = self._process_completions(model_output, ref_output, prompts)
 
         # Compute rewards
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             model_scores, ref_scores = self._compute_rewards(model_data, ref_data, context_length)
             chosen_mask = model_scores >= ref_scores
         else:

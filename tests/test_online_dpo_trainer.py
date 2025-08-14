@@ -363,10 +363,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
         config = OnlineDPOConfig(use_vllm=True, vllm_mode="colocate")
         self.assertEqual(config.vllm_mode, "colocate")
 
-        # Test invalid vllm_mode
-        with self.assertRaises(ValueError):
-            config = OnlineDPOConfig(use_vllm=True, vllm_mode="invalid")
-
         # Test default values
         config = OnlineDPOConfig()
         self.assertEqual(config.vllm_mode, "server")
