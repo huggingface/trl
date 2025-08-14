@@ -798,6 +798,7 @@ class BEMACallback(TrainerCallback):
         # Update BEMA weights every `update_freq` steps
         elif (step - self.update_after) % self.update_freq == 0:
             self._update_bema_weights(step)
+            logger.info(f"Updated BEMA weights at step {step}")
 
         # Update reference model if enabled
         if (
