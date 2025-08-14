@@ -1,9 +1,9 @@
-# Training a model with TRL using HF Jobs
+# Training using Jobs
 
-[HF Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) lets you run training scripts on fully managed infrastructure (no need to handle GPUs, dependencies, or environment setup locally). This makes it easy to scale and monitor your experiments directly from the Hub.
+[Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) lets you run training scripts on fully managed infrastructure (no need to handle GPUs, dependencies, or environment setup locally). This makes it easy to scale and monitor your experiments directly from the Hub.
 
 In this guide, you’ll learn how to:
-- Run TRL training scripts using HF Jobs.
+- Run TRL training scripts using Jobs.
 - Configure hardware, timeouts, environment variables, and secrets.
 - Monitor and manage jobs from the CLI or Python.
 
@@ -13,7 +13,7 @@ In this guide, you’ll learn how to:
 
 ## Preparing your Script
 
-You can launch HF Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli#hf-jobs) or the Python API. A convenient option is to use [UV scripts](https://docs.astral.sh/uv/guides/scripts/), which packages all dependencies directly into a single Python file. You can run them like this:
+You can launch Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli#hf-jobs) or the Python API. A convenient option is to use [UV scripts](https://docs.astral.sh/uv/guides/scripts/), which packages all dependencies directly into a single Python file. You can run them like this:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -99,7 +99,7 @@ run_job(
 
 ### Adding Dependencies with UV
 
-All example scripts in TRL are compatible with `uv`, allowing seamless execution with HF Jobs. You can check the full list of examples [here](example_overview#maintained-examples).  
+All example scripts in TRL are compatible with `uv`, allowing seamless execution with Jobs. You can check the full list of examples [here](example_overview#maintained-examples).  
 
 Dependencies are specified at the top of the script using this structure:
 
@@ -147,7 +147,7 @@ run_uv_job(
 
 ### Hardware and Timeout Settings
 
-HF Jobs allows you to select a specific hardware configuration using the `--flavor` flag. As of 08/25, the available options are:
+Jobs allows you to select a specific hardware configuration using the `--flavor` flag. As of 08/25, the available options are:
 
 **CPU:** `cpu-basic`, `cpu-upgrade`  
 **GPU:** `t4-small`, `t4-medium`, `l4x1`, `l4x4`, `a10g-small`, `a10g-large`, `a10g-largex2`, `a10g-largex4`, `a100-large`  
@@ -231,9 +231,9 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-## Training and Evaluating a Model with HF Jobs
+## Training and Evaluating a Model with Jobs
 
-TRL example scripts are fully UV-compatible, allowing you to run a complete training workflow directly on HF Jobs. You can customize the training by providing the usual script arguments, along with hardware specifications and secrets.  
+TRL example scripts are fully UV-compatible, allowing you to run a complete training workflow directly on Jobs. You can customize the training by providing the usual script arguments, along with hardware specifications and secrets.  
 
 To evaluate your training runs, in addition to reviewing the job logs, you can use **Trackio**, a lightweight experiment tracking library. Trackio enables end-to-end experiment management on the Hugging Face Hub. All TRL example scripts already support reporting to Trackio via the `report_to` argument. Using this feature saves your experiments in an interactive HF Space, making it easy to monitor metrics, compare runs, and track progress over time.
 
@@ -295,7 +295,7 @@ run_uv_job(
 
 ## Monitoring and Managing Jobs
 
-After launching a job, you can track its progress on the [Jobs page](https://huggingface.co/settings/jobs). Additionally, HF Jobs provides CLI and Python commands to check status, view logs, or cancel a job.
+After launching a job, you can track its progress on the [Jobs page](https://huggingface.co/settings/jobs). Additionally, Jobs provides CLI and Python commands to check status, view logs, or cancel a job.
 
 <hfoptions id="script_type">
 <hfoption id="bash">
