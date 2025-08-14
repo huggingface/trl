@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import logging
 import os
 from typing import Optional, Union
@@ -32,6 +31,7 @@ from transformers import (
     TrainerState,
     TrainingArguments,
 )
+from transformers.trainer_callback import CallbackHandler
 from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
@@ -55,6 +55,37 @@ if is_wandb_available():
 
 # Logger for module-level logging
 logger = logging.getLogger(__name__)
+
+
+class CallbackHandlerWithRefModel(CallbackHandler):
+    """
+    A CallbackHandler that supports passing a reference model to callbacks.
+    """
+
+    def __init__(self, callbacks, model, ref_model, processing_class, optimizer, lr_scheduler):
+        super().__init__(callbacks, model, processing_class, optimizer, lr_scheduler)
+        self.ref_model = ref_model
+
+    # Copied from CallbackHandler.call_event with the addition of `ref_model` to the callback call.
+    def call_event(self, event, args, state, control, **kwargs):
+        for callback in self.callbacks:
+            result = getattr(callback, event)(
+                args,
+                state,
+                control,
+                model=self.model,
+                ref_model=self.ref_model,  # <- Added ref_model to the callback call
+                processing_class=self.processing_class,
+                optimizer=self.optimizer,
+                lr_scheduler=self.lr_scheduler,
+                train_dataloader=self.train_dataloader,
+                eval_dataloader=self.eval_dataloader,
+                **kwargs,
+            )
+            # A Callback can skip the return of `control` if it doesn't change it.
+            if result is not None:
+                control = result
+        return control
 
 
 def _generate_completions(
@@ -580,8 +611,8 @@ class MergeModelCallback(TrainerCallback):
 
 class BEMACallback(TrainerCallback):
     r"""
-    A [`~transformers.TrainerCallback`] that implements [BEMA](https://huggingface.co/papers/2508.00180) (Bias
-    Corrected Exponential Moving Average) by [Adam Block](https://huggingface.co/abblock) and [Cyril
+    A [`~transformers.TrainerCallback`] that implements [BEMA](https://huggingface.co/papers/2508.00180)
+    (Bias-Corrected Exponential Moving Average) by [Adam Block](https://huggingface.co/abblock) and [Cyril
     Zhang](https://huggingface.co/cyrilzhang). Code from https://github.com/abblock/bema under MIT license.
 
     BEMA computes model weights that scale like:
@@ -592,7 +623,7 @@ class BEMACallback(TrainerCallback):
 
     where  \\( \theta_t \\) is the current model weights,  \\( \theta_0 \\) is a snapshot of the model weights at the
     first `update_after` step,  \\( \text{EMA}_t  \\) is the exponential moving average of the model weights, and
-    \\( \alpha_t \\) is a scaling factor that decays with the number of steps  \\( t \\) as
+     \\( \alpha_t \\) is a scaling factor that decays with the number of steps  \\( t \\) as
 
     $$
     \alpha_t = (\rho + \gamma \cdot t)^{-\eta}.
@@ -617,22 +648,24 @@ class BEMACallback(TrainerCallback):
             Power for the EMA decay factor. Denoted  \\( \kappa \\) in the paper.
         bias_power (`float`, *optional*, defaults to `0.2`):
             Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper.
+        lag (`int`, *optional*, defaults to `10`):
+            Lag parameter  \\( \rho \\) in the paper. This is a constant that
+            Initial offset in the weight decay schedule that controls early-stage smoothness by acting as a virtual
+            starting age for the updates. Denoted as  \\( \rho \\) in the paper.
         update_after (`int`, *optional*, defaults to `0`):
-            Number of steps to wait before starting to update the BEMA weights.
-        scaling_lag (`int`, *optional*, defaults to `10`):
-            Number of steps to lag the scaling factor \\alpha_t.
-        ema_gamma (`float`, *optional*, defaults to `1.0`):
-            Initial value for the EMA decay factor.
+            Burn-in time before starting to update the BEMA weights. Denoted  \\( \tau \\) in the paper.
+        multiplier (`float`, *optional*, defaults to `1.0`):
+            Initial value for the EMA decay factor. Denoted as  \\( \gamma \\) in the paper.
         min_ema_multiplier (`float`, *optional*, defaults to `0.0`):
             Minimum value for the EMA decay factor.
         device (`str`, *optional*, defaults to `"cpu"`):
-            Device to use for the BEMA buffers, e.g. "cpu" or "cuda". Note that in most cases, this device
-            SHOULD BE DIFFERENT from the device used for training in order to avoid OOM.
+            Device to use for the BEMA buffers, e.g. `"`cpu" or `"cuda"`. Note that in most cases, this device SHOULD
+            BE DIFFERENT from the device used for training in order to avoid OOM.
         update_ref_model (`bool`, *optional*, defaults to `False`):
-            Whether to update the reference model with BEMA weights. This creates a lagged, smoothed version
-            of the main model as the reference model.
+            Whether to update the reference model with BEMA weights. This creates a lagged, smoothed version of the
+            main model as the reference model.
         ref_model_update_freq (`int`, *optional*, defaults to `100`):
-            How often to update the reference model with BEMA weights (in steps).
+            Update the reference model with BEMA weights every X steps.
         ref_model_update_after (`int`, *optional*, defaults to `0`):
             Number of steps to wait before starting to update the reference model.
 
@@ -647,12 +680,12 @@ class BEMACallback(TrainerCallback):
 
     def __init__(
         self,
-        update_freq: int = 100,
+        update_freq: int = 400,
         ema_power: float = 0.5,
         bias_power: float = 0.2,
+        lag: int = 10,
         update_after: int = 0,
-        scaling_lag: int = 10,
-        ema_gamma: float = 1.0,
+        multiplier: float = 1.0,
         min_ema_multiplier: float = 0.0,
         device: str = "cpu",
         update_ref_model: bool = False,
@@ -663,10 +696,9 @@ class BEMACallback(TrainerCallback):
         self.update_freq = update_freq
         self.ema_power = ema_power
         self.bias_power = bias_power
-        self.lag = 10
-        self.update_after = update_after if update_after is not None else 0
-        self.scaling_lag = scaling_lag
-        self.ema_gamma = ema_gamma
+        self.lag = lag
+        self.update_after = update_after
+        self.multiplier = multiplier
         self.min_ema_multiplier = min_ema_multiplier
         self.device = device
 
@@ -676,13 +708,11 @@ class BEMACallback(TrainerCallback):
         self.ref_model_update_after = ref_model_update_after
 
         # Internal state
-        self.initialized = False
-        self.param_names = []  # references to training model params
+        self.param_names = []  # references to training model param names
         self.thetat_params = []  # references to training model params
         self.theta0_params = []  # θ₀ buffers (on self.device)
         self.ema_params = []  # EMA buffers (on self.device)
         self.running_model = None  # a copy of the model to run BEMA on
-        self.logger = logging.getLogger(__name__)
 
     @staticmethod
     def _unwrap_model(model):
@@ -704,128 +734,86 @@ class BEMACallback(TrainerCallback):
         return model
 
     @torch.no_grad()
-    def on_train_begin(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
-        model = self._unwrap_model(kwargs["model"])
+    def on_train_begin(
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, model: PreTrainedModel, **kwargs
+    ):
+        model = self._unwrap_model(model)
 
-        self.running_model = copy.deepcopy(model).to(self.device)
-        # Cache params once in a fixed order
-        for name, p in model.named_parameters():
-            if not p.requires_grad:
+        # Create a new instance and load state_dict
+        self.running_model = type(model)(model.config).to(self.device)
+        self.running_model.load_state_dict(model.state_dict())
+
+        # Cache trainable parameters once in a fixed order
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
                 continue
             self.param_names.append(name)
-            self.thetat_params.append(p)
+            self.thetat_params.append(param)
 
-            # clone θ₀ and EMA on device
-            theta0_buf = p.data.detach().to(self.device).clone()
-            ema_buf = theta0_buf.clone()  # initialize EMA with θ₀
-            self.theta0_params.append(theta0_buf)
-            self.ema_params.append(ema_buf)
-
-        self.initialized = False
+            # Clone θ₀ and EMA on the same device as model
+            theta0 = param.detach().clone().to(self.device)
+            self.theta0_params.append(theta0)
+            self.ema_params.append(theta0.clone())  # initialize EMA with θ₀
 
     def _ema_beta(self, t: int) -> float:
-        """Compute the EMA decay factor βₜ = (1 + γ·t)⁻ᵉᵐᵃ."""
+        """Compute the EMA decay factor βₜ = (ρ + γ·t)⁻ᵉᵐᵃ."""
         if self.ema_power < 0:
             return 1.0  # no EMA, just BEMA
-        beta = (self.lag + self.ema_gamma * t) ** (-self.ema_power)
+        beta = (self.lag + self.multiplier * t) ** (-self.ema_power)
         return max(beta, self.min_ema_multiplier)
 
     def _bema_alpha(self, t: int) -> float:
-        """Compute the BEMA scaling factor αₜ = (1 + γ·t)⁻ᵉᵗᵃ."""
+        """Compute the BEMA scaling factor αₜ = (ρ + γ·t)⁻ᵉᵗᵃ."""
         if self.bias_power < 0:
             return 0.0  # no BEMA, just EMA
-        return (self.lag + self.ema_gamma * t) ** (-self.bias_power)
-
-    @staticmethod
-    def update_weight_(
-        first_tensor: torch.Tensor,
-        second_tensor: torch.Tensor,
-        alpha: float,
-        beta: float,
-    ):
-        """
-        Updates the first tensor in place using the second tensor and the given alpha and beta values.
-
-        Args:
-            first_tensor (`torch.Tensor`): The tensor to update in place.
-            second_tensor (`torch.Tensor`): The tensor to use for updating.
-            alpha (`float`): The alpha scaling factor.
-            beta (`float`): The beta scaling factor.
-
-        Returns:
-            `torch.Tensor`: The updated first tensor.
-        """
-        first_tensor.mul_(alpha)  # first_tensor = alpha * first_tensor
-        first_tensor.add_(second_tensor, alpha=beta)  # first_tensor += beta * second_tensor
-        return first_tensor
+        return (self.lag + self.multiplier * t) ** (-self.bias_power)
 
     @torch.no_grad()
-    def on_step_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+    def on_step_end(
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, model: PreTrainedModel, **kwargs
+    ):
         step = state.global_step
-        if step is None:
+
+        # If we haven't reached the update_after step, skip the BEMA update
+        if step < self.update_after:
             return
 
-        # 1) When we first cross update_after, snapshot θ₀
-        if not self.initialized and step >= self.update_after:
+        # Snapshot θ₀ and EMA at first update
+        if step == self.update_after:
             for thetat_param, theta0_param, ema_param in zip(self.thetat_params, self.theta0_params, self.ema_params):
-                # copy θₜ to θ₀
-                theta0_param.copy_(thetat_param.data.detach().to(self.device))
-                # initialize EMA with θ₀
-                ema_param.copy_(theta0_param)
-            self.initialized = True
+                theta0_param.copy_(thetat_param)
+                ema_param.copy_(thetat_param)
 
-        # 2) skip until after update_after
-        if not self.initialized:
-            return
+        if (step - self.update_after) % self.update_freq == 0:
+            beta = self._ema_beta(step)
+            alpha = self._bema_alpha(step)
 
-        # 3) frequency check
-        if step % self.update_freq != 0:
-            return
+            # Compute EMA + BEMA in-place and write directly to running_model
+            for thetat, theta0, ema, run_param in zip(
+                self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters()
+            ):
+                thetat = thetat.detach().to(self.device)
+                ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
+                run_param.copy_(ema + alpha * (thetat - theta0))  # BEMA update: run_param = ema + alpha * (θₜ - θ₀)
 
-        # 4) compute shared t (with scaling lag)
-        t = max(step - self.update_after + self.scaling_lag, 1)
-        beta = self._ema_beta(t)
-        alpha = self._bema_alpha(t)
+        # Update reference model if enabled
+        if (
+            self.update_ref_model
+            and step >= self.ref_model_update_after
+            and (step - self.ref_model_update_after) % self.ref_model_update_freq == 0
+        ):
+            if "ref_model" not in kwargs:
+                raise ValueError("'ref_model' not found in kwargs.")
 
-        # 5) gather the current θₜ from GPU → CPU once, non-blocking
-        new_thetats = [p.data.detach().to(self.device, non_blocking=True) for p in self.thetat_params]
+            ref_model = kwargs["ref_model"]
 
-        # 6) EMA update: ema ← β·θₜ + (1–β)·ema
-        torch._foreach_mul_(self.ema_params, 1 - beta)  # ema = (1 -β) * ema
-        torch._foreach_add_(self.ema_params, new_thetats, alpha=beta)  # ema += β*θₜ
-
-        # 7) BEMA: corr = (θₜ - θ₀)*α + ema
-        #    we do this in three foreach calls to avoid Python loops:
-        deltas = [t.clone() for t in new_thetats]  # a) δ = θₜ.clone()
-        torch._foreach_sub_(deltas, self.theta0_params)  # b) δ.sub_(θ₀)
-        torch._foreach_mul_(deltas, alpha)  # c) δ.mul_(α)
-        torch._foreach_add_(deltas, self.ema_params)  # d) δ.add_(ema)
-
-        # 8) write back into a *single* flat state_dict and load
-        sd_run = self.running_model.state_dict()
-        for name, corr in zip(self.param_names, deltas):
-            sd_run[name].copy_(corr)
-        self.running_model.load_state_dict(sd_run, strict=False)
-
-        # 9) Update reference model if enabled
-        if self.update_ref_model and step >= self.ref_model_update_after and step % self.ref_model_update_freq == 0:
-            self._update_ref_model()
-
-    def _update_ref_model(self):
-        """Update the reference model with the current BEMA weights."""
-        if not hasattr(self.trainer, "ref_model"):
-            if self.trainer is not None:
-                self.logger.warning("BEMACallback: Cannot update ref_model - trainer has no ref_model attribute")
-            return
-
-        try:
             # Get the current BEMA state dict
             bema_state_dict = self.running_model.state_dict()
 
             # Handle the case where ref_model is None (PEFT case)
-            if self.trainer.ref_model is None:
+            if ref_model is None:
                 # In PEFT case, ref_model is None and we need to update the base model of the main model
-                main_model = self._unwrap_model(self.trainer.model)
+                main_model = self._unwrap_model(model)
                 if hasattr(main_model, "get_base_model"):
                     # This is a PEFT model, update the base model
                     base_model = main_model.get_base_model()
@@ -844,11 +832,7 @@ class BEMACallback(TrainerCallback):
                     # Regular model, update directly
                     self._update_model_with_bema_weights(ref_model, bema_state_dict, is_peft_base=False)
 
-            # self._log_metric({"bema_ref_model_updated": True}) # FIXME: proper logging
-            self.logger.info("BEMACallback: Updated reference model with BEMA weights")
-        except Exception as e:
-            self.logger.error(f"BEMACallback: Failed to update reference model: {e}")
-            self.logger.error(f"Error details: {type(e).__name__}: {str(e)}")
+            logger.info("BEMACallback: Updated reference model with BEMA weights")
 
     def _update_model_with_bema_weights(self, model, bema_state_dict, is_peft_base=False):
         """Helper method to update a model with BEMA weights, handling PEFT and distributed scenarios."""
@@ -874,8 +858,6 @@ class BEMACallback(TrainerCallback):
     @torch.no_grad()
     def on_train_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
         if state.is_world_process_zero:
-            final_state_dict = self.running_model.state_dict()
-            path = f"{args.output_dir}/bema.pt"
-            torch.save(final_state_dict, path)
-            # self._log_metric({"bema_saved": True, "bema_path": path}) # proper logging loggic
-            self.logger.info(f"Saved BEMA model to {path}")
+            save_directory = f"{args.output_dir}/bema"
+            self.running_model.save_pretrained(save_directory)
+            logger.info(f"Saved BEMA model to {save_directory}")
