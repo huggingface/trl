@@ -971,10 +971,10 @@ class SFTTrainer(Trainer):
                 predictions = shift_logits.argmax(dim=-1)
                 mask = shift_labels != -100
                 correct_predictions = (predictions == shift_labels) & mask
-                total_tokens = mask.sum().item()  # Remove double .sum()
-                correct_tokens = correct_predictions.sum().item()  # Remove double .sum()
+                total_tokens = mask.sum().item()
+                correct_tokens = correct_predictions.sum().item()
 
-                # Store raw counts (not gathered yet)
+                # Store local counts for later aggregation during logging
                 self._metrics[mode]["correct_tokens"].append(correct_tokens)
                 self._metrics[mode]["total_tokens"].append(total_tokens)
 
