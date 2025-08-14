@@ -945,50 +945,38 @@ class SFTTrainer(Trainer):
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
-        Compute training loss and additionally compute token accuracies
+        Compute training loss and collect token statistics for later aggregation.
         """
         mode = "train" if self.model.training else "eval"
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
+
         if mode == "train":
-            # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
-            # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
             if "attention_mask" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
+                num_tokens_in_batch = inputs["attention_mask"].sum().item()
             elif "position_ids" in inputs:
-                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
+                num_tokens_in_batch = inputs["position_ids"].size(1)
             else:
                 raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
             self._total_train_tokens += num_tokens_in_batch
+
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
+        # Collect correct_tokens and total_tokens for accuracy aggregation in log
         if "labels" in inputs and not self.args.use_liger_kernel:
             with torch.no_grad():
                 shift_logits = outputs.logits[..., :-1, :].contiguous()
                 shift_labels = inputs["labels"][..., 1:].contiguous()
-
-                # Get predictions
                 predictions = shift_logits.argmax(dim=-1)
-
-                # Create mask for non-padding tokens (assuming ignore_index is -100)
                 mask = shift_labels != -100
-
-                # Calculate accuracy only on non-padding tokens
                 correct_predictions = (predictions == shift_labels) & mask
-                total_tokens = mask.sum()
-                correct_tokens = correct_predictions.sum()
+                total_tokens = mask.sum().item()  # Remove double .sum()
+                correct_tokens = correct_predictions.sum().item()  # Remove double .sum()
 
-                # Gather the correct_tokens and total_tokens across all processes
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-
-                # Compute the mean token accuracy and log it
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+                # Store raw counts (not gathered yet)
+                self._metrics[mode]["correct_tokens"].append(correct_tokens)
+                self._metrics[mode]["total_tokens"].append(total_tokens)
 
         return (loss, outputs) if return_outputs else loss
 
@@ -999,13 +987,32 @@ class SFTTrainer(Trainer):
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "train" if self.model.training else "eval"
-        metrics = {key: sum(val) / len(val) for key, val in self._metrics[mode].items()}  # average the metrics
+        metrics = {}
 
-        # This method can be called both in training and evaluation. When called in evaluation, the keys in `logs`
-        # start with "eval_". We need to add the prefix "eval_" to the keys in `metrics` to match the format.
+        # Aggregate accuracy if available
+        correct_tokens = self._metrics[mode].get("correct_tokens", [])
+        total_tokens = self._metrics[mode].get("total_tokens", [])
+        if correct_tokens and total_tokens:
+            # Sum across logging interval, then gather across processes
+            local_correct = sum(correct_tokens)
+            local_total = sum(total_tokens)
+
+            correct_tensor = torch.tensor(local_correct, device=self.accelerator.device)
+            total_tensor = torch.tensor(local_total, device=self.accelerator.device)
+
+            gathered_correct = self.accelerator.gather_for_metrics(correct_tensor).sum().item()
+            gathered_total = self.accelerator.gather_for_metrics(total_tensor).sum().item()
+
+            accuracy = gathered_correct / gathered_total if gathered_total > 0 else 0.0
+            metrics["mean_token_accuracy"] = accuracy
+
+        for key, val in self._metrics[mode].items():
+            if key not in ("correct_tokens", "total_tokens"):
+                metrics[key] = sum(val) / len(val) if val else 0.0
+
+        # Prefix for eval mode
         if mode == "eval":
             metrics = {f"eval_{key}": val for key, val in metrics.items()}
-
         logs.update(metrics)
         super().log(logs, start_time)
         self._metrics[mode].clear()
