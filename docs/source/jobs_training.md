@@ -348,5 +348,5 @@ cancel_job(job_id=job_id)
 ## Best Practices and Tips
 
 - Choose hardware that fits the size of your model and dataset for optimal performance.
-- Training jobs can be long-running—consider increasing the default timeout.
+- Training jobs can be long-running. Consider increasing the default timeout.
 - Reuse training and evaluation scripts whenever possible to streamline workflows.
