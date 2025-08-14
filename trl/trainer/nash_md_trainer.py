@@ -164,7 +164,9 @@ class NashMDTrainer(OnlineDPOTrainer):
             "mixture_coef": [],
         }
         if self.reward_funcs is not None:
-            self.reward_funcs = self.reward_funcs[0] # only support one reward function / reward model for NashMDTrainer
+            self.reward_funcs = self.reward_funcs[
+                0
+            ]  # only support one reward function / reward model for NashMDTrainer
             self.stats["rewards/chosen"] = []
             self.stats["rewards/rejected"] = []
 

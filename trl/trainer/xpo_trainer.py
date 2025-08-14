@@ -167,7 +167,7 @@ class XPOTrainer(OnlineDPOTrainer):
             "beta": [],
         }
         if self.reward_funcs is not None:
-            self.reward_funcs = self.reward_funcs[0] # only support one reward function / reward model for XPOTrainer
+            self.reward_funcs = self.reward_funcs[0]  # only support one reward function / reward model for XPOTrainer
             # Replace "scores" by "model_scores" and "ref_scores"
             self.stats["objective/model_scores"] = []
             self.stats["objective/ref_scores"] = []
