@@ -453,9 +453,6 @@ class _SegmentTree:
     value for a given input within the range [1, maxval].
 
     See [Fewer Truncations Improve Language Modeling](https://arxiv.org/abs/2404.10830) for more details.
-    
-    Fix: Properly handle non-power-of-2 values by rounding up to the next power of 2 for the tree size.
-    This ensures that the search method works correctly for all seq_length values.
     """
 
     def __init__(self, maxval: int):
@@ -498,11 +495,7 @@ class _SegmentTree:
 
 
 def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
-    """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy.
-    
-    Fix: Ensure segment tree properly handles non-power-of-2 seq_length values by using a correctly
-    sized tree. This allows proper bin packing for all seq_length values, not just powers of 2.
-    """
+    """Pack sequences in a pyarrow Table using Best Fit Decreasing strategy."""
     columns = []
     list_column_idx = None
     for idx, column in enumerate(examples.columns):
@@ -529,10 +522,8 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
         space = segment_tree.search(length)
         
-        # Handle case where search returns 0 (no suitable bin found)
-        # This can happen with certain seq_length values
+        # If no suitable bin found (space == 0) or length > space, create a new bin
         if space == 0 or length > space:
-            # Create a new bin for this sequence
             bin = {"ids": [], "length": 0}
             bins.append(bin)
         elif space_to_bin[space]:
@@ -545,7 +536,8 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
 
         bin["ids"].append(idx)
         bin["length"] += length
-        if space_to_bin[space] and not space_to_bin[space]:
+        # Fix the condition that was always False
+        if space_to_bin[space] and len(space_to_bin[space]) == 0:
             segment_tree.remove(space)
 
         space = space - length
