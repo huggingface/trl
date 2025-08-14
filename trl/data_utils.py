@@ -62,6 +62,9 @@ def is_conversational(example: dict[str, Any]) -> bool:
         # It must be a list of messages
         if isinstance(maybe_messages, list):
             maybe_message = maybe_messages[0]
+            # If the example is batched the values will be a list of lists
+            if isinstance(maybe_message, list):
+                maybe_message = maybe_message[0]
             # Each message must a list of dictionaries with keys "role" and "content"
             if isinstance(maybe_message, dict) and "role" in maybe_message and "content" in maybe_message:
                 return True
@@ -764,16 +767,24 @@ def maybe_convert_to_chatml(example: dict[str, list]) -> dict[str, list]:
                   {'role': 'assistant', 'content': 'It is blue.'}]}
     ```
     """
+
+    def extract_role_and_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        for message in messages:
+            if "from" in message:
+                message["role"] = message.pop("from")
+            if "value" in message:
+                message["content"] = message.pop("value")
+        return messages
+
     # List of possible keys containing message lists
     for key in ["prompt", "completion", "chosen", "rejected", "messages", "conversations"]:
         if key in example and isinstance(example[key], list):
             messages = example[key]
-            for message in messages:
-                if isinstance(message, dict):
-                    if "from" in message:
-                        message["role"] = message.pop("from")
-                    if "value" in message:
-                        message["content"] = message.pop("value")
+            if isinstance(messages[0], list):
+                messages = messages[0]
+                messages = extract_role_and_content(messages)
+            else:
+                messages = extract_role_and_content(messages)
 
     # Rename "conversations" to "messages"
     if "conversations" in example:

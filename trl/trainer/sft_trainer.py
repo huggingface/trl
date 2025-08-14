@@ -805,6 +805,7 @@ class SFTTrainer(Trainer):
                     column_names = next(iter(dataset)).keys()
                     dataset = dataset.map(
                         maybe_convert_to_chatml,
+                        batched=True,
                         remove_columns="conversations" if "conversations" in column_names else None,
                         **map_kwargs,
                     )
@@ -815,15 +816,19 @@ class SFTTrainer(Trainer):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
 
-                    def add_eos(example, eos_token):
-                        if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
-                            example["text"] = example["text"] + eos_token
-                        elif "completion" in example and not example["completion"].endswith(eos_token):
-                            example["completion"] = example["completion"] + eos_token
-                        return example
+                    def add_eos(examples, eos_token):
+                        def append_eos(text):
+                            return text + eos_token if not text.endswith(eos_token) else text
+
+                        if "text" in examples:  # language modeling case
+                            examples["text"] = [append_eos(text) for text in examples["text"]]
+                        elif "completion" in examples:
+                            examples["completion"] = [append_eos(completion) for completion in examples["completion"]]
+                        return examples
 
                     dataset = dataset.map(
                         add_eos,
+                        batched=True,
                         fn_kwargs={"eos_token": processing_class.eos_token},
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
@@ -833,33 +838,39 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
-                    if "prompt" in example:  # prompt-completion case
-                        output = {}
-                        if is_conversational(example):
-                            prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"],
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
+                def tokenize(examples, processing_class, dataset_text_field, assistant_only_loss):
+                    output = {}
+                    if "prompt" in examples:  # prompt-completion case
+                        if is_conversational(examples):
+                            prompts_ids = processing_class.apply_chat_template(
+                                examples["prompt"],
+                                tools=examples.get("tools"),
+                                **examples.get("chat_template_kwargs", {}),
                             )
-                            prompt_completion_processed = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"],
+                            prompts_completions_processed = processing_class.apply_chat_template(
+                                [
+                                    prompt + completion
+                                    for prompt, completion in zip(examples["prompt"], examples["completion"])
+                                ],
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
+                                tools=examples.get("tools"),
+                                **examples.get("chat_template_kwargs", {}),
                             )
-                            prompt_completion_ids = prompt_completion_processed["input_ids"]
-                            if "assistant_masks" in prompt_completion_processed:
-                                output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
+                            prompts_completions_ids = prompts_completions_processed["input_ids"]
+                            if "assistant_masks" in prompts_completions_processed:
+                                output["assistant_masks"] = prompts_completions_processed["assistant_masks"]
                         else:
-                            prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                            prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
-                                "input_ids"
-                            ]
+                            prompts_ids = processing_class(text=examples["prompt"])["input_ids"]
+                            prompts_completions_ids = processing_class(
+                                text=[
+                                    prompt + completion
+                                    for prompt, completion in zip(examples["prompt"], examples["completion"])
+                                ]
+                            )["input_ids"]
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                        if not prompts_completions_ids[: len(prompts_ids)] == prompts_ids:
                             warnings.warn(
                                 "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
                                 "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
@@ -867,34 +878,43 @@ class SFTTrainer(Trainer):
                             )
 
                         # Create a completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        output["input_ids"] = prompt_completion_ids
-                        output["completion_mask"] = completion_mask
+                        completions_mask = [
+                            [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                            for prompt_ids, prompt_completion_ids in zip(prompts_ids, prompts_completions_ids)
+                        ]
+                        output["input_ids"] = prompts_completions_ids
+                        output["completion_mask"] = completions_mask
 
                     else:  # language modeling case
-                        if is_conversational(example):
+                        if is_conversational(examples):
                             processed = processing_class.apply_chat_template(
-                                example["messages"],
+                                examples["messages"],
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
+                                tools=examples.get("tools"),
+                                **examples.get("chat_template_kwargs", {}),
                             )
-                            if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
-                                raise RuntimeError(
-                                    "You're using `assistant_only_loss=True`, but at least one example has no "
-                                    "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                    "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
-                                    "check the template and ensure it's correctly configured to support assistant "
-                                    "masking."
-                                )
+                            if "assistant_masks" in processed:
+                                is_assistant_token_present = [
+                                    1 in assistant_mask for assistant_mask in processed["assistant_masks"]
+                                ]
+                                if not any(is_assistant_token_present):
+                                    raise RuntimeError(
+                                        "You're using `assistant_only_loss=True`, but at least one example has no "
+                                        "assistant tokens. This usually means the tokenizer's chat template doesn't "
+                                        "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
+                                        "check the template and ensure it's correctly configured to support assistant "
+                                        "masking."
+                                    )
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
-                            output = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
+                            output = {"input_ids": processing_class(text=examples[dataset_text_field])["input_ids"]}
+
                     return output
 
                 dataset = dataset.map(
                     tokenize,
+                    batched=True,
                     fn_kwargs={
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
