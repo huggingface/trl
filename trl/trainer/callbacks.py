@@ -31,6 +31,7 @@ from transformers import (
     TrainerState,
     TrainingArguments,
 )
+from transformers.trainer_callback import CallbackHandler
 from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
@@ -54,6 +55,37 @@ if is_wandb_available():
 
 # Logger for module-level logging
 logger = logging.getLogger(__name__)
+
+
+class CallbackHandlerWithRefModel(CallbackHandler):
+    """
+    A [`~transformers.CallbackHandler`] that supports passing a reference model to callbacks.
+    """
+
+    def __init__(self, callbacks, model, ref_model, processing_class, optimizer, lr_scheduler):
+        super().__init__(callbacks, model, processing_class, optimizer, lr_scheduler)
+        self.ref_model = ref_model
+
+    # Copied from CallbackHandler.call_event with the addition of `ref_model` to the callback call.
+    def call_event(self, event, args, state, control, **kwargs):
+        for callback in self.callbacks:
+            result = getattr(callback, event)(
+                args,
+                state,
+                control,
+                model=self.model,
+                ref_model=self.ref_model,  # <- Added ref_model to the callback call
+                processing_class=self.processing_class,
+                optimizer=self.optimizer,
+                lr_scheduler=self.lr_scheduler,
+                train_dataloader=self.train_dataloader,
+                eval_dataloader=self.eval_dataloader,
+                **kwargs,
+            )
+            # A Callback can skip the return of `control` if it doesn't change it.
+            if result is not None:
+                control = result
+        return control
 
 
 def _generate_completions(
@@ -629,6 +661,13 @@ class BEMACallback(TrainerCallback):
         device (`str`, *optional*, defaults to `"cpu"`):
             Device to use for the BEMA buffers, e.g. `"cpu"` or `"cuda"`. Note that in most cases, this device SHOULD
             BE DIFFERENT from the device used for training in order to avoid OOM.
+        update_ref_model (`bool`, *optional*, defaults to `False`):
+            Whether to update the reference model with BEMA weights. This creates a lagged, smoothed version of the
+            main model as the reference model.
+        ref_model_update_freq (`int`, *optional*, defaults to `100`):
+            Update the reference model with BEMA weights every X steps.
+        ref_model_update_after (`int`, *optional*, defaults to `0`):
+            Number of steps to wait before starting to update the reference model.
 
     Example:
 
@@ -649,6 +688,9 @@ class BEMACallback(TrainerCallback):
         multiplier: float = 1.0,
         min_ema_multiplier: float = 0.0,
         device: str = "cpu",
+        update_ref_model: bool = False,
+        ref_model_update_freq: int = 400,
+        ref_model_update_after: int = 0,
     ):
         # User-provided hyperparams
         self.update_freq = update_freq
@@ -659,6 +701,11 @@ class BEMACallback(TrainerCallback):
         self.multiplier = multiplier
         self.min_ema_multiplier = min_ema_multiplier
         self.device = device
+
+        # Reference model update parameters
+        self.update_ref_model = update_ref_model
+        self.ref_model_update_freq = ref_model_update_freq
+        self.ref_model_update_after = ref_model_update_after
 
         # Internal state
         self.param_names = []  # references to training model param names
@@ -751,7 +798,65 @@ class BEMACallback(TrainerCallback):
         # Update BEMA weights every `update_freq` steps
         elif (step - self.update_after) % self.update_freq == 0:
             self._update_bema_weights(step)
-            logger.info(f"Updated BEMA weights at step {step}")
+
+        # Update reference model if enabled
+        if (
+            self.update_ref_model
+            and step >= self.ref_model_update_after
+            and (step - self.ref_model_update_after) % self.ref_model_update_freq == 0
+        ):
+            if "ref_model" not in kwargs:
+                raise ValueError("'ref_model' not found in kwargs.")
+
+            ref_model = kwargs["ref_model"]
+
+            # Get the current BEMA state dict
+            bema_state_dict = self.running_model.state_dict()
+
+            # Handle the case where ref_model is None (PEFT case)
+            if ref_model is None:
+                # In PEFT case, ref_model is None and we need to update the base model of the main model
+                main_model = self._unwrap_model(model)
+                if hasattr(main_model, "get_base_model"):
+                    # This is a PEFT model, update the base model
+                    base_model = main_model.get_base_model()
+                    self._update_model_with_bema_weights(base_model, bema_state_dict, is_peft_base=True)
+                else:
+                    # Regular model, update directly
+                    self._update_model_with_bema_weights(main_model, bema_state_dict, is_peft_base=False)
+            else:
+                # ref_model is provided, unwrap it and update
+                ref_model = self._unwrap_model(ref_model)
+                if hasattr(ref_model, "get_base_model"):
+                    # This is a PEFT model, update the base model
+                    base_model = ref_model.get_base_model()
+                    self._update_model_with_bema_weights(base_model, bema_state_dict, is_peft_base=True)
+                else:
+                    # Regular model, update directly
+                    self._update_model_with_bema_weights(ref_model, bema_state_dict, is_peft_base=False)
+
+            logger.info("BEMACallback: Updated reference model with BEMA weights")
+
+    def _update_model_with_bema_weights(self, model, bema_state_dict, is_peft_base=False):
+        """Helper method to update a model with BEMA weights, handling PEFT and distributed scenarios."""
+        if is_peft_base:
+            # For PEFT base models, filter out adapter parameters
+            filtered_state_dict = {}
+            for key, value in bema_state_dict.items():
+                # Skip adapter parameters
+                if not key.startswith("lora_") and not key.startswith("adapter_"):
+                    # Remove 'base_model.' prefix if it exists
+                    if key.startswith("base_model."):
+                        base_key = key[len("base_model.") :]
+                    else:
+                        base_key = key
+                    filtered_state_dict[base_key] = value
+
+            # Update the base model
+            model.load_state_dict(filtered_state_dict, strict=False)
+        else:
+            # Regular model, update directly
+            model.load_state_dict(bema_state_dict, strict=False)
 
     @torch.no_grad()
     def on_train_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
