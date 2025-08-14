@@ -1163,7 +1163,7 @@ class SFTTrainerTester2(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/toolcall", split="train")
 
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", bf16=False)
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
