@@ -37,10 +37,10 @@ python examples/scripts/ddpo.py \
 import os
 from dataclasses import dataclass, field
 
-import trackio
 import numpy as np
 import torch
 import torch.nn as nn
+import trackio
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available
@@ -228,7 +228,9 @@ if __name__ == "__main__":
     )
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     trainer = DDPOTrainer(

@@ -49,9 +49,9 @@ python examples/scripts/prm.py \
 """
 
 import warnings
-import trackio
 
 import torch
+import trackio
 from datasets import load_dataset
 from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgumentParser
 
@@ -110,9 +110,10 @@ if __name__ == "__main__":
     dataset = dataset.filter(lambda x: len(x["completions"]) > 0)
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
 
     ##########
     # Training

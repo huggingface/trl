@@ -63,9 +63,9 @@ python trl/scripts/dpo.py \
 
 import argparse
 import warnings
-import trackio
 
 import torch
+import trackio
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -139,9 +139,10 @@ def main(script_args, training_args, model_args, dataset_args):
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
 
     # Initialize the DPO trainer
     trainer = DPOTrainer(
@@ -168,6 +169,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trackio.finish()
+
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
     dataclass_types = (ScriptArguments, DPOConfig, ModelConfig, DatasetMixtureConfig)

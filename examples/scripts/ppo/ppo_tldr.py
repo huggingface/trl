@@ -166,7 +166,9 @@ if __name__ == "__main__":
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     ################

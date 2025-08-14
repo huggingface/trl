@@ -75,7 +75,9 @@ def main(script_args, training_args, model_args):
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     # Train model
@@ -94,6 +96,7 @@ def main(script_args, training_args, model_args):
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trackio.finish()
+
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))

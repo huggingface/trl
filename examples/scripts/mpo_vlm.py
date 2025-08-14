@@ -120,7 +120,9 @@ if __name__ == "__main__":
         test_dataset = test_dataset.map(ensure_rgb, num_proc=training_args.dataset_num_proc)
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     ################

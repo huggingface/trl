@@ -52,7 +52,6 @@ python examples/scripts/gkd.py \
 """
 
 import trackio
-
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -114,7 +113,9 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     ################

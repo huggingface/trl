@@ -77,10 +77,10 @@ python examples/scripts/bco.py \
 """
 
 from functools import partial
-import trackio
 
 import torch
 import torch.nn.functional as F
+import trackio
 from accelerate import Accelerator
 from datasets import load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
@@ -155,9 +155,10 @@ if __name__ == "__main__":
     )
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
 
     # Initialize the BCO trainer
     trainer = BCOTrainer(

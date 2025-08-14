@@ -55,9 +55,9 @@ accelerate launch \
 import io
 import os
 import zipfile
-import trackio
 
 import torch
+import trackio
 from datasets import DatasetDict, load_dataset
 from huggingface_hub import hf_hub_download, list_repo_files
 from PIL import Image
@@ -168,7 +168,9 @@ def main():
         dataset = prepare_dataset(dataset, script_args.dataset_name)
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     ################

@@ -65,8 +65,8 @@ python trl/scripts/kto.py \
 
 import argparse
 import warnings
-import trackio
 
+import trackio
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -118,7 +118,9 @@ def main(script_args, training_args, model_args, dataset_args):
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
     # Initialize trackio if specified
-    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     # Initialize the KTO trainer
