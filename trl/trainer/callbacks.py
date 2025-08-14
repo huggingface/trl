@@ -627,7 +627,7 @@ class BEMACallback(TrainerCallback):
         min_ema_multiplier (`float`, *optional*, defaults to `0.0`):
             Minimum value for the EMA decay factor.
         device (`str`, *optional*, defaults to `"cpu"`):
-            Device to use for the BEMA buffers, e.g. `"`cpu" or `"cuda"`. Note that in most cases, this device SHOULD
+            Device to use for the BEMA buffers, e.g. `"cpu"` or `"cuda"`. Note that in most cases, this device SHOULD
             BE DIFFERENT from the device used for training in order to avoid OOM.
 
     Example:
