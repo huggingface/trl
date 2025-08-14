@@ -1033,7 +1033,7 @@ dataset = dataset.map(merge_completions_and_labels, remove_columns=["completions
 
 ## Vision datasets
 
-Some trainers also support fine-tuning vision-language models (VLMs) using image-text pairs. In this scenario, it's recommended to use a conversational format, as each model handles image placeholders in text differently. 
+Some trainers also support fine-tuning vision-language models (VLMs) using image-text pairs. In this scenario, it's recommended to use a conversational format, as each model handles image placeholders in text differently.
 
 A conversational vision dataset differs from a standard conversational dataset in two key ways:
 
@@ -1061,4 +1061,3 @@ An example of a conversational vision dataset is the [openbmb/RLAIF-V-Dataset](h
   width="100%"
   height="560px"
 ></iframe>
-
