@@ -53,7 +53,6 @@ _import_structure = {
         "BaseRankJudge",
         "BCOConfig",
         "BCOTrainer",
-        "BEMACallback",
         "CPOConfig",
         "CPOTrainer",
         "DPOConfig",
@@ -94,7 +93,7 @@ _import_structure = {
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.callbacks": ["BEMACallback", "MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
@@ -148,7 +147,6 @@ if TYPE_CHECKING:
         BaseRankJudge,
         BCOConfig,
         BCOTrainer,
-        BEMACallback,
         CPOConfig,
         CPOTrainer,
         DPOConfig,
@@ -189,7 +187,7 @@ if TYPE_CHECKING:
         XPOConfig,
         XPOTrainer,
     )
-    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
+    from .trainer.callbacks import BEMACallback, MergeModelCallback, RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
     try:
