@@ -13,7 +13,7 @@ In this guide, you’ll learn how to:
 
 ## Preparing your Script
 
-You can launch HF Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli#hf-jobs) or the Python API. A convenient option is to use [UV scripts](https://docs.astral.sh/uv/guides/scripts/), which package all dependencies directly into a single Python file. You can run them like this:
+You can launch HF Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli#hf-jobs) or the Python API. A convenient option is to use [UV scripts](https://docs.astral.sh/uv/guides/scripts/), which packages all dependencies directly into a single Python file. You can run them like this:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -70,12 +70,12 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-You can also run jobs without uv:
+You can also run jobs without UV:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
 
-In this case, we give the command the Docker image and command to run:
+In this case, we give the cli the Docker image and run it as:
 
 ```bash
 hf jobs run --flavor a10g-small pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel python -c "import torch; print(torch.cuda.get_device_name())"
@@ -192,7 +192,7 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-### Environment Variables, Secrets and Token
+### Environment Variables, Secrets, and Token
 
 You can pass environment variables, secrets, and your auth token to your jobs. 
 
