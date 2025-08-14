@@ -57,7 +57,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
 from ..models.utils import prepare_fsdp
-from .callbacks import CallbackHandlerWithRefModel, SyncRefModelCallback
+from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     RunningMoments,
@@ -462,16 +462,6 @@ class DPOTrainer(Trainer):
             optimizers=optimizers,
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-        )
-
-        # Replace with a new one that calls the events with the reference model
-        self.callback_handler = CallbackHandlerWithRefModel(
-            self.callback_handler.callbacks,
-            self.model,
-            self.ref_model,
-            self.processing_class,
-            self.optimizer,
-            self.lr_scheduler,
         )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
