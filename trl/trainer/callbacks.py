@@ -689,7 +689,7 @@ class BEMACallback(TrainerCallback):
         min_ema_multiplier: float = 0.0,
         device: str = "cpu",
         update_ref_model: bool = False,
-        ref_model_update_freq: int = 100,
+        ref_model_update_freq: int = 400,
         ref_model_update_after: int = 0,
     ):
         # User-provided hyperparams
@@ -826,7 +826,7 @@ class BEMACallback(TrainerCallback):
                     self._update_model_with_bema_weights(main_model, bema_state_dict, is_peft_base=False)
             else:
                 # ref_model is provided, unwrap it and update
-                ref_model = self._unwrap_model(self.trainer.ref_model)
+                ref_model = self._unwrap_model(ref_model)
                 if hasattr(ref_model, "get_base_model"):
                     # This is a PEFT model, update the base model
                     base_model = ref_model.get_base_model()
