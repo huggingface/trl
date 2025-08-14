@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "Pillow",
+#     "trackio",
 # ]
 # ///
 
@@ -25,6 +26,7 @@ Train Gemma-3 on the Codeforces COTS dataset.
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/sft_gemma3.py
 """
 
+import trackio
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
 
@@ -53,6 +55,12 @@ def main():
         dataset_num_proc=32,
         num_train_epochs=1,
     )
+
+    # Initialize trackio if specified
+    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
+
     trainer = SFTTrainer(
         args=training_args,
         model=model,
@@ -62,6 +70,7 @@ def main():
 
     # Push to hub
     trainer.push_to_hub(dataset_name="open-r1/codeforces-cots")
+    trackio.finish()
 
 
 if __name__ == "__main__":

@@ -231,9 +231,11 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-## Training a Model with HF Jobs
+## Training and Evaluating a Model with HF Jobs
 
-TRL example scripts are fully UV-compatible, so you can run a training procedure directly with HF Jobs. You can customize the training by passing the usual script arguments along with hardware and secrets options.
+TRL example scripts are fully UV-compatible, allowing you to run a complete training workflow directly on HF Jobs. You can customize the training by providing the usual script arguments, along with hardware specifications and secrets.  
+
+To evaluate your training runs, in addition to reviewing the job logs, you can use **Trackio**, a lightweight experiment tracking library. Trackio enables end-to-end experiment management on the Hugging Face Hub. All TRL example scripts already support reporting to Trackio via the `report_to` argument. Using this feature saves your experiments in an interactive HF Space, making it easy to monitor metrics, compare runs, and track progress over time.
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -242,7 +244,7 @@ TRL example scripts are fully UV-compatible, so you can run a training procedure
 hf jobs uv run \
     --flavor a100-large \
     --secrets HF_TOKEN \
-    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" \
+    "trl/scripts/sft.py" \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --learning_rate 2.0e-5 \
@@ -255,6 +257,7 @@ hf jobs uv run \
     --eval_strategy steps \
     --eval_steps 100 \
     --output_dir Qwen2-0.5B-SFT \
+    --report_to trackio \
     --push_to_hub
 ```
 
@@ -265,7 +268,7 @@ hf jobs uv run \
 from huggingface_hub import run_uv_job
 
 run_uv_job(
-    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py",
+    "trl/scripts/sft.py",
     flavor="a100-large",
     secrets={"HF_TOKEN": "your_hf_token"},
     script_args=[
@@ -281,6 +284,7 @@ run_uv_job(
         "--eval_strategy", "steps",
         "--eval_steps", "100",
         "--output_dir", "Qwen2-0.5B-SFT",
+        "--report_to", "trackio",
         "--push_to_hub"
     ]
 )

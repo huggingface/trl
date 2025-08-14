@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -62,6 +63,7 @@ python trl/scripts/sft.py \
 
 import argparse
 import warnings
+import trackio
 
 from datasets import load_dataset
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -134,6 +136,10 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
+    # Initialize trackio if specified
+    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
     # Initialize the SFT trainer
     trainer = SFTTrainer(
         model=model,
@@ -152,6 +158,7 @@ def main(script_args, training_args, model_args, dataset_args):
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
+    trackio.finish()
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
     dataclass_types = (ScriptArguments, SFTConfig, ModelConfig, DatasetMixtureConfig)

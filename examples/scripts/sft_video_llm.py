@@ -16,10 +16,10 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
-#     "wandb",
 #     "qwen-vl-utils",
 #     "torchvision",
 #     "bitsandbytes",
+#     "trackio",
 # ]
 # ///
 
@@ -58,7 +58,7 @@ from typing import Any
 
 import requests
 import torch
-import wandb
+import trackio
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
@@ -229,9 +229,10 @@ if __name__ == "__main__":
     # Prepare dataset
     prepared_dataset = [prepare_dataset(example, script_args.video_cache_dir) for example in dataset]
 
-    # Initialize wandb if specified
-    if training_args.report_to == "wandb":
-        wandb.init(project="video-llm-training")
+    # Initialize trackio if specified
+    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
 
     # Initialize trainer
     trainer = SFTTrainer(
@@ -257,4 +258,4 @@ if __name__ == "__main__":
     del model
     del trainer
     torch.cuda.empty_cache()
-    wandb.finish()
+    trackio.finish()

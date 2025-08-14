@@ -17,6 +17,7 @@
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "Pillow>=9.4.0",
 #     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -53,6 +54,7 @@ accelerate launch \
 """
 
 import torch
+import trackio
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
 
@@ -98,6 +100,10 @@ if __name__ == "__main__":
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
+    # Initialize trackio if specified
+    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
     ################
     # Training
     ################
@@ -115,3 +121,5 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trackio.finish()

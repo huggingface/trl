@@ -20,6 +20,7 @@
 #     "einops",
 #     "scikit-learn",
 #     "joblib",
+#     "trackio",
 # ]
 # ///
 
@@ -76,6 +77,7 @@ python examples/scripts/bco.py \
 """
 
 from functools import partial
+import trackio
 
 import torch
 import torch.nn.functional as F
@@ -152,6 +154,11 @@ if __name__ == "__main__":
         model=embedding_model,
     )
 
+    # Initialize trackio if specified
+    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
+
     # Initialize the BCO trainer
     trainer = BCOTrainer(
         model,
@@ -172,3 +179,5 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trackio.finish()

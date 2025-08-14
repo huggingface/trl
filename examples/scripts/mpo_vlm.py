@@ -18,6 +18,7 @@
 #     "Pillow",
 #     "peft",
 #     "torchvision",
+#     "trackio",
 # ]
 # ///
 
@@ -40,6 +41,7 @@ python examples/scripts/mpo_vlm.py \
 """
 
 import torch
+import trackio
 from datasets import load_dataset
 from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
@@ -117,6 +119,10 @@ if __name__ == "__main__":
     if test_dataset is not None:
         test_dataset = test_dataset.map(ensure_rgb, num_proc=training_args.dataset_num_proc)
 
+    # Initialize trackio if specified
+    if "trackio" in (training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
     ################
     # Training
     ################
@@ -136,3 +142,5 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trackio.finish()
