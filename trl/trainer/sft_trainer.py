@@ -839,27 +839,47 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
                 def tokenize(examples, processing_class, dataset_text_field, assistant_only_loss):
-                    output = {}
+                    output = defaultdict(list)
                     if "prompt" in examples:  # prompt-completion case
                         if is_conversational(examples):
-                            prompts_ids = processing_class.apply_chat_template(
-                                examples["prompt"],
-                                tools=examples.get("tools"),
-                                **examples.get("chat_template_kwargs", {}),
-                            )
-                            prompts_completions_processed = processing_class.apply_chat_template(
-                                [
-                                    prompt + completion
-                                    for prompt, completion in zip(examples["prompt"], examples["completion"])
-                                ],
-                                return_dict=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
-                                tools=examples.get("tools"),
-                                **examples.get("chat_template_kwargs", {}),
-                            )
-                            prompts_completions_ids = prompts_completions_processed["input_ids"]
-                            if "assistant_masks" in prompts_completions_processed:
-                                output["assistant_masks"] = prompts_completions_processed["assistant_masks"]
+                            if examples.get("tools") is None:
+                                prompts_ids = processing_class.apply_chat_template(
+                                    examples["prompt"],
+                                    **examples.get("chat_template_kwargs", {}),
+                                )
+                                prompts_completions_processed = processing_class.apply_chat_template(
+                                    [
+                                        prompt + completion
+                                        for prompt, completion in zip(examples["prompt"], examples["completion"])
+                                    ],
+                                    return_dict=True,
+                                    return_assistant_tokens_mask=assistant_only_loss,
+                                    **examples.get("chat_template_kwargs", {}),
+                                )
+                                prompts_completions_ids = prompts_completions_processed["input_ids"]
+                                if "assistant_masks" in prompts_completions_processed:
+                                    output["assistant_masks"] = prompts_completions_processed["assistant_masks"]
+                            else:
+                                prompts_ids = defaultdict(list)
+                                prompts_completions_ids = defaultdict(list)
+                                for prompt, completion, tools in zip(examples["prompt"], examples["completion"], examples["tools"]):
+                                    prompt_id = processing_class.apply_chat_template(
+                                        prompt,
+                                        tools=tools,
+                                        **examples.get("chat_template_kwargs", {}),
+                                    )["input_ids"]
+                                    prompt_completion_processed = processing_class.apply_chat_template(
+                                        prompt + completion,
+                                        return_dict=True,
+                                        return_assistant_tokens_mask=assistant_only_loss,
+                                        tools=tools,
+                                        **examples.get("chat_template_kwargs", {}),
+                                    )
+                                    prompts_ids["input_ids"].append(prompt_id)
+                                    prompts_completions_ids["input_ids"].append(prompt_completion_processed["input_ids"])
+                                    if "assistant_masks" in prompt_completion_processed:
+                                        output["assistant_masks"].append(prompt_completion_processed["assistant_masks"])    
+
                         else:
                             prompts_ids = processing_class(text=examples["prompt"])["input_ids"]
                             prompts_completions_ids = processing_class(
@@ -887,7 +907,7 @@ class SFTTrainer(Trainer):
 
                     else:  # language modeling case
                         if is_conversational(examples):
-                            if examples.get("tools") is not None:
+                            if examples.get("tools") is None:
                                 processed = processing_class.apply_chat_template(
                                     examples["messages"],
                                     return_dict=True,
