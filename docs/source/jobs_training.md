@@ -147,7 +147,7 @@ run_uv_job(
 
 ### Hardware and Timeout Settings
 
-Jobs allows you to select a specific hardware configuration using the `--flavor` flag. As of 08/25, the available options are:
+Jobs allow you to select a specific hardware configuration using the `--flavor` flag. As of 08/25, the available options are:
 
 **CPU:** `cpu-basic`, `cpu-upgrade`  
 **GPU:** `t4-small`, `t4-medium`, `l4x1`, `l4x4`, `a10g-small`, `a10g-large`, `a10g-largex2`, `a10g-largex4`, `a100-large`  
