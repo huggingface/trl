@@ -36,6 +36,11 @@ The documentation is organized into the following sections:
 
 <div class="mt-10">
   <div class="w-full flex flex-col space-y-4 md:space-y-0 md:grid md:grid-cols-2 md:gap-y-4 md:gap-x-5">
+    <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/trl-vlm-alignment">
+      <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/trl_vlm/thumbnail.png" alt="thumbnail" class="mt-0">
+      <p class="text-gray-500 text-sm">Published on August 7, 2025</p>
+      <p class="text-gray-700">Vision Language Model Alignment in TRL ⚡️</p>
+    </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/vllm-colocate">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/vllm-colocate/thumbnail.png" alt="thumbnail" class="mt-0">
       <p class="text-gray-500 text-sm">Published on June 3, 2025</p>
@@ -43,12 +48,8 @@ The documentation is organized into the following sections:
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/liger-grpo">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/liger-grpo/thumbnail.png" alt="thumbnail" class="mt-0">
-      <img src="/blog/assets/liger-grpo//thumbnail.png" class="h-full w-full object-cover group-hover:brightness-110" alt="">
-      <h2 class="font-serif font-semibold group-hover:underline  text-xl ">🐯 Liger GRPO meets TRL</h2>
-      <p class="mt-3 flex items-center gap-y-1.5 font-mono text-xs text-gray-500 flex-wrap">
-      <span class="inline-flex flex-none items-center">By&nbsp;<object title=""><span class="inline-block "><span class="contents"><a href="/shisahni" class="hover:underline">shisahni</a></span></span></object></span>
-      <span class="mx-2 h-1 w-1 flex-none bg-gray-200"></span>
-      <span class="truncate">May 25, 2025</span>
+      <p class="text-gray-500 text-sm">Published on May 25, 2025</p>
+      <p class="text-gray-700">🐯 Liger GRPO meets TRL</p>
     </a>
     <a class="!no-underline border dark:border-gray-700 p-5 rounded-lg shadow hover:shadow-lg" href="https://huggingface.co/blog/open-r1">
       <img src="https://raw.githubusercontent.com/huggingface/blog/main/assets/open-r1/thumbnails.png" alt="thumbnail" class="mt-0">
