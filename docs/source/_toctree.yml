@@ -29,6 +29,8 @@
     title: Distributing Training
   - local: use_model
     title: Using Trained Models
+  - local: hf_jobs_training
+    title: Training with Hugging Face Jobs
   title: How-to guides
 - sections:
   - local: deepspeed_integration
