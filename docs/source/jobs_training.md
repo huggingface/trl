@@ -235,7 +235,7 @@ run_uv_job(
 
 TRL example scripts are fully UV-compatible, allowing you to run a complete training workflow directly on Jobs. You can customize the training by providing the usual script arguments, along with hardware specifications and secrets.  
 
-To evaluate your training runs, in addition to reviewing the job logs, you can use **Trackio**, a lightweight experiment tracking library. Trackio enables end-to-end experiment management on the Hugging Face Hub. All TRL example scripts already support reporting to Trackio via the `report_to` argument. Using this feature saves your experiments in an interactive HF Space, making it easy to monitor metrics, compare runs, and track progress over time.
+To evaluate your training runs, in addition to reviewing the job logs, you can use [**Trackio**](https://huggingface.co/blog/trackio), a lightweight experiment tracking library. Trackio enables end-to-end experiment management on the Hugging Face Hub. All TRL example scripts already support reporting to Trackio via the `report_to` argument. Using this feature saves your experiments in an interactive HF Space, making it easy to monitor metrics, compare runs, and track progress over time.
 
 <hfoptions id="script_type">
 <hfoption id="bash">
