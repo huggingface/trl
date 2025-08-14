@@ -645,9 +645,9 @@ class BEMACallback(TrainerCallback):
         update_freq (`int`, *optional*, defaults to `400`):
             Update the BEMA weights every X steps. Denoted this as  \\( \phi \\) in the paper.
         ema_power (`float`, *optional*, defaults to `0.5`):
-            Power for the EMA decay factor. Denoted  \\( \kappa \\) in the paper.
+            Power for the EMA decay factor. Denoted  \\( \kappa \\) in the paper. To disable EMA, set this to `0.0`.
         bias_power (`float`, *optional*, defaults to `0.2`):
-            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper.
+            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. To disable BEMA, set this to `0.0`.
         lag (`int`, *optional*, defaults to `10`):
             Lag parameter  \\( \rho \\) in the paper. This is a constant that
             Initial offset in the weight decay schedule that controls early-stage smoothness by acting as a virtual
@@ -716,7 +716,10 @@ class BEMACallback(TrainerCallback):
 
     @staticmethod
     def _unwrap_model(model):
-        """Helper function to unwrap model from various wrappers including DataParallel, DistributedDataParallel, DeepSpeed, and FSDP."""
+        """
+        Helper function to unwrap model from various wrappers including DataParallel, DistributedDataParallel,
+        DeepSpeed, and FSDP.
+        """
         # Handle DeepSpeed
         if hasattr(model, "module") and hasattr(model, "engine"):
             # DeepSpeed engine
@@ -755,18 +758,26 @@ class BEMACallback(TrainerCallback):
             self.theta0_params.append(theta0)
             self.ema_params.append(theta0.clone())  # initialize EMA with θ₀
 
-    def _ema_beta(self, t: int) -> float:
-        """Compute the EMA decay factor βₜ = (ρ + γ·t)⁻ᵉᵐᵃ."""
-        if self.ema_power < 0:
-            return 1.0  # no EMA, just BEMA
-        beta = (self.lag + self.multiplier * t) ** (-self.ema_power)
+    def _ema_beta(self, step: int) -> float:
+        """Compute the EMA decay factor βₜ = (ρ + γ·t)⁻ᵏᵃᵖᵖᵃ."""
+        beta = (self.lag + self.multiplier * step) ** (-self.ema_power)
         return max(beta, self.min_ema_multiplier)
 
-    def _bema_alpha(self, t: int) -> float:
+    def _bema_alpha(self, step: int) -> float:
         """Compute the BEMA scaling factor αₜ = (ρ + γ·t)⁻ᵉᵗᵃ."""
-        if self.bias_power < 0:
-            return 0.0  # no BEMA, just EMA
-        return (self.lag + self.multiplier * t) ** (-self.bias_power)
+        return (self.lag + self.multiplier * step) ** (-self.bias_power)
+
+    def _update_bema_weights(self, step: int):
+        beta = self._ema_beta(step)
+        alpha = self._bema_alpha(step)
+
+        # Compute EMA + BEMA in-place and write directly to running_model
+        for thetat, theta0, ema, run_param in zip(
+            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters()
+        ):
+            thetat = thetat.detach().to(self.device)
+            ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
+            run_param.copy_(ema + alpha * (thetat - theta0))  # BEMA update: run_param = ema + alpha * (θₜ - θ₀)
 
     @torch.no_grad()
     def on_step_end(
@@ -784,17 +795,9 @@ class BEMACallback(TrainerCallback):
                 theta0_param.copy_(thetat_param)
                 ema_param.copy_(thetat_param)
 
-        if (step - self.update_after) % self.update_freq == 0:
-            beta = self._ema_beta(step)
-            alpha = self._bema_alpha(step)
-
-            # Compute EMA + BEMA in-place and write directly to running_model
-            for thetat, theta0, ema, run_param in zip(
-                self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters()
-            ):
-                thetat = thetat.detach().to(self.device)
-                ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
-                run_param.copy_(ema + alpha * (thetat - theta0))  # BEMA update: run_param = ema + alpha * (θₜ - θ₀)
+        # Update BEMA weights every `update_freq` steps
+        elif (step - self.update_after) % self.update_freq == 0:
+            self._update_bema_weights(step)
 
         # Update reference model if enabled
         if (
