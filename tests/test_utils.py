@@ -574,6 +574,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
 
         output = mock_stdout.getvalue()
 
+        # docstyle-ignore
         expected_output = textwrap.dedent("""\
         ╭──────────────────────────── Step 42 ─────────────────────────────╮
         │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
@@ -585,6 +586,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
         ╰──────────────────────────────────────────────────────────────────╯
         """)
+
         self.assertEqual(output, expected_output)
 
     @patch("sys.stdout", new_callable=StringIO)
@@ -598,6 +600,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
         output = mock_stdout.getvalue()
 
+        # docstyle-ignore
         possible_outputs = [
             textwrap.dedent("""\
             ╭────────────────── Step 10 ──────────────────╮
@@ -608,6 +611,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
             │ └────────┴────────────┴───────┴───────────┘ │
             ╰─────────────────────────────────────────────╯
                 """),
+            # docstyle-ignore
             textwrap.dedent("""\
             ╭────────────────── Step 10 ──────────────────╮
             │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │

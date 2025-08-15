@@ -1520,6 +1520,7 @@ class BCOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{jung2024binary,
             title        = {{Binary Classifier Optimization for Large Language Model Alignment}},

@@ -336,6 +336,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -363,6 +364,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -393,6 +395,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -428,6 +431,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -465,6 +469,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_chosen = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -475,6 +480,8 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
+
+        # docstyle-ignore
         expected_rejected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -507,6 +514,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
