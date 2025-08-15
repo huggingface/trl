@@ -522,9 +522,6 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
         space = segment_tree.search(length)
 
-        # If no suitable bin found (space == 0) or length > space, create a new bin
-        # This handles cases where search returns 0 (no suitable bin found) or when
-        # the document is longer than the available space in any bin
         if space < seq_length:
             # Use existing bin with exactly this amount of space
             bin = space_to_bin[space].popleft()
