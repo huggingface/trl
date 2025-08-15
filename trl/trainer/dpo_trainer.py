@@ -771,7 +771,6 @@ class DPOTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-            if args.use_liger_kernel:
                 dataset = dataset.select_columns(
                     {"input_ids", "seq_lengths", "completion_mask"}.intersection(dataset.column_names)
                 )
