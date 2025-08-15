@@ -1712,6 +1712,7 @@ class KTOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{ethayarajh2024kto,
             title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
