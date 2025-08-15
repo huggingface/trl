@@ -444,6 +444,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{prabhudesai2024aligning,
             title        = {{Aligning Text-to-Image Diffusion Models with Reward Backpropagation}},

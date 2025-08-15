@@ -23,6 +23,7 @@ _import_structure = {
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "callbacks": [
+        "BEMACallback",
         "LogCompletionsCallback",
         "MergeModelCallback",
         "RichProgressCallback",
@@ -93,6 +94,7 @@ if TYPE_CHECKING:
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .callbacks import (
+        BEMACallback,
         LogCompletionsCallback,
         MergeModelCallback,
         RichProgressCallback,
