@@ -724,9 +724,6 @@ class TestPackDatasetWrapped(TrlTestCase):
 
 
 class TestPackDatasetBfd(TrlTestCase):
-    def setUp(self):
-        disable_progress_bar()
-        self.tmp_dir = tempfile.mkdtemp()  # Add tmp_dir for teardown
         
     @pytest.fixture(autouse=True)
     def setup_dataset(self):
@@ -782,8 +779,6 @@ class TestPackDatasetBfd(TrlTestCase):
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         self.assertEqual(dataset.to_dict(), expected_output)
         
-    
-        
     def test_bfd_packing_power_of_2_plus_1(self):
         """Test BFD packing with power of 2 + 1 seq_length."""
         # Pack with power of 2 + 1
@@ -791,16 +786,6 @@ class TestPackDatasetBfd(TrlTestCase):
         
         # Verify that packing occurred (output length should be less than input)
         self.assertLess(len(packed_dataset), len(self.dataset))
-        
-    def test_bfd_packing_identical_results(self):
-        """Test that BFD packing gives similar results for power of 2 and power of 2 + 1."""
-        # Test with multiple random seq_lengths
-        seq_lengths = np.random.randint(1000, 8192, 5).tolist()
-        for seq_length in seq_lengths:
-            with self.subTest(seq_length=seq_length):
-                packed_dataset = pack_dataset(self.dataset, seq_length=seq_length, strategy="bfd")
-                # Verify that packing occurred (output length should be less than or equal to input)
-                self.assertLessEqual(len(packed_dataset), len(self.dataset))
         
     def test_bfd_packing_random_seq_lengths(self):
         """Test BFD packing with randomly chosen seq_lengths."""
@@ -811,7 +796,17 @@ class TestPackDatasetBfd(TrlTestCase):
                 packed_dataset = pack_dataset(self.dataset, seq_length=seq_length, strategy="bfd")
                 # Verify that packing occurred (output length should be less than or equal to input)
                 self.assertLessEqual(len(packed_dataset), len(self.dataset))
-
+    
+    def test_bfd_packing_example_length_greater_than_seq_length(self):
+        """Test BFD packing with randomly chosen seq_lengths."""
+        # Our dataset object has examples with lengths in the range [100, 8192]
+        # so we set sequence lengths in the range [1, 99]
+        seq_lengths = np.random.randint(low=1, high=99, size=5).tolist()
+        for seq_length in seq_lengths:
+            with self.subTest(seq_length=seq_length):
+                packed_dataset = pack_dataset(self.dataset, seq_length=seq_length, strategy="bfd")
+                # Verify that packing occurred (output length should equal to input)
+                self.assertEqual(len(packed_dataset), len(self.dataset))
 
 class TestTruncateExamples(TrlTestCase):
     def test_with_dataset(self):
