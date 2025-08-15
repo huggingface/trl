@@ -45,6 +45,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
+    apply_chat_template,
     is_conversational,
     is_conversational_from_value,
     maybe_convert_to_chatml,
@@ -53,7 +54,7 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad
+from .utils import flush_left, generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
@@ -273,7 +274,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Each input example should be a dictionary containing at least:
     - An `"images"` key holding the image data.
-    - Either a `"messages"` key for conversational inputs or a `"text"` key for standard text inputs.
+    - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
+      key for standard text inputs.
+    - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
 
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
@@ -342,23 +345,59 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
-        images = [example["images"] for example in examples]
+        if "messages" in examples[0] or self.dataset_text_field in examples[0]:
+            return self._collate_language_modeling(examples)
+        elif "prompt" in examples[0] and "completion" in examples[0]:
+            return self._collate_prompt_completion(examples)
+        else:
+            raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
 
+    @staticmethod
+    def prepare_multimodal_messages(messages: list[dict[str, Any]]) -> None:
+        """
+        Convert messages into a structured multimodal format.
+
+        Each message's content is transformed from a raw string into a list of typed parts. The first user message is
+        prefixed with an image placeholder, while all other user and assistant messages are wrapped as text entries.
+
+        Args:
+            messages (`list[dict[str, Any]]`):
+                Messages with "role" and "content". Content may be a raw string before transformation.
+
+        Example:
+        ```python
+        # Input
+        [
+            {"role": "user", "content": "What's in this image?"},
+            {"role": "assistant", "content": "It looks like a cat."},
+        ]
+
+        # Output
+        [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
+        ]
+        ```
+        """
+
+        image_included = False
+        for message in messages:
+            if message["role"] == "user":
+                if isinstance(message["content"], str) and not image_included:
+                    message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
+                    image_included = True
+                elif isinstance(message["content"], str) and image_included:
+                    message["content"] = [{"type": "text", "text": message["content"]}]
+            if message["role"] == "assistant":
+                if isinstance(message["content"], str):
+                    message["content"] = [{"type": "text", "text": message["content"]}]
+
+    def _collate_language_modeling(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                image_included = False
-                for message in example["messages"]:
-                    if message["role"] == "user":
-                        if isinstance(message["content"], str) and not image_included:
-                            message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
-                            image_included = True
-                        elif isinstance(message["content"], str) and image_included:
-                            message["content"] = [{"type": "text", "text": message["content"]}]
-                    if message["role"] == "assistant":
-                        if isinstance(message["content"], str):
-                            message["content"] = [{"type": "text", "text": message["content"]}]
+                self.prepare_multimodal_messages(example["messages"])
             messages = [example["messages"] for example in examples]
-            texts = self.processor.apply_chat_template(messages, images=images)
+            texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
         else:
@@ -368,7 +407,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             )
 
         output = self.processor(
-            images=images,
+            images=[example["images"] for example in examples],
             text=texts,
             padding=True,
             pad_to_multiple_of=self.pad_to_multiple_of,
@@ -378,10 +417,66 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
         labels = output["input_ids"].clone()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[output["attention_mask"] == 0] = -100
         # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
         # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
         # token definitions vary across architectures.
+        output["labels"] = labels
+        return output
+
+    def _collate_prompt_completion(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        if self.pad_to_multiple_of is not None:
+            raise NotImplementedError(
+                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
+                "prompt-completion data yet."
+            )
+
+        if is_conversational(examples[0]):  # conversational case
+            for example in examples:
+                self.prepare_multimodal_messages(example["prompt"] + example["completion"])
+            examples = [apply_chat_template(example, self.processor) for example in examples]
+
+        prompts = [example["prompt"] for example in examples]
+        completions = [example["completion"] for example in examples]
+
+        processed_prompts = self.processor(
+            images=[example["images"] for example in examples],
+            text=prompts,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+        processed_completions = self.processor(
+            text=completions,
+            padding=True,
+            padding_side="right",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+
+        # Concatenate prompts and completions
+        input_ids = torch.cat((processed_prompts["input_ids"], processed_completions["input_ids"]), dim=1)
+        attention_mask = torch.cat(
+            (processed_prompts["attention_mask"], processed_completions["attention_mask"]), dim=1
+        )
+
+        # Flush left to reduce padding
+        attention_mask, input_ids = flush_left(attention_mask, input_ids)
+
+        # Truncate if necessary
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+
+        # Create labels and mask padding tokens
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+
+        # Build the output dictionary
+        output = processed_prompts  # we take processed_prompts because it contains the images
+        output["input_ids"] = input_ids
+        output["attention_mask"] = attention_mask
         output["labels"] = labels
         return output
 
@@ -578,12 +673,6 @@ class SFTTrainer(Trainer):
             raise ValueError(
                 "Assistant-only loss is not yet supported for vision-language models. Please set "
                 "`assistant_only_loss=False` in the `SFTConfig`."
-            )
-        first_example = next(iter(train_dataset))
-        if self._is_vlm and "prompt" in first_example and "completion" in first_example:
-            raise ValueError(
-                "Prompt-completion datasets are not yet supported for vision-language models in `SFTTrainer`. "
-                "Please use a language-modeling type dataset instead."
             )
 
         # PEFT configuration and model wrapping
@@ -952,7 +1041,7 @@ class SFTTrainer(Trainer):
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
             if self._is_vlm:
-                self._signature_columns = ["messages", "images"]
+                self._signature_columns = ["messages", "prompt", "completion", "images"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
