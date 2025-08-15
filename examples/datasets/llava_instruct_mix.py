@@ -64,6 +64,17 @@ def filter_long_examples(example):
     return total_length <= 1000
 
 
+def split_prompt_completion(example):
+    """
+    Splits the messages into a prompt and a completion.
+    The last message is considered the completion.
+    """
+    assert len(example["messages"]) > 1
+    example["prompt"] = example["messages"][:-1]
+    example["completion"] = example["messages"][-1]
+    return example
+
+
 model_card = ModelCard("""
 ---
 tags: [trl]
@@ -82,7 +93,8 @@ The LLaVA Instruct Mix dataset is a processed version of [LLaVA Instruct Mix](ht
 
 Columns:
 - `"images"`: The image associated with the text.
-- `"messages"`: A list of messages in the conversation.
+- `"prompt"`: A list of messages that form the context for the conversation.
+- `"completion"`: The last message in the conversation, which is the model's response.
 
 This structure allows models to learn from the context of the conversation, enhancing their understanding of how to generate descriptive text based on visual inputs.
 
@@ -101,6 +113,7 @@ if __name__ == "__main__":
         process_example, remove_columns=["conversations", "image"], num_proc=script_args.dataset_num_proc
     )
     dataset = dataset.filter(filter_long_examples, num_proc=script_args.dataset_num_proc)
+    dataset = dataset.map(split_prompt_completion, remove_columns=["messages"], num_proc=script_args.dataset_num_proc)
 
     if script_args.push_to_hub:
         dataset.push_to_hub(script_args.repo_id, num_proc=script_args.dataset_num_proc)
