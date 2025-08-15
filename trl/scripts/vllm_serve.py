@@ -102,7 +102,8 @@ class WeightSyncWorkerExtension:
             world_size (`int`):
                 Total number of participating processes in the update group.
             client_device_uuid (`str`):
-                UUID of the device of client main process. Used to assert that devices are different from vllm workers devices.
+                UUID of the device of client main process. Used to assert that devices are different from vllm workers
+                devices.
         """
         if self.pynccl_comm is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
@@ -476,16 +477,25 @@ def main(script_args: ScriptArguments):
         Args:
             request (`GenerateRequest`):
                 - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
-                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process along with prompts.
+                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
+                  along with prompts.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
-                - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during generation.
-                - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead to more random outputs.
-                - `top_p` (`float`, *optional*, defaults to `1.0`): Top-p (nucleus) sampling parameter. It controls the diversity of the generated text.
-                - `top_k` (`int`, *optional*, defaults to `-1`): Top-k sampling parameter. If set to `-1`, it disables top-k sampling.
+                - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
+                  generation.
+                - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead
+                  to more random outputs.
+                - `top_p` (`float`, *optional*, defaults to `1.0`): Top-p (nucleus) sampling parameter. It controls the
+                  diversity of the generated text.
+                - `top_k` (`int`, *optional*, defaults to `-1`): Top-k sampling parameter. If set to `-1`, it disables
+                  top-k sampling.
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
-                - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each completion.
-                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the model will only generate tokens that match this regex pattern.
-                - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will override them.
+                - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
+                  completion.
+                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
+                  model will only generate tokens that match this regex pattern.
+                - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
+                  `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
+                  keys that conflict with the other parameters, they will override them.
 
         Returns:
             `GenerateResponse`:
