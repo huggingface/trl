@@ -342,6 +342,7 @@ class GKDTrainer(SFTTrainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{agarwal2024on-policy,
             title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},

@@ -646,6 +646,7 @@ class DDPOTrainer(PyTorchModelHubMixin):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{black2024training,
             title        = {{Training Diffusion Models with Reinforcement Learning}},
