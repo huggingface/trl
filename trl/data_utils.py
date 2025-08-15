@@ -521,14 +521,11 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
     bins: list[dict] = []
     for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
         space = segment_tree.search(length)
-        
+
         # If no suitable bin found (space == 0) or length > space, create a new bin
         # This handles cases where search returns 0 (no suitable bin found) or when
         # the document is longer than the available space in any bin
-        if space == 0 or length > space:
-            bin = {"ids": [], "length": 0}
-            bins.append(bin)
-        elif space_to_bin[space]:
+        if space < seq_length:
             # Use existing bin with exactly this amount of space
             bin = space_to_bin[space].popleft()
         else:
@@ -538,7 +535,7 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
 
         bin["ids"].append(idx)
         bin["length"] += length
-        if space_to_bin[space] and len(space_to_bin[space]) == 0:
+        if space < seq_length and not space_to_bin[space]:
             segment_tree.remove(space)
 
         space = space - length
