@@ -19,11 +19,11 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class SFTConfig(TrainingArguments):
+class DPOConfig(TrainingArguments):
     r"""
-    Configuration class for the [`SFTTrainer`].
+    Configuration class for the [`DPOTrainer`].
 
-    This class includes only the parameters that are specific to SFT training. For a full list of training arguments,
+    This class includes only the parameters that are specific to DPO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
     differ from those in [`~transformers.TrainingArguments`].
 
@@ -36,60 +36,31 @@ class SFTConfig(TrainingArguments):
 
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string.
-        chat_template_path (`str` or `None`, *optional*, defaults to `None`):
-            If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
-            or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
-            ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
-            embedding layer is resized accordingly.
+            argument of the [`DPOTrainer`] is provided as a string.
 
         > Parameters that control the data preprocessing
 
-        dataset_text_field (`str`, *optional*, defaults to `"text"`):
-            Name of the column that contains text data in the dataset.
-        dataset_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
-            Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
-            `skip_prepare_dataset`. When the model is a VLM, `skip_prepare_dataset` is automatically treated as `True`
-            regardless of the provided value, since preprocessing is done on the fly.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        eos_token (`str` or `None`, *optional*, defaults to `None`):
-            Token used to indicate the end of a turn or sequence. If `None`, it defaults to
-            `processing_class.eos_token`.
         pad_token (`int` or `None`, *optional*, defaults to `None`):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
+        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
+            Maximum length of the prompt part of the sequence. If `None`, no truncation is applied.
+        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+            Maximum length of the completion part of the sequence. If `None`, no truncation is applied.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
-            If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
-        packing (`bool`, *optional*, defaults to `False`):
-            Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
-            padding. Uses `max_length` to define sequence length.
-        packing_strategy (`str`, *optional*, defaults to `"bfd"`):
-            Strategy for packing sequences. Can be either `"bfd"` (best-fit decreasing, default), or `"wrapped"`.
+            If `None`, no truncation is applied.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
-            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
-            packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
-            parameter.
+            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
-        eval_packing (`bool` or `None`, *optional*, defaults to `None`):
-            Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
         > Parameters that control the training
 
-        completion_only_loss (`bool` or `None`, *optional*, defaults to `None`):
-            Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
-            only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
-            `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
-            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
-            sequence for [language modeling](#language-modeling) datasets.
-        assistant_only_loss (`bool`, *optional*, defaults to `False`):
-            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
-            on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
-            `False`, loss is computed on the entire sequence.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -138,42 +109,14 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `SFTTrainer` is provided as a string."
-        },
-    )
-    chat_template_path: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
-            "directory or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, "
-            "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
-            "that the model's embedding layer is resized accordingly."
+            "the `DPOTrainer` is provided as a string."
         },
     )
 
     # Parameters that control the data preprocessing
-    dataset_text_field: str = field(
-        default="text",
-        metadata={"help": "Name of the column that contains text data in the dataset."},
-    )
-    dataset_kwargs: Optional[dict[str, Any]] = field(
-        default=None,
-        metadata={
-            "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
-            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
-            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
-            "since preprocessing is done on the fly."
-        },
-    )
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
-    )
-    eos_token: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
-        },
     )
     pad_token: Optional[str] = field(
         default=None,
@@ -182,26 +125,23 @@ class SFTConfig(TrainingArguments):
             "is also `None`, it falls back to `processing_class.eos_token`."
         },
     )
+    max_prompt_length: Optional[int] = field(
+        default=512,
+        metadata={
+            "help": "Maximum length of the prompt part of the sequence. If `None`, no truncation is applied. When packing is enabled, this value sets the prompt length."
+        },
+    )
+    max_completion_length: Optional[int] = field(
+        default=None,
+        metadata={
+            "help": "Maximum length of the completion part of the sequence. If `None`, no truncation is applied. When packing is enabled, this value sets the completion length."
+        },
+    )
     max_length: Optional[int] = field(
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
-            "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
-            "sequence length."
-        },
-    )
-    packing: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to group multiple sequences into fixed-length blocks to improve computational efficiency "
-            "and reduce padding. Uses `max_length` to define sequence length."
-        },
-    )
-    packing_strategy: str = field(
-        default="bfd",
-        metadata={
-            "help": "Strategy for packing sequences. Can be either `'bfd'` (best-fit decreasing, default), or "
-            "`'wrapped'`."
+            "the right. If `None`, no truncation is applied."
         },
     )
     padding_free: bool = field(
@@ -210,42 +150,15 @@ class SFTConfig(TrainingArguments):
             "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
             "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
             "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
-            "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
-            "value of this parameter."
+            "structure."
         },
     )
     pad_to_multiple_of: Optional[int] = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
-    eval_packing: Optional[bool] = field(
-        default=None,
-        metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
-    )
 
     # Parameters that control the training
-    completion_only_loss: Optional[bool] = field(
-        default=None,
-        metadata={
-            "help": (
-                "Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is "
-                "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
-                "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
-                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
-                "language modeling datasets."
-            )
-        },
-    )
-    assistant_only_loss: bool = field(
-        default=False,
-        metadata={
-            "help": (
-                "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
-                "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
-                "loss is computed on the entire sequence."
-            )
-        },
-    )
     activation_offloading: bool = field(
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
