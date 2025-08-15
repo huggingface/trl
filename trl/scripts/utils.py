@@ -48,9 +48,9 @@ class DatasetConfig:
         name (`str`, *optional*, defaults to `None`):
             Defining the name of the dataset configuration.
         data_dir (`str`, *optional*, defaults to `None`):
-            Defining the `data_dir` of the dataset configuration. If specified for the generic builders(csv, text
-            etc.) or the Hub datasets and `data_files` is `None`, the behavior is equal to passing
-            `os.path.join(data_dir, **)` as `data_files` to reference all the files in a directory.
+            Defining the `data_dir` of the dataset configuration. If specified for the generic builders(csv, text etc.)
+            or the Hub datasets and `data_files` is `None`, the behavior is equal to passing `os.path.join(data_dir,
+            **)` as `data_files` to reference all the files in a directory.
         data_files (`str` or `Sequence` or `Mapping`, *optional*, defaults to `None`):
             Path(s) to source data file(s).
         split (`str`, *optional*, defaults to `"train"`):

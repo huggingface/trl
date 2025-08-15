@@ -287,8 +287,8 @@ class DPOTrainerTester(TrlTestCase):
 
     def test_train_with_multiple_loss_types(self):
         """
-        Tests multi-loss combinations, loss type inference, and weight configuration.
-        MPO combines DPO (sigmoid), BCO (bco_pair), and SFT (sft) losses.
+        Tests multi-loss combinations, loss type inference, and weight configuration. MPO combines DPO (sigmoid), BCO
+        (bco_pair), and SFT (sft) losses.
         """
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")

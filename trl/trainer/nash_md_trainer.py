@@ -524,6 +524,7 @@ class NashMDTrainer(OnlineDPOTrainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{munos2024nash,
             title        = {{Nash Learning from Human Feedback}},
