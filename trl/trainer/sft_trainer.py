@@ -614,6 +614,7 @@ class SFTTrainer(Trainer):
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
         # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
         self.num_virtual_tokens = 0
+
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
             if model.active_adapter in model.peft_config:
