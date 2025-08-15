@@ -713,10 +713,12 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     >>> example = {"conversations": [{"from": "user", "value": "What color is the sky?"}]}
     >>> is_conversational_from_value(example)
     True
+
     >>> example = {"conversations": [{"role": "user", "content": "What color is the sky?"}]}
     >>> is_conversational_from_value(example)
     False
-    >>> example = {"conversations": "The sky is"})
+
+    >>> example = {"conversations": "The sky is"}
     >>> is_conversational_from_value(example)
     False
     ```
