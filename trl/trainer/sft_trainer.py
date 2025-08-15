@@ -393,6 +393,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                     message["content"] = [{"type": "text", "text": message["content"]}]
 
     def _collate_language_modeling(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        images = [example["images"] for example in examples]
+
         if "messages" in examples[0]:  # conversational case
             for example in examples:
                 self.prepare_multimodal_messages(example["messages"])
@@ -407,7 +409,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             )
 
         output = self.processor(
-            images=[example["images"] for example in examples],
+            images=images,
             text=texts,
             padding=True,
             pad_to_multiple_of=self.pad_to_multiple_of,
@@ -430,7 +432,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
                 "prompt-completion data yet."
             )
-
+        images = [example["images"] for example in examples]
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
                 self.prepare_multimodal_messages(example["prompt"] + example["completion"])
@@ -440,7 +442,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         completions = [example["completion"] for example in examples]
 
         processed_prompts = self.processor(
-            images=[example["images"] for example in examples],
+            images=images,
             text=prompts,
             padding=True,
             padding_side="left",
