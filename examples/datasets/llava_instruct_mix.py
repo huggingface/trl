@@ -71,7 +71,7 @@ def split_prompt_completion(example):
     """
     assert len(example["messages"]) > 1
     example["prompt"] = example["messages"][:-1]
-    example["completion"] = example["messages"][-1]
+    example["completion"] = example["messages"][-1:]
     return example
 
 
@@ -107,7 +107,7 @@ if __name__ == "__main__":
     parser = HfArgumentParser(ScriptArguments)
     script_args = parser.parse_args_into_dataclasses()[0]
 
-    dataset = load_dataset("theblackcat102/llava-instruct-mix")
+    dataset = load_dataset("theblackcat102/llava-instruct-mix", split="train", num_proc=script_args.dataset_num_proc)
 
     dataset = dataset.map(
         process_example, remove_columns=["conversations", "image"], num_proc=script_args.dataset_num_proc
