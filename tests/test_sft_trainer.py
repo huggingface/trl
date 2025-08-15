@@ -1364,15 +1364,11 @@ class SFTTrainerTester2(TrlTestCase):
     @require_peft
     def test_prompt_tuning(self):
         """Test that SFT works with Prompt Tuning."""
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(
-            model=model_id,
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             args=training_args,
             train_dataset=dataset,
             peft_config=PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
@@ -1390,17 +1386,17 @@ class SFTTrainerTester2(TrlTestCase):
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
+            if "base_model" in n:  # We expect the base model parameters to be the same
                 self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+            elif "prompt_encoder" in n:  # We expect the peft parameters to be different
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            else:
+                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
 
     @require_peft
     def test_prompt_tuning_peft_model(self):
         """Test that SFT works with Prompt Tuning and a pre-converted PeftModel"""
-        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        model = AutoModelForCausalLM.from_pretrained(model_id)
-        base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         model = get_peft_model(model, PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8))
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -1420,7 +1416,9 @@ class SFTTrainerTester2(TrlTestCase):
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if n in base_param_names:  # We expect the base model parameters to be the same
+            if "base_model" in n:  # We expect the base model parameters to be the same
                 self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
-            elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+            elif "prompt_encoder" in n:  # We expect the peft parameters to be different
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            else:
+                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
