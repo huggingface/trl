@@ -605,14 +605,14 @@ class SFTTrainer(Trainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
-        self.num_virtual_tokens = None
+        # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
+        # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
+        self.num_virtual_tokens = 0
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
-            # Get the active adapter (usually 'default')
-            active_adapter = getattr(model, "active_adapter", "default")
-            if active_adapter in model.peft_config:
-                peft_model_config = model.peft_config[active_adapter]
-                self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", None)
+            if model.active_adapter in model.peft_config:
+                peft_model_config = model.peft_config[model.active_adapter]
+                self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
 
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
@@ -975,13 +975,9 @@ class SFTTrainer(Trainer):
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = inputs["labels"][..., 1:].contiguous()
 
-            # Handle virtual tokens from PEFT PromptEncoder
-            if (
-                self.num_virtual_tokens is not None
-                and shift_logits.shape[1] - shift_labels.shape[1] == self.num_virtual_tokens
-            ):
-                # Virtual tokens are prepended, so we skip them in logits
-                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+            # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
+            # not correspond to actual input labels.
+            shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
             # Get predictions
             predictions = shift_logits.argmax(dim=-1)
