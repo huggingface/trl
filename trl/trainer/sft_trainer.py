@@ -24,7 +24,7 @@ from typing import Any, Callable, Optional, TypeVar, Union
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import PartialState
+from accelerate import ParallelismConfig, PartialState
 from datasets import Dataset, IterableDataset
 from transformers import (
     AutoConfig,
@@ -736,6 +736,9 @@ class SFTTrainer(Trainer):
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
 
+        # Store context parallel size for create_accelerator_and_postprocess
+        self.context_parallel_size = args.context_parallel_size
+
         # Initialize the Trainer. Parent class will handle:
         # - DeepSpeed configuration (through create_accelerator_and_postprocess)
         # - FSDP setup
@@ -766,6 +769,19 @@ class SFTTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
+
+    def create_accelerator_and_postprocess(self):
+        """Override to add ParallelismConfig support for context parallelism."""
+        # Set up ParallelismConfig if context parallelism is enabled
+        if self.args.context_parallel_size > 1:
+            parallelism_config = ParallelismConfig(
+                cp_size=self.args.context_parallel_size,
+            )
+            # Add parallelism_config to accelerator kwargs
+            self.args.accelerator_config["parallelism_config"] = parallelism_config
+
+        # Call parent's create_accelerator_and_postprocess
+        super().create_accelerator_and_postprocess()
 
     def _prepare_dataset(
         self,
@@ -1010,9 +1026,40 @@ class SFTTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
     # Override training step to add activation offloading context.
-    def training_step(self, *args, **kwargs):
+    def training_step(self, model, inputs, num_items_in_batch=None):
+        """Override training step to add context parallelism support."""
         with self.maybe_activation_offload_context:
-            return super().training_step(*args, **kwargs)
+            if self.args.context_parallel_size > 1:
+                # Identify tensor inputs that need buffer sharding for context parallelism
+                buffers = []
+                buffer_seq_dims = []
+
+                # Check for common sequence tensors in inputs
+                if "input_ids" in inputs and isinstance(inputs["input_ids"], torch.Tensor):
+                    buffers.append(inputs["input_ids"])
+                    buffer_seq_dims.append(1)  # sequence dimension is typically dim 1
+
+                if "attention_mask" in inputs and isinstance(inputs["attention_mask"], torch.Tensor):
+                    buffers.append(inputs["attention_mask"])
+                    buffer_seq_dims.append(1)
+
+                if "labels" in inputs and isinstance(inputs["labels"], torch.Tensor):
+                    buffers.append(inputs["labels"])
+                    buffer_seq_dims.append(1)
+
+                # Apply context parallelism with buffer sharding
+                if buffers:
+                    with self.accelerator.maybe_context_parallel(
+                        buffers=buffers,
+                        buffer_seq_dims=buffer_seq_dims,
+                    ):
+                        return super().training_step(model, inputs, num_items_in_batch)
+                else:
+                    # No suitable tensors found, proceed without context parallelism
+                    return super().training_step(model, inputs, num_items_in_batch)
+            else:
+                # No context parallelism, use default behavior
+                return super().training_step(model, inputs, num_items_in_batch)
 
     def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
         mode = "train" if self.model.training else "eval"

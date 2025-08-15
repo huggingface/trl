@@ -250,6 +250,13 @@ class SFTConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
+    context_parallel_size: int = field(
+        default=1,
+        metadata={
+            "help": "The size of the context parallel group for sequence parallelism. When > 1, sequences are "
+            "sharded across multiple GPUs to enable training on extremely long contexts. Requires accelerate>=1.10.0."
+        },
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
