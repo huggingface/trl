@@ -371,6 +371,7 @@ class TestGetDataset(unittest.TestCase):
 
     def test_trlparser_parses_yaml_config_correctly(self):
         # Prepare YAML content exactly like your example
+        # docstyle-ignore
         yaml_content = """
         datasets:
         - path: trl-internal-testing/zen
@@ -410,6 +411,7 @@ class TestGetDataset(unittest.TestCase):
 
     def test_trlparser_parses_yaml_and_loads_dataset(self):
         # Prepare YAML content exactly like your example
+        # docstyle-ignore
         yaml_content = """
         datasets:
         - path: trl-internal-testing/zen
