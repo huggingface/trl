@@ -55,6 +55,12 @@ class IterativeSFTTrainer(Trainer):
     """
     The IterativeSFTTrainer can be used to finetune models with methods that requires some steps between optimization.
 
+    <Tip warning={true}>
+
+    The [`IterativeSFTTrainer`] is deprecated and will be removed in version 0.24.0. Please use the [`SFTTrainer`].
+
+    </Tip>
+
     Args:
         model (`Union[str, PreTrainedModel]`):
             Model to be trained. Can be either:
@@ -104,6 +110,12 @@ class IterativeSFTTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
     ):
+        warnings.warn(
+            "The `IterativeSFTTrainer` is deprecated and will be removed in version 0.24.0. Please use the "
+            "`SFTTrainer`.",
+            FutureWarning,
+        )
+
         # Args
         model_id = model if isinstance(model, str) else model.config._name_or_path
         if args is None:
