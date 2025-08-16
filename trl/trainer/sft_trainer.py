@@ -818,6 +818,7 @@ class SFTTrainer(Trainer):
                     column_names = next(iter(dataset)).keys()
                     dataset = dataset.map(
                         maybe_convert_to_chatml,
+                        batched=True,
                         remove_columns="conversations" if "conversations" in column_names else None,
                         **map_kwargs,
                     )
@@ -828,15 +829,19 @@ class SFTTrainer(Trainer):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
 
-                    def add_eos(example, eos_token):
-                        if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
-                            example["text"] = example["text"] + eos_token
-                        elif "completion" in example and not example["completion"].endswith(eos_token):
-                            example["completion"] = example["completion"] + eos_token
-                        return example
+                    def add_eos(examples, eos_token):
+                        def append_eos(text):
+                            return text + eos_token if not text.endswith(eos_token) else text
+
+                        if "text" in examples:  # language modeling case
+                            examples["text"] = [append_eos(text) for text in examples["text"]]
+                        elif "completion" in examples:
+                            examples["completion"] = [append_eos(completion) for completion in examples["completion"]]
+                        return examples
 
                     dataset = dataset.map(
                         add_eos,
+                        batched=True,
                         fn_kwargs={"eos_token": processing_class.eos_token},
                         remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                         **map_kwargs,
@@ -846,68 +851,165 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
-                    if "prompt" in example:  # prompt-completion case
-                        output = {}
-                        if is_conversational(example):
-                            prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"],
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
+                def _tokenize_conversational_prompt_completion(examples, processing_class, assistant_only_loss):
+                    """Tokenize conversational prompt-completion examples with optional tools support."""
+                    output = {}
+                    chat_template_kwargs = examples.get("chat_template_kwargs", {})
+                    
+                    if examples.get("tools") is None:
+                        # Batch processing without tools
+                        prompts_ids = processing_class.apply_chat_template(
+                            examples["prompt"],
+                            **chat_template_kwargs,
+                        )["input_ids"]
+                        
+                        prompts_completions_processed = processing_class.apply_chat_template(
+                            [prompt + completion for prompt, completion in zip(examples["prompt"], examples["completion"])],
+                            return_dict=True,
+                            return_assistant_tokens_mask=assistant_only_loss,
+                            **chat_template_kwargs,
+                        )
+                        prompts_completions_ids = prompts_completions_processed["input_ids"]
+                        
+                        if "assistant_masks" in prompts_completions_processed:
+                            output["assistant_masks"] = prompts_completions_processed["assistant_masks"]
+                    else:
+                        # Individual processing with tools
+                        prompts_ids = []
+                        prompts_completions_ids = []
+                        assistant_masks = []
+                        
+                        for prompt, completion, tools in zip(examples["prompt"], examples["completion"], examples["tools"]):
+                            prompt_result = processing_class.apply_chat_template(
+                                prompt, tools=tools, **chat_template_kwargs
                             )
-                            prompt_completion_processed = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"],
+                            prompt_completion_result = processing_class.apply_chat_template(
+                                prompt + completion,
                                 return_dict=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
+                                tools=tools,
+                                **chat_template_kwargs,
                             )
-                            prompt_completion_ids = prompt_completion_processed["input_ids"]
-                            if "assistant_masks" in prompt_completion_processed:
-                                output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
-                        else:
-                            prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                            prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
-                                "input_ids"
-                            ]
+                            
+                            prompts_ids.append(prompt_result["input_ids"])
+                            prompts_completions_ids.append(prompt_completion_result["input_ids"])
+                            
+                            if "assistant_masks" in prompt_completion_result:
+                                assistant_masks.append(prompt_completion_result["assistant_masks"])
+                        
+                        if assistant_masks:
+                            output["assistant_masks"] = assistant_masks
+                    
+                    return prompts_ids, prompts_completions_ids, output
 
-                        # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            warnings.warn(
-                                "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                                "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                                "token handling. Verify that the tokenizer is processing text consistently."
-                            )
+                def _tokenize_standard_prompt_completion(examples, processing_class):
+                    """Tokenize standard (non-conversational) prompt-completion examples."""
+                    prompts_ids = processing_class(text=examples["prompt"])["input_ids"]
+                    prompts_completions_ids = processing_class(
+                        text=[prompt + completion for prompt, completion in zip(examples["prompt"], examples["completion"])]
+                    )["input_ids"]
+                    return prompts_ids, prompts_completions_ids
 
-                        # Create a completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        output["input_ids"] = prompt_completion_ids
-                        output["completion_mask"] = completion_mask
+                def _create_completion_mask(prompts_ids, prompts_completions_ids):
+                    """Create completion mask for prompt-completion tokenization."""
+                    return [
+                        [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                        for prompt_ids, prompt_completion_ids in zip(prompts_ids, prompts_completions_ids)
+                    ]
 
-                    else:  # language modeling case
-                        if is_conversational(example):
-                            processed = processing_class.apply_chat_template(
-                                example["messages"],
-                                return_dict=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
-                            )
-                            if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
-                                raise RuntimeError(
-                                    "You're using `assistant_only_loss=True`, but at least one example has no "
-                                    "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                    "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
-                                    "check the template and ensure it's correctly configured to support assistant "
-                                    "masking."
+                def _validate_prompt_completion_consistency(prompts_ids, prompts_completions_ids):
+                    """Validate that prompt tokens are consistent with prompt+completion tokens."""
+                    # For batched data, check first example as representative
+                    if isinstance(prompts_ids, list) and isinstance(prompts_completions_ids, list):
+                        if prompts_ids and prompts_completions_ids:
+                            first_prompt = prompts_ids[0]
+                            first_prompt_completion = prompts_completions_ids[0]
+                            if not first_prompt_completion[:len(first_prompt)] == first_prompt:
+                                warnings.warn(
+                                    "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                                    "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                                    "token handling. Verify that the tokenizer is processing text consistently."
                                 )
+
+                def _tokenize_conversational_messages(examples, processing_class, assistant_only_loss):
+                    """Tokenize conversational messages for language modeling."""
+                    chat_template_kwargs = examples.get("chat_template_kwargs", {})
+                    
+                    if examples.get("tools") is None:
+                        # Batch processing without tools
+                        processed = processing_class.apply_chat_template(
+                            examples["messages"],
+                            return_dict=True,
+                            return_assistant_tokens_mask=assistant_only_loss,
+                            **chat_template_kwargs,
+                        )
+                    else:
+                        # Individual processing with tools
+                        processed = defaultdict(list)
+                        for message, tools in zip(examples["messages"], examples["tools"]):
+                            processed_message = processing_class.apply_chat_template(
+                                message,
+                                return_dict=True,
+                                return_assistant_tokens_mask=assistant_only_loss,
+                                tools=tools,
+                                **chat_template_kwargs,
+                            )
+                            processed["input_ids"].append(processed_message["input_ids"])
+                            if "assistant_masks" in processed_message:
+                                processed["assistant_masks"].append(processed_message["assistant_masks"])
+                    
+                    return processed
+
+                def _validate_assistant_tokens(processed):
+                    """Validate that assistant tokens are present when required."""
+                    if "assistant_masks" in processed:
+                        is_assistant_token_present = [
+                            1 in assistant_mask for assistant_mask in processed["assistant_masks"]
+                        ]
+                        if not any(is_assistant_token_present):
+                            raise RuntimeError(
+                                "You're using `assistant_only_loss=True`, but at least one example has no "
+                                "assistant tokens. This usually means the tokenizer's chat template doesn't "
+                                "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
+                                "check the template and ensure it's correctly configured to support assistant "
+                                "masking."
+                            )
+
+                def tokenize(examples, processing_class, dataset_text_field, assistant_only_loss):
+                    """Main tokenization function that handles both prompt-completion and language modeling cases."""
+                    if "prompt" in examples:
+                        # Prompt-completion case
+                        if is_conversational(examples):
+                            prompts_ids, prompts_completions_ids, output = _tokenize_conversational_prompt_completion(
+                                examples, processing_class, assistant_only_loss
+                            )
+                        else:
+                            prompts_ids, prompts_completions_ids = _tokenize_standard_prompt_completion(
+                                examples, processing_class
+                            )
+                            output = {}
+                        
+                        # Validate consistency and create mask
+                        _validate_prompt_completion_consistency(prompts_ids, prompts_completions_ids)
+                        completions_mask = _create_completion_mask(prompts_ids, prompts_completions_ids)
+                        
+                        output["input_ids"] = prompts_completions_ids
+                        output["completion_mask"] = completions_mask
+                        
+                    else:
+                        # Language modeling case
+                        if is_conversational(examples):
+                            processed = _tokenize_conversational_messages(examples, processing_class, assistant_only_loss)
+                            _validate_assistant_tokens(processed)
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
-                            output = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
+                            output = {"input_ids": processing_class(text=examples[dataset_text_field])["input_ids"]}
+                    
                     return output
 
                 dataset = dataset.map(
                     tokenize,
+                    batched=True,
                     fn_kwargs={
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
