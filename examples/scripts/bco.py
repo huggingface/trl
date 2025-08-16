@@ -47,6 +47,8 @@ python examples/scripts/bco.py \
 # QLoRA:
 python examples/scripts/bco.py \
     --model_name_or_path=nnheui/stablelm-2-1_6b-sft-full \
+    --trust_remote_code \
+    --dataset_name trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 32 \
     --num_train_epochs 1 \
