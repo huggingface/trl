@@ -66,8 +66,7 @@ def filter_long_examples(example):
 
 def split_prompt_completion(example):
     """
-    Splits the messages into a prompt and a completion.
-    The last message is considered the completion.
+    Splits the messages into a prompt and a completion. The last message is considered the completion.
     """
     assert len(example["messages"]) > 1
     example["prompt"] = example["messages"][:-1]
