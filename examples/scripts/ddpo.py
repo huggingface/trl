@@ -15,21 +15,23 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "diffusers",
+#     "peft",
+#     "trackio",
 # ]
 # ///
 
 """
 python examples/scripts/ddpo.py \
-    --num_epochs=200 \
-    --train_gradient_accumulation_steps=1 \
-    --sample_num_steps=50 \
-    --sample_batch_size=6 \
-    --train_batch_size=3 \
-    --sample_num_batches_per_epoch=4 \
-    --per_prompt_stat_tracking=True \
-    --per_prompt_stat_tracking_buffer_size=32 \
-    --tracker_project_name="stable_diffusion_training" \
-    --log_with="wandb"
+    --num_epochs 200 \
+    --train_gradient_accumulation_steps 1 \
+    --sample_num_steps 50 \
+    --sample_batch_size 6 \
+    --train_batch_size 3 \
+    --sample_num_batches_per_epoch 4 \
+    --per_prompt_stat_tracking True \
+    --per_prompt_stat_tracking_buffer_size 32 \
+    --tracker_project_name "stable_diffusion_training"
 """
 
 import os
@@ -38,6 +40,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 import torch.nn as nn
+import trackio
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
 from transformers import CLIPModel, CLIPProcessor, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available
@@ -224,6 +227,12 @@ if __name__ == "__main__":
         use_lora=script_args.use_lora,
     )
 
+    # Initialize trackio if specified
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
     trainer = DDPOTrainer(
         training_args,
         aesthetic_scorer(script_args.hf_hub_aesthetic_model_id, script_args.hf_hub_aesthetic_model_filename),
@@ -238,3 +247,5 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trackio.finish()

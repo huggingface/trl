@@ -16,37 +16,38 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
-#     "wandb",
 #     "qwen-vl-utils",
+#     "torchvision",
+#     "bitsandbytes",
+#     "trackio",
 # ]
 # ///
 
 """
 Example usage:
 accelerate launch \
-    --config_file=deepspeed_zero2.yaml \
-    sft_video_llm.py \
-    --dataset_name=mfarre/simplevideoshorts \
-    --video_cache_dir="/optional/path/to/cache/" \
-    --model_name_or_path=Qwen/Qwen2-VL-7B-Instruct \
-    --per_device_train_batch_size=1 \
-    --output_dir=video-llm-output \
-    --tf32=True \
-    --gradient_accumulation_steps=4 \
-    --num_train_epochs=4 \
-    --optim="adamw_torch_fused" \
-    --log_level="debug" \
-    --log_level_replica="debug" \
-    --save_strategy="steps" \
-    --save_steps=300 \
-    --learning_rate=8e-5 \
-    --max_grad_norm=0.3 \
-    --warmup_ratio=0.1 \
-    --lr_scheduler_type="cosine" \
-    --report_to="wandb" \
-    --push_to_hub=False \
-    --torch_dtype=bfloat16 \
-    --gradient_checkpointing=True
+    --config_file deepspeed_zero2.yaml \
+    examples/scripts/sft_video_llm.py \
+    --dataset_name mfarre/simplevideoshorts \
+    --video_cache_dir "/optional/path/to/cache/" \
+    --model_name_or_path Qwen/Qwen2-VL-7B-Instruct \
+    --per_device_train_batch_size 1 \
+    --output_dir video-llm-output \
+    --tf32 True \
+    --gradient_accumulation_steps 4 \
+    --num_train_epochs 4 \
+    --optim adamw_torch_fused \
+    --log_level debug \
+    --log_level_replica debug \
+    --save_strategy steps \
+    --save_steps 300 \
+    --learning_rate 8e-5 \
+    --max_grad_norm 0.3 \
+    --warmup_ratio 0.1 \
+    --lr_scheduler_type cosine \
+    --push_to_hub False \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing True
 """
 
 import json
@@ -57,7 +58,7 @@ from typing import Any
 
 import requests
 import torch
-import wandb
+import trackio
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
@@ -228,9 +229,11 @@ if __name__ == "__main__":
     # Prepare dataset
     prepared_dataset = [prepare_dataset(example, script_args.video_cache_dir) for example in dataset]
 
-    # Initialize wandb if specified
-    if training_args.report_to == "wandb":
-        wandb.init(project="video-llm-training")
+    # Initialize trackio if specified
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     # Initialize trainer
     trainer = SFTTrainer(
@@ -256,4 +259,4 @@ if __name__ == "__main__":
     del model
     del trainer
     torch.cuda.empty_cache()
-    wandb.finish()
+    trackio.finish()

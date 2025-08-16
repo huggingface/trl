@@ -15,9 +15,12 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
+#     "torchvision",
+#     "trackio",
 # ]
 # ///
 
@@ -58,11 +61,12 @@ accelerate launch \
     --log_completions \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 2 \
-    --num_generations 2  \
+    --num_generations 2
 
 """
 
 import torch
+import trackio
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
@@ -187,6 +191,12 @@ if __name__ == "__main__":
 
         return rewards
 
+    # Initialize trackio if specified
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
     ################
     # Training
     ################
@@ -205,3 +215,5 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trackio.finish()

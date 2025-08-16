@@ -16,6 +16,8 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "Pillow>=9.4.0",
+#     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -55,6 +57,7 @@ import os
 import zipfile
 
 import torch
+import trackio
 from datasets import DatasetDict, load_dataset
 from huggingface_hub import hf_hub_download, list_repo_files
 from PIL import Image
@@ -164,6 +167,12 @@ def main():
     if script_args.dataset_name == "FanqingM/MMIU-Benchmark":
         dataset = prepare_dataset(dataset, script_args.dataset_name)
 
+    # Initialize trackio if specified
+    if "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
     ################
     # Training
     ################
@@ -181,6 +190,8 @@ def main():
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    trackio.finish()
 
 
 if __name__ == "__main__":
