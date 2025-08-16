@@ -678,11 +678,6 @@ class SFTTrainer(Trainer):
                 "Padding-free training is yet not supported for vision-language models. Please set "
                 "`padding_free=False` in the `SFTConfig`."
             )
-        if self._is_vlm and args.completion_only_loss:
-            raise ValueError(
-                "Completion-only loss is not yet supported for vision-language models. Please set "
-                "`completion_only_loss=False` in the `SFTConfig`."
-            )
         if self._is_vlm and args.assistant_only_loss:
             raise ValueError(
                 "Assistant-only loss is not yet supported for vision-language models. Please set "
