@@ -677,7 +677,6 @@ class GRPOTrainerTester(TrlTestCase):
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             torch_dtype=torch.float32,  # Use float32 for testing to avoid precision issues
-            use_cache=False,  # Required for gradient checkpointing
         )
 
         lora_config = LoraConfig(

@@ -258,7 +258,6 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.bfloat16,
     device_map="auto",
 )
-model.config.use_cache = False
 
 # Load the adapter.
 model = PeftModel.from_pretrained(
