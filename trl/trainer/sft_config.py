@@ -87,9 +87,9 @@ class SFTConfig(TrainingArguments):
             loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
             sequence for [language modeling](#language-modeling) datasets.
         assistant_only_loss (`bool`, *optional*, defaults to `False`):
-            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed
-            only on the assistant responses, which is supported only for [conversational](#conversational) datasets. If `False`,
-            loss is computed on the entire sequence.
+            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
+            on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
+            `False`, loss is computed on the entire sequence.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """

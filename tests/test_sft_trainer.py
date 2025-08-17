@@ -29,7 +29,7 @@ from .testing_utils import TrlTestCase
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, get_peft_model
+    from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
 
 
 def formatting_prompts_func(example):
@@ -221,6 +221,26 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
+
+    def test_single_example_single_doc(self):
+        batch_seq_lengths = [[5]]
+        result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 1)
+        self.assertTrue(torch.equal(result[0], torch.arange(5)))
+
+    def test_single_example_multiple_docs(self):
+        batch_seq_lengths = [[3, 2]]
+        result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 1)
+        # First sequence: 0, 1, 2; second sequence: 0, 1
+        self.assertTrue(torch.equal(result[0], torch.tensor([0, 1, 2, 0, 1])))
+
+    def test_multiple_examples(self):
+        batch_seq_lengths = [[2, 2], [3]]
+        result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 2)
+        self.assertTrue(torch.equal(result[0], torch.tensor([0, 1, 0, 1])))
+        self.assertTrue(torch.equal(result[1], torch.arange(3)))
 
 
 class SFTTrainerTester(TrlTestCase):
@@ -1360,3 +1380,65 @@ class SFTTrainerTester2(TrlTestCase):
                 # This parameter is not updated, not sure why at this point.
                 continue
             self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
+
+    @require_peft
+    def test_prompt_tuning(self):
+        """Test that SFT works with Prompt Tuning."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8),
+        )
+
+        # Save initial parameters to check they change during training
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        # Check that training completed successfully
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["mean_token_accuracy"])
+
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "base_model" in n:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            elif "prompt_encoder" in n:  # We expect the peft parameters to be different
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            else:
+                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+    @require_peft
+    def test_prompt_tuning_peft_model(self):
+        """Test that SFT works with Prompt Tuning and a pre-converted PeftModel"""
+        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        model = get_peft_model(model, PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=8))
+
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        # Save initial parameters to check they change during training
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        # Check that training completed successfully
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["mean_token_accuracy"])
+
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if "base_model" in n:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            elif "prompt_encoder" in n:  # We expect the peft parameters to be different
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            else:
+                raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")

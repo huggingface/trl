@@ -26,7 +26,6 @@ training_args = GRPOConfig(
 )
 ```
 
-
 ## AlphaPO -- Reward shape matters for LLM alignment
 
 **📜 Paper**: https://huggingface.co/papers/2501.03884
@@ -44,5 +43,19 @@ training_args = CPOConfig(
     simpo_gamma=0.1,
     learning_rate=7e-7,
     ...
+```
+
+## EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
+
+**📜 Paper**: https://huggingface.co/papers/2508.00180
+
+Bias-Corrected Exponential Moving Average (BEMA) improves the stability and efficiency of language model fine-tuning by reducing stochasticity and eliminating bias. To use BEMA with SFT as described in the paper, you can use the [`BEMACallback`]:
+
+```python
+from trl import BEMACallback, SFTTrainer
+
+trainer = SFTTrainer(
+    ...
+    callbacks=[BEMACallback()],
 )
 ```

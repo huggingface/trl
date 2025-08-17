@@ -327,6 +327,7 @@ class PRMTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{uesato2022solving,
             title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},

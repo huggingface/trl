@@ -1112,6 +1112,7 @@ class CPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{xu2024contrastive,
             title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
