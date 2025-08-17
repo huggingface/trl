@@ -93,7 +93,9 @@ def setup_chat_format(
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
     embedding layer of the model based on the new special tokens.
 
-    <Tip warning="true"> We recommend using [`clone_chat_template`] instead of this function.
+    <Tip warning="true">
+
+    We recommend using [`clone_chat_template`] instead of this function.
 
     </Tip>
 

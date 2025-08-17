@@ -25,3 +25,18 @@ training_args = GRPOConfig(
     steps_per_generation=4,  # partition rollout batch into 4 mini-batches. GSPO paper (v2), section 5.1. Must be 4 times gradient_accumulation_steps
 )
 ```
+
+## EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
+
+**📜 Paper**: https://huggingface.co/papers/2508.00180
+
+Bias-Corrected Exponential Moving Average (BEMA) improves the stability and efficiency of language model fine-tuning by reducing stochasticity and eliminating bias. To use BEMA with SFT as described in the paper, you can use the [`BEMACallback`]:
+
+```python
+from trl import BEMACallback, SFTTrainer
+
+trainer = SFTTrainer(
+    ...
+    callbacks=[BEMACallback()],
+)
+```
