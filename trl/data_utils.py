@@ -458,9 +458,7 @@ class _SegmentTree:
     def __init__(self, maxval: int):
         self.maxval = maxval
         # For non-power-of-2 values, we need to round up to the next power of 2 for the tree size
-        self.tree_size = 1
-        while self.tree_size < maxval:
-            self.tree_size <<= 1
+        self.tree_size = 1 << (maxval - 1).bit_length()
         self.tree = [0] * (2 * self.tree_size)
 
     def add(self, val):
