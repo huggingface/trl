@@ -1593,9 +1593,7 @@ class GRPOTrainer(Trainer):
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [
-            [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
-        ]
+        completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
 
         # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
         completion_lengths = completion_mask.sum(1)
