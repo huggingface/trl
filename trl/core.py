@@ -136,7 +136,7 @@ def randn_tensor(
                 warnings.warn(
                     f"The passed generator was created on 'cpu' even though a tensor on {device} was expected."
                     f" Tensors will be created on 'cpu' and then moved to {device}. Note that one can probably"
-                    f" slighly speed up this function by passing a generator that was created on the {device} device.",
+                    f" slightly speed up this function by passing a generator that was created on the {device} device.",
                     UserWarning,
                 )
         elif gen_device_type != device.type and gen_device_type == "cuda":
