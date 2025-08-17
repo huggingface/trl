@@ -53,11 +53,7 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import (
-    generate_model_card,
-    get_comet_experiment_url,
-    pad,
-)
+from .utils import generate_model_card, get_comet_experiment_url, pad,
 
 
 if is_peft_available():
@@ -256,11 +252,14 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     def get_position_ids_from_packed_seq_lengths(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
         """
         Get position IDs for packed sequences.
+
         Args:
-            batch_seq_lengths (list[list[int]]): A list of lists containing the lengths of each
-                individual document in the packed batch.
+            batch_seq_lengths (`list[list[int]]`):
+                A list of lists containing the lengths of each individual document in the packed batch.
+
         Return:
-            list[torch.Tensor]: A list of tensors containing the position IDs for each packed sequence.
+            `list[torch.Tensor]`:
+                A list of tensors containing the position IDs for each packed sequence.
         """
         # Get lengths per row
         example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
@@ -273,7 +272,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # Reset position ids to 0 at the start of each sequence
         position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
         position_ids = position_ids.cumsum(0)
-        # Reshape to match batch size
+        # Split back into one tensor per example
         return list(position_ids.split(example_lengths))
 
 
