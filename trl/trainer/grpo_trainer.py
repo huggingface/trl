@@ -107,9 +107,7 @@ class RepeatSampler(Sampler):
 
     Example:
     ```python
-    >>> sampler = RepeatSampler(
-    ...     ["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4
-    ... )
+    >>> sampler = RepeatSampler(["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4)
     >>> list(sampler)
     [4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
@@ -319,8 +317,8 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Unio
 
 def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
     """
-    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]`
-    back into a single tensor along the first dimension.
+    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]` back into a single
+    tensor along the first dimension.
     """
     pixel_values = batch.get("pixel_values")
 
@@ -348,10 +346,12 @@ def truncate_with_protected_tokens(
             List of token IDs that should be preserved in the output.
     """
     protected_set = set(protected_tokens)
+    # Create protected_tokens tensor once to avoid recreating it on every call
+    protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
 
     def process_sequence(ids, mask):
         # Create boolean masks
-        is_protected = torch.tensor([x.item() in protected_set for x in ids])
+        is_protected = torch.isin(ids, protected_tokens_tensor)
         is_non_protected = ~is_protected
 
         # Count tokens
@@ -460,7 +460,8 @@ class GRPOTrainer(Trainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -483,7 +484,8 @@ class GRPOTrainer(Trainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
@@ -1034,8 +1036,8 @@ class GRPOTrainer(Trainer):
 
         Returns:
             `torch.Tensor`:
-                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
-                `False` otherwise.
+                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold
+                and `False` otherwise.
         """
         non_pad_entropies = entropies[mask.bool()].float()
         if non_pad_entropies.numel() == 0:
@@ -2035,6 +2037,7 @@ class GRPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent(
             """\
             @article{zhihong2024deepseekmath,
