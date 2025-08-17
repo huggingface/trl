@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar, Union
-
+import torch.nn.functional as F
 import torch
 import torch.nn as nn
 import transformers
@@ -44,12 +44,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import (
-    is_conversational,
-    is_conversational_from_value,
-    maybe_convert_to_chatml,
-    truncate_dataset,
-)
+from ..data_utils import extract_prompt, is_conversational, truncate_dataset
 from ..models import get_act_offloading_ctx_manager, prepare_peft_model
 from .dpo_config import DPOConfig
 from .utils import generate_model_card, get_comet_experiment_url, pad
@@ -173,7 +168,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
-        input_ids = [torch.tensor(example["input_ids"]) for example in examples]
+        chosen_ids = [torch.tensor(example["chosen_ids"]) for example in examples]
+        rejected_ids = [torch.tensor(example["rejected_ids"]) for example in examples]
+        input_ids = chosen_ids + rejected_ids
 
         # Check if we have meaningful seq_lengths from packing (restarting sequences)
         has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
@@ -190,12 +187,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 )
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
-        if "labels" in examples[0]:
-            labels = [torch.tensor(example["labels"]) for example in examples]
-        else:
-            labels = [torch.tensor(example["input_ids"]) for example in examples]
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
+        chosen_mask = [torch.tensor(example["chosen_mask"]) for example in examples]
+        rejected_mask = [torch.tensor(example["rejected_mask"]) for example in examples]
+        completion_mask = chosen_mask + rejected_mask
 
         # Pad
         output = {}
@@ -205,10 +199,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
             if self.return_position_ids:
                 output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
-            output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
-            if "completion_mask" in examples[0]:
-                completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
-                output["labels"][completion_mask == 0] = -100
         else:
             output["input_ids"] = pad(
                 input_ids,
@@ -223,14 +213,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                 output["position_ids"] = pad(
                     position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
                 )
-            output["labels"] = pad(
-                labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            output["completion_mask"] = pad(
+                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-            if "completion_mask" in examples[0]:
-                completion_mask = pad(
-                    completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
+
         return output
 
     @staticmethod
@@ -489,6 +475,7 @@ class DPOTrainer(Trainer):
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
@@ -516,12 +503,6 @@ class DPOTrainer(Trainer):
             raise ValueError(
                 "Padding-free training is yet not supported for vision-language models. Please set "
                 "`padding_free=False` in the `DPOConfig`."
-            )
-        first_example = next(iter(train_dataset))
-        if self._is_vlm and "prompt" in first_example and "completion" in first_example:
-            raise ValueError(
-                "Prompt-completion datasets are not yet supported for vision-language models in `DPOTrainer`. "
-                "Please use a language-modeling type dataset instead."
             )
 
         # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
@@ -656,17 +637,12 @@ class DPOTrainer(Trainer):
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().main_process_first():
-            # Convert the dataset to ChatML if needed
+            # Extract the prompt if needed
             first_example = next(iter(dataset))
-            if is_conversational_from_value(first_example):
+            if "prompt" not in first_example:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-                column_names = next(iter(dataset)).keys()
-                dataset = dataset.map(
-                    maybe_convert_to_chatml,
-                    remove_columns="conversations" if "conversations" in column_names else None,
-                    **map_kwargs,
-                )
+                    map_kwargs["desc"] = f"Extracting prompt from {dataset_name} dataset"
+                dataset = dataset.map(extract_prompt, **map_kwargs)
 
             # Apply the chat template if needed
             first_example = next(iter(dataset))
@@ -701,13 +677,16 @@ class DPOTrainer(Trainer):
                         tools=example.get("tools"),
                         **example.get("chat_template_kwargs", {}),
                     )
-                    prompt_completion_processed = processing_class.apply_chat_template(
-                        example["prompt"] + example["completion"],
-                        return_dict=True,
+                    prompt_chosen_ids = processing_class.apply_chat_template(
+                        example["prompt"] + example["chosen"],
                         tools=example.get("tools"),
                         **example.get("chat_template_kwargs", {}),
                     )
-                    prompt_completion_ids = prompt_completion_processed["input_ids"]
+                    prompt_rejected_ids = processing_class.apply_chat_template(
+                        example["prompt"] + example["rejected"],
+                        tools=example.get("tools"),
+                        **example.get("chat_template_kwargs", {}),
+                    )
                 else:
                     prompt_ids = processing_class(text=example["prompt"])["input_ids"]
                     prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
@@ -715,25 +694,30 @@ class DPOTrainer(Trainer):
                     ]
 
                 # Check if the tokenized prompt starts with the tokenized prompt+completion
-                if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
                     warnings.warn(
-                        "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                        "Mismatch between tokenized prompt and the start of tokenized prompt+chosen. "
+                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                        "token handling. Verify that the tokenizer is processing text consistently."
+                    )
+                if not prompt_rejected_ids[: len(prompt_ids)] == prompt_ids:
+                    warnings.warn(
+                        "Mismatch between tokenized prompt and the start of tokenized prompt+rejected. "
                         "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
                         "token handling. Verify that the tokenizer is processing text consistently."
                     )
 
                 # Create a completion mask
-                completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                output["input_ids"] = prompt_completion_ids
-                output["completion_mask"] = completion_mask
+                chosen_mask = [0] * len(prompt_ids) + [1] * (len(prompt_chosen_ids) - len(prompt_ids))
+                rejected_mask = [0] * len(prompt_ids) + [1] * (len(prompt_rejected_ids) - len(prompt_ids))
+                output["chosen_ids"] = prompt_chosen_ids
+                output["rejected_ids"] = prompt_rejected_ids
+                output["chosen_mask"] = chosen_mask
+                output["rejected_mask"] = rejected_mask
 
                 return output
 
-            dataset = dataset.map(
-                tokenize,
-                fn_kwargs={"processing_class": processing_class},
-                **map_kwargs,
-            )
+            dataset = dataset.map(tokenize, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
             # Truncate
             if args.max_length is not None:
@@ -755,16 +739,38 @@ class DPOTrainer(Trainer):
             if self._is_vlm:
                 self._signature_columns = ["messages", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask"]
+                self._signature_columns = ["chosen_ids", "rejected_ids", "chosen_mask", "rejected_mask"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
-        (loss, outputs) = super().compute_loss(
-            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-        )
+
+        
+        shifted_labels = inputs["input_ids"][:, 1:]         # (B, L-1)
+        shifted_mask = inputs["completion_mask"][:, 1:] # (B, L-1)
+
+        logits = model(**inputs, use_cache=False).logits
+        ref_logits = self.ref_model(**inputs, use_cache=False).logits
+
+        shifted_logits = ref_logits[:, :-1, :]        # (B, L-1, V)
+        ref_all_logps = F.log_softmax(shifted_logits, dim=-1)  # (B, L-1, V)
+        ref_per_token_logprobs = ref_all_logps.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)  # (B, L-1)
+        ref_per_token_logprobs = ref_per_token_logprobs * shifted_mask
+        ref_logprobs = ref_per_token_logprobs.sum(dim=-1)  # (B,)
+        ref_chosen_logprobs = ref_logprobs[: ref_logprobs.size(0) // 2]  # (B//2,)
+        ref_rejected_logprobs = ref_logprobs[ref_logprobs.size(0) // 2 :]  # (B//2,)
+
+        shifted_logits = logits[:, :-1, :]        # (B, L-1, V)
+        all_logps = F.log_softmax(shifted_logits, dim=-1)  # (B, L-1, V)
+        per_token_logprobs = all_logps.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)  # (B, L-1)
+        per_token_logprobs = per_token_logprobs * shifted_mask
+        logprobs = per_token_logprobs.sum(dim=-1)  # (B,)
+        chosen_logprobs = logprobs[: logprobs.size(0) // 2]  # (B//2,)
+        rejected_logprobs = logprobs[logprobs.size(0) // 2 :]  # (B//2,)
+        
+
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
             # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.

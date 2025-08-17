@@ -186,7 +186,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # For packing with position_ids, we should NOT create attention_mask as it causes
         # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
         if not has_packed_position_ids:
-            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+            attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         if self.return_position_ids:
             if "seq_lengths" in examples[0]:
