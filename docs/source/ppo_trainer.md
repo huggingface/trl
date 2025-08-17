@@ -52,7 +52,7 @@ The logged metrics are as follows. Here is an example [tracked run at Weights an
 * `val/ratio_var`: The variance of the `val/ratio`, indicating the variability in policy changes.
 * `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
 * `lr`: lr: The current learning rate used by the optimizer.
-* `episode`: episode: The current global step or episode count in the training process.
+* `episode`: episode: The current episode count in the training process.
 
 
 ## Cookbook
@@ -233,6 +233,9 @@ python -m openrlbenchmark.rlops_multi_metrics \
 ## PPOTrainer
 
 [[autodoc]] PPOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## PPOConfig
 

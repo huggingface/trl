@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,9 +13,8 @@
 # limitations under the License.
 
 """
-State dict utilities: utility methods for converting state dicts easily
-File copied from diffusers to avoid import issues and make TRL compatible
-with most of diffusers versions.
+State dict utilities: utility methods for converting state dicts easily File copied from diffusers to avoid import
+issues and make TRL compatible with most of diffusers versions.
 """
 
 import enum

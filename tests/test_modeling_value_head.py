@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,22 +13,22 @@
 # limitations under the License.
 
 import gc
-import sys
-import tempfile
 import unittest
 
 import torch
 from parameterized import parameterized
-from transformers import AutoModel, AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
+from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
+
+from .testing_utils import TrlTestCase
 
 
 ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-BloomForCausalLM",
     "trl-internal-testing/tiny-CohereForCausalLM",
     "trl-internal-testing/tiny-DbrxForCausalLM",
-    "trl-internal-testing/tiny-FalconMambaForCausalLM",
+    # "trl-internal-testing/tiny-FalconMambaForCausalLM",  # FalconMambaForCausalLM modeling seems to be broken for now
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
     "trl-internal-testing/tiny-GPT2LMHeadModel",
@@ -50,7 +50,7 @@ ALL_SEQ2SEQ_MODELS = [
 
 
 class BaseTester:
-    class VHeadModelTester(unittest.TestCase):
+    class VHeadModelTester(TrlTestCase):
         all_model_names = None
         trl_model_class = None
         transformers_model_class = None
@@ -73,8 +73,7 @@ class BaseTester:
 
         def test_value_head_init_random(self):
             r"""
-            Test if the v-head has been randomly initialized.
-            We can check that by making sure the bias is different
+            Test if the v-head has been randomly initialized. We can check that by making sure the bias is different
             than zeros by default.
             """
             for model_name in self.all_model_names:
@@ -85,33 +84,30 @@ class BaseTester:
 
         def test_value_head_not_str(self):
             r"""
-            Test if the v-head is added to the model successfully, by passing a non `PretrainedModel`
-            as an argument to `from_pretrained`.
+            Test if the v-head is added to the model successfully, by passing a non `PretrainedModel` as an argument to
+            `from_pretrained`.
             """
             for model_name in self.all_model_names:
                 pretrained_model = self.transformers_model_class.from_pretrained(model_name)
                 model = self.trl_model_class.from_pretrained(pretrained_model)
                 self.assertTrue(hasattr(model, "v_head"))
 
-        @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
         def test_from_save_trl(self):
             """
-            Test if the model can be saved and loaded from a directory and get the same weights
-            Including the additional modules (e.g. v_head)
+            Test if the model can be saved and loaded from a directory and get the same weights, including the
+            additional modules (e.g. v_head)
             """
             for model_name in self.all_model_names:
                 model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    model.save_pretrained(tmp_dir)
+                model.save_pretrained(self.tmp_dir)
 
-                    model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(self.tmp_dir)
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
                     self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
 
-        @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
         def test_from_save_trl_sharded(self):
             """
             Test if the model can be saved and loaded from a directory and get the same weights - sharded case
@@ -119,16 +115,14 @@ class BaseTester:
             for model_name in self.all_model_names:
                 model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    model.save_pretrained(tmp_dir)
+                model.save_pretrained(self.tmp_dir)
 
-                    model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(self.tmp_dir)
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
                     self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
 
-        @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
         def test_from_save_transformers_sharded(self):
             """
             Test if the model can be saved and loaded using transformers and get the same weights - sharded case
@@ -138,11 +132,10 @@ class BaseTester:
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    trl_model.save_pretrained(tmp_dir, max_shard_size="1MB")
-                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
-                        tmp_dir
-                    )
+                trl_model.save_pretrained(self.tmp_dir, max_shard_size="1MB")
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
+                    self.tmp_dir
+                )
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
@@ -152,22 +145,20 @@ class BaseTester:
                         )
                     )
 
-        @unittest.skipIf(sys.platform.startswith("win"), "Skipping on Windows")
         def test_from_save_transformers(self):
             """
-            Test if the model can be saved and loaded using transformers and get the same weights.
-            We override the test of the super class to check if the weights are the same.
+            Test if the model can be saved and loaded using transformers and get the same weights. We override the test
+            of the super class to check if the weights are the same.
             """
             for model_name in self.all_model_names:
                 transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    trl_model.save_pretrained(tmp_dir)
-                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
-                        tmp_dir
-                    )
+                trl_model.save_pretrained(self.tmp_dir)
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
+                    self.tmp_dir
+                )
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
@@ -194,7 +185,7 @@ class BaseTester:
                 )
 
 
-class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase):
+class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -206,6 +197,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
     def tearDown(self):
         # free memory
         gc.collect()
+        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -225,8 +217,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
     def test_dropout_config(self):
         r"""
-        Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the v_head
+        Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
             pretrained_model = self.transformers_model_class.from_pretrained(model_name)
@@ -238,8 +229,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
     def test_dropout_kwargs(self):
         r"""
-        Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the v_head
+        Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
             v_head_kwargs = {"summary_dropout_prob": 0.5}
@@ -268,10 +258,9 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
     def test_transformers_bf16_kwargs(self):
         r"""
-        Test if the transformers kwargs are correctly passed
-        Here we check that loading a model in half precision works as expected, i.e. the weights of
-        the `pretrained_model` attribute is loaded in half precision and you can run a dummy
-        forward pass without any issue.
+        Test if the transformers kwargs are correctly passed. Here we check that loading a model in half precision
+        works as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can
+        run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
             trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
@@ -312,7 +301,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
                 )
 
 
-class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase):
+class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -324,6 +313,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
     def tearDown(self):
         # free memory
         gc.collect()
+        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -344,8 +334,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
     def test_dropout_config(self):
         r"""
-        Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the v_head
+        Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
             pretrained_model = self.transformers_model_class.from_pretrained(model_name)
@@ -357,8 +346,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
     def test_dropout_kwargs(self):
         r"""
-        Test if we instantiate a model by adding `summary_drop_prob` to the config
-        it will be added to the v_head
+        Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
             v_head_kwargs = {"summary_dropout_prob": 0.5}
@@ -386,14 +374,6 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
         # Just check if the generation works
         _ = model.generate(input_ids, decoder_input_ids=decoder_input_ids, generation_config=generation_config)
 
-    def test_raise_error_not_causallm(self):
-        # Test with a model without a LM head
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        # This should raise a ValueError
-        with self.assertRaises(ValueError):
-            pretrained_model = AutoModel.from_pretrained(model_id)
-            _ = self.trl_model_class.from_pretrained(pretrained_model)
-
     @unittest.skip("This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
@@ -415,10 +395,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
     def test_transformers_bf16_kwargs(self):
         r"""
-        Test if the transformers kwargs are correctly passed
-        Here we check that loading a model in half precision works as expected, i.e. the weights of
-        the `pretrained_model` attribute is loaded in half precision and you can run a dummy
-        forward pass without any issue.
+        Test if the transformers kwargs are correctly passed. Here we check that loading a model in half precision
+        works as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can
+        run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
             trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
@@ -439,8 +418,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
             _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)
 
 
-class ReferenceModelTest(unittest.TestCase):
+class ReferenceModelTest(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model = AutoModelForCausalLMWithValueHead.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)

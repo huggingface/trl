@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,18 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 import pandas as pd
 import torch
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
-from accelerate.utils import gather_object, is_comet_ml_available, is_deepspeed_available, is_wandb_available
-from rich.console import Console, Group
-from rich.live import Live
-from rich.panel import Panel
-from rich.progress import Progress
+from accelerate.utils import gather_object, is_wandb_available
 from transformers import (
     GenerationConfig,
     PreTrainedModel,
@@ -35,6 +32,7 @@ from transformers import (
     TrainingArguments,
 )
 from transformers.trainer_utils import has_length
+from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_mergekit_available
@@ -44,14 +42,18 @@ from .judges import BasePairwiseJudge
 from .utils import log_table_to_comet_experiment
 
 
-if is_deepspeed_available():
-    import deepspeed
-
-if is_comet_ml_available():
-    pass
+if is_rich_available():
+    from rich.console import Console, Group
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.progress import Progress
 
 if is_wandb_available():
     import wandb
+
+
+# Logger for module-level logging
+logger = logging.getLogger(__name__)
 
 
 def _generate_completions(
@@ -115,6 +117,8 @@ class SyncRefModelCallback(TrainerCallback):
     def sync_target_model(model, target_model, alpha):
         deepspeed_plugin = AcceleratorState().deepspeed_plugin
         if deepspeed_plugin is not None and deepspeed_plugin.zero_stage == 3:
+            import deepspeed
+
             with deepspeed.zero.GatheredParameters(
                 list(model.parameters()) + list(target_model.parameters()), modifier_rank=0
             ):
@@ -138,6 +142,9 @@ class RichProgressCallback(TrainerCallback):
     """
 
     def __init__(self):
+        if not is_rich_available():
+            raise ImportError("RichProgressCallback requires the `rich` extra. To install, run `pip install rich`.")
+
         self.training_bar = None
         self.prediction_bar = None
 
@@ -210,7 +217,7 @@ class RichProgressCallback(TrainerCallback):
 
 
 def _win_rate_completions_df(
-    state: TrainerState, prompts: List[str], completions: List[str], winner_indices: List[str]
+    state: TrainerState, prompts: list[str], completions: list[str], winner_indices: list[str]
 ) -> pd.DataFrame:
     global_step = [str(state.global_step)] * len(prompts)
     data = list(zip(global_step, prompts, completions, winner_indices))
@@ -248,8 +255,8 @@ class WinRateCallback(TrainerCallback):
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*, defaults to `None`):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples
-            in the evaluation dataset.
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
+            the evaluation dataset.
         shuffle_order (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the order of the completions before judging.
         use_soft_judge (`bool`, *optional*, defaults to `False`):
@@ -433,7 +440,8 @@ class LogCompletionsCallback(TrainerCallback):
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples in the evaluation dataset.
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
+            the evaluation dataset.
         freq (`int` or `None`, *optional*):
             The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
@@ -508,7 +516,8 @@ class LogCompletionsCallback(TrainerCallback):
 
 class MergeModelCallback(TrainerCallback):
     r"""
-    A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based on a merge configuration.
+    A [`~transformers.TrainerCallback`] that merges the policy model (the model being trained) with another model based
+    on a merge configuration.
 
     Args:
         merge_config ([`MergeConfig`], *optional*, defaults to `None`):
@@ -521,8 +530,6 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
-    !pip install trl[mergekit]
-
     from trl.mergekit_utils import MergeConfig
     from trl import MergeModelCallback
 
@@ -540,7 +547,7 @@ class MergeModelCallback(TrainerCallback):
     ):
         if not is_mergekit_available():
             raise ImportError(
-                "MergeModelCallback requires the `mergekit` extra. To install, run `pip install trl[mergekit]`."
+                "MergeModelCallback requires the `mergekit` extra. To install, run `pip install mergekit`."
             )
         self.merge_config = merge_config or MergeConfig()
         self.merge_at_every_checkpoint = merge_at_every_checkpoint
@@ -566,3 +573,187 @@ class MergeModelCallback(TrainerCallback):
     def on_train_end(self, args, state, control, model=None, **kwargs):
         if not self.merge_at_every_checkpoint:
             self._merge_and_maybe_push(args.output_dir, state.global_step, model)
+
+
+class BEMACallback(TrainerCallback):
+    r"""
+    A [`~transformers.TrainerCallback`] that implements [BEMA](https://huggingface.co/papers/2508.00180)
+    (Bias-Corrected Exponential Moving Average) by [Adam Block](https://huggingface.co/abblock) and [Cyril
+    Zhang](https://huggingface.co/cyrilzhang). Code from https://github.com/abblock/bema under MIT license.
+
+    BEMA computes model weights that scale like:
+
+    $$
+    \theta_t' = \alpha_t \cdot (\theta_t - \theta_0) + \text{EMA}_t
+    $$
+
+    where  \\( \theta_t \\) is the current model weights,  \\( \theta_0 \\) is a snapshot of the model weights at the
+    first `update_after` step,  \\( \text{EMA}_t  \\) is the exponential moving average of the model weights, and
+     \\( \alpha_t \\) is a scaling factor that decays with the number of steps  \\( t \\) as
+
+    $$
+    \alpha_t = (\rho + \gamma \cdot t)^{-\eta}.
+    $$
+
+    The EMA is computed as:
+
+    $$
+    \text{EMA}_t = (1 - \beta_t) \cdot \text{EMA}_{t-1} + \beta_t \cdot \theta_t
+    $$
+
+    where  \\( \beta_t \\) is a decay factor that decays with the number of steps  \\( t \\) as
+
+    $$
+    \beta_t = (\rho + \gamma \cdot t)^{-\kappa}.
+    $$
+
+    Args:
+        update_freq (`int`, *optional*, defaults to `400`):
+            Update the BEMA weights every X steps. Denoted this as  \\( \phi \\) in the paper.
+        ema_power (`float`, *optional*, defaults to `0.5`):
+            Power for the EMA decay factor. Denoted  \\( \kappa \\) in the paper. To disable EMA, set this to `0.0`.
+        bias_power (`float`, *optional*, defaults to `0.2`):
+            Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. To disable BEMA, set this to `0.0`.
+        lag (`int`, *optional*, defaults to `10`):
+            Lag parameter  \\( \rho \\) in the paper. This is a constant that
+            Initial offset in the weight decay schedule that controls early-stage smoothness by acting as a virtual
+            starting age for the updates. Denoted as  \\( \rho \\) in the paper.
+        update_after (`int`, *optional*, defaults to `0`):
+            Burn-in time before starting to update the BEMA weights. Denoted  \\( \tau \\) in the paper.
+        multiplier (`float`, *optional*, defaults to `1.0`):
+            Initial value for the EMA decay factor. Denoted as  \\( \gamma \\) in the paper.
+        min_ema_multiplier (`float`, *optional*, defaults to `0.0`):
+            Minimum value for the EMA decay factor.
+        device (`str`, *optional*, defaults to `"cpu"`):
+            Device to use for the BEMA buffers, e.g. `"cpu"` or `"cuda"`. Note that in most cases, this device SHOULD
+            BE DIFFERENT from the device used for training in order to avoid OOM.
+
+    Example:
+
+    ```python
+    from trl import BEMACallback
+
+    trainer = Trainer(..., callbacks=[BEMACallback()])
+    ```
+    """
+
+    def __init__(
+        self,
+        update_freq: int = 400,
+        ema_power: float = 0.5,
+        bias_power: float = 0.2,
+        lag: int = 10,
+        update_after: int = 0,
+        multiplier: float = 1.0,
+        min_ema_multiplier: float = 0.0,
+        device: str = "cpu",
+    ):
+        # User-provided hyperparams
+        self.update_freq = update_freq
+        self.ema_power = ema_power
+        self.bias_power = bias_power
+        self.lag = lag
+        self.update_after = update_after
+        self.multiplier = multiplier
+        self.min_ema_multiplier = min_ema_multiplier
+        self.device = device
+
+        # Internal state
+        self.param_names = []  # references to training model param names
+        self.thetat_params = []  # references to training model params
+        self.theta0_params = []  # θ₀ buffers (on self.device)
+        self.ema_params = []  # EMA buffers (on self.device)
+        self.running_model = None  # a copy of the model to run BEMA on
+
+    @staticmethod
+    def _unwrap_model(model):
+        """
+        Helper function to unwrap model from various wrappers including DataParallel, DistributedDataParallel,
+        DeepSpeed, and FSDP.
+        """
+        # Handle DeepSpeed
+        if hasattr(model, "module") and hasattr(model, "engine"):
+            # DeepSpeed engine
+            return model.module
+
+        # Handle FSDP
+        if hasattr(model, "_fsdp_wrapped_module"):
+            # FSDP wrapped model
+            return model._fsdp_wrapped_module
+
+        # Handle DataParallel/DistributedDataParallel
+        if hasattr(model, "module"):
+            return model.module
+
+        return model
+
+    @torch.no_grad()
+    def on_train_begin(
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, model: PreTrainedModel, **kwargs
+    ):
+        model = self._unwrap_model(model)
+
+        # Create a new instance and load state_dict
+        self.running_model = type(model)(model.config).to(self.device)
+        self.running_model.load_state_dict(model.state_dict())
+
+        # Cache trainable parameters once in a fixed order
+        for name, param in model.named_parameters():
+            if not param.requires_grad:
+                continue
+            self.param_names.append(name)
+            self.thetat_params.append(param)
+
+            # Clone θ₀ and EMA on the same device as model
+            theta0 = param.detach().clone().to(self.device)
+            self.theta0_params.append(theta0)
+            self.ema_params.append(theta0.clone())  # initialize EMA with θ₀
+
+    def _ema_beta(self, step: int) -> float:
+        """Compute the EMA decay factor βₜ = (ρ + γ·t)⁻ᵏᵃᵖᵖᵃ."""
+        beta = (self.lag + self.multiplier * step) ** (-self.ema_power)
+        return max(beta, self.min_ema_multiplier)
+
+    def _bema_alpha(self, step: int) -> float:
+        """Compute the BEMA scaling factor αₜ = (ρ + γ·t)⁻ᵉᵗᵃ."""
+        return (self.lag + self.multiplier * step) ** (-self.bias_power)
+
+    def _update_bema_weights(self, step: int):
+        beta = self._ema_beta(step)
+        alpha = self._bema_alpha(step)
+
+        # Compute EMA + BEMA in-place and write directly to running_model
+        for thetat, theta0, ema, run_param in zip(
+            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters()
+        ):
+            thetat = thetat.detach().to(self.device)
+            ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
+            run_param.copy_(ema + alpha * (thetat - theta0))  # BEMA update: run_param = ema + alpha * (θₜ - θ₀)
+
+    @torch.no_grad()
+    def on_step_end(
+        self, args: TrainingArguments, state: TrainerState, control: TrainerControl, model: PreTrainedModel, **kwargs
+    ):
+        step = state.global_step
+
+        # If we haven't reached the update_after step, skip the BEMA update
+        if step < self.update_after:
+            return
+
+        # Snapshot θ₀ and EMA at first update
+        if step == self.update_after:
+            for thetat_param, theta0_param, ema_param in zip(self.thetat_params, self.theta0_params, self.ema_params):
+                theta0_param.copy_(thetat_param)
+                ema_param.copy_(thetat_param)
+
+        # Update BEMA weights every `update_freq` steps
+        elif (step - self.update_after) % self.update_freq == 0:
+            self._update_bema_weights(step)
+            logger.info(f"Updated BEMA weights at step {step}")
+
+    @torch.no_grad()
+    def on_train_end(self, args: TrainingArguments, state: TrainerState, control: TrainerControl, **kwargs):
+        if state.is_world_process_zero:
+            save_directory = f"{args.output_dir}/bema"
+            self.running_model.save_pretrained(save_directory)
+            logger.info(f"Saved BEMA model to {save_directory}")

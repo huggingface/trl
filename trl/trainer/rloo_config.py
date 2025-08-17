@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,6 +22,10 @@ from ..trainer.utils import OnPolicyConfig
 class RLOOConfig(OnPolicyConfig):
     r"""
     Configuration class for the [`RLOOTrainer`].
+
+    This class includes only the parameters that are specific to RLOO training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] and [`OnPolicyConfig`] documentation. Note that default
+    values in this class may differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,15 +13,15 @@
 # limitations under the License.
 
 import gc
-import unittest
 
+import pytest
 import torch
 from parameterized import parameterized
 from transformers.utils import is_peft_available
 
-from trl import is_diffusers_available
+from trl.import_utils import is_diffusers_available
 
-from .testing_utils import require_diffusers
+from .testing_utils import TrlTestCase, require_diffusers
 
 
 if is_diffusers_available() and is_peft_available():
@@ -36,13 +36,15 @@ def prompt_function():
     return ("cabbages", {})
 
 
+@pytest.mark.low_priority
 @require_diffusers
-class AlignPropTrainerTester(unittest.TestCase):
+class AlignPropTrainerTester(TrlTestCase):
     """
     Test the AlignPropTrainer class.
     """
 
     def setUp(self):
+        super().setUp()
         training_args = AlignPropConfig(
             num_epochs=2,
             train_gradient_accumulation_steps=1,

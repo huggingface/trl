@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,24 +12,55 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+#     "Pillow>=9.4.0",
+# ]
+# ///
+
 """
+Without dataset streaming:
+
+```
 accelerate launch examples/scripts/dpo_vlm.py \
     --dataset_name HuggingFaceH4/rlaif-v_formatted \
-    --model_name_or_path HuggingFaceM4/idefics2-8b \
+    --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
-    --bf16 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --lora_target_modules=all-linear
+    --lora_target_modules=all-linear \
+    --report_to wandb
+```
+
+With dataset streaming:
+
+```
+accelerate launch examples/scripts/dpo_vlm.py \
+    --dataset_name HuggingFaceH4/rlaif-v_formatted \
+    --dataset_streaming \
+    --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
+    --per_device_train_batch_size 2 \
+    --max_steps 100 \
+    --gradient_accumulation_steps 32 \
+    --dataset_num_proc 32 \
+    --output_dir dpo_idefics_rlaif-v \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --use_peft \
+    --lora_target_modules=all-linear \
+    --report_to wandb
+```
 """
 
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from trl import (
     DPOConfig,
@@ -62,14 +93,14 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path,
         trust_remote_code=model_args.trust_remote_code,
         **model_kwargs,
     )
     peft_config = get_peft_config(model_args)
     if peft_config is None:
-        ref_model = AutoModelForVision2Seq.from_pretrained(
+        ref_model = AutoModelForImageTextToText.from_pretrained(
             model_args.model_name_or_path,
             trust_remote_code=model_args.trust_remote_code,
             **model_kwargs,
@@ -100,7 +131,11 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
+    dataset = load_dataset(
+        script_args.dataset_name,
+        name=script_args.dataset_config,
+        streaming=script_args.dataset_streaming,
+    )
 
     ################
     # Training

@@ -134,6 +134,132 @@ preference_example = {
 
 Conversational datasets are useful for training chat models, but must be converted into a standard format before being used with TRL trainers. This is typically done using chat templates specific to the model being used. For more information, refer to the [Working with conversational datasets in TRL](#working-with-conversational-datasets-in-trl) section.
 
+#### Tool Calling
+
+Some chat templates support *tool calling*, which allows the model to interact with external functions—referred to as **tools**—during generation. This extends the conversational capabilities of the model by enabling it to output a `"tool_calls"` field instead of a standard `"content"` message whenever it decides to invoke a tool.
+
+After the assistant initiates a tool call, the tool executes and returns its output. The assistant can then process this output and continue the conversation accordingly.
+
+Here’s a simple example of a tool-calling interaction:
+
+```python
+messages = [
+    {"role": "user", "content": "Turn on the living room lights."},
+    {"role": "assistant", "tool_calls": [
+        {"type": "function", "function": {
+            "name": "control_light",
+            "arguments": {"room": "living room", "state": "on"}
+        }}]
+    },
+    {"role": "tool", "name": "control_light", "content": "The lights in the living room are now on."},
+    {"role": "assistant", "content": "Done!"}
+]
+```
+
+When preparing datasets for Supervised Fine-Tuning (SFT) with tool calling, it is important that your dataset includes an additional column named `tools`. This column contains the list of available tools for the model, which is usually used by the chat template to construct the system prompt.
+
+The tools must be specified in a codified JSON schema format. You can automatically generate this schema from Python function signatures using the [`~transformers.utils.get_json_schema`] utility:
+
+```python
+from transformers.utils import get_json_schema
+
+def control_light(room: str, state: str) -> str:
+    """
+    Controls the lights in a room.
+
+    Args:
+        room: The name of the room.
+        state: The desired state of the light ("on" or "off").
+
+    Returns:
+        str: A message indicating the new state of the lights.
+    """
+    return f"The lights in {room} are now {state}."
+
+# Generate JSON schema
+json_schema = get_json_schema(control_light)
+```
+
+The generated schema would look like:
+
+```python
+{
+    "type": "function",
+    "function": {
+        "name": "control_light",
+        "description": "Controls the lights in a room.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "room": {"type": "string", "description": "The name of the room."},
+                "state": {"type": "string", "description": 'The desired state of the light ("on" or "off").'},
+            },
+            "required": ["room", "state"],
+        },
+        "return": {"type": "string", "description": "str: A message indicating the new state of the lights."},
+    },
+}
+```
+
+A complete dataset entry for SFT might look like:
+
+```python
+{"messages": messages, "tools": [json_schema]}
+```
+
+For more detailed information on tool calling, refer to the [Tool Calling section in the `transformers` documentation](https://huggingface.co/docs/transformers/chat_extras#tools-and-rag) and the blog post [Tool Use, Unified](https://huggingface.co/blog/unified-tool-use).
+
+### Harmony
+
+The [Harmony response format](https://cookbook.openai.com/articles/openai-harmony) was introduced with the [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior. Key features include:
+
+- **Developer role** – Provides high level instructions (similar to a system prompt) and lists available tools.
+- **Channels** – Separate types of assistant output into distinct streams:
+
+  - `analysis` – for internal reasoning, from the key `"thinking"`
+  - `final` – for the user-facing answer, from the key `"content"`
+  - `commentary` – for tool calls or meta notes
+
+- **Reasoning effort** – Signals how much thinking the model should show (e.g., `"low"`, `"medium"`, `"high"`).
+- **Model identity** – Explicitly defines the assistant’s persona.
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("openai/gpt-oss-20b")
+
+messages = [
+    {"role": "developer", "content": "Use a friendly tone."},
+    {"role": "user", "content": "What is the meaning of life?"},
+    {"role": "assistant", "thinking": "Deep reflection...", "content": "The final answer is..."},
+]
+
+print(
+    tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        reasoning_effort="low",
+        model_identity="You are HuggingGPT, a large language model trained by Hugging Face."
+    )
+)
+```
+
+This produces:
+
+```txt
+<|start|>system<|message|>You are HuggingGPT, a large language model trained by Hugging Face.
+Knowledge cutoff: 2024-06
+Current date: 2025-08-03
+
+Reasoning: low
+
+# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+Use a friendly tone.<|end|><|start|>user<|message|>What is the meaning of life?<|end|><|start|>assistant<|channel|>analysis<|message|>Deep reflection...<|end|><|start|>assistant<|channel|>final<|message|>The final answer is...<|return|>
+```
+
+For full details on message structure, supported fields, and advanced usage, see the [Harmony documentation](https://cookbook.openai.com/articles/openai-harmony).
+
 ### Types
 
 #### Language modeling
@@ -152,7 +278,7 @@ language_modeling_example = {"messages": [
 
 #### Prompt-only
 
-In a prompt-only dataset, only the initial prompt (the question or partial sentence) is provided under the key `"prompt"`. The training typically involves generating the completion based on this prompt, where the model learns to continue or complete the given input.
+In a prompt-only dataset, only the initial prompt (the question or partial sentence) is provided under the key `"prompt"`. The training typically involves generating completion based on this prompt, where the model learns to continue or complete the given input.
 
 ```python
 # Standard format
@@ -206,7 +332,7 @@ For examples of prompt-completion datasets, refer to the [Prompt-completion data
 #### Preference
 
 A preference dataset is used for tasks where the model is trained to choose between two or more possible completions to the same prompt. This dataset includes a `"prompt"`, a `"chosen"` completion, and a `"rejected"` completion. The model is trained to select the `"chosen"` response over the `"rejected"` response.
-Some dataset may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
+Some datasets may not include the `"prompt"` column, in which case the prompt is implicit and directly included in the `"chosen"` and `"rejected"` completions. We recommend using explicit prompts whenever possible.
 
 ```python
 # Standard format
@@ -279,7 +405,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`PPOTrainer`]          | Tokenized language modeling                                                                            |
 | [`PRMTrainer`]          | [Stepwise supervision](#stepwise-supervision)                                                          |
 | [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference)                                                |
-| [`SFTTrainer`]          | [Language modeling](#language-modeling)                                                                |
+| [`SFTTrainer`]          | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion)                     |
 | [`XPOTrainer`]          | [Prompt-only](#prompt-only)                                                                            |
 
 <Tip>
@@ -830,7 +956,7 @@ dataset = dataset.filter(lambda x: all(x["labels"])).map(concatenate_prompt_comp
 {'text': 'Blue light scatters more in the atmosphere, so the sky is green.'}
 ```
 
-### From stepwise supervision to prompt completion dataset
+### From stepwise supervision to prompt-completion dataset
 
 To convert a stepwise supervision dataset into a prompt-completion dataset, join the good completions and remove the labels.
 
@@ -856,7 +982,7 @@ dataset = dataset.filter(lambda x: all(x["labels"])).map(join_completions, remov
 {'prompt': 'Blue light', 'completion': ' scatters more in the atmosphere, so the sky is green.'}
 ```
 
-### From stepwise supervision to prompt only dataset
+### From stepwise supervision to prompt-only dataset
 
 To convert a stepwise supervision dataset into a prompt-only dataset, remove the completions and the labels.
 
@@ -907,7 +1033,7 @@ dataset = dataset.map(merge_completions_and_labels, remove_columns=["completions
 
 ## Vision datasets
 
-Some trainers also support fine-tuning vision-language models (VLMs) using image-text pairs. In this scenario, it's recommended to use a conversational format, as each model handles image placeholders in text differently. 
+Some trainers also support fine-tuning vision-language models (VLMs) using image-text pairs. In this scenario, it's recommended to use a conversational format, as each model handles image placeholders in text differently.
 
 A conversational vision dataset differs from a standard conversational dataset in two key ways:
 
@@ -935,4 +1061,3 @@ An example of a conversational vision dataset is the [openbmb/RLAIF-V-Dataset](h
   width="100%"
   height="560px"
 ></iframe>
-

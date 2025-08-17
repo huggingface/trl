@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+# ]
+# ///
 
 """
 Train Gemma-3 on the Codeforces COTS dataset.
@@ -36,7 +42,6 @@ def main():
     # Train model
     training_args = SFTConfig(
         output_dir=f"{model_id}-codeforces-SFT",
-        logging_steps=10,
         bf16=True,
         use_liger_kernel=True,
         gradient_checkpointing=True,

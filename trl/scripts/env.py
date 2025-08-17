@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+# ]
+# ///
+
 import os
 import platform
 from importlib.metadata import version
@@ -19,16 +25,27 @@ from importlib.metadata import version
 import torch
 from accelerate.commands.config import default_config_file, load_config_from_file
 from transformers import is_bitsandbytes_available
-from transformers.utils import is_liger_kernel_available, is_openai_available, is_peft_available
+from transformers.utils import is_openai_available, is_peft_available
 
 from .. import __version__
-from ..import_utils import is_deepspeed_available, is_diffusers_available, is_llm_blender_available, is_vllm_available
+from ..import_utils import (
+    is_deepspeed_available,
+    is_diffusers_available,
+    is_liger_kernel_available,
+    is_llm_blender_available,
+    is_vllm_available,
+)
 from .utils import get_git_commit_hash
 
 
 def print_env():
+    devices = None
     if torch.cuda.is_available():
         devices = [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+    elif torch.backends.mps.is_available():
+        devices = ["MPS"]
+    elif torch.xpu.is_available():
+        devices = [torch.xpu.get_device_name(i) for i in range(torch.xpu.device_count())]
 
     accelerate_config = accelerate_config_str = "not found"
 
@@ -49,7 +66,7 @@ def print_env():
         "Python version": platform.python_version(),
         "TRL version": f"{__version__}+{commit_hash[:7]}" if commit_hash else __version__,
         "PyTorch version": version("torch"),
-        "CUDA device(s)": ", ".join(devices) if torch.cuda.is_available() else "not available",
+        "accelerator(s)": ", ".join(devices) if devices is not None else "cpu",
         "Transformers version": version("transformers"),
         "Accelerate version": version("accelerate"),
         "Accelerate config": accelerate_config_str,

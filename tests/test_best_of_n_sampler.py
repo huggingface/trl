@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
 import torch
 from transformers import AutoTokenizer, GenerationConfig
@@ -21,12 +20,14 @@ from trl import AutoModelForCausalLMWithValueHead
 from trl.core import LengthSampler
 from trl.extras import BestOfNSampler
 
+from .testing_utils import TrlTestCase
+
 
 def queries_to_scores(list_of_strings):
     return [torch.rand(1).item() for _ in list_of_strings]
 
 
-class BestOfNSamplerTester(unittest.TestCase):
+class BestOfNSamplerTester(TrlTestCase):
     """
     Tests the BestOfNSampler class
     """

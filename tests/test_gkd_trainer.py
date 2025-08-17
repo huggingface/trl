@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,8 +13,6 @@
 # limitations under the License.
 
 import os
-import tempfile
-import unittest
 
 import torch
 import torch.nn.functional as F
@@ -24,8 +22,10 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from trl import GKDConfig, GKDTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
+from .testing_utils import TrlTestCase
 
-class TestGKDTrainer(unittest.TestCase):
+
+class TestGKDTrainer(TrlTestCase):
     @classmethod
     def setUpClass(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -126,8 +126,9 @@ class TestGKDTrainer(unittest.TestCase):
         self.assertEqual(new_labels.shape, new_attention_mask.shape)
 
 
-class TestGeneralizedJSDLoss(unittest.TestCase):
+class TestGeneralizedJSDLoss(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.batch_size = 2
         self.seq_length = 3
         self.vocab_size = 5
@@ -201,8 +202,9 @@ class TestGeneralizedJSDLoss(unittest.TestCase):
         self.assertAlmostEqual(loss.item(), 0, places=6)
 
 
-class GKDTrainerTester(unittest.TestCase):
+class GKDTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -214,51 +216,49 @@ class GKDTrainerTester(unittest.TestCase):
             self.tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
     def test_gkd_trainer(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GKDConfig(
-                output_dir=tmp_dir,
-                dataloader_drop_last=True,
-                eval_strategy="steps",
-                max_steps=4,
-                eval_steps=2,
-                save_steps=2,
-                per_device_train_batch_size=2,
-                per_device_eval_batch_size=2,
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        training_args = GKDConfig(
+            output_dir=self.tmp_dir,
+            dataloader_drop_last=True,
+            eval_strategy="steps",
+            max_steps=4,
+            eval_steps=2,
+            save_steps=2,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
-            trainer = GKDTrainer(
-                model=self.model_id,
-                teacher_model=self.model_id,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                processing_class=self.tokenizer,
-            )
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+        )
 
-            trainer.train()
+        trainer.train()
 
-            self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
-            self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
-            self.assertIn("model.safetensors", os.listdir(tmp_dir + "/checkpoint-2"))
+        self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+        self.assertIn("model.safetensors", os.listdir(self.tmp_dir + "/checkpoint-2"))
 
     def test_generation_config_init(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = GKDConfig(output_dir=tmp_dir)
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+        training_args = GKDConfig(output_dir=self.tmp_dir)
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
-            trainer = GKDTrainer(
-                model=self.model_id,
-                teacher_model=self.model_id,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                processing_class=self.tokenizer,
-            )
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+        )
 
-            self.assertEqual(trainer.generation_config.pad_token_id, self.tokenizer.eos_token_id)
-            self.assertEqual(trainer.generation_config.eos_token_id, self.model.generation_config.eos_token_id)
-            self.assertEqual(trainer.generation_config.max_new_tokens, training_args.max_new_tokens)
-            self.assertEqual(trainer.generation_config.temperature, training_args.temperature)
-            self.assertEqual(trainer.generation_config.top_k, 0)
+        self.assertEqual(trainer.generation_config.pad_token_id, self.tokenizer.eos_token_id)
+        self.assertEqual(trainer.generation_config.eos_token_id, self.model.generation_config.eos_token_id)
+        self.assertEqual(trainer.generation_config.max_new_tokens, training_args.max_new_tokens)
+        self.assertEqual(trainer.generation_config.temperature, training_args.temperature)
+        self.assertEqual(trainer.generation_config.top_k, 0)

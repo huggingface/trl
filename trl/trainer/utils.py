@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any, Literal, Optional, Union
 
-import datasets
 import numpy as np
 import pandas as pd
 import torch
@@ -32,10 +31,8 @@ from accelerate import Accelerator, PartialState
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.nn.utils.rnn import pad_sequence
-from torch.utils.data import IterableDataset
 from transformers import (
     BitsAndBytesConfig,
-    DataCollatorForLanguageModeling,
     EvalPrediction,
     GenerationConfig,
     PreTrainedTokenizerBase,
@@ -44,13 +41,14 @@ from transformers import (
     is_comet_available,
 )
 from transformers.utils import (
+    ModelOutput,
     is_peft_available,
+    is_rich_available,
     is_torch_mlu_available,
     is_torch_npu_available,
     is_torch_xpu_available,
 )
 
-from ..import_utils import is_rich_available
 from ..trainer.model_config import ModelConfig
 
 
@@ -65,178 +63,6 @@ if is_comet_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
-
-
-class DataCollatorForCompletionOnlyLM(DataCollatorForLanguageModeling):
-    """
-    Data collator used for completion tasks. It ensures that all the tokens of the labels are set to an 'ignore_index'
-    when they do not come from the assistant. This ensure that the loss is only
-    calculated on the completion made by the assistant.
-
-    Args:
-        response_template (`Union[str, list[int]]`): the template form that indicates the start of the response, typically something like
-            '### Response:\n'. It can also be passed as tokenized ids, which can be useful when using a tokenizer that encodes the response
-            differently if it does not have proper context.
-        instruction_template (`Union[str, list[int]]`): the template form that indicates the start of the human instruction, typically something like
-            '### Human:\n'. Useful for assistant-style conversation datasets. It can also be passed as tokenized ids.
-        mlm (`bool`, *optional*, defaults to `False`): Whether to use masked language modeling in the underlying
-            `DataCollatorForLanguageModeling` class. Note that this option currently has no effect but is present
-             for flexibility and backwards-compatibility.
-        ignore_index (`int`, *optional*, defaults to `-100`):
-            The index to use to ignore the initial tokens with
-    """
-
-    def __init__(
-        self,
-        response_template: Union[str, list[int]],
-        instruction_template: Optional[Union[str, list[int]]] = None,
-        *args,
-        mlm: bool = False,
-        ignore_index: int = -100,
-        padding_free: bool = False,
-        **kwargs,
-    ):
-        super().__init__(*args, mlm=mlm, **kwargs)
-
-        self.instruction_template = instruction_template
-        if isinstance(instruction_template, str):
-            # The user provides a string, must tokenize
-            self.instruction_token_ids = self.tokenizer.encode(self.instruction_template, add_special_tokens=False)
-        else:
-            # The user already provides the token ids
-            self.instruction_token_ids = instruction_template
-
-        self.response_template = response_template
-        if isinstance(response_template, str):
-            # The user provides a string, must tokenize
-            self.response_token_ids = self.tokenizer.encode(self.response_template, add_special_tokens=False)
-        else:
-            # The user already provides the token ids
-            self.response_token_ids = response_template
-
-        if not self.mlm and self.instruction_template and self.tokenizer.pad_token_id == self.tokenizer.eos_token_id:
-            warnings.warn(
-                "The pad_token_id and eos_token_id values of this tokenizer are identical. "
-                "If you are planning for multi-turn training, "
-                "it can result in the model continuously generating questions and answers without eos token. "
-                "To avoid this, set the pad_token_id to a different value.",
-                UserWarning,
-            )
-
-        self.ignore_index = ignore_index
-        self.padding_free = padding_free
-
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
-        batch = super().torch_call(examples)
-
-        if self.instruction_template is None:
-            for i in range(len(examples)):
-                response_token_ids_start_idx = None
-
-                for idx in np.where(batch["labels"][i] == self.response_token_ids[0])[0]:
-                    # `response_token_ids` is `'### Response:\n'`, here we are just making sure that the token IDs match
-                    if (
-                        self.response_token_ids
-                        == batch["labels"][i][idx : idx + len(self.response_token_ids)].tolist()
-                    ):
-                        response_token_ids_start_idx = idx
-
-                if response_token_ids_start_idx is None:
-                    warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the following instance: "
-                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
-                        UserWarning,
-                    )
-                    batch["labels"][i, :] = self.ignore_index
-                else:
-                    response_token_ids_end_idx = response_token_ids_start_idx + len(self.response_token_ids)
-
-                    # Make pytorch loss function ignore all tokens up through the end of the response key
-                    batch["labels"][i, :response_token_ids_end_idx] = self.ignore_index
-
-        else:
-            for i in range(len(examples)):
-                response_token_ids_idxs = []
-                human_token_ids_idxs = []
-
-                for assistant_idx in np.where(batch["labels"][i] == self.response_token_ids[0])[0]:
-                    # find the indexes of the start of a response.
-                    if (
-                        self.response_token_ids
-                        == batch["labels"][i][assistant_idx : assistant_idx + len(self.response_token_ids)].tolist()
-                    ):
-                        response_token_ids_idxs.append(assistant_idx + len(self.response_token_ids))
-
-                if len(response_token_ids_idxs) == 0:
-                    warnings.warn(
-                        f"Could not find response key `{self.response_template}` in the following instance: "
-                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
-                        UserWarning,
-                    )
-                    batch["labels"][i, :] = self.ignore_index
-
-                human_token_ids = self.instruction_token_ids
-                for human_idx in np.where(batch["labels"][i] == human_token_ids[0])[0]:
-                    # find the indexes of the start of a human answer.
-                    if human_token_ids == batch["labels"][i][human_idx : human_idx + len(human_token_ids)].tolist():
-                        human_token_ids_idxs.append(human_idx)
-
-                if len(human_token_ids_idxs) == 0:
-                    warnings.warn(
-                        f"Could not find instruction key `{self.instruction_template}` in the following instance: "
-                        f"{self.tokenizer.decode(batch['input_ids'][i])}. This instance will be ignored in loss "
-                        "calculation. Note, if this happens often, consider increasing the `max_length`.",
-                        UserWarning,
-                    )
-                    batch["labels"][i, :] = self.ignore_index
-
-                if (
-                    len(human_token_ids_idxs) > 0
-                    and len(response_token_ids_idxs) > 0
-                    and human_token_ids_idxs[0] > response_token_ids_idxs[0]
-                ):
-                    human_token_ids_idxs = [0] + human_token_ids_idxs
-
-                for idx, (start, end) in enumerate(zip(human_token_ids_idxs, response_token_ids_idxs)):
-                    # Make pytorch loss function ignore all non response tokens
-                    if idx != 0:
-                        batch["labels"][i, start:end] = self.ignore_index
-                    else:
-                        batch["labels"][i, :end] = self.ignore_index
-
-                if len(response_token_ids_idxs) < len(human_token_ids_idxs):
-                    batch["labels"][i, human_token_ids_idxs[-1] :] = self.ignore_index
-
-        if self.padding_free:
-            # remove padding, `attention_mask` and add `position_ids`
-            attn_mask = batch.pop("attention_mask")
-            batch["input_ids"] = batch["input_ids"][attn_mask.bool()].unsqueeze(0)
-            batch["position_ids"] = attn_mask.cumsum(1)[attn_mask.bool()].unsqueeze(0) - 1
-            batch["labels"] = batch["labels"][attn_mask.bool()].unsqueeze(0)
-            batch["labels"][batch["position_ids"] == 0] = self.ignore_index
-
-            # Calculate cumulative sequence lengths for queries and keys to prevent graph breaks during further computations.
-            flattened_position_ids = batch["position_ids"].flatten()
-            indices_q = torch.arange(
-                flattened_position_ids.size(0), device=flattened_position_ids.device, dtype=torch.int32
-            )
-            batch["cu_seq_lens_q"] = torch.cat(
-                (
-                    indices_q[flattened_position_ids == 0],
-                    torch.tensor(
-                        flattened_position_ids.size(), device=flattened_position_ids.device, dtype=torch.int32
-                    ),
-                )
-            ).unsqueeze(0)
-            batch["cu_seq_lens_k"] = batch["cu_seq_lens_q"]
-
-            # Determine maximum sequence lengths to prevent graph breaks during further computations.
-            batch["max_length_k"] = torch.tensor([flattened_position_ids.max().item() + 1])
-            batch["max_length_q"] = batch["max_length_k"]
-
-        return batch
 
 
 @dataclass
@@ -287,10 +113,16 @@ class DataCollatorForChatML:
                     add_special_tokens=False,
                 )
                 input_ids.append(tokenized_message["input_ids"])
-                attention_mask.append(tokenized_message["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(tokenized_message["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
             else:
                 input_ids.append(example["input_ids"])
-                attention_mask.append(example["attention_mask"])
+                if "attention_mask" in example:
+                    attention_mask.append(example["attention_mask"])
+                else:
+                    attention_mask.append([1] * len(example["input_ids"]))
 
             tokenized_prompt = self.tokenizer(
                 formatted_prompt,
@@ -410,7 +242,12 @@ class RewardDataCollatorWithPadding:
         return batch
 
 
-def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str = "right") -> torch.Tensor:
+def pad(
+    tensors: list[torch.Tensor],
+    padding_value: int = 0,
+    padding_side: str = "right",
+    pad_to_multiple_of: Optional[int] = None,
+) -> torch.Tensor:
     """
     Pads a list of tensors to the same shape along the first dimension.
 
@@ -421,38 +258,50 @@ def pad(tensors: list[torch.Tensor], padding_value: int = 0, padding_side: str =
             Value to use for padding. Default is 0.
         padding_side (`str`):
             Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
+        pad_to_multiple_of (`int`, *optional*, defaults to `None`):
+            If set will pad the sequence to a multiple of the provided value.
 
     Returns:
         `torch.Tensor`:
             A single tensor containing the padded tensors.
 
     Examples:
-        >>> import torch
-        >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])])
-        tensor([[1, 2, 3],
-                [4, 5, 0]])
-        >>> pad([torch.tensor([[1, 2], [3, 4]]), torch.tensor([[5, 6]])])
-        tensor([[[1, 2],
-                [3, 4]],
+    ```python
+    >>> import torch
 
-                [[5, 6],
-                [0, 0]]])
+    >>> pad([torch.tensor([1, 2, 3]), torch.tensor([4, 5])])
+    tensor([[1, 2, 3],
+            [4, 5, 0]])
+
+    >>> pad([torch.tensor([[1, 2], [3, 4]]), torch.tensor([[5, 6]])])
+    tensor([[[1, 2],
+            [3, 4]],
+            [[5, 6],
+            [0, 0]]])
+    ```
     """
     # Determine the maximum shape for each dimension
     output_shape = np.max([t.shape for t in tensors], 0).tolist()
+
+    # Apply pad_to_multiple_of to the first (sequence) dimension
+    if pad_to_multiple_of is not None:
+        remainder = output_shape[0] % pad_to_multiple_of
+        if remainder != 0:
+            output_shape[0] += pad_to_multiple_of - remainder
 
     # Create an output tensor filled with the padding value
     output = torch.full((len(tensors), *output_shape), padding_value, dtype=tensors[0].dtype, device=tensors[0].device)
 
     for i, t in enumerate(tensors):
-        # Determine the slice for the sequence dimension
         if padding_side == "left":
-            seq_slice = slice(output_shape[0] - t.shape[0], output_shape[0])
+            seq_start = output_shape[0] - t.shape[0]
         elif padding_side == "right":
-            seq_slice = slice(0, t.shape[0])
+            seq_start = 0
         else:
             raise ValueError("padding_side must be 'left' or 'right'")
 
+        # Define the slices
+        seq_slice = slice(seq_start, seq_start + t.shape[0])
         slices = (seq_slice,) + tuple(slice(0, s) for s in t.shape[1:])
         output[i][slices] = t
 
@@ -541,140 +390,6 @@ class DPODataCollatorWithPadding:
                 padded_batch[k] = [ex[k] for ex in features]
 
         return padded_batch
-
-
-class ConstantLengthDataset(IterableDataset):
-    """
-    Iterable dataset that returns constant length chunks of tokens from stream of text files.
-    The dataset also formats the text before tokenization with a specific format that is provided
-    by the user.
-
-    Args:
-        tokenizer (`transformers.PreTrainedTokenizer`):
-            The processor used for processing the data.
-        dataset (`dataset.Dataset`):
-            Dataset with text files.
-        dataset_text_field (`str` or `None`, *optional*, defaults to `None`):
-            Name of the field in the dataset that contains the text. Only one of `dataset_text_field` and
-            `formatting_func` should be provided.
-        formatting_func (`Callable`, *optional*):
-            Function that formats the text before tokenization. Usually it is recommended to follow a certain
-            pattern such as `"### Question: {question} ### Answer: {answer}"`. Only one of `dataset_text_field` and
-            `formatting_func` should be provided.
-        infinite (`bool`, *optional*, defaults to `False`):
-            If True the iterator is reset after dataset reaches end else stops.
-        seq_length (`int`, *optional*, defaults to `1024`):
-            Length of token sequences to return.
-        num_of_sequences (`int`, *optional*, defaults to `1024`):
-            Number of token sequences to keep in buffer.
-        chars_per_token (`int`, *optional*, defaults to `3.6`):
-            Number of characters per token used to estimate number of tokens in text buffer.
-        eos_token_id (`int`, *optional*, defaults to `0`):
-            Id of the end of sequence token if the passed tokenizer does not have an EOS token.
-        shuffle (`bool`, *optional*, defaults to `True`)
-            Shuffle the examples before they are returned
-        append_concat_token (`bool`, *optional*, defaults to `True`)
-            If true, appends `eos_token_id` at the end of each sample being packed.
-        add_special_tokens (`bool`, *optional*, defaults to `True`)
-            If true, tokenizers adds special tokens to each sample being packed.
-    """
-
-    def __init__(
-        self,
-        tokenizer,
-        dataset,
-        dataset_text_field=None,
-        formatting_func=None,
-        infinite=False,
-        seq_length=1024,
-        num_of_sequences=1024,
-        chars_per_token=3.6,
-        eos_token_id=0,
-        shuffle=True,
-        append_concat_token=True,
-        add_special_tokens=True,
-    ):
-        self.tokenizer = tokenizer
-        self.concat_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id else eos_token_id
-        self.dataset = dataset
-        self.seq_length = seq_length
-        self.infinite = infinite
-        self.current_size = 0
-        self.max_buffer_size = seq_length * chars_per_token * num_of_sequences
-        self.shuffle = shuffle
-        self.append_concat_token = append_concat_token
-        self.add_special_tokens = add_special_tokens
-
-        if dataset_text_field is not None and formatting_func is not None:
-            warnings.warn(
-                "Only one of `dataset_text_field` and `formatting_func` should be provided. "
-                "Ignoring `dataset_text_field` and using `formatting_func`.",
-                UserWarning,
-            )
-
-        if formatting_func is not None:
-            self.formatting_func = formatting_func
-        elif dataset_text_field is not None:
-            self.formatting_func = lambda x: x[dataset_text_field]
-        else:  # neither is provided
-            raise ValueError("Either `dataset_text_field` or `formatting_func` should be provided.")
-
-        self.pretokenized = False
-        column_names = (
-            dataset.column_names if isinstance(dataset, (datasets.Dataset, datasets.IterableDataset)) else None
-        )
-        if column_names is not None and "input_ids" in column_names:
-            self.pretokenized = True
-            # since the dataset is tokenized, the unit of buffer size should be tokens
-            self.max_buffer_size = seq_length * num_of_sequences
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __iter__(self):
-        iterator = iter(self.dataset)
-        more_examples = True
-        while more_examples:
-            buffer, buffer_len = [], 0
-            while True:
-                if buffer_len >= self.max_buffer_size:
-                    break
-                try:
-                    buffer.append(self.formatting_func(next(iterator)))
-                    buffer_len += len(buffer[-1])
-                except StopIteration:
-                    if self.infinite:
-                        iterator = iter(self.dataset)
-                    else:
-                        more_examples = False
-                        break
-            if self.shuffle:
-                random.shuffle(buffer)
-            if self.pretokenized:
-                tokenized_inputs = buffer
-            else:
-                tokenized_inputs = self.tokenizer(
-                    buffer, add_special_tokens=self.add_special_tokens, truncation=False
-                )["input_ids"]
-            all_token_ids = []
-            for tokenized_input in tokenized_inputs:
-                if self.append_concat_token:
-                    tokenized_input = tokenized_input + [self.concat_token_id]
-                all_token_ids.extend(tokenized_input)
-            examples = []
-            for i in range(0, len(all_token_ids), self.seq_length):
-                input_ids = all_token_ids[i : i + self.seq_length]
-                if len(input_ids) == self.seq_length:
-                    examples.append(input_ids)
-            if self.shuffle:
-                # Shuffle again, otherwise split examples occur in consecutive tensors.
-                random.shuffle(examples)
-            for example in examples:
-                self.current_size += 1
-                yield {
-                    "input_ids": torch.LongTensor(example),
-                    "labels": torch.LongTensor(example),
-                }
 
 
 @dataclass
@@ -894,9 +609,7 @@ def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesCon
 
 
 def get_kbit_device_map() -> Optional[dict[str, int]]:
-    if is_torch_xpu_available():
-        return {"": f"xpu:{PartialState().local_process_index}"}
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available() or is_torch_xpu_available():
         return {"": PartialState().local_process_index}
     else:
         return None
@@ -929,19 +642,15 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
 
 def get_exp_cap(value, decimal=4):
     """
-    Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow.
-    The formula is : log(value.dtype.max)
-    E.g.
-      For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
-    ```
+    Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow. The formula is :
+    log(value.dtype.max) E.g. for float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
 
     Args:
         value (`torch.Tensor`):
             The input tensor to obtain the data type
         decimal (`int`):
-            The number of decimal points of the output exponent cap.
-            eg: direct calling exp(log(torch.float32.max)) will result in inf
-            so we cap the exponent to 88.7228 to avoid overflow.
+            The number of decimal points of the output exponent cap. eg: direct calling exp(log(torch.float32.max))
+            will result in inf so we cap the exponent to 88.7228 to avoid overflow.
     """
     vdtype_max = torch.zeros([1]).to(value.dtype) + torch.finfo(value.dtype).max
     vdtype_log_max = torch.log(vdtype_max).to(value.device)
@@ -954,7 +663,11 @@ def cap_exp(value, cap=-1):
     return torch.exp(torch.clamp(value, max=cap))
 
 
-def print_rich_table(df: pd.DataFrame) -> Table:
+def print_rich_table(df: pd.DataFrame) -> None:
+    if not is_rich_available():
+        raise ImportError(
+            "The function `print_rich_table` requires the `rich` library. Please install it with `pip install rich`."
+        )
     console = Console()
     table = Table(show_lines=True)
     for column in df.columns:
@@ -979,6 +692,10 @@ class OnlineTrainerState(TrainerState):
 class OnPolicyConfig(TrainingArguments):
     r"""
     Base configuration class for on-policy trainers.
+
+    This class includes only the parameters that are specific to some on-policy training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -1012,8 +729,8 @@ class OnPolicyConfig(TrainingArguments):
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
-            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage
-            to generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
+            Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
+            generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
@@ -1026,7 +743,8 @@ class OnPolicyConfig(TrainingArguments):
         local_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
         batch_size (`int` or `None`, *optional*, defaults to `None`):
-            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` * `gradient_accumulation_steps`).
+            Batch size across devices (HF's `per_device_train_batch_size` * `world_size` *
+            `gradient_accumulation_steps`).
         local_mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
             Mini batch size per GPU.
         mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
@@ -1034,6 +752,29 @@ class OnPolicyConfig(TrainingArguments):
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
     """
+
+    # Parameters whose default values are overridden from TrainingArguments
+    logging_steps: float = field(
+        default=10,
+        metadata={
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
+        },
+    )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
+        },
+    )
 
     run_name: Optional[str] = field(
         default=None,
@@ -1131,11 +872,16 @@ class OnPolicyConfig(TrainingArguments):
         metadata={"help": "Whether to push the model to the Hub after training."},
     )
 
+    def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
-def first_true_indices(bools: torch.Tensor, dtype=torch.long):
+        super().__post_init__()
+
+
+def first_true_indices(bools: torch.Tensor, dtype=torch.long) -> torch.Tensor:
     """
-    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving
-    the position of the first True in each "row".
+    Takes an N-dimensional bool tensor and returns an (N-1)-dimensional tensor of integers giving the position of the
+    first True in each "row".
 
     Returns the length of the rows (bools.size(-1)) if no element is True in a given row.
 
@@ -1147,8 +893,8 @@ def first_true_indices(bools: torch.Tensor, dtype=torch.long):
 
     Returns:
         `torch.Tensor`:
-            An (N-1)-dimensional tensor of integers indicating the position of the first True
-            in each row. If no True value is found in a row, returns the length of the row.
+            An (N-1)-dimensional tensor of integers indicating the position of the first True in each row. If no True
+            value is found in a row, returns the length of the row.
     """
     row_len = bools.size(-1)
     zero_or_index = row_len * (~bools).type(dtype) + torch.arange(row_len, dtype=dtype, device=bools.device)
@@ -1209,7 +955,7 @@ def forward(
     model: torch.nn.Module,
     query_responses: torch.Tensor,
     pad_token_id: int,
-) -> torch.nn.Module:
+) -> ModelOutput:
     """
     Performs a forward pass through the model with the given query responses and pad token ID.
 
@@ -1222,7 +968,7 @@ def forward(
             The token ID representing the pad token.
 
     Returns:
-        `torch.nn.Module`:
+        `ModelOutput`:
             The output of the model, including hidden states.
     """
     attention_mask = query_responses != pad_token_id
@@ -1239,10 +985,10 @@ def forward(
 
 def prepare_deepspeed(
     model: torch.nn.Module, per_device_train_batch_size: int, fp16: bool = False, bf16: bool = False
-):
+) -> torch.nn.Module:
     """
-    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based on the model and
-    batch size.
+    Prepares the model for training with DeepSpeed (both for stage 2 and 3), configuring the appropriate settings based
+    on the model and batch size.
 
     Args:
         model (`torch.nn.Module`):
@@ -1291,7 +1037,7 @@ def prepare_deepspeed(
     return model
 
 
-def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor):
+def truncate_response(stop_token_id: int, pad_token_id: int, responses: torch.Tensor) -> torch.Tensor:
     """
     Truncates the responses at the first occurrence of the stop token, filling the rest with pad tokens.
 
@@ -1452,8 +1198,8 @@ def truncate_right(
 def empty_cache() -> None:
     """Empties the cache of the available torch device.
 
-    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA)
-    and empties the cache of the first available device it finds.
+    This function checks for the availability of different torch devices (XPU, MLU, NPU, CUDA) and empties the cache of
+    the first available device it finds.
 
     If none of the specific devices are available, it defaults to emptying the CUDA cache.
     """
@@ -1590,7 +1336,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
         experiment.log_table(tabular_data=table, filename=name)
 
 
-def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor, ...]:
+def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
     """
     Shift non-zero elements in the mask and corresponding tensors to the left.
 
@@ -1604,7 +1350,6 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
     ```
 
     Args:
-
         mask (`torch.Tensor`):
             2D tensor (binary mask) with shape `(N, M)`.
         *tensors (`torch.Tensor`)
@@ -1619,44 +1364,74 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> tuple[torch.Tensor
 
     Example:
     ```python
-    >>> mask = torch.tensor([[0, 0, 1, 1, 1],
-    ...                      [0, 1, 1, 0, 0]])
-    >>> tensor = torch.tensor([[9, 9, 2, 3, 4],
-    ...                        [9, 5, 6, 9, 9]])
+    >>> mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
+    >>> tensor = torch.tensor([[9, 9, 2, 3, 4], [9, 5, 6, 9, 9]])
     >>> new_mask, new_tensor = flush_left(mask, tensor)
     >>> print(new_mask)
     tensor([[1, 1, 1],
             [1, 1, 0]])
+
     >>> print(new_tensor)
     tensor([[2, 3, 4],
             [5, 6, 0]])
     ```
     """
+    _, M = mask.shape
+
     # Create copy of mask and tensors
-    mask = mask.clone()
+    mask_copy = mask.clone()
     tensors = [t.clone() for t in tensors]
 
     # Shift non-zero values to the left
-    for i in range(mask.size(0)):
-        first_one_idx = torch.nonzero(mask[i])[0].item()
-        mask[i] = torch.roll(mask[i], shifts=-first_one_idx)
-        for tensor in tensors:
-            tensor[i] = torch.roll(tensor[i], shifts=-first_one_idx)
+    first_non_zero = mask_copy.argmax(dim=1)
+    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
+    idx_roll = (pos + first_non_zero.unsqueeze(1)) % M
+    mask_roll = mask_copy.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
 
-    # Get the first column idx that is all zeros and remove every column after that
-    empty_cols = torch.sum(mask, dim=0) == 0
-    first_empty_col = torch.nonzero(empty_cols)[0].item() if empty_cols.any() else mask.size(1)
-    mask = mask[:, :first_empty_col]
-    for i, tensor in enumerate(tensors):
-        tensors[i] = tensor[:, :first_empty_col]
+    # Truncate trailing columns that are all zeros in mask_roll
+    col_sums = mask_roll.sum(dim=0)
+    empty_cols = col_sums == 0
+    first_empty_col = int(empty_cols.to(torch.int8).argmax()) if empty_cols.any() else M
+    flushed_mask = mask_roll[:, :first_empty_col]
+    flushed_tensors = [t[:, :first_empty_col] for t in rolled_tensors]
 
-    if not tensors:
-        return mask
-    else:
-        return mask, *tensors
+    if not flushed_tensors:
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
 
 
-def selective_log_softmax(logits, index):
+def flush_right(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor, tuple[torch.Tensor, ...]]:
+    """
+    Shift non-zero elements in the mask and corresponding tensors to the right. See `flush_left` for details.
+    """
+    _, M = mask.shape
+
+    # Create copy of mask and tensors
+    mask_copy = mask.clone()
+    tensors = [t.clone() for t in tensors]
+
+    # Shift non-zero values to the right
+    flipped_mask = torch.fliplr(mask_copy)
+    first_non_zero = flipped_mask.argmax(dim=1)
+    pos = torch.arange(M, device=mask_copy.device).unsqueeze(0)
+    idx_roll = (pos - first_non_zero.unsqueeze(1)) % M
+    mask_roll = mask_copy.gather(1, idx_roll)
+    rolled_tensors = [t.gather(1, idx_roll) for t in tensors]
+
+    # Truncate leading columns that are all zeros in mask_roll
+    col_sums = mask_roll.sum(dim=0)
+    non_empty_cols = col_sums != 0
+    first_non_empty_col = int(non_empty_cols.to(torch.int8).argmax()) if non_empty_cols.any() else M
+    flushed_mask = mask_roll[:, first_non_empty_col:]
+    flushed_tensors = [t[:, first_non_empty_col:] for t in rolled_tensors]
+
+    if not flushed_tensors:
+        return flushed_mask
+    return flushed_mask, *flushed_tensors
+
+
+def selective_log_softmax(logits, index) -> torch.Tensor:
     """
     A memory-efficient implementation of the common `log_softmax -> gather` operation.
 
@@ -1681,7 +1456,7 @@ def selective_log_softmax(logits, index):
         logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
         per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
     else:
-        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficent approach
+        # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
         per_token_logps = []
         for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
             row_logps = F.log_softmax(row_logits, dim=-1)
@@ -1691,9 +1466,43 @@ def selective_log_softmax(logits, index):
     return per_token_logps
 
 
-def print_prompt_completions_sample(prompts: list[str], completions: list[str], rewards: list[int], step: int) -> None:
+def entropy_from_logits(logits, chunk_size: int = 1) -> torch.Tensor:
     """
-    Print out a sample of model completions to the console.
+    Compute the Shannon entropy (in nats) for each row of *logits* without materialising the full soft-max in memory.
+    The batch dimension is processed in chunks of size `chunk_size` so that only a subset of rows is expanded to
+    probabilities at any one time.
+
+    Args:
+        logits (`torch.Tensor`):
+            Logits tensor of shape `(..., num_classes)`. Entropy is taken along the last axis; all leading dimensions
+            are preserved.
+        chunk_size (`int`, *optional*, defaults to `1`):
+            Number of rows to process per iteration.
+
+    Returns:
+        `torch.Tensor`:
+            Entropy values with shape `logits.shape[:-1]`.
+    """
+    per_token_entropies = []
+    for logits_chunk in logits.split(chunk_size, dim=0):
+        logps = F.log_softmax(logits_chunk, dim=-1)
+        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
+        per_token_entropies.extend(chunk_entropy)
+
+    per_token_entropies = torch.stack(per_token_entropies)
+    return per_token_entropies
+
+
+def print_prompt_completions_sample(
+    prompts: list[str],
+    completions: list[str],
+    rewards: dict[str, list[float]],
+    advantages: list[float],
+    step: int,
+    num_samples: int = None,
+) -> None:
+    """
+    Print out a sample of model completions to the console with multiple reward metrics.
 
     This function creates a nicely formatted table showing prompt-completion pairs, useful for monitoring model outputs
     during training. It requires the `rich` library to be installed.
@@ -1703,42 +1512,68 @@ def print_prompt_completions_sample(prompts: list[str], completions: list[str], 
             List of prompts.
         completions (`list[str]`):
             List of completions corresponding to the prompts.
-        reward (`list[float]`):
-            List of rewards corresponding to the completions.
+        rewards (`dict[str, list[float]]`):
+            Dictionary where keys are reward names and values are lists of rewards.
+        advantages (`list[float]`):
+            List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
+        num_samples (`int` or `None`, *optional*, defaults to `None`):
+            Number of random samples to display. If `None` (default), all items will be displayed.
 
     Example:
     ```python
     >>> from trl.trainer.utils import print_prompt_completions_sample
+
     >>> prompts = ["The sky is", "The sun is"]
     >>> completions = [" blue.", " in the sky."]
-    >>> rewards = [0.12345, 0.68789]
-    >>> print_prompt_completions_sample(prompts, completions, rewards, 42)
-    ╭─────────────── Step 42 ────────────────╮
-    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━┓ │
-    │ ┃ Prompt     ┃ Completion   ┃ Reward ┃ │
-    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━┩ │
-    │ │ The sky is │  blue.       │   0.12 │ │
-    │ ├────────────┼──────────────┼────────┤ │
-    │ │ The sun is │  in the sky. │   0.68 │ │
-    │ └────────────┴──────────────┴────────┘ │
-    ╰────────────────────────────────────────╯
+    >>> rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+    >>> advantages = [0.987, 0.654]
+    >>> print_prompt_completions_sample(prompts, completions, rewards, advantages, 42)
+    ╭──────────────────────────── Step 42 ─────────────────────────────╮
+    │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+    │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+    │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+    │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+    │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+    │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+    │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+    ╰──────────────────────────────────────────────────────────────────╯
     ```
     """
     if not is_rich_available():
-        raise ImportError("This feature requires `rich` to be installed. Please install it first: `pip install rich`")
-
+        raise ImportError(
+            "The function `print_prompt_completions_sample` requires the `rich` library. Please install it with "
+            "`pip install rich`."
+        )
     console = Console()
     table = Table(show_header=True, header_style="bold white", expand=True)
 
     # Add columns
     table.add_column("Prompt", style="bright_yellow")
     table.add_column("Completion", style="bright_green")
-    table.add_column("Reward", style="bold cyan", justify="right")
+    for reward_name in rewards.keys():
+        table.add_column(reward_name, style="bold cyan", justify="right")
+    table.add_column("Advantage", style="bold magenta", justify="right")
 
-    for prompt, completion, reward in zip(prompts, completions, rewards):
-        table.add_row(Text(prompt), Text(completion), f"{reward:.2f}")  # Formatting reward to 2 decimal places
+    # Some basic input validation
+    if num_samples is not None:
+        if num_samples >= len(prompts):
+            num_samples = None
+        elif num_samples <= 0:
+            return
+
+    # Subsample data if num_samples is specified
+    if num_samples is not None:
+        indices = random.sample(range(len(prompts)), num_samples)
+        prompts = [prompts[i] for i in indices]
+        completions = [completions[i] for i in indices]
+        rewards = {key: [val[i] for i in indices] for key, val in rewards.items()}
+        advantages = [advantages[i] for i in indices]
+
+    for i in range(len(prompts)):
+        reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
+        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values, f"{advantages[i]:.2f}")
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
