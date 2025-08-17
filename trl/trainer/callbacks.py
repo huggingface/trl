@@ -562,8 +562,6 @@ class MergeModelCallback(TrainerCallback):
     Example:
 
     ```python
-    # pip install mergekit
-
     from trl.mergekit_utils import MergeConfig
     from trl import MergeModelCallback
 

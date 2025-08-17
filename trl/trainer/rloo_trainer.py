@@ -688,6 +688,7 @@ class RLOOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{ahmadian2024back,
             title        = {{Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs}},
