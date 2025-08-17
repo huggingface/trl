@@ -17,10 +17,10 @@ from collections.abc import Callable
 
 
 def get_soft_overlong_punishment(max_completion_len: int, soft_punish_cache: int) -> Callable:
+    # docstyle-ignore
     r"""
     Reward function that penalizes overlong completions. It is used to penalize overlong completions, but not to reward
-    shorter completions.
-    Reference: Eq. (13) from the DAPO paper (https://huggingface.co/papers/2503.14476)
+    shorter completions. Reference: Eq. (13) from the DAPO paper (https://huggingface.co/papers/2503.14476)
 
     $$
     R_{\text{length}}(y) = \begin{cases}

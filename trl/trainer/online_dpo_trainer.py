@@ -1497,6 +1497,7 @@ class OnlineDPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{guo2024direct,
             title        = {{Direct Language Model Alignment from Online AI Feedback}},
