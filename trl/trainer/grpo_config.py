@@ -613,6 +613,14 @@ class GRPOConfig(TrainingArguments):
                 "'generation_batch_size' and 'steps_per_generation' can not be both configured at the same time"
             )
 
+        if self.do_eval and self.eval_strategy != "no":
+            # Just ensure the value is divisible by the global batch size
+            if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
+                raise ValueError(
+                    f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
+                    f"divisible by num_generations ({self.num_generations})."
+                )
+
         # The generation batch must contain full prompt groups (no partials), so it must be divisible by
         # num_generations.
         if self.generation_batch_size % self.num_generations != 0:
