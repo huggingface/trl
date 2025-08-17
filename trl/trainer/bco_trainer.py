@@ -603,6 +603,14 @@ class BCOTrainer(Trainer):
                 maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
             )
             if eval_dataset is not None:
+                # Extract the prompt if needed
+                eval_dataset = eval_dataset.map(
+                    maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from eval dataset"
+                )
+                # Unpair the dataset if needed
+                eval_dataset = maybe_unpair_preference_dataset(
+                    eval_dataset, args.dataset_num_proc, desc="Unpairing eval dataset"
+                )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
                     fn_kwargs={"tokenizer": processing_class},
