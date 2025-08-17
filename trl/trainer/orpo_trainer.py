@@ -1074,6 +1074,7 @@ class ORPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{hong2024orpo,
             title        = {{ORPO: Monolithic Preference Optimization without Reference Model}},
