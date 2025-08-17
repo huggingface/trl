@@ -12,12 +12,45 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from transformers import TrainingArguments
 
 
+def _handle_deprecated_max_seq_length(cls):
+    """Wrapper to handle deprecated max_seq_length parameter."""
+    original_init = cls.__init__
+
+    def __init__(self, **kwargs):
+        # Handle backward compatibility for max_seq_length
+        if "max_seq_length" in kwargs:
+            warnings.warn(
+                "`max_seq_length` is deprecated and will be removed in a future version. "
+                "Please use `max_length` instead.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            # If max_length is not provided, use max_seq_length value
+            if "max_length" not in kwargs:
+                kwargs["max_length"] = kwargs.pop("max_seq_length")
+            else:
+                # If both are provided, remove max_seq_length and warn
+                kwargs.pop("max_seq_length")
+                warnings.warn(
+                    "Both `max_seq_length` and `max_length` were provided. Using `max_length` and ignoring `max_seq_length`.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
+        original_init(self, **kwargs)
+
+    cls.__init__ = __init__
+    return cls
+
+
+@_handle_deprecated_max_seq_length
 @dataclass
 class SFTConfig(TrainingArguments):
     r"""
