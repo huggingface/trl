@@ -53,7 +53,7 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad,
+from .utils import generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
