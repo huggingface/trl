@@ -442,9 +442,6 @@ class DPOTrainer(Trainer):
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-        formatting_func (`Optional[Callable]`):
-            Formatting function applied to the dataset before tokenization. Applying the formatting function explicitly
-            converts the dataset into a [language modeling](#language-modeling) type.
     """
 
     _tag_names = ["trl", "dpo"]
@@ -464,7 +461,6 @@ class DPOTrainer(Trainer):
         optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Callable[[dict], str]] = None,
     ):
         # Args
         if args is None:
@@ -599,15 +595,15 @@ class DPOTrainer(Trainer):
         # and done on the fly instead.
         skip_prepare_dataset = self._is_vlm
         if not skip_prepare_dataset:
-            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, formatting_func, "train")
+            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
             if eval_dataset is not None:
                 if isinstance(eval_dataset, dict):
                     eval_dataset = {
-                        key: self._prepare_dataset(dataset, processing_class, args, formatting_func, key)
+                        key: self._prepare_dataset(dataset, processing_class, args, key)
                         for key, dataset in eval_dataset.items()
                     }
                 else:
-                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, formatting_func, "eval")
+                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -649,7 +645,6 @@ class DPOTrainer(Trainer):
         dataset: Union[Dataset, IterableDataset],
         processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
         args: DPOConfig,
-        formatting_func: Optional[Callable[[dict], str]],
         dataset_name: str,
     ) -> Union[Dataset, IterableDataset]:
         # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
@@ -667,24 +662,6 @@ class DPOTrainer(Trainer):
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().main_process_first():
-            # Apply the formatting function if any
-            if formatting_func is not None and is_processed:
-                warnings.warn(
-                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
-                    "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
-                    "`formatting_func` or pass a dataset that is not already processed.",
-                    UserWarning,
-                )
-
-            if formatting_func is not None and not is_processed:
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
-
-                def _func(example):
-                    return {"text": formatting_func(example)}
-
-                dataset = dataset.map(_func, batched=False, **map_kwargs)
-
             if not is_processed:
                 # Convert the dataset to ChatML if needed
                 first_example = next(iter(dataset))
