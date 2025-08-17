@@ -43,6 +43,7 @@ training_args = CPOConfig(
     simpo_gamma=0.1,
     learning_rate=7e-7,
     ...
+)
 ```
 
 ## EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes

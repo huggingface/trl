@@ -213,7 +213,7 @@ For more detailed information on tool calling, refer to the [Tool Calling sectio
 
 The [Harmony response format](https://cookbook.openai.com/articles/openai-harmony) was introduced with the [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior. Key features include:
 
-- **Developer role** – Provides high-level instructions (similar to a system prompt) and lists available tools.
+- **Developer role** – Provides high level instructions (similar to a system prompt) and lists available tools.
 - **Channels** – Separate types of assistant output into distinct streams:
 
   - `analysis` – for internal reasoning, from the key `"thinking"`
