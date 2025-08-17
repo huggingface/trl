@@ -53,8 +53,6 @@ from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
-from ..models import PreTrainedModelWrapper, create_reference_model
-from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_joblib_available
 from ..models import create_reference_model, prepare_deepspeed
 from .bco_config import BCOConfig
