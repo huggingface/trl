@@ -407,8 +407,6 @@ class DPOTrainer(Trainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-
-            The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
         IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
@@ -652,94 +650,90 @@ class DPOTrainer(Trainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
             dataset = dataset.with_transform(remove_none_values)
 
-        # If the dataset is already preprocessed (tokenized), skip the processing steps.
-        column_names = list(next(iter(dataset)).keys())
-        is_processed = "input_ids" in column_names
-
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().main_process_first():
-            if not is_processed:
-                # Convert the dataset to ChatML if needed
-                first_example = next(iter(dataset))
-                if is_conversational_from_value(first_example):
-                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                        map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-                    column_names = next(iter(dataset)).keys()
-                    dataset = dataset.map(
-                        maybe_convert_to_chatml,
-                        remove_columns="conversations" if "conversations" in column_names else None,
-                        **map_kwargs,
-                    )
-
-                # Apply the chat template if needed
-                first_example = next(iter(dataset))
-                if not is_conversational(first_example):
-                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                        map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
-
-                    def add_eos(example, eos_token):
-                        if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
-                            example["text"] = example["text"] + eos_token
-                        elif "completion" in example and not example["completion"].endswith(eos_token):
-                            example["completion"] = example["completion"] + eos_token
-                        return example
-
-                    dataset = dataset.map(
-                        add_eos,
-                        fn_kwargs={"eos_token": processing_class.eos_token},
-                        remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
-                        **map_kwargs,
-                    )
-
-                # Tokenize the dataset
+            # Convert the dataset to ChatML if needed
+            first_example = next(iter(dataset))
+            if is_conversational_from_value(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-
-                def tokenize(example, processing_class):
-                    output = {}
-                    if is_conversational(example):
-                        prompt_ids = processing_class.apply_chat_template(
-                            example["prompt"],
-                            tools=example.get("tools"),
-                            **example.get("chat_template_kwargs", {}),
-                        )
-                        prompt_completion_processed = processing_class.apply_chat_template(
-                            example["prompt"] + example["completion"],
-                            return_dict=True,
-                            tools=example.get("tools"),
-                            **example.get("chat_template_kwargs", {}),
-                        )
-                        prompt_completion_ids = prompt_completion_processed["input_ids"]
-                    else:
-                        prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                        prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
-                            "input_ids"
-                        ]
-
-                    # Check if the tokenized prompt starts with the tokenized prompt+completion
-                    if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                        warnings.warn(
-                            "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                            "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                            "token handling. Verify that the tokenizer is processing text consistently."
-                        )
-
-                    # Create a completion mask
-                    completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                    output["input_ids"] = prompt_completion_ids
-                    output["completion_mask"] = completion_mask
-
-                    return output
-
+                    map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+                column_names = next(iter(dataset)).keys()
                 dataset = dataset.map(
-                    tokenize,
-                    fn_kwargs={"processing_class": processing_class},
+                    maybe_convert_to_chatml,
+                    remove_columns="conversations" if "conversations" in column_names else None,
                     **map_kwargs,
                 )
+
+            # Apply the chat template if needed
+            first_example = next(iter(dataset))
+            if not is_conversational(first_example):
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+
+                def add_eos(example, eos_token):
+                    if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
+                        example["text"] = example["text"] + eos_token
+                    elif "completion" in example and not example["completion"].endswith(eos_token):
+                        example["completion"] = example["completion"] + eos_token
+                    return example
+
+                column_names = list(next(iter(dataset)).keys())
+                dataset = dataset.map(
+                    add_eos,
+                    fn_kwargs={"eos_token": processing_class.eos_token},
+                    remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
+                    **map_kwargs,
+                )
+
+            # Tokenize the dataset
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+
+            def tokenize(example, processing_class):
+                output = {}
+                if is_conversational(example):
+                    prompt_ids = processing_class.apply_chat_template(
+                        example["prompt"],
+                        tools=example.get("tools"),
+                        **example.get("chat_template_kwargs", {}),
+                    )
+                    prompt_completion_processed = processing_class.apply_chat_template(
+                        example["prompt"] + example["completion"],
+                        return_dict=True,
+                        tools=example.get("tools"),
+                        **example.get("chat_template_kwargs", {}),
+                    )
+                    prompt_completion_ids = prompt_completion_processed["input_ids"]
+                else:
+                    prompt_ids = processing_class(text=example["prompt"])["input_ids"]
+                    prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
+                        "input_ids"
+                    ]
+
+                # Check if the tokenized prompt starts with the tokenized prompt+completion
+                if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
+                    warnings.warn(
+                        "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                        "token handling. Verify that the tokenizer is processing text consistently."
+                    )
+
+                # Create a completion mask
+                completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                output["input_ids"] = prompt_completion_ids
+                output["completion_mask"] = completion_mask
+
+                return output
+
+            dataset = dataset.map(
+                tokenize,
+                fn_kwargs={"processing_class": processing_class},
+                **map_kwargs,
+            )
 
             # Truncate
             if args.max_length is not None:
