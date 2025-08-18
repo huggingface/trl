@@ -336,6 +336,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -363,6 +364,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -393,6 +395,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -428,6 +431,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -465,6 +469,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_chosen = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -475,6 +480,8 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
+
+        # docstyle-ignore
         expected_rejected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -507,6 +514,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -762,6 +770,21 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
             "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
             "seq_lengths": [[4], [4], [2, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_non_power_of_2(self):
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6], [7, 8, 9, 10], [11, 12, 13]],
+            "attention_mask": [[1, 0, 0, 1, 1], [0], [0, 1, 0, 0], [1, 0, 1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 5
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
+            "attention_mask": [[1, 0, 0, 1, 1], [0, 1, 0, 0, 0], [1, 0, 1]],
+            "seq_lengths": [[5], [4, 1], [3]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         self.assertEqual(dataset.to_dict(), expected_output)
