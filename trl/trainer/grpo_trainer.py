@@ -1642,10 +1642,10 @@ class GRPOTrainer(Trainer):
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
                 )
-                vllm_old_per_token_logps = vllm_logprobs
+                rollout_old_per_token_logps = vllm_logprobs
             else:
                 old_per_token_logps = None
-                vllm_old_per_token_logps = None
+                rollout_old_per_token_logps = None
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1757,10 +1757,10 @@ class GRPOTrainer(Trainer):
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
-        # vllm_logps = torch.tensor(vllm_logprobs, device=device, dtype=torch.float32)
-        # logps_diff = torch.abs(vllm_logps - old_per_token_logps)
-        # self._metrics[mode]["Token Probability Difference/max"].append(logps_diff.max().exp().item())
-        # self._metrics[mode]["Token Probability Difference/mean"].append(logps_diff.mean().exp().item())
+        if old_per_token_logps is not None:
+            probs_diff = torch.exp(old_per_token_logps - rollout_old_per_token_logps)
+            self._metrics[mode]["Token Probability Difference/max"].append(probs_diff.max().exp().item())
+            self._metrics[mode]["Token Probability Difference/mean"].append(probs_diff.mean().exp().item())
 
         output = {
             "prompt_texts": prompts_text,
@@ -1772,8 +1772,8 @@ class GRPOTrainer(Trainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
-        if vllm_old_per_token_logps is not None:
-            output["vllm_old_per_token_logps"] = vllm_old_per_token_logps
+        if rollout_old_per_token_logps is not None:
+            output["rollout_old_per_token_logps"] = rollout_old_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in prompt_inputs:
@@ -1907,11 +1907,11 @@ class GRPOTrainer(Trainer):
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
-        if self.rollout_importance_sampling_cap > 0 and old_per_token_logps is not None:
-            vllm_old_per_token_logps = inputs.get("vllm_old_per_token_logps")
-            importance_sampling_ratio = torch.exp(old_per_token_logps - vllm_old_per_token_logps)
-            importance_sampling_ratio = torch.min(importance_sampling_ratio, self.rollout_importance_sampling_cap)
-            per_token_loss = per_token_loss * importance_sampling_ratio
+        if self.use_vllm and self.rollout_importance_sampling_cap > 0 and old_per_token_logps is not None:
+            rollout_old_per_token_logps = inputs.get("rollout_old_per_token_logps")
+            rollout_imp_ratio = torch.exp(old_per_token_logps - rollout_old_per_token_logps)
+            rollout_imp_ratio = torch.min(rollout_imp_ratio, self.rollout_importance_sampling_cap)
+            per_token_loss = per_token_loss * rollout_imp_ratio
 
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
