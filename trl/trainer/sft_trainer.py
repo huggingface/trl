@@ -1045,9 +1045,8 @@ class SFTTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                dataset = dataset.select_columns(
-                    {"input_ids", "seq_lengths", "completion_mask"}.intersection(dataset.column_names)
-                )
+                collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
+                dataset = dataset.select_columns(collator_expected_keys.intersection(dataset.column_names))
 
         return dataset
 
