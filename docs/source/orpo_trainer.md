@@ -109,7 +109,7 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
+While training and evaluating we record the following reward metrics:
 
 - `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
 - `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta

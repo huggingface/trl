@@ -149,8 +149,6 @@ This constant is recommended to be the maximum completion length. To use this fo
 
 ## Logged metrics
 
-While training and evaluating, we record the following reward metrics:
-
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
 - `completions/mean_length`: The average length of generated completions.
 - `completions/min_length`: The minimum length of generated completions.

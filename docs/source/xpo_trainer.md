@@ -131,7 +131,7 @@ python examples/scripts/xpo.py \
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+The logged metrics are as follows:
 
 * `loss/xpo`: The mean xpo part of the full loss.
 * `loss/dpo`: The mean dpo part of the full loss.

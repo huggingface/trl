@@ -52,7 +52,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
-from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
+from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_joblib_available
 from ..models import create_reference_model, prepare_deepspeed
 from .bco_config import BCOConfig
@@ -595,27 +595,11 @@ class BCOTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         with PartialState().main_process_first():
-            # Extract the prompt if needed
-            train_dataset = train_dataset.map(
-                maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
-            )
-            # Unpair the dataset if needed
-            train_dataset = maybe_unpair_preference_dataset(
-                train_dataset, args.dataset_num_proc, desc="Unpairing train dataset"
-            )
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
                 maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
             )
             if eval_dataset is not None:
-                # Extract the prompt if needed
-                eval_dataset = eval_dataset.map(
-                    maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from eval dataset"
-                )
-                # Unpair the dataset if needed
-                eval_dataset = maybe_unpair_preference_dataset(
-                    eval_dataset, args.dataset_num_proc, desc="Unpairing eval dataset"
-                )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
                     fn_kwargs={"tokenizer": processing_class},

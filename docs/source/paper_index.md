@@ -26,26 +26,6 @@ training_args = GRPOConfig(
 )
 ```
 
-## AlphaPO -- Reward shape matters for LLM alignment
-
-**📜 Paper**: https://huggingface.co/papers/2501.03884
-
-AlphaPO is a new Direct Alignment Algorithms (DAAs) method that leverages an alpha-parameter to help change the shape of the reward function beyond the standard log reward. AlphaPO helps maintain fine-grained control over likelihood displacement and over-optimization. To reproduce the paper's setting, use this configuration:
-
-```python
-from trl import CPOConfig
-
-# Mistral-Instruct from Table 3 of the paper
-training_args = CPOConfig(
-    loss_type="alphapo",
-    alpha=0.25,
-    beta=2.5,
-    simpo_gamma=0.1,
-    learning_rate=7e-7,
-    ...
-)
-```
-
 ## EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
 
 **📜 Paper**: https://huggingface.co/papers/2508.00180
