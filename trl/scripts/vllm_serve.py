@@ -469,7 +469,6 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
-        prompt_logprobs: list[list[float]]
         logprobs: list[list[float]]
 
     @app.post("/generate/", response_model=GenerateResponse)
@@ -530,7 +529,6 @@ def main(script_args: ScriptArguments):
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
             "logprobs": request.logprobs,
-            "prompt_logprobs": request.prompt_logprobs,
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
@@ -559,6 +557,7 @@ def main(script_args: ScriptArguments):
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
 
         response = {"completion_ids": completion_ids}
+
         if request.logprobs is not None:
             logprobs: list[list[float]] = [
                 [next(iter(lp.values())).logprob for lp in output.logprobs]
@@ -568,13 +567,6 @@ def main(script_args: ScriptArguments):
 
             response["logprobs"] = logprobs
 
-        if request.prompt_logprobs is not None:
-            prompt_logprob: list[list[float]] = [
-                [next(iter(d.values())).logprob for d in output.prompt_logprobs[1:]]  # one float per dict
-                for output in all_outputs
-                # for pl in output.prompt_logprobs                      # one list per PromptLogprobs
-            ]
-            response["prompt_logprobs"] = prompt_logprob
         return response
 
     class InitCommunicatorRequest(BaseModel):

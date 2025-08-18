@@ -654,6 +654,7 @@ class GRPOTrainer(Trainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
+        self.rollout_importance_sampling_cap = 2
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
@@ -1451,12 +1452,10 @@ class GRPOTrainer(Trainer):
                             max_tokens=self.max_completion_length,
                             guided_decoding_regex=self.guided_decoding_regex,
                             generation_kwargs=self.args.generation_kwargs,
-                            prompt_logprobs=0,
                             logprobs=0,
                         )
                         payload = (
                             output["completion_ids"],
-                            output["prompt_logprobs"],
                             output["logprobs"],
                         )
                 else:
@@ -1465,14 +1464,13 @@ class GRPOTrainer(Trainer):
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
                 obj_list = [payload]
                 broadcast_object_list(obj_list, from_process=0)
-                completion_ids, prompt_logprobs, logprobs = obj_list[0]
+                completion_ids, logprobs = obj_list[0]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
                 completion_ids = completion_ids[process_slice]
-                prompt_logprobs = prompt_logprobs[process_slice]
                 logprobs = logprobs[process_slice]
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
@@ -1537,9 +1535,12 @@ class GRPOTrainer(Trainer):
                     completion_ids = completion_ids[tp_slice]
 
             # Pad the completions, and concatenate them with the prompts
+            completion_ids[0].append(24)
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            vllm_logprobs = [torch.tensor(logp, device=device) for logp in logprobs]
+            vllm_logprobs = pad(vllm_logprobs, padding_value=0.0)
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
@@ -1641,8 +1642,10 @@ class GRPOTrainer(Trainer):
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
                 )
+                vllm_old_per_token_logps = vllm_logprobs
             else:
                 old_per_token_logps = None
+                vllm_old_per_token_logps = None
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1769,6 +1772,8 @@ class GRPOTrainer(Trainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
+        if vllm_old_per_token_logps is not None:
+            output["vllm_old_per_token_logps"] = vllm_old_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in prompt_inputs:
@@ -1855,34 +1860,6 @@ class GRPOTrainer(Trainer):
             image_sizes=inputs.get("image_sizes"),
         )
 
-        if self.use_vllm:
-            prompt_texts = inputs["prompts_text"]
-            all_prompts_text = gather_object(prompt_texts)
-            if self.accelerator.is_main_process:
-                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
-
-                ordered_set_of_images = None
-
-                output = self.vllm_client.generate(
-                    prompts=ordered_set_of_prompts,
-                    images=ordered_set_of_images,
-                    n=self.num_generations,
-                    repetition_penalty=self.repetition_penalty,
-                    temperature=self.temperature,
-                    top_p=self.top_p,
-                    top_k=-1 if self.top_k is None else self.top_k,
-                    min_p=0.0 if self.min_p is None else self.min_p,
-                    max_tokens=0,
-                    guided_decoding_regex=self.guided_decoding_regex,
-                    generation_kwargs=self.args.generation_kwargs,
-                    prompt_logprobs=-1,
-                )
-                completion_ids = output["completion_ids"]
-            else:
-                completion_ids = [None] * len(all_prompts_text)
-
-            # Calculate entropy.
-
         if self.top_entropy_quantile < 1.0:
             entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
@@ -1929,6 +1906,13 @@ class GRPOTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
+
+        if self.rollout_importance_sampling_cap > 0 and old_per_token_logps is not None:
+            vllm_old_per_token_logps = inputs.get("vllm_old_per_token_logps")
+            importance_sampling_ratio = torch.exp(old_per_token_logps - vllm_old_per_token_logps)
+            importance_sampling_ratio = torch.min(importance_sampling_ratio, self.rollout_importance_sampling_cap)
+            per_token_loss = per_token_loss * importance_sampling_ratio
+
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
