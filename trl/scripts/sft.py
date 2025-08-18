@@ -92,7 +92,6 @@ def main(script_args, training_args, model_args, dataset_args):
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=model_args.torch_dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
@@ -104,7 +103,6 @@ def main(script_args, training_args, model_args, dataset_args):
     if config.architectures and any(arch in valid_image_text_architectures for arch in config.architectures):
         from transformers import AutoModelForImageTextToText
 
-        model_kwargs.pop("use_cache", None)  # Image models do not support cache
         model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
     else:
         model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
