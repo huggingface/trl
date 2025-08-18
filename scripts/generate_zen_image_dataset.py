@@ -32,7 +32,7 @@ class ScriptArguments:
             Fraction of the dataset to include in the test split.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the dataset to the Hugging Face Hub.
-        repo_id (`str`, *optional*, defaults to `"trl-internal-testing/zen"`):
+        repo_id (`str`, *optional*, defaults to `"trl-internal-testing/zen-image"`):
             Hugging Face repository ID to push the dataset to.
     """
 
