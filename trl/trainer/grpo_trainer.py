@@ -1439,7 +1439,7 @@ class GRPOTrainer(Trainer):
                         ordered_set_of_images = None
 
                     with profiling_context(self, "vLLM.generate"):
-                        completion_ids, vllm_logprobs = self.vllm_client.generate(
+                        output = self.vllm_client.generate(
                             prompts=ordered_set_of_prompts,
                             images=ordered_set_of_images,
                             n=self.num_generations,
@@ -1451,17 +1451,29 @@ class GRPOTrainer(Trainer):
                             max_tokens=self.max_completion_length,
                             guided_decoding_regex=self.guided_decoding_regex,
                             generation_kwargs=self.args.generation_kwargs,
+                            prompt_logprobs=0,
+                            logprobs=0,
+                        )
+                        payload = (
+                            output["completion_ids"],
+                            output["prompt_logprobs"],
+                            output["logprobs"],
                         )
                 else:
-                    completion_ids = [None] * len(all_prompts_text)
-                # Broadcast the completions from the main process to all processes, ensuring each process receives its
-                # corresponding slice.
-                completion_ids = broadcast_object_list(completion_ids, from_process=0)
+                    payload = None
+
+                # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
+                obj_list = [payload]
+                broadcast_object_list(obj_list, from_process=0)
+                completion_ids, prompt_logprobs, logprobs = obj_list[0]
+
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
                 completion_ids = completion_ids[process_slice]
+                prompt_logprobs = prompt_logprobs[process_slice]
+                logprobs = logprobs[process_slice]
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
@@ -1742,12 +1754,13 @@ class GRPOTrainer(Trainer):
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
-        vllm_logps = torch.tensor(vllm_logprobs, device=device, dtype=torch.float32)
-        logps_diff = torch.abs(vllm_logps - old_per_token_logps)
-        self._metrics[mode]["Token Probability Difference/max"].append(logps_diff.max().exp().item())
-        self._metrics[mode]["Token Probability Difference/mean"].append(logps_diff.mean().exp().item())
+        # vllm_logps = torch.tensor(vllm_logprobs, device=device, dtype=torch.float32)
+        # logps_diff = torch.abs(vllm_logps - old_per_token_logps)
+        # self._metrics[mode]["Token Probability Difference/max"].append(logps_diff.max().exp().item())
+        # self._metrics[mode]["Token Probability Difference/mean"].append(logps_diff.mean().exp().item())
 
         output = {
+            "prompt_texts": prompts_text,
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
@@ -1841,6 +1854,34 @@ class GRPOTrainer(Trainer):
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
         )
+
+        if self.use_vllm:
+            prompt_texts = inputs["prompts_text"]
+            all_prompts_text = gather_object(prompt_texts)
+            if self.accelerator.is_main_process:
+                ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
+
+                ordered_set_of_images = None
+
+                output = self.vllm_client.generate(
+                    prompts=ordered_set_of_prompts,
+                    images=ordered_set_of_images,
+                    n=self.num_generations,
+                    repetition_penalty=self.repetition_penalty,
+                    temperature=self.temperature,
+                    top_p=self.top_p,
+                    top_k=-1 if self.top_k is None else self.top_k,
+                    min_p=0.0 if self.min_p is None else self.min_p,
+                    max_tokens=0,
+                    guided_decoding_regex=self.guided_decoding_regex,
+                    generation_kwargs=self.args.generation_kwargs,
+                    prompt_logprobs=-1,
+                )
+                completion_ids = output["completion_ids"]
+            else:
+                completion_ids = [None] * len(all_prompts_text)
+
+            # Calculate entropy.
 
         if self.top_entropy_quantile < 1.0:
             entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)

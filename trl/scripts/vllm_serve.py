@@ -464,9 +464,12 @@ def main(script_args: ScriptArguments):
         max_tokens: int = 16
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: dict = field(default_factory=dict)
+        logprobs: Optional[int] = None
+        prompt_logprobs: Optional[int] = None
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
+        prompt_logprobs: list[list[float]]
         logprobs: list[list[float]]
 
     @app.post("/generate/", response_model=GenerateResponse)
@@ -526,14 +529,14 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
-            "logprobs": 0,  # this gives us logps of only the generated token
+            "logprobs": request.logprobs,
+            "prompt_logprobs": request.prompt_logprobs,
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
 
         # Evenly distribute prompts across DP ranks
         chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
-
         # Send the prompts to each worker
         for connection, prompts in zip(connections, chunked_prompts):
             # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
@@ -554,13 +557,25 @@ def main(script_args: ScriptArguments):
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
 
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        logprobs: list[list[float]] = [
-            [next(iter(lp.values())).logprob for lp in output.logprobs]
-            for outputs in all_outputs
-            for output in outputs.outputs
-        ]
-        # return {"completion_ids": completion_ids}
-        return {"completion_ids": completion_ids, "logprobs": logprobs}
+
+        response = {"completion_ids": completion_ids}
+        if request.logprobs is not None:
+            logprobs: list[list[float]] = [
+                [next(iter(lp.values())).logprob for lp in output.logprobs]
+                for outputs in all_outputs
+                for output in outputs.outputs
+            ]
+
+            response["logprobs"] = logprobs
+
+        if request.prompt_logprobs is not None:
+            prompt_logprob: list[list[float]] = [
+                [next(iter(d.values())).logprob for d in output.prompt_logprobs[1:]]  # one float per dict
+                for output in all_outputs
+                # for pl in output.prompt_logprobs                      # one list per PromptLogprobs
+            ]
+            response["prompt_logprobs"] = prompt_logprob
+        return response
 
     class InitCommunicatorRequest(BaseModel):
         host: str
