@@ -975,6 +975,8 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+        # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
+        inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
