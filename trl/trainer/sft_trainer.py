@@ -358,7 +358,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     processor: ProcessorMixin
     max_length: Optional[int] = None
-    completion_only_loss: bool = False
+    completion_only_loss: bool = False  # default not used in practice; SFTTrainer always passes the relevant value
     pad_to_multiple_of: Optional[int] = None
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
