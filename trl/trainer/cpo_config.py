@@ -54,6 +54,8 @@ class CPOConfig(TrainingArguments):
                   [SLiC](https://huggingface.co/papers/2305.10425) paper.
                 - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
                 - `"simpo"`: SimPO loss from the [SimPO](https://huggingface.co/papers/2405.14734) paper.
+                - `"alphapo"`: AlphaPO loss from the [AlphaPO](https://huggingface.co/papers/2501.03884) paper. This
+                  automatically sets `loss_type="simpo"` and `cpo_alpha=0.0`.
 
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
@@ -61,6 +63,11 @@ class CPOConfig(TrainingArguments):
             Weight of the BC regularizer in CPO training.
         simpo_gamma (`float`, *optional*, defaults to `0.5`):
             Target reward margin for the SimPO loss, used only when the `loss_type="simpo"`.
+        alpha (`float`, *optional*, defaults to `0.0`):
+            Alpha parameter that controls reward function shape across all loss types. When alpha=0 (default), uses
+            standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: `r = (1 - p^(-alpha))
+            / alpha` from the [AlphaPO paper](https://huggingface.co/papers/2501.03884). This parameter works with all
+            loss types.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Label pad token id. This argument is required if you want to use the default data collator.
         padding_value (`int` or `None`, *optional*, defaults to `None`):
@@ -142,7 +149,7 @@ class CPOConfig(TrainingArguments):
         default="sigmoid",
         metadata={
             "help": "Type of loss to use.",
-            "choices": ["sigmoid", "hinge", "ipo", "simpo"],
+            "choices": ["sigmoid", "hinge", "ipo", "simpo", "alphapo"],
         },
     )
     disable_dropout: bool = field(
@@ -156,6 +163,14 @@ class CPOConfig(TrainingArguments):
     simpo_gamma: float = field(
         default=0.5,
         metadata={"help": "Target reward margin for the SimPO loss, used only when the `loss_type='simpo'`."},
+    )
+    alpha: float = field(
+        default=0.0,
+        metadata={
+            "help": "Alpha parameter that controls reward function shape across all loss types. When alpha=0 "
+            "(default), uses standard log probability rewards. When `alpha != 0`, applies AlphaPO transformation: "
+            "`r = (1 - p^(-alpha)) / alpha` from the AlphaPO paper. This parameter works with all loss types."
+        },
     )
     label_pad_token_id: int = field(
         default=-100,
@@ -194,5 +209,10 @@ class CPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Syntactic sugar for AlphaPO: set loss_type to "simpo" and cpo_alpha to 0.0
+        if self.loss_type == "alphapo":
+            self.loss_type = "simpo"
+            self.cpo_alpha = 0.0
 
         super().__post_init__()
