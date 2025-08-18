@@ -308,6 +308,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int` or `None`, optional, defaults to `None`):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
+        completion_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the completion part of the sequence. When `True`, the labels for the prompt
+            part are set to -100. It requires the dataset type to be prompt-completion.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         dataset_text_field (`str`, optional, defaults to `"text"`):
@@ -381,6 +384,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     processor: ProcessorMixin
     max_length: Optional[int] = None
+    completion_only_loss: bool = False
     pad_to_multiple_of: Optional[int] = None
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
@@ -388,6 +392,10 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         if "messages" in examples[0] or self.dataset_text_field in examples[0]:
+            if self.completion_only_loss:
+                raise ValueError(
+                    "The `completion_only_loss` argument is not supported for language modeling datasets."
+                )
             return self._collate_language_modeling(examples)
         elif "prompt" in examples[0] and "completion" in examples[0] and "images" in examples[0]:
             return self._collate_prompt_completion(examples)
@@ -587,22 +595,26 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         )
 
         # Concatenate prompts and completions
-        input_ids = torch.cat((processed_prompts["input_ids"], processed_completions["input_ids"]), dim=1)
-        attention_mask = torch.cat(
-            (processed_prompts["attention_mask"], processed_completions["attention_mask"]), dim=1
-        )
+        prompt_ids, completion_ids = processed_prompts["input_ids"], processed_completions["input_ids"]
+        prompt_mask, completion_mask = processed_prompts["attention_mask"], processed_completions["attention_mask"]
+        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
 
         # Flush left to reduce padding
-        attention_mask, input_ids = flush_left(attention_mask, input_ids)
+        attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
         # Truncate if necessary
         if self.max_length is not None:
             input_ids = input_ids[:, : self.max_length]
             attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
 
         # Create labels and mask padding tokens
         labels = input_ids.clone()
         labels[attention_mask == 0] = -100
+        if self.completion_only_loss:
+            labels[completion_mask == 0] = -100
 
         # Build the output dictionary
         output = processed_prompts  # we take processed_prompts because it contains the images
@@ -948,6 +960,7 @@ class SFTTrainer(Trainer):
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
                 max_length=args.max_length,
+                completion_only_loss=self.completion_only_loss,
                 pad_to_multiple_of=args.pad_to_multiple_of,
                 dataset_text_field=args.dataset_text_field,
                 completion_only_loss=self.completion_only_loss,
