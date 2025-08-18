@@ -420,41 +420,39 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             multimodal content lists contain only non-empty dict items and have no None-valued fields.
 
         Example:
-        ```python
-        # Input:
-        [
-            {
-                "prompt": [
-                    {"role": "user", "content": [
-                        {"type": "image", "text": None, "image": "tiger.jpg"},
-                        {"type": "text", "text": "What is this?", "image": None}
-                    ]}
-                ],
-                "completion": [
-                    {"role": "assistant", "content": [
-                        {"type": "text", "text": "It is a tiger.", "image": None}
-                    ]}
+            Input:
+                [
+                    {
+                        "prompt": [
+                            {"role": "user", "content": [
+                                {"type": "image", "text": None, "image": "tiger.jpg"},
+                                {"type": "text", "text": "What is this?", "image": None}
+                            ]}
+                        ],
+                        "completion": [
+                            {"role": "assistant", "content": [
+                                {"type": "text", "text": "It is a tiger.", "image": None}
+                            ]}
+                        ]
+                    }
                 ]
-            }
-        ]
 
-        # Output:
-        [
-            {
-                "prompt": [
-                    {"role": "user", "content": [
-                        {"type": "image", "image": "tiger.jpg"},
-                        {"type": "text", "text": "What is this?"}
-                    ]}
-                ],
-                "completion": [
-                    {"role": "assistant", "content": [
-                        {"type": "text", "text": "It is a tiger."}
-                    ]}
+            Output:
+                [
+                    {
+                        "prompt": [
+                            {"role": "user", "content": [
+                                {"type": "image", "image": "tiger.jpg"},
+                                {"type": "text", "text": "What is this?"}
+                            ]}
+                        ],
+                        "completion": [
+                            {"role": "assistant", "content": [
+                                {"type": "text", "text": "It is a tiger."}
+                            ]}
+                        ]
+                    }
                 ]
-            }
-        ]
-        ```
         """
         def _clean_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             cleaned_messages = []
