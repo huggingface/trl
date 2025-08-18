@@ -844,11 +844,6 @@ class SFTTrainer(Trainer):
                 "Padding-free training is yet not supported for vision-language models. Please set "
                 "`padding_free=False` in the `SFTConfig`."
             )
-        if self._is_vlm and args.completion_only_loss:
-            raise ValueError(
-                "Completion-only loss is not yet supported for vision-language models. Please set "
-                "`completion_only_loss=False` in the `SFTConfig`."
-            )
         if self._is_vlm and args.assistant_only_loss:
             raise ValueError(
                 "Assistant-only loss is not yet supported for vision-language models. Please set "
@@ -955,6 +950,7 @@ class SFTTrainer(Trainer):
                 max_length=args.max_length,
                 pad_to_multiple_of=args.pad_to_multiple_of,
                 dataset_text_field=args.dataset_text_field,
+                completion_only_loss=self.completion_only_loss,
             )
 
         if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
