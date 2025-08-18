@@ -222,6 +222,26 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
 
+    def test_single_example_single_doc(self):
+        batch_seq_lengths = [[5]]
+        result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 1)
+        self.assertTrue(torch.equal(result[0], torch.arange(5)))
+
+    def test_single_example_multiple_docs(self):
+        batch_seq_lengths = [[3, 2]]
+        result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 1)
+        # First sequence: 0, 1, 2; second sequence: 0, 1
+        self.assertTrue(torch.equal(result[0], torch.tensor([0, 1, 2, 0, 1])))
+
+    def test_multiple_examples(self):
+        batch_seq_lengths = [[2, 2], [3]]
+        result = DataCollatorForLanguageModeling.get_position_ids_from_packed_seq_lengths(batch_seq_lengths)
+        self.assertEqual(len(result), 2)
+        self.assertTrue(torch.equal(result[0], torch.tensor([0, 1, 0, 1])))
+        self.assertTrue(torch.equal(result[1], torch.arange(3)))
+
 
 class SFTTrainerTester(TrlTestCase):
     r""" """

@@ -774,6 +774,21 @@ class TestPackDatasetBfd(TrlTestCase):
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         self.assertEqual(dataset.to_dict(), expected_output)
 
+    def test_with_non_power_of_2(self):
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6], [7, 8, 9, 10], [11, 12, 13]],
+            "attention_mask": [[1, 0, 0, 1, 1], [0], [0, 1, 0, 0], [1, 0, 1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 5
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
+            "attention_mask": [[1, 0, 0, 1, 1], [0, 1, 0, 0, 0], [1, 0, 1]],
+            "seq_lengths": [[5], [4, 1], [3]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        self.assertEqual(dataset.to_dict(), expected_output)
+
 
 class TestTruncateExamples(TrlTestCase):
     def test_with_dataset(self):
