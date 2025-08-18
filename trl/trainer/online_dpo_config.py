@@ -47,7 +47,7 @@ class OnlineDPOConfig(TrainingArguments):
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
             generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
-            value.
+            value. **Note**: This parameter only works when using `reward_funcs` and not when using `judge`.
         beta (`float` or `list[float]`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
