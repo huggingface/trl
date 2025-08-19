@@ -234,7 +234,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         self.assertTrue(torch.equal(result[1], torch.arange(3)))
 
 
-# This new tester aims to replace the first one at some point
 class SFTTrainerTester(TrlTestCase):
     @parameterized.expand(
         [
