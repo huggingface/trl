@@ -968,10 +968,15 @@ class SFTTrainer(Trainer):
                 def tokenize(examples, processing_class, dataset_text_field, assistant_only_loss):
                     are_tools_present = examples.get("tools") is not None
                     are_chat_template_kwargs_present = examples.get("chat_template_kwargs") is not None
-                            
+
                     if "prompt" in examples:  # prompt-completion case
-                        get_completion_mask = lambda prompt_ids, prompt_completion_ids: [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        does_tokenization_match = lambda prompt_ids, prompt_completion_ids: prompt_ids == prompt_completion_ids[: len(prompt_ids)]
+
+                        def get_completion_mask(prompt_ids, prompt_completion_ids) -> list[int]:
+                            return [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+
+                        def does_tokenization_match(prompt_ids, prompt_completion_ids) -> bool:
+                            return prompt_ids == prompt_completion_ids[: len(prompt_ids)]
+
                         output = defaultdict(list)
                         if is_conversational(examples):
                             for idx in range(len(examples["prompt"])):
@@ -999,24 +1004,31 @@ class SFTTrainer(Trainer):
                                 output["prompt_completion_ids"].append(prompt_completion_processed["input_ids"])
                                 if "assistant_masks" in prompt_completion_processed:
                                     output["assistant_masks"].append(prompt_completion_processed["assistant_masks"])
-                                
+
                                 # Check if the tokenized prompt starts with the tokenized prompt+completion
-                                if not does_tokenization_match(output["prompt_ids"][-1], output["prompt_completion_ids"][-1]):
+                                if not does_tokenization_match(
+                                    output["prompt_ids"][-1], output["prompt_completion_ids"][-1]
+                                ):
                                     warnings.warn(
                                         "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
                                         "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
                                         "token handling. Verify that the tokenizer is processing text consistently."
                                     )
-                                
+
                                 output["input_ids"].append(output["prompt_completion_ids"][-1])
                                 # Create a completion mask
-                                output["completion_mask"].append(get_completion_mask(output["prompt_ids"][-1], output["prompt_completion_ids"][-1]))
+                                output["completion_mask"].append(
+                                    get_completion_mask(output["prompt_ids"][-1], output["prompt_completion_ids"][-1])
+                                )
 
                         else:
-                            prompt_ids_list = processing_class(text=examples["prompt"])['input_ids']
-                            prompt_completion_ids_list = processing_class(text=[
-                                prompt + completion for prompt, completion in zip(examples["prompt"], examples["completion"])
-                            ])['input_ids']
+                            prompt_ids_list = processing_class(text=examples["prompt"])["input_ids"]
+                            prompt_completion_ids_list = processing_class(
+                                text=[
+                                    prompt + completion
+                                    for prompt, completion in zip(examples["prompt"], examples["completion"])
+                                ]
+                            )["input_ids"]
 
                             input_ids = []
                             completion_mask = []
@@ -1043,7 +1055,7 @@ class SFTTrainer(Trainer):
                                     tools = examples["tools"][idx]
                                 if are_chat_template_kwargs_present:
                                     chat_template_kwargs = examples["chat_template_kwargs"][idx]
-                                
+
                                 processed = processing_class.apply_chat_template(
                                     examples["messages"][idx],
                                     return_dict=True,
