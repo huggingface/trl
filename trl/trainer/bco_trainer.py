@@ -52,7 +52,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
-from ..data_utils import maybe_apply_chat_template
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..import_utils import is_joblib_available
 from ..models import create_reference_model, prepare_deepspeed
 from .bco_config import BCOConfig
@@ -82,7 +82,7 @@ if is_joblib_available():
     import joblib
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
+    from transformers import PreTrainedTokenizer
 
 logger = get_logger(__name__)
 
@@ -595,11 +595,27 @@ class BCOTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         with PartialState().main_process_first():
+            # Extract the prompt if needed
+            train_dataset = train_dataset.map(
+                maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
+            )
+            # Unpair the dataset if needed
+            train_dataset = maybe_unpair_preference_dataset(
+                train_dataset, args.dataset_num_proc, desc="Unpairing train dataset"
+            )
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
                 maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
             )
             if eval_dataset is not None:
+                # Extract the prompt if needed
+                eval_dataset = eval_dataset.map(
+                    maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from eval dataset"
+                )
+                # Unpair the dataset if needed
+                eval_dataset = maybe_unpair_preference_dataset(
+                    eval_dataset, args.dataset_num_proc, desc="Unpairing eval dataset"
+                )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
                     fn_kwargs={"tokenizer": processing_class},
@@ -1407,11 +1423,11 @@ class BCOTrainer(Trainer):
             random_batch = self._prepare_inputs(random_batch)
 
             target_labels = torch.tensor(random_batch["label"], dtype=torch.bool, device=self.accelerator.device)
-            target_indicies = torch.where(~target_labels)[0]
+            target_indices = torch.where(~target_labels)[0]
             target_batch = {
-                "prompt_input_ids": random_batch["prompt_input_ids"][target_indicies],
-                "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indicies],
-                "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
+                "prompt_input_ids": random_batch["prompt_input_ids"][target_indices],
+                "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indices],
+                "prompt": itemgetter(*target_indices)(random_batch["prompt"]),
             }
             policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, target_batch)
 
@@ -1520,6 +1536,7 @@ class BCOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{jung2024binary,
             title        = {{Binary Classifier Optimization for Large Language Model Alignment}},

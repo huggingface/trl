@@ -460,11 +460,13 @@ class _SegmentTree:
 
     def __init__(self, maxval: int):
         self.maxval = maxval
-        self.tree = [0] * (2 * maxval)
+        # For non-power-of-2 values, we need to round up to the next power of 2 for the tree size
+        self.tree_size = 1 << (maxval - 1).bit_length()
+        self.tree = [0] * (2 * self.tree_size)
 
     def add(self, val):
         assert 0 < val <= self.maxval
-        i = self.maxval + val - 1
+        i = self.tree_size + val - 1
         self.tree[i] = val
         while i > 1:
             i >>= 1
@@ -474,7 +476,7 @@ class _SegmentTree:
 
     def remove(self, val):
         assert 0 < val <= self.maxval
-        i = self.maxval + val - 1
+        i = self.tree_size + val - 1
         self.tree[i] = 0
         while i > 1:
             i >>= 1
@@ -485,7 +487,7 @@ class _SegmentTree:
     def search(self, val):
         assert 0 < val <= self.maxval
         i = 1
-        while i < self.maxval:
+        while i < self.tree_size:
             if self.tree[i << 1] >= val:
                 i = i << 1
             else:
@@ -522,8 +524,10 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
         space = segment_tree.search(length)
 
         if space < seq_length:
+            # Use existing bin with exactly this amount of space
             bin = space_to_bin[space].popleft()
         else:
+            # Create a new bin
             bin = {"ids": [], "length": 0}
             bins.append(bin)
 
@@ -636,7 +640,7 @@ def truncate_dataset(
     dataset: DatasetType, max_length: int, map_kwargs: Optional[dict[str, Any]] = None
 ) -> DatasetType:
     r"""
-    Truncate sequences in a dataset to a specifed `max_length`.
+    Truncate sequences in a dataset to a specified `max_length`.
 
     Args:
         dataset (`Dataset` or `DatasetDict`):
@@ -716,10 +720,12 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     >>> example = {"conversations": [{"from": "user", "value": "What color is the sky?"}]}
     >>> is_conversational_from_value(example)
     True
+
     >>> example = {"conversations": [{"role": "user", "content": "What color is the sky?"}]}
     >>> is_conversational_from_value(example)
     False
-    >>> example = {"conversations": "The sky is"})
+
+    >>> example = {"conversations": "The sky is"}
     >>> is_conversational_from_value(example)
     False
     ```

@@ -739,7 +739,7 @@ def pipeline_step_with_grad(
             if truncated_backprop:
                 # Randomized truncation randomizes the truncation process (https://huggingface.co/papers/2310.03739)
                 # the range of truncation is defined by truncated_rand_backprop_minmax
-                # Setting truncated_rand_backprop_minmax[0] to be low will allow the model to update earlier timesteps in the diffusion chain, while setitng it high will reduce the memory usage.
+                # Setting truncated_rand_backprop_minmax[0] to be low will allow the model to update earlier timesteps in the diffusion chain, while setting it high will reduce the memory usage.
                 if truncated_backprop_rand:
                     rand_timestep = random.randint(
                         truncated_rand_backprop_minmax[0], truncated_rand_backprop_minmax[1]
