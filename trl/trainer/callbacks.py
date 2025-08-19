@@ -576,6 +576,7 @@ class MergeModelCallback(TrainerCallback):
 
 
 class BEMACallback(TrainerCallback):
+    # docstyle-ignore
     r"""
     A [`~transformers.TrainerCallback`] that implements [BEMA](https://huggingface.co/papers/2508.00180)
     (Bias-Corrected Exponential Moving Average) by [Adam Block](https://huggingface.co/abblock) and [Cyril
@@ -615,7 +616,6 @@ class BEMACallback(TrainerCallback):
         bias_power (`float`, *optional*, defaults to `0.2`):
             Power for the BEMA scaling factor. Denoted  \\( \eta \\) in the paper. To disable BEMA, set this to `0.0`.
         lag (`int`, *optional*, defaults to `10`):
-            Lag parameter  \\( \rho \\) in the paper. This is a constant that
             Initial offset in the weight decay schedule that controls early-stage smoothness by acting as a virtual
             starting age for the updates. Denoted as  \\( \rho \\) in the paper.
         update_after (`int`, *optional*, defaults to `0`):
