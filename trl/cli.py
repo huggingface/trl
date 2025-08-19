@@ -15,8 +15,8 @@
 import importlib.resources as resources
 import os
 import sys
-import warnings
 
+from accelerate import logging
 from accelerate.commands.launch import launch_command, launch_command_parser
 
 from .scripts.dpo import make_parser as make_dpo_parser
@@ -27,6 +27,9 @@ from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
 from .scripts.vllm_serve import main as vllm_serve_main
 from .scripts.vllm_serve import make_parser as make_vllm_serve_parser
+
+
+logger = logging.get_logger(__name__)
 
 
 def main():
@@ -123,7 +126,7 @@ def main():
         # launched via the CLI. Suggest running the module directly.
         # More information: https://github.com/vllm-project/vllm/issues/17079
         if script_args.tensor_parallel_size == 1 and script_args.data_parallel_size > 1:
-            warnings.warn(
+            logger.warning(
                 "Detected configuration: tensor_parallel_size=1 and data_parallel_size>1. This setup is known to "
                 "cause a crash when using the `trl vllm-serve` CLI entry point. As a workaround, please run the "
                 "server using the module path instead: `python -m trl.scripts.vllm_serve`",

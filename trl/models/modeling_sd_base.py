@@ -15,13 +15,13 @@
 import contextlib
 import os
 import random
-import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Union
 
 import numpy as np
 import torch
 import torch.utils.checkpoint as checkpoint
+from accelerate import logging
 from diffusers import DDIMScheduler, StableDiffusionPipeline, UNet2DConditionModel
 from diffusers.pipelines.stable_diffusion.pipeline_stable_diffusion import rescale_noise_cfg
 from transformers.utils import is_peft_available
@@ -33,6 +33,9 @@ from .sd_utils import convert_state_dict_to_diffusers
 if is_peft_available():
     from peft import LoraConfig
     from peft.utils import get_peft_model_state_dict
+
+
+logger = logging.get_logger(__name__)
 
 
 @dataclass
@@ -814,7 +817,7 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
             self.use_lora = True
         except OSError:
             if use_lora:
-                warnings.warn(
+                logger.warning(
                     "Trying to load LoRA weights but no LoRA weights found. Set `use_lora=False` or check that "
                     "`pytorch_lora_weights.safetensors` exists in the model folder.",
                     UserWarning,

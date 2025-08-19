@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -22,7 +21,7 @@ from typing import Any, Callable, Optional, Union
 import pandas as pd
 import torch
 import torch.nn as nn
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from accelerate.utils import gather_object
 from datasets import Dataset
 from transformers import (
@@ -60,6 +59,9 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+
+logger = logging.get_logger(__name__)
 
 
 def _tokenize(batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase") -> dict[str, list[Any]]:
@@ -166,7 +168,7 @@ class RewardTrainer(Trainer):
                 except FrozenInstanceError:
                     args = replace(args, remove_unused_columns=False)
                 # warn users
-                warnings.warn(
+                logger.warning(
                     "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
                     " we have set it for you, but you should do it yourself in the future.",
                     UserWarning,

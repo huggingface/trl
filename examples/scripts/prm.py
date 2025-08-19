@@ -47,9 +47,8 @@ python examples/scripts/prm.py \
     --lora_alpha 16
 """
 
-import warnings
-
 import torch
+from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgumentParser
 
@@ -63,6 +62,8 @@ from trl import (
     get_quantization_config,
 )
 
+
+logger = logging.get_logger(__name__)
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))
@@ -94,7 +95,7 @@ if __name__ == "__main__":
     model.config.pad_token_id = tokenizer.pad_token_id
 
     if model_config.use_peft and model_config.lora_task_type != "TOKEN_CLS":
-        warnings.warn(
+        logger.warning(
             "You are using a `task_type` that is different than `TOKEN_CLS` for PEFT. This will lead to silent bugs"
             " Make sure to pass --lora_task_type TOKEN_CLS when using this script with PEFT.",
             UserWarning,

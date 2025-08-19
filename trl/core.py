@@ -13,14 +13,17 @@
 # limitations under the License.
 
 import gc
-import warnings
 from collections.abc import Mapping
 from contextlib import contextmanager
 from typing import Optional, Union
 
 import numpy as np
 import torch
+from accelerate import logging
 from transformers import is_torch_npu_available, is_torch_xpu_available
+
+
+logger = logging.get_logger(__name__)
 
 
 def flatten_dict(nested: dict, sep: str = "/") -> dict:
@@ -133,7 +136,7 @@ def randn_tensor(
         if gen_device_type != device.type and gen_device_type == "cpu":
             rand_device = "cpu"
             if device != "mps":
-                warnings.warn(
+                logger.warning(
                     f"The passed generator was created on 'cpu' even though a tensor on {device} was expected."
                     f" Tensors will be created on 'cpu' and then moved to {device}. Note that one can probably"
                     f" slightly speed up this function by passing a generator that was created on the {device} "

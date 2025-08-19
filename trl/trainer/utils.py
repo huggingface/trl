@@ -16,7 +16,6 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
-import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -27,7 +26,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import torch.utils.data
-from accelerate import Accelerator, PartialState
+from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.nn.utils.rnn import pad_sequence
@@ -63,6 +62,9 @@ if is_comet_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+
+logger = logging.get_logger(__name__)
 
 
 @dataclass
@@ -492,7 +494,7 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
         equal_predictions_count = int(equal_mask.sum())
 
         if equal_predictions_count > 0:
-            warnings.warn(
+            logger.warning(
                 f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
                 "for both options are equal. These instances are ignored in the accuracy computation.",
                 UserWarning,
