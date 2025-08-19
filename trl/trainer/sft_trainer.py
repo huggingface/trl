@@ -384,7 +384,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     processor: ProcessorMixin
     max_length: Optional[int] = None
-    completion_only_loss: bool = False
+    completion_only_loss: bool = False  # default not used in practice; SFTTrainer always passes the relevant value
     pad_to_multiple_of: Optional[int] = None
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
@@ -1217,9 +1217,8 @@ class SFTTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                dataset = dataset.select_columns(
-                    {"input_ids", "seq_lengths", "completion_mask"}.intersection(dataset.column_names)
-                )
+                collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
+                dataset = dataset.select_columns(collator_expected_keys.intersection(dataset.column_names))
 
         return dataset
 
@@ -1239,6 +1238,8 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+        # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
+        inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
