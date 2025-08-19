@@ -76,11 +76,12 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
 
     Example:
     ```python
-    >>> [{
-    ...     "a": {"aa": None,
-    ...           "ab": 1},
-    ...     "b": "my_string",
-    ... }]
+    >>> [
+    ...     {
+    ...         "a": {"aa": None, "ab": 1},
+    ...         "b": "my_string",
+    ...     }
+    ... ]
     >>> remove_none_values(example)
     [{'a': {'ab': 1}, 'b': 'my_string'}]
     ```
@@ -284,15 +285,15 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Args:
         processor (`ProcessorMixin`):
-            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin`
-            and include a `tokenizer` with a defined `pad_token_id`.
+            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin` and
+            include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int` or `None`, optional, defaults to `None`):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         dataset_text_field (`str`, optional, defaults to `"text"`):
-            Name of the column that contains text data in the dataset. This parameter is only relevant for
-            [standard datasets format](dataset_formats#standard).
+            Name of the column that contains text data in the dataset. This parameter is only relevant for [standard
+            datasets format](dataset_formats#standard).
         return_tensors (`str`, optional, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
 
@@ -300,11 +301,12 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     ```python
     >>> from trl import DataCollatorForVisionLanguageModeling
     >>> from transformers import AutoProcessor
+
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
     >>> collator = DataCollatorForVisionLanguageModeling(processor)
     >>> examples = [
     ...     {"images": [Image.open("image_0.png")], "messages": [{"role": "user", "content": "What is this?"}]},
-    ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]}
+    ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
@@ -426,7 +428,8 @@ class SFTTrainer(Trainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -438,16 +441,19 @@ class SFTTrainer(Trainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to
+        `None`):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
 
             Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before
             initializing the Trainer.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to
+        `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.
@@ -605,8 +611,15 @@ class SFTTrainer(Trainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
+        # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
+        # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
+        self.num_virtual_tokens = 0
+
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
+            if model.active_adapter in model.peft_config:
+                peft_model_config = model.peft_config[model.active_adapter]
+                self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
 
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
@@ -838,160 +851,105 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def _tokenize_conversational_prompt_completion(examples, processing_class, assistant_only_loss):
-                    """Tokenize conversational prompt-completion examples with optional tools support."""
-                    output = {}
-                    chat_template_kwargs = examples.get("chat_template_kwargs", {})
-                    
-                    if examples.get("tools") is None:
-                        # Batch processing without tools
-                        prompts_ids = processing_class.apply_chat_template(
-                            examples["prompt"],
-                            **chat_template_kwargs,
-                        )["input_ids"]
-                        
-                        prompts_completions_processed = processing_class.apply_chat_template(
-                            [prompt + completion for prompt, completion in zip(examples["prompt"], examples["completion"])],
-                            return_dict=True,
-                            return_assistant_tokens_mask=assistant_only_loss,
-                            **chat_template_kwargs,
-                        )
-                        prompts_completions_ids = prompts_completions_processed["input_ids"]
-                        
-                        if "assistant_masks" in prompts_completions_processed:
-                            output["assistant_masks"] = prompts_completions_processed["assistant_masks"]
-                    else:
-                        # Individual processing with tools
-                        prompts_ids = []
-                        prompts_completions_ids = []
-                        assistant_masks = []
-                        
-                        for prompt, completion, tools in zip(examples["prompt"], examples["completion"], examples["tools"]):
-                            prompt_result = processing_class.apply_chat_template(
-                                prompt, tools=tools, **chat_template_kwargs
-                            )
-                            prompt_completion_result = processing_class.apply_chat_template(
-                                prompt + completion,
-                                return_dict=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
-                                tools=tools,
-                                **chat_template_kwargs,
-                            )
-                            
-                            prompts_ids.append(prompt_result["input_ids"])
-                            prompts_completions_ids.append(prompt_completion_result["input_ids"])
-                            
-                            if "assistant_masks" in prompt_completion_result:
-                                assistant_masks.append(prompt_completion_result["assistant_masks"])
-                        
-                        if assistant_masks:
-                            output["assistant_masks"] = assistant_masks
-                    
-                    return prompts_ids, prompts_completions_ids, output
-
-                def _tokenize_standard_prompt_completion(examples, processing_class):
-                    """Tokenize standard (non-conversational) prompt-completion examples."""
-                    prompts_ids = processing_class(text=examples["prompt"])["input_ids"]
-                    prompts_completions_ids = processing_class(
-                        text=[prompt + completion for prompt, completion in zip(examples["prompt"], examples["completion"])]
-                    )["input_ids"]
-                    return prompts_ids, prompts_completions_ids
-
-                def _create_completion_mask(prompts_ids, prompts_completions_ids):
-                    """Create completion mask for prompt-completion tokenization."""
-                    return [
-                        [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        for prompt_ids, prompt_completion_ids in zip(prompts_ids, prompts_completions_ids)
-                    ]
-
-                def _validate_prompt_completion_consistency(prompts_ids, prompts_completions_ids):
-                    """Validate that prompt tokens are consistent with prompt+completion tokens."""
-                    # For batched data, check first example as representative
-                    if isinstance(prompts_ids, list) and isinstance(prompts_completions_ids, list):
-                        if prompts_ids and prompts_completions_ids:
-                            first_prompt = prompts_ids[0]
-                            first_prompt_completion = prompts_completions_ids[0]
-                            if not first_prompt_completion[:len(first_prompt)] == first_prompt:
-                                warnings.warn(
-                                    "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                                    "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                                    "token handling. Verify that the tokenizer is processing text consistently."
-                                )
-
-                def _tokenize_conversational_messages(examples, processing_class, assistant_only_loss):
-                    """Tokenize conversational messages for language modeling."""
-                    chat_template_kwargs = examples.get("chat_template_kwargs", {})
-                    
-                    if examples.get("tools") is None:
-                        # Batch processing without tools
-                        processed = processing_class.apply_chat_template(
-                            examples["messages"],
-                            return_dict=True,
-                            return_assistant_tokens_mask=assistant_only_loss,
-                            **chat_template_kwargs,
-                        )
-                    else:
-                        # Individual processing with tools
-                        processed = defaultdict(list)
-                        for message, tools in zip(examples["messages"], examples["tools"]):
-                            processed_message = processing_class.apply_chat_template(
-                                message,
-                                return_dict=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
-                                tools=tools,
-                                **chat_template_kwargs,
-                            )
-                            processed["input_ids"].append(processed_message["input_ids"])
-                            if "assistant_masks" in processed_message:
-                                processed["assistant_masks"].append(processed_message["assistant_masks"])
-                    
-                    return processed
-
-                def _validate_assistant_tokens(processed):
-                    """Validate that assistant tokens are present when required."""
-                    if "assistant_masks" in processed:
-                        is_assistant_token_present = [
-                            1 in assistant_mask for assistant_mask in processed["assistant_masks"]
-                        ]
-                        if not any(is_assistant_token_present):
-                            raise RuntimeError(
-                                "You're using `assistant_only_loss=True`, but at least one example has no "
-                                "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
-                                "check the template and ensure it's correctly configured to support assistant "
-                                "masking."
-                            )
-
                 def tokenize(examples, processing_class, dataset_text_field, assistant_only_loss):
-                    """Main tokenization function that handles both prompt-completion and language modeling cases."""
-                    if "prompt" in examples:
-                        # Prompt-completion case
+                    are_tools_present = examples.get("tools") is not None
+                    are_chat_template_kwargs_present = examples.get("chat_template_kwargs") is not None
+                            
+                    if "prompt" in examples:  # prompt-completion case
+                        get_completion_mask = lambda prompt_ids, prompt_completion_ids: [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                        does_tokenization_match = lambda prompt_ids, prompt_completion_ids: prompt_ids == prompt_completion_ids[: len(prompt_ids)]
+                        output = defaultdict(list)
                         if is_conversational(examples):
-                            prompts_ids, prompts_completions_ids, output = _tokenize_conversational_prompt_completion(
-                                examples, processing_class, assistant_only_loss
-                            )
+                            for idx in range(len(examples["prompt"])):
+                                prompt = examples["prompt"][idx]
+                                completion = examples["completion"][idx]
+                                tools, chat_template_kwargs = None, {}
+                                if are_tools_present:
+                                    tools = examples["tools"][idx]
+                                if are_chat_template_kwargs_present:
+                                    chat_template_kwargs = examples["chat_template_kwargs"][idx]
+
+                                prompt_ids = processing_class.apply_chat_template(
+                                    prompt,
+                                    tools=tools,
+                                    **chat_template_kwargs,
+                                )
+                                output["prompt_ids"].append(prompt_ids)
+                                prompt_completion_processed = processing_class.apply_chat_template(
+                                    prompt + completion,
+                                    return_dict=True,
+                                    return_assistant_tokens_mask=assistant_only_loss,
+                                    tools=tools,
+                                    **chat_template_kwargs,
+                                )
+                                output["prompt_completion_ids"].append(prompt_completion_processed["input_ids"])
+                                if "assistant_masks" in prompt_completion_processed:
+                                    output["assistant_masks"].append(prompt_completion_processed["assistant_masks"])
+                                
+                                # Check if the tokenized prompt starts with the tokenized prompt+completion
+                                if not does_tokenization_match(output["prompt_ids"][-1], output["prompt_completion_ids"][-1]):
+                                    warnings.warn(
+                                        "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                                        "token handling. Verify that the tokenizer is processing text consistently."
+                                    )
+                                
+                                output["input_ids"].append(output["prompt_completion_ids"][-1])
+                                # Create a completion mask
+                                output["completion_mask"].append(get_completion_mask(output["prompt_ids"][-1], output["prompt_completion_ids"][-1]))
+
                         else:
-                            prompts_ids, prompts_completions_ids = _tokenize_standard_prompt_completion(
-                                examples, processing_class
-                            )
-                            output = {}
-                        
-                        # Validate consistency and create mask
-                        _validate_prompt_completion_consistency(prompts_ids, prompts_completions_ids)
-                        completions_mask = _create_completion_mask(prompts_ids, prompts_completions_ids)
-                        
-                        output["input_ids"] = prompts_completions_ids
-                        output["completion_mask"] = completions_mask
-                        
-                    else:
-                        # Language modeling case
+                            prompt_ids_list = processing_class(text=examples["prompt"])['input_ids']
+                            prompt_completion_ids_list = processing_class(text=[
+                                prompt + completion for prompt, completion in zip(examples["prompt"], examples["completion"])
+                            ])['input_ids']
+
+                            input_ids = []
+                            completion_mask = []
+                            for prompt_ids, prompt_completion_ids in zip(prompt_ids_list, prompt_completion_ids_list):
+                                if not does_tokenization_match(prompt_ids, prompt_completion_ids):
+                                    warnings.warn(
+                                        "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
+                                        "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
+                                        "token handling. Verify that the tokenizer is processing text consistently."
+                                    )
+                                input_ids.append(prompt_completion_ids)
+                                completion_mask.append(get_completion_mask(prompt_ids, prompt_completion_ids))
+                            output["prompt_ids"] = prompt_ids_list
+                            output["prompt_completion_ids"] = prompt_completion_ids_list
+                            output["input_ids"] = input_ids
+                            output["completion_mask"] = completion_mask
+
+                    else:  # language modeling case
                         if is_conversational(examples):
-                            processed = _tokenize_conversational_messages(examples, processing_class, assistant_only_loss)
-                            _validate_assistant_tokens(processed)
-                            output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
+                            output = defaultdict(list)
+                            for idx in range(len(examples["messages"])):
+                                tools, chat_template_kwargs = None, {}
+                                if are_tools_present:
+                                    tools = examples["tools"][idx]
+                                if are_chat_template_kwargs_present:
+                                    chat_template_kwargs = examples["chat_template_kwargs"][idx]
+                                
+                                processed = processing_class.apply_chat_template(
+                                    examples["messages"][idx],
+                                    return_dict=True,
+                                    return_assistant_tokens_mask=assistant_only_loss,
+                                    tools=tools,
+                                    **chat_template_kwargs,
+                                )
+                                if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
+                                    raise RuntimeError(
+                                        "You're using `assistant_only_loss=True`, but at least one example has no "
+                                        "assistant tokens. This usually means the tokenizer's chat template doesn't "
+                                        "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
+                                        "check the template and ensure it's correctly configured to support assistant "
+                                        "masking."
+                                    )
+                                if "assistant_masks" in processed:
+                                    output["assistant_masks"].append(processed["assistant_masks"])
+                                output["input_ids"].append(processed["input_ids"])
                         else:
                             output = {"input_ids": processing_class(text=examples[dataset_text_field])["input_ids"]}
-                    
                     return output
 
                 dataset = dataset.map(
@@ -1071,6 +1029,10 @@ class SFTTrainer(Trainer):
             with torch.no_grad():
                 shift_logits = outputs.logits[..., :-1, :].contiguous()
                 shift_labels = inputs["labels"][..., 1:].contiguous()
+
+                # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
+                # not correspond to actual input labels.
+                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 # Get predictions
                 predictions = shift_logits.argmax(dim=-1)
