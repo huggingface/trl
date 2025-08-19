@@ -82,7 +82,7 @@ if is_joblib_available():
     import joblib
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
+    from transformers import PreTrainedTokenizer
 
 logger = get_logger(__name__)
 
@@ -1423,11 +1423,11 @@ class BCOTrainer(Trainer):
             random_batch = self._prepare_inputs(random_batch)
 
             target_labels = torch.tensor(random_batch["label"], dtype=torch.bool, device=self.accelerator.device)
-            target_indicies = torch.where(~target_labels)[0]
+            target_indices = torch.where(~target_labels)[0]
             target_batch = {
-                "prompt_input_ids": random_batch["prompt_input_ids"][target_indicies],
-                "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indicies],
-                "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
+                "prompt_input_ids": random_batch["prompt_input_ids"][target_indices],
+                "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indices],
+                "prompt": itemgetter(*target_indices)(random_batch["prompt"]),
             }
             policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, target_batch)
 
