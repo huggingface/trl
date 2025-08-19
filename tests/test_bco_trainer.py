@@ -33,7 +33,16 @@ if is_peft_available():
 
 
 class BCOTrainerTester(TrlTestCase):
-    @parameterized.expand([("standard_unpaired_preference"), ("conversational_unpaired_preference")])
+    @parameterized.expand(
+        [
+            ("standard_preference",),
+            ("standard_implicit_prompt_preference",),
+            ("standard_unpaired_preference",),
+            ("conversational_preference",),
+            ("conversational_implicit_prompt_preference",),
+            ("conversational_unpaired_preference",),
+        ]
+    )
     @require_sklearn
     def test_train(self, config_name):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

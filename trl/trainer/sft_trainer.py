@@ -963,7 +963,6 @@ class SFTTrainer(Trainer):
                 completion_only_loss=self.completion_only_loss,
                 pad_to_multiple_of=args.pad_to_multiple_of,
                 dataset_text_field=args.dataset_text_field,
-                completion_only_loss=self.completion_only_loss,
             )
 
         if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
