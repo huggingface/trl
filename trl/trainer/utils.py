@@ -497,7 +497,6 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
             logger.warning(
                 f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
                 "for both options are equal. These instances are ignored in the accuracy computation.",
-                UserWarning,
             )
 
         # Filter out equal predictions

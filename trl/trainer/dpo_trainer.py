@@ -425,7 +425,6 @@ class DPOTrainer(Trainer):
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
         for loss_type in self.loss_type:
             if (
@@ -436,7 +435,6 @@ class DPOTrainer(Trainer):
                     f"You are using the {loss_type} loss type that does not support label smoothing. The "
                     "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this "
                     "warning.",
-                    UserWarning,
                 )
             if loss_type == "kto_pair":
                 raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")

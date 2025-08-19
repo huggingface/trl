@@ -328,7 +328,6 @@ class IterativeSFTTrainer(Trainer):
             logger.warning(
                 "Both `input_ids` and `texts` argument are provided. `input_ids` will be ignored. "
                 "Please provide only one of the two.",
-                UserWarning,
             )
 
         if labels is None and texts_labels is None and self.is_encoder_decoder:

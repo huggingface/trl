@@ -485,7 +485,6 @@ class KTOTrainer(Trainer):
             logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
                 " it will be set to `512` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_length = 512
         if args.max_length is not None:
@@ -495,7 +494,6 @@ class KTOTrainer(Trainer):
             logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the KTOTrainer's init"
                 " it will be set to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_prompt_length = 128
         if args.max_prompt_length is not None:
@@ -506,7 +504,6 @@ class KTOTrainer(Trainer):
             logger.warning(
                 "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
                 " it will be set to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_completion_length = 128
         if args.max_completion_length is not None and self.is_encoder_decoder:
@@ -525,7 +522,6 @@ class KTOTrainer(Trainer):
                 logger.warning(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your KTOConfig"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_dpo_data_collator = True
@@ -574,7 +570,6 @@ class KTOTrainer(Trainer):
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
@@ -734,7 +729,6 @@ class KTOTrainer(Trainer):
                         f"desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}] or "
                         f"undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). "
                         "See the documentation on how to optimally set these weights.",
-                        UserWarning,
                     )
 
         super().__init__(

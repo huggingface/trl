@@ -98,7 +98,6 @@ if __name__ == "__main__":
         logger.warning(
             "You are using a `task_type` that is different than `TOKEN_CLS` for PEFT. This will lead to silent bugs"
             " Make sure to pass --lora_task_type TOKEN_CLS when using this script with PEFT.",
-            UserWarning,
         )
 
     ##############

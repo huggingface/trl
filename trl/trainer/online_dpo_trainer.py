@@ -172,7 +172,6 @@ class OnlineDPOTrainer(Trainer):
             logger.warning(
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
                 "Ignoring `judge` and using `reward_model`.",
-                UserWarning,
             )
             judge = None
         elif reward_model is None and judge is None:

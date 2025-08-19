@@ -231,7 +231,6 @@ class CPOTrainer(Trainer):
             logger.warning(
                 "`max_length` is not set in the CPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_length = 512
         else:
@@ -240,7 +239,6 @@ class CPOTrainer(Trainer):
             logger.warning(
                 "`max_prompt_length` is not set in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_prompt_length = 128
         else:
@@ -255,7 +253,6 @@ class CPOTrainer(Trainer):
             logger.warning(
                 "When using an encoder decoder architecture, you should set `max_completion_length` in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_completion_length = 128
         else:
@@ -274,7 +271,6 @@ class CPOTrainer(Trainer):
                 logger.warning(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_dpo_data_collator = True
@@ -298,7 +294,6 @@ class CPOTrainer(Trainer):
             logger.warning(
                 f"You are using the {args.loss_type} loss type that does not support label smoothing. The "
                 "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
-                UserWarning,
             )
         if args.loss_type == "kto_pair":
             raise ValueError("Support for kto_pair has been removed in CPOTrainer. Please use KTOTrainer.")
@@ -315,7 +310,6 @@ class CPOTrainer(Trainer):
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
 
         if args.loss_type == "simpo":

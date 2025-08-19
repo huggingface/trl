@@ -820,7 +820,6 @@ class DefaultDDPOStableDiffusionPipeline(DDPOStableDiffusionPipeline):
                 logger.warning(
                     "Trying to load LoRA weights but no LoRA weights found. Set `use_lora=False` or check that "
                     "`pytorch_lora_weights.safetensors` exists in the model folder.",
-                    UserWarning,
                 )
 
         self.sd_pipeline.scheduler = DDIMScheduler.from_config(self.sd_pipeline.scheduler.config)

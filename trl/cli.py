@@ -130,7 +130,6 @@ def main():
                 "Detected configuration: tensor_parallel_size=1 and data_parallel_size>1. This setup is known to "
                 "cause a crash when using the `trl vllm-serve` CLI entry point. As a workaround, please run the "
                 "server using the module path instead: `python -m trl.scripts.vllm_serve`",
-                RuntimeWarning,
             )
 
         vllm_serve_main(script_args)

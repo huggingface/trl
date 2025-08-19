@@ -682,7 +682,7 @@ class SFTTrainer(Trainer):
                 )
         else:
             added_tokens = []
-        logger.warning("Hey")
+
         # Catch some wrong configurations related to VLMs
         if self._is_vlm and args.packing:
             raise ValueError(
@@ -911,7 +911,6 @@ class SFTTrainer(Trainer):
                     "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
                     "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
                     "`formatting_func` or pass a dataset that is not already processed.",
-                    UserWarning,
                 )
 
             if formatting_func is not None and not is_processed:

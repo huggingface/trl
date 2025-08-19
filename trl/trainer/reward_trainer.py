@@ -171,7 +171,6 @@ class RewardTrainer(Trainer):
                 logger.warning(
                     "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_reward_data_collator = True

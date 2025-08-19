@@ -235,7 +235,6 @@ class ORPOTrainer(Trainer):
             logger.warning(
                 "`max_length` is not set in the ORPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_length = 512
         else:
@@ -244,7 +243,6 @@ class ORPOTrainer(Trainer):
             logger.warning(
                 "`max_prompt_length` is not set in the ORPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_prompt_length = 128
         else:
@@ -254,7 +252,6 @@ class ORPOTrainer(Trainer):
             logger.warning(
                 "When using an encoder decoder architecture, you should set `max_completion_length` in the ORPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             self.max_completion_length = 128
         else:
@@ -273,7 +270,6 @@ class ORPOTrainer(Trainer):
                 logger.warning(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_dpo_data_collator = True
@@ -301,7 +297,6 @@ class ORPOTrainer(Trainer):
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))

@@ -141,7 +141,6 @@ def randn_tensor(
                     f" Tensors will be created on 'cpu' and then moved to {device}. Note that one can probably"
                     f" slightly speed up this function by passing a generator that was created on the {device} "
                     "device.",
-                    UserWarning,
                 )
         elif gen_device_type != device.type and gen_device_type == "cuda":
             raise ValueError(f"Cannot generate a {device} tensor from a generator of type {gen_device_type}.")
