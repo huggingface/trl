@@ -849,21 +849,13 @@ class TestMaybeConvertToChatML(TrlTestCase):
             {"from": "user", "value": "What is the capital of France?"},
             {"from": "assistant", "value": "The capital of France is Paris."},
         ]
-        example = {
-            "conversations": conversation_1
-        }
-        expected_output = {
-            "messages": conversation_1
-        }
+        example = {"conversations": conversation_1}
+        expected_output = {"messages": conversation_1}
         self.assertEqual(maybe_convert_to_chatml(example), expected_output)
 
         # Test for batched examples
-        examples = {
-            "conversations": [conversation_1, conversation_2]
-        }
-        expected_output = {
-            "messages": [conversation_1, conversation_2]
-        }
+        examples = {"conversations": [conversation_1, conversation_2]}
+        expected_output = {"messages": [conversation_1, conversation_2]}
         self.assertEqual(maybe_convert_to_chatml(examples), expected_output)
 
     def test_without_conversations_key(self):
@@ -898,6 +890,7 @@ class TestMaybeConvertToChatML(TrlTestCase):
             ]
         }
         self.assertEqual(maybe_convert_to_chatml(example), example)
+
 
 # Run the tests
 if __name__ == "__main__":
