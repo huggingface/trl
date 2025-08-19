@@ -840,19 +840,31 @@ class TestTruncateExamples(TrlTestCase):
 class TestMaybeConvertToChatML(TrlTestCase):
     def test_with_conversations_key(self):
         # Particular case where the key is "conversations": we rename it to "messages"
+        conversation_1 = [
+            {"from": "user", "value": "What color is the sky?"},
+            {"from": "assistant", "value": "It is blue."},
+        ]
+
+        conversation_2 = [
+            {"from": "user", "value": "What is the capital of France?"},
+            {"from": "assistant", "value": "The capital of France is Paris."},
+        ]
         example = {
-            "conversations": [
-                {"from": "user", "value": "What color is the sky?"},
-                {"from": "assistant", "value": "It is blue."},
-            ]
+            "conversations": conversation_1
         }
         expected_output = {
-            "messages": [
-                {"role": "user", "content": "What color is the sky?"},
-                {"role": "assistant", "content": "It is blue."},
-            ]
+            "messages": conversation_1
         }
         self.assertEqual(maybe_convert_to_chatml(example), expected_output)
+
+        # Test for batched examples
+        examples = {
+            "conversations": [conversation_1, conversation_2]
+        }
+        expected_output = {
+            "messages": [conversation_1, conversation_2]
+        }
+        self.assertEqual(maybe_convert_to_chatml(examples), expected_output)
 
     def test_without_conversations_key(self):
         # Same as before, but we don't rename the keys
@@ -866,10 +878,16 @@ class TestMaybeConvertToChatML(TrlTestCase):
         }
         self.assertEqual(maybe_convert_to_chatml(example), expected_output)
 
-    def test_not_conversional(self):
+    def test_not_conversational(self):
+        text_1 = "The sky is blue."
+        text_2 = "What is the capital of France?"
         # When not needed, the example should remain unchanged
-        example = {"text": "The sky is blue."}
+        example = {"text": text_1}
         self.assertEqual(maybe_convert_to_chatml(example), example)
+
+        # Test when batch of examples are passed
+        examples = {"text": [text_1, text_2]}
+        self.assertEqual(maybe_convert_to_chatml(examples), examples)
 
     def test_already_chatml(self):
         # When the example is already in ChatML format, it should remain unchanged
@@ -880,7 +898,6 @@ class TestMaybeConvertToChatML(TrlTestCase):
             ]
         }
         self.assertEqual(maybe_convert_to_chatml(example), example)
-
 
 # Run the tests
 if __name__ == "__main__":
