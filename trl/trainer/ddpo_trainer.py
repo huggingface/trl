@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import torch
-from accelerate import Accelerator, get_logger
+from accelerate import Accelerator, logging
 from accelerate.utils import ProjectConfiguration, set_seed
 from huggingface_hub import PyTorchModelHubMixin
 from transformers import is_wandb_available
@@ -35,7 +35,7 @@ if is_wandb_available():
     import wandb
 
 
-logger = get_logger(__name__)
+logger = logging.get_logger(__name__)
 
 
 class DDPOTrainer(PyTorchModelHubMixin):

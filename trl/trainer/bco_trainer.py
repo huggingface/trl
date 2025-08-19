@@ -27,7 +27,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState, get_logger
+from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset
 from torch import autocast
@@ -82,7 +82,7 @@ if is_joblib_available():
 if TYPE_CHECKING:
     from transformers import PreTrainedTokenizer
 
-logger = get_logger(__name__)
+logger = logging.get_logger(__name__)
 
 RUNNING_NAME = "running.json"
 CLF_NAME = "clf.pkl"
