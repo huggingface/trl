@@ -637,7 +637,7 @@ def truncate_dataset(
     dataset: DatasetType, max_length: int, map_kwargs: Optional[dict[str, Any]] = None
 ) -> DatasetType:
     r"""
-    Truncate sequences in a dataset to a specifed `max_length`.
+    Truncate sequences in a dataset to a specified `max_length`.
 
     Args:
         dataset (`Dataset` or `DatasetDict`):

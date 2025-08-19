@@ -289,7 +289,7 @@ class SFTTrainerTester(TrlTestCase):
         )
 
     def test_uncorrect_data(self):
-        # Shoud work as SFTTrainer natively supports conversational lm dataset
+        # Should work as SFTTrainer natively supports conversational lm dataset
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
