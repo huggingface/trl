@@ -292,15 +292,14 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
       key for standard text inputs.
     - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
-    Image data can be provided either embedded within the `content` lists of `"prompt"`/`"completion"`, or via an
-    individual `"images"` key. Both file paths and `PIL.Image.Image` objects are supported.
+    Image data can be provided either embedded within the `"content"` lists of `"prompt"`/`"completion"`, or via an
+    individual `"images"` key. Both file paths and PIL.Image objects are supported.
 
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
     - `"attention_mask"`: Tensor indicating attention mask.
     - `"pixel_values"`: Tensor representing image pixel values.
     - `"labels"`: Tensor for training labels.
-    - `"completion_mask"`: Tensor indicating which tokens are part of the completion (for prompt-completion format).
 
     Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
 
@@ -371,14 +370,14 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     ...     }
     ... ]
     >>> collator(examples)
-    {'input_ids': tensor([[151644, 8948, 198, 2610, 525, 264, 10950, 17847, 13, 151645, 198, ...],
-                          [151644, 8948, 198, 2610, 525, 264, 10950, 17847, 13, 151645, 198, ...]]),
-     'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...],
-                               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...]]),
-     'completion_mask': tensor([[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..., 1, 1, 1, 1],
-                               [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ..., 1, 1, 1, 1]]),
-     'labels': tensor([[-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, ..., 151643, 151643, 151643, 151643],
-                       [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, ..., 1906, 12, 16, 374, 264, 10496, 13, 151645, 198]]),
+    {'input_ids': tensor([[151644, 8948, 198, 2610, 525, 264, 10950, 17847, 13, 151645, 198,    
+                        151644, ..., 151643, 151643, 151643, 151643],
+                          [151644, 8948, 198, 2610, 525, 264, 10950, 17847, 13, 151645, 198, 151644, ..., 10496, 13, 151645, 198]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ..., 0, 0, 0, 0],
+                               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ..., 1, 1, 1, 1]]),
+     'labels': tensor([[-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 
+                       -100, ..., -100, -100, -100, -100],
+                       [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, ..., 10496, 13, 151645, 198]]),
      'pixel_values': tensor([[0.1931, 0.3537, 1.3902, ..., 0.0982, 0.3399, -0.5275],
                              [0.4705, 0.5581, 0.1785, ..., -0.7266, -0.2431, -0.4137]]),
      'image_grid_thw': tensor([[1, 12, 20], [1, 12, 20], [1, 24, 16]])}
@@ -480,7 +479,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                         f"Invalid message content type. Expected a list of dicts or a string, got {type(message['content'])}"
                     )
             return cleaned_messages
-        
+
         def _add_images_to_prompt(prompt_messages: list[dict[str, Any]], images: list[Any]) -> list[dict[str, Any]]:
             img_parts = [{"type": "image", "url": image} for image in images]
             for idx, msg in enumerate(prompt_messages):
@@ -575,11 +574,11 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         # token definitions vary across architectures.
         output["labels"] = labels
         return output
-    
+
     def _collate_prompt_completion(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Process and clean the examples first
         processed_examples = self.prepare_multimodal_examples(examples)
-        
+
         # Process prompt and completion separately
         prompts = [example["prompt"] for example in processed_examples]
         completions = [example["completion"] for example in processed_examples]
@@ -619,11 +618,11 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         full_cumsum = full_attns.cumsum(dim=1)
         completion_mask_bool = (full_cumsum > prompt_lengths.unsqueeze(1)) & full_attns.bool()
         completion_mask = completion_mask_bool.to(full_inputs["input_ids"].dtype)
-        
+
         labels = full_inputs["input_ids"].clone()
         if self.completion_only_loss:
             labels[completion_mask == 0] = -100
-        
+
         # Build the output dictionary
         output = full_inputs
         output["labels"] = labels
