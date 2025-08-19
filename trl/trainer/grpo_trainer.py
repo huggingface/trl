@@ -58,6 +58,7 @@ from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
+from .sft_trainer import DataCollatorForVisionLanguageModeling
 from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
@@ -1349,16 +1350,8 @@ class GRPOTrainer(Trainer):
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
                 if isinstance(prompt, list):
-                    for message in prompt:
-                        if not isinstance(message, dict):
-                            continue
-                        content = message.get("content")
-                        role = message.get("role")
-                        if isinstance(content, str):
-                            if role == "user":
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
-                            elif role == "system":
-                                message["content"] = [{"type": "text", "text": content}]
+                    # Use the same multimodal message preparation as in SFTTrainer
+                    DataCollatorForVisionLanguageModeling.prepare_multimodal_messages(prompt)
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
