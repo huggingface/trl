@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import torch
-from accelerate import Accelerator, logging
+ from accelerate import Accelerator, logging
 from accelerate.utils import ProjectConfiguration, set_seed
 from huggingface_hub import PyTorchModelHubMixin
 from transformers import is_wandb_available
