@@ -823,6 +823,12 @@ class SFTTrainer(Trainer):
                 "Assistant-only loss is not yet supported for vision-language models. Please set "
                 "`assistant_only_loss=False` in the `SFTConfig`."
             )
+        if self._is_vlm and args.max_length is not None:
+            warnings.warn(
+                "For VLMs, truncating may remove image tokens, leading to errors during training."
+                "To avoid this, set `max_length=None` in the `SFTConfig`. Only use `max_length` "
+                "when you've verified that truncation won't remove image tokens for the entire dataset."
+            )
 
         # PEFT configuration and model wrapping
         if peft_config is not None:
