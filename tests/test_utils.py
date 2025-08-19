@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import textwrap
-import unittest
 from io import StringIO
 from unittest.mock import patch
 
@@ -41,14 +40,14 @@ from trl.trainer.utils import (
     selective_log_softmax,
 )
 
-from .testing_utils import require_rich
+from .testing_utils import TrlTestCase, require_rich
 
 
 if is_peft_available():
     from peft import LoraConfig
 
 
-class TestPad(unittest.TestCase):
+class TestPad(TrlTestCase):
     def test_pad_1_dim_left(self):
         x = torch.tensor([1, 2, 3])
         y = torch.tensor([4, 5])
@@ -133,7 +132,7 @@ class TestPad(unittest.TestCase):
 
 
 @require_peft
-class TestGetPEFTConfig(unittest.TestCase):
+class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
         """Test that when use_peft is False, the function returns None."""
         model_args = ModelConfig(use_peft=False)
@@ -166,8 +165,9 @@ class TestGetPEFTConfig(unittest.TestCase):
             self.assertEqual(getattr(peft_config, arg), value)
 
 
-class TestDecodeAndStripPadding(unittest.TestCase):
+class TestDecodeAndStripPadding(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
     def test_example_with_padding(self):
@@ -181,7 +181,7 @@ class TestDecodeAndStripPadding(unittest.TestCase):
         self.assertEqual(decoded, ["Hello", "Hello"])
 
 
-class TestGenerateModelCard(unittest.TestCase):
+class TestGenerateModelCard(TrlTestCase):
     def test_full(self):
         model_card = generate_model_card(
             base_model="username/my_base_model",
@@ -227,8 +227,9 @@ class TestGenerateModelCard(unittest.TestCase):
         self.assertIn("My Trainer", card_text)
 
 
-class TestDataCollatorForChatML(unittest.TestCase):
+class TestDataCollatorForChatML(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Initialize the tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         if self.tokenizer.pad_token is None:
@@ -323,8 +324,9 @@ class TestDataCollatorForChatML(unittest.TestCase):
         )
 
 
-class TestBatchGeneration(unittest.TestCase):
+class TestBatchGeneration(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Initialize the tokenizer
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -382,7 +384,7 @@ class TestBatchGeneration(unittest.TestCase):
         self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
 
 
-class TestComputeAccuracy(unittest.TestCase):
+class TestComputeAccuracy(TrlTestCase):
     def test_token_classification_task(self):
         eval_pred = (
             np.array(
@@ -449,7 +451,7 @@ class TestComputeAccuracy(unittest.TestCase):
         self.assertEqual(str(cm.warning), expected_warning)
 
 
-class TestFlushLeft(unittest.TestCase):
+class TestFlushLeft(TrlTestCase):
     def test_basic_case(self):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         tensor1 = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 0, 0]])
@@ -493,7 +495,7 @@ class TestFlushLeft(unittest.TestCase):
         self.assertTrue(torch.equal(new_mask, expected_mask))
 
 
-class TestFlushRight(unittest.TestCase):
+class TestFlushRight(TrlTestCase):
     def test_basic_case(self):
         mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
         tensor1 = torch.tensor([[2, 3, 4, 0, 0], [0, 0, 5, 6, 0]])
@@ -537,7 +539,7 @@ class TestFlushRight(unittest.TestCase):
         self.assertTrue(torch.equal(new_mask, expected_mask))
 
 
-class TestSelectiveLogSoftmax(unittest.TestCase):
+class TestSelectiveLogSoftmax(TrlTestCase):
     @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
     def test_selective_log_softmax(self, dtype):
         """Test selective_log_softmax with logits of different dtypes"""
@@ -559,7 +561,7 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
 
 
 @require_rich
-class TestPrintPromptCompletionsSample(unittest.TestCase):
+class TestPrintPromptCompletionsSample(TrlTestCase):
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_output(self, mock_stdout):
         prompts = ["The sky is", "The sun is"]
@@ -572,6 +574,7 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
 
         output = mock_stdout.getvalue()
 
+        # docstyle-ignore
         expected_output = textwrap.dedent("""\
         ╭──────────────────────────── Step 42 ─────────────────────────────╮
         │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
@@ -583,6 +586,7 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
         ╰──────────────────────────────────────────────────────────────────╯
         """)
+
         self.assertEqual(output, expected_output)
 
     @patch("sys.stdout", new_callable=StringIO)
@@ -596,6 +600,7 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
         output = mock_stdout.getvalue()
 
+        # docstyle-ignore
         possible_outputs = [
             textwrap.dedent("""\
             ╭────────────────── Step 10 ──────────────────╮
@@ -606,6 +611,7 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
             │ └────────┴────────────┴───────┴───────────┘ │
             ╰─────────────────────────────────────────────╯
                 """),
+            # docstyle-ignore
             textwrap.dedent("""\
             ╭────────────────── Step 10 ──────────────────╮
             │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
@@ -619,7 +625,7 @@ class TestPrintPromptCompletionsSample(unittest.TestCase):
         self.assertIn(output, possible_outputs)
 
 
-class TestEntropyFromLogits(unittest.TestCase):
+class TestEntropyFromLogits(TrlTestCase):
     @parameterized.expand(
         [
             (dtype, chunk_size)

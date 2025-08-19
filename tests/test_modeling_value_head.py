@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import gc
-import tempfile
 import unittest
 
 import torch
@@ -21,6 +20,8 @@ from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
 
 from trl import AutoModelForCausalLMWithValueHead, AutoModelForSeq2SeqLMWithValueHead, create_reference_model
+
+from .testing_utils import TrlTestCase
 
 
 ALL_CAUSAL_LM_MODELS = [
@@ -49,7 +50,7 @@ ALL_SEQ2SEQ_MODELS = [
 
 
 class BaseTester:
-    class VHeadModelTester(unittest.TestCase):
+    class VHeadModelTester(TrlTestCase):
         all_model_names = None
         trl_model_class = None
         transformers_model_class = None
@@ -93,16 +94,15 @@ class BaseTester:
 
         def test_from_save_trl(self):
             """
-            Test if the model can be saved and loaded from a directory and get the same weights Including the
+            Test if the model can be saved and loaded from a directory and get the same weights, including the
             additional modules (e.g. v_head)
             """
             for model_name in self.all_model_names:
                 model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    model.save_pretrained(tmp_dir)
+                model.save_pretrained(self.tmp_dir)
 
-                    model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(self.tmp_dir)
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
@@ -115,10 +115,9 @@ class BaseTester:
             for model_name in self.all_model_names:
                 model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    model.save_pretrained(tmp_dir)
+                model.save_pretrained(self.tmp_dir)
 
-                    model_from_save = self.trl_model_class.from_pretrained(tmp_dir)
+                model_from_save = self.trl_model_class.from_pretrained(self.tmp_dir)
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
@@ -133,11 +132,10 @@ class BaseTester:
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    trl_model.save_pretrained(tmp_dir, max_shard_size="1MB")
-                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
-                        tmp_dir
-                    )
+                trl_model.save_pretrained(self.tmp_dir, max_shard_size="1MB")
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
+                    self.tmp_dir
+                )
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
@@ -157,11 +155,10 @@ class BaseTester:
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
 
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    trl_model.save_pretrained(tmp_dir)
-                    transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
-                        tmp_dir
-                    )
+                trl_model.save_pretrained(self.tmp_dir)
+                transformers_model_from_save = self.trl_model_class.transformers_parent_class.from_pretrained(
+                    self.tmp_dir
+                )
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
@@ -188,7 +185,7 @@ class BaseTester:
                 )
 
 
-class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase):
+class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -200,6 +197,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
     def tearDown(self):
         # free memory
         gc.collect()
+        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -260,9 +258,9 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
 
     def test_transformers_bf16_kwargs(self):
         r"""
-        Test if the transformers kwargs are correctly passed Here we check that loading a model in half precision works
-        as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can run a
-        dummy forward pass without any issue.
+        Test if the transformers kwargs are correctly passed. Here we check that loading a model in half precision
+        works as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can
+        run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
             trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
@@ -303,7 +301,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCas
                 )
 
 
-class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase):
+class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -315,6 +313,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
     def tearDown(self):
         # free memory
         gc.collect()
+        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -396,9 +395,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
 
     def test_transformers_bf16_kwargs(self):
         r"""
-        Test if the transformers kwargs are correctly passed Here we check that loading a model in half precision works
-        as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can run a
-        dummy forward pass without any issue.
+        Test if the transformers kwargs are correctly passed. Here we check that loading a model in half precision
+        works as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can
+        run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
             trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
@@ -419,8 +418,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, unittest.TestCase
             _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)
 
 
-class ReferenceModelTest(unittest.TestCase):
+class ReferenceModelTest(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model = AutoModelForCausalLMWithValueHead.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)

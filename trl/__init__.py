@@ -20,7 +20,7 @@ from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffus
 
 
 _import_structure = {
-    "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
+    "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
@@ -69,7 +69,6 @@ _import_structure = {
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
-        "MergeModelCallback",
         "ModelConfig",
         "NashMDConfig",
         "NashMDTrainer",
@@ -93,7 +92,7 @@ _import_structure = {
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.callbacks": ["BEMACallback", "MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
@@ -136,7 +135,7 @@ if TYPE_CHECKING:
         create_reference_model,
         setup_chat_format,
     )
-    from .scripts import ScriptArguments, TrlParser, init_zero_verbose
+    from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
@@ -163,7 +162,6 @@ if TYPE_CHECKING:
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
-        MergeModelCallback,
         ModelConfig,
         NashMDConfig,
         NashMDTrainer,
@@ -187,7 +185,7 @@ if TYPE_CHECKING:
         XPOConfig,
         XPOTrainer,
     )
-    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
+    from .trainer.callbacks import BEMACallback, MergeModelCallback, RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
     try:

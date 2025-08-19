@@ -85,7 +85,7 @@ Additionally, unlike standard text-based models where a `tokenizer` is used, for
 
 ```diff
 - model = AutoModelForCausalLM.from_pretrained(model_id)
-+ model = AutoModelForVision2Seq.from_pretrained(model_id)
++ model = AutoModelForImageTextToText.from_pretrained(model_id)
 
 - tokenizer = AutoTokenizer.from_pretrained(model_id)
 + processor = AutoProcessor.from_pretrained(model_id)
@@ -118,7 +118,7 @@ accelerate launch trl/scripts/dpo.py \
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following reward metrics:
 
 - `rewards/chosen`: the mean difference between the log probabilities of the policy model and the reference model for the chosen responses scaled by beta
 - `rewards/rejected`: the mean difference between the log probabilities of the policy model and the reference model for the rejected responses scaled by beta
@@ -258,7 +258,6 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.bfloat16,
     device_map="auto",
 )
-model.config.use_cache = False
 
 # Load the adapter.
 model = PeftModel.from_pretrained(
