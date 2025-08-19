@@ -16,7 +16,7 @@ import pathlib
 
 import pytest
 import torch
-from datasets import Dataset, load_dataset
+from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import require_flash_attn, require_peft, require_vision
@@ -25,20 +25,11 @@ from transformers.utils import is_peft_available
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, ignore_warnings
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
-
-
-def formatting_prompts_func(example):
-    text = f"### Question: {example['question']}\n ### Answer: {example['answer']}"
-    return text
-
-
-def formatting_func_for_pretokenized(example):
-    return example["input_ids"]
 
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
@@ -243,234 +234,8 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         self.assertTrue(torch.equal(result[1], torch.arange(3)))
 
 
-class SFTTrainerTester(TrlTestCase):
-    r""" """
-
-    def setUp(self):
-        super().setUp()
-        self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        self.dummy_dataset = Dataset.from_dict(
-            {
-                "question": [
-                    "Does llamas know how to code?",
-                    "Does llamas know how to fly?",
-                    "Does llamas know how to talk?",
-                    "Does llamas know how to code?",
-                    "Does llamas know how to fly?",
-                    "Does llamas know how to talk?",
-                    "Does llamas know how to swim?",
-                ],
-                "answer": [
-                    "Yes, llamas are very good at coding.",
-                    "No, llamas can't fly.",
-                    "Yes, llamas are very good at talking.",
-                    "Yes, llamas are very good at coding.",
-                    "No, llamas can't fly.",
-                    "Yes, llamas are very good at talking.",
-                    "No, llamas can't swim.",
-                ],
-                "text": [
-                    "### Question: Does llamas know how to code?\n ### Answer: Yes, llamas are very good at coding.",
-                    "### Question: Does llamas know how to fly?\n ### Answer: No, llamas can't fly.",
-                    "### Question: Does llamas know how to talk?\n ### Answer: Yes, llamas are very good at talking.",
-                    "### Question: Does llamas know how to code?\n ### Answer: Yes, llamas are very good at coding.",
-                    "### Question: Does llamas know how to fly?\n ### Answer: No, llamas can't fly.",
-                    "### Question: Does llamas know how to talk?\n ### Answer: Yes, llamas are very good at talking.",
-                    "### Question: Does llamas know how to swim?\n ### Answer: No, llamas can't swim.",
-                ],
-            }
-        )
-
-        self.conversational_lm_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
-        self.standard_prompt_completion_dataset = load_dataset(
-            "trl-internal-testing/zen", "standard_prompt_completion"
-        )
-
-    def test_uncorrect_data(self):
-        # Should work as SFTTrainer natively supports conversational lm dataset
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=32,  # make sure there is at least 1 packed sequence
-            packing=True,
-            report_to="none",
-        )
-        _ = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=self.conversational_lm_dataset["train"],
-        )
-
-        # Same, but without packing
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            packing=False,
-            report_to="none",
-        )
-        _ = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=self.conversational_lm_dataset["train"],
-        )
-
-        # Same, but with packing with `max_length`
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=16,  # make sure there is at least 1 packed sequence
-            packing=True,
-            report_to="none",
-        )
-        _ = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=self.standard_prompt_completion_dataset["train"],
-        )
-
-        # Same but with prompt-completion dataset
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            packing=False,
-            report_to="none",
-        )
-        _ = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=self.standard_prompt_completion_dataset["train"],
-        )
-
-        # Should work as dummy dataset are supported with a formatting function
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=32,  # make sure there is at least 1 packed sequence
-            packing=True,
-            report_to="none",
-        )
-        _ = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=self.dummy_dataset,
-            formatting_func=formatting_prompts_func,
-        )
-
-    def test_with_model_(self):
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=16,
-            packing=True,
-            report_to="none",
-        )
-        trainer = SFTTrainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=self.dummy_dataset,
-        )
-
-        trainer.train()
-
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        # with formatting_func + packed
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=16,
-            packing=True,
-            report_to="none",
-        )
-        trainer = SFTTrainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=self.dummy_dataset,
-            formatting_func=formatting_prompts_func,
-        )
-
-        trainer.train()
-
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=16,
-            report_to="none",
-        )
-        trainer = SFTTrainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=self.dummy_dataset,
-        )
-
-        trainer.train()
-
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-    def test_only_train_packing(self):
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            gradient_checkpointing=True,
-            packing=True,
-            max_length=128,  # make sure there is at least 1 packed sequence
-            eval_packing=False,
-            report_to="none",
-        )
-
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=self.conversational_lm_dataset["train"],
-            eval_dataset=self.conversational_lm_dataset["test"],
-        )
-
-        self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
-        self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
-
-    def test_eval_packing(self):
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=128,  # make sure there is at least 1 packed sequence
-            packing=True,
-            report_to="none",
-        )
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=self.conversational_lm_dataset["train"],
-            eval_dataset=self.conversational_lm_dataset["test"],
-        )
-
-        self.assertEqual(len(trainer.train_dataset["input_ids"]), 7)  # w/ this dataset, we end up with 46 seqs
-        self.assertEqual(len(trainer.eval_dataset["input_ids"]), 1)  # w/ this dataset, we end up with 6 seqs
-
-    def test_no_packing(self):
-        training_args = SFTConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_length=128,  # make sure there is at least 1 packed sequence
-            packing=False,
-            report_to="none",
-        )
-        trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            args=training_args,
-            train_dataset=self.conversational_lm_dataset["train"],
-            eval_dataset=self.conversational_lm_dataset["test"],
-        )
-
-        self.assertEqual(len(trainer.train_dataset["input_ids"]), len(self.conversational_lm_dataset["train"]))
-        self.assertEqual(len(trainer.eval_dataset["input_ids"]), len(self.conversational_lm_dataset["test"]))
-
-
 # This new tester aims to replace the first one at some point
-class SFTTrainerTester2(TrlTestCase):
+class SFTTrainerTester(TrlTestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),
@@ -535,6 +300,38 @@ class SFTTrainerTester2(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
         trainer = SFTTrainer(model=model, args=training_args, train_dataset=dataset)
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_with_formatting_func(self):
+        # Dummy formatting function
+        def formatting_prompts_func(example):
+            chosen, rejected = example["chosen"], example["rejected"]
+            return f"### Chosen: {chosen}\n### Rejected: {rejected}"
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset,
+            formatting_func=formatting_prompts_func,
+        )
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -922,6 +719,8 @@ class SFTTrainerTester2(TrlTestCase):
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @parameterized.expand([("bfd",), ("wrapped",)])
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
     def test_train_packing(self, packing_strategy):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
@@ -947,6 +746,75 @@ class SFTTrainerTester2(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
+    def test_eval_packing(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            packing=True,
+            max_length=64,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        # Check the number of sequences in train and eval datasets
+        num_train_seqs = sum([len(x) for x in trainer.train_dataset["seq_lengths"]])
+        num_eval_seqs = sum([len(x) for x in trainer.eval_dataset["seq_lengths"]])
+        self.assertEqual(num_train_seqs, 17)  # we should still have 17 seqs
+        self.assertEqual(num_eval_seqs, 2)  # we should still have 2 seqs
+
+        # Check that all sequences are shorter than the max length
+        self.assertTrue(all(sum(x) <= 64 for x in trainer.train_dataset["seq_lengths"]))
+        self.assertTrue(all(sum(x) <= 64 for x in trainer.eval_dataset["seq_lengths"]))
+
+        # Check the number of sequences in train and eval datasets
+        self.assertEqual(len(trainer.train_dataset["input_ids"]), 3)  # w/ this dataset, we end up with 46 seqs
+        self.assertEqual(len(trainer.eval_dataset["input_ids"]), 1)  # w/ this dataset, we end up with 6 seqs
+
+    @ignore_warnings(message="You are using packing, but the attention implementation is not.*", category=UserWarning)
+    @ignore_warnings(message="Padding-free training is enabled, but the attention.*", category=UserWarning)
+    def test_only_train_packing(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            packing=True,
+            eval_packing=False,
+            max_length=64,
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        # Check the number of sequences in train dataset
+        num_train_seqs = sum([len(x) for x in trainer.train_dataset["seq_lengths"]])
+        self.assertEqual(num_train_seqs, 17)  # we should still have 17 seqs
+
+        # We expect eval dataset not having "seq_lengths" as eval_packing is False
+        self.assertNotIn("seq_lengths", trainer.eval_dataset)
+
+        # Check that all sequences are shorter than the max length
+        self.assertTrue(all(sum(x) <= 64 for x in trainer.train_dataset["seq_lengths"]))
+
+        # Check the number of sequences in train and eval datasets
+        self.assertEqual(len(trainer.train_dataset["input_ids"]), 3)  # w/ this dataset, we end up with 46 seqs
+        self.assertEqual(len(trainer.eval_dataset["input_ids"]), 2)  # w/ this dataset, we end up with 6 seqs
 
     def test_train_with_chat_template_kwargs(self):
         # Get the dataset
@@ -1407,8 +1275,8 @@ class SFTTrainerTester2(TrlTestCase):
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if "model.vision_tower.timm_model.conv_stem.bn.weight" in n:
-                # This parameter is not updated, not sure why at this point.
+            if "model.vision_tower" in n:
+                # The vision tower is not updated, not sure why at this point.
                 continue
             self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
 
