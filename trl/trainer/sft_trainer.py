@@ -45,6 +45,7 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
+    apply_chat_template,
     is_conversational,
     is_conversational_from_value,
     maybe_convert_to_chatml,
@@ -53,7 +54,7 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad
+from .utils import flush_left, generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
@@ -76,11 +77,12 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
 
     Example:
     ```python
-    >>> [{
-    ...     "a": {"aa": None,
-    ...           "ab": 1},
-    ...     "b": "my_string",
-    ... }]
+    >>> [
+    ...     {
+    ...         "a": {"aa": None, "ab": 1},
+    ...         "b": "my_string",
+    ...     }
+    ... ]
     >>> remove_none_values(example)
     [{'a': {'ab': 1}, 'b': 'my_string'}]
     ```
@@ -189,7 +191,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
         if self.return_position_ids:
             if "seq_lengths" in examples[0]:
-                position_ids = self._convert_seq_lengths_to_position_ids(
+                position_ids = self.get_position_ids_from_packed_seq_lengths(
                     [example["seq_lengths"] for example in examples]
                 )
             else:
@@ -248,15 +250,30 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         return output
 
     @staticmethod
-    def _convert_seq_lengths_to_position_ids(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
+    def get_position_ids_from_packed_seq_lengths(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
+        """
+        Get position IDs for packed sequences.
+
+        Args:
+            batch_seq_lengths (`list[list[int]]`):
+                A list of lists containing the lengths of each individual document in the packed batch.
+
+        Return:
+            `list[torch.Tensor]`:
+                A list of tensors containing the position IDs for each packed sequence.
+        """
+        # Get lengths per row
         example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
+        # Flat list of lengths
         batch_seq_lengths = torch.tensor(
             [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
         )
         position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
         position_ids[0] = 0
+        # Reset position ids to 0 at the start of each sequence
         position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
         position_ids = position_ids.cumsum(0)
+        # Split back into one tensor per example
         return list(position_ids.split(example_lengths))
 
 
@@ -272,7 +289,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Each input example should be a dictionary containing at least:
     - An `"images"` key holding the image data.
-    - Either a `"messages"` key for conversational inputs or a `"text"` key for standard text inputs.
+    - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
+      key for standard text inputs.
+    - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
 
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
@@ -284,15 +303,18 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Args:
         processor (`ProcessorMixin`):
-            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin`
-            and include a `tokenizer` with a defined `pad_token_id`.
+            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin` and
+            include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int` or `None`, optional, defaults to `None`):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
+        completion_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the completion part of the sequence. When `True`, the labels for the prompt
+            part are set to -100. It requires the dataset type to be prompt-completion.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         dataset_text_field (`str`, optional, defaults to `"text"`):
-            Name of the column that contains text data in the dataset. This parameter is only relevant for
-            [standard datasets format](dataset_formats#standard).
+            Name of the column that contains text data in the dataset. This parameter is only relevant for [standard
+            datasets format](dataset_formats#standard).
         return_tensors (`str`, optional, defaults to `"pt"`):
             The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
 
@@ -300,11 +322,12 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     ```python
     >>> from trl import DataCollatorForVisionLanguageModeling
     >>> from transformers import AutoProcessor
+
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
     >>> collator = DataCollatorForVisionLanguageModeling(processor)
     >>> examples = [
     ...     {"images": [Image.open("image_0.png")], "messages": [{"role": "user", "content": "What is this?"}]},
-    ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]}
+    ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]},
     ... ]
     >>> collator(examples)
     {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
@@ -335,28 +358,71 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     processor: ProcessorMixin
     max_length: Optional[int] = None
+    completion_only_loss: bool = False  # default not used in practice; SFTTrainer always passes the relevant value
     pad_to_multiple_of: Optional[int] = None
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        if "messages" in examples[0] or self.dataset_text_field in examples[0]:
+            if self.completion_only_loss:
+                raise ValueError(
+                    "The `completion_only_loss` argument is not supported for language modeling datasets."
+                )
+            return self._collate_language_modeling(examples)
+        elif "prompt" in examples[0] and "completion" in examples[0]:
+            return self._collate_prompt_completion(examples)
+        else:
+            raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
+
+    @staticmethod
+    def prepare_multimodal_messages(messages: list[dict[str, Any]]) -> None:
+        """
+        Convert messages into a structured multimodal format.
+
+        Each message's content is transformed from a raw string into a list of typed parts. The first user message is
+        prefixed with an image placeholder, while all other user and assistant messages are wrapped as text entries.
+
+        Args:
+            messages (`list[dict[str, Any]]`):
+                Messages with "role" and "content". Content may be a raw string before transformation.
+
+        Example:
+        ```python
+        # Input
+        [
+            {"role": "user", "content": "What's in this image?"},
+            {"role": "assistant", "content": "It looks like a cat."},
+        ]
+
+        # Output
+        [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
+        ]
+        ```
+        """
+
+        image_included = False
+        for message in messages:
+            if message["role"] == "user":
+                if isinstance(message["content"], str) and not image_included:
+                    message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
+                    image_included = True
+                elif isinstance(message["content"], str) and image_included:
+                    message["content"] = [{"type": "text", "text": message["content"]}]
+            if message["role"] == "assistant":
+                if isinstance(message["content"], str):
+                    message["content"] = [{"type": "text", "text": message["content"]}]
+
+    def _collate_language_modeling(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                image_included = False
-                for message in example["messages"]:
-                    if message["role"] == "user":
-                        if isinstance(message["content"], str) and not image_included:
-                            message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
-                            image_included = True
-                        elif isinstance(message["content"], str) and image_included:
-                            message["content"] = [{"type": "text", "text": message["content"]}]
-                    if message["role"] == "assistant":
-                        if isinstance(message["content"], str):
-                            message["content"] = [{"type": "text", "text": message["content"]}]
+                self.prepare_multimodal_messages(example["messages"])
             messages = [example["messages"] for example in examples]
-            texts = self.processor.apply_chat_template(messages, images=images)
+            texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
         else:
@@ -376,10 +442,70 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
         labels = output["input_ids"].clone()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[output["attention_mask"] == 0] = -100
         # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
         # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
         # token definitions vary across architectures.
+        output["labels"] = labels
+        return output
+
+    def _collate_prompt_completion(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        if self.pad_to_multiple_of is not None:
+            raise NotImplementedError(
+                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
+                "prompt-completion data yet."
+            )
+        images = [example["images"] for example in examples]
+        if is_conversational(examples[0]):  # conversational case
+            for example in examples:
+                self.prepare_multimodal_messages(example["prompt"] + example["completion"])
+            examples = [apply_chat_template(example, self.processor) for example in examples]
+
+        prompts = [example["prompt"] for example in examples]
+        completions = [example["completion"] for example in examples]
+
+        processed_prompts = self.processor(
+            images=images,
+            text=prompts,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+        processed_completions = self.processor(
+            text=completions,
+            padding=True,
+            padding_side="right",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+
+        # Concatenate prompts and completions
+        prompt_ids, completion_ids = processed_prompts["input_ids"], processed_completions["input_ids"]
+        prompt_mask, completion_mask = processed_prompts["attention_mask"], processed_completions["attention_mask"]
+        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+
+        # Flush left to reduce padding
+        attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+
+        # Truncate if necessary
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
+
+        # Create labels and mask padding tokens
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+        if self.completion_only_loss:
+            labels[completion_mask == 0] = -100
+
+        # Build the output dictionary
+        output = processed_prompts  # we take processed_prompts because it contains the images
+        output["input_ids"] = input_ids
+        output["attention_mask"] = attention_mask
         output["labels"] = labels
         return output
 
@@ -426,7 +552,8 @@ class SFTTrainer(Trainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -438,16 +565,19 @@ class SFTTrainer(Trainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to
+        `None`):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
 
             Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before
             initializing the Trainer.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to
+        `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.
@@ -563,21 +693,10 @@ class SFTTrainer(Trainer):
                 "Padding-free training is yet not supported for vision-language models. Please set "
                 "`padding_free=False` in the `SFTConfig`."
             )
-        if self._is_vlm and args.completion_only_loss:
-            raise ValueError(
-                "Completion-only loss is not yet supported for vision-language models. Please set "
-                "`completion_only_loss=False` in the `SFTConfig`."
-            )
         if self._is_vlm and args.assistant_only_loss:
             raise ValueError(
                 "Assistant-only loss is not yet supported for vision-language models. Please set "
                 "`assistant_only_loss=False` in the `SFTConfig`."
-            )
-        first_example = next(iter(train_dataset))
-        if self._is_vlm and "prompt" in first_example and "completion" in first_example:
-            raise ValueError(
-                "Prompt-completion datasets are not yet supported for vision-language models in `SFTTrainer`. "
-                "Please use a language-modeling type dataset instead."
             )
 
         # PEFT configuration and model wrapping
@@ -605,8 +724,15 @@ class SFTTrainer(Trainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
+        # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
+        # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
+        self.num_virtual_tokens = 0
+
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
+            if model.active_adapter in model.peft_config:
+                peft_model_config = model.peft_config[model.active_adapter]
+                self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
 
         # Data collator
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
@@ -671,6 +797,7 @@ class SFTTrainer(Trainer):
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
                 max_length=args.max_length,
+                completion_only_loss=self.completion_only_loss,
                 pad_to_multiple_of=args.pad_to_multiple_of,
                 dataset_text_field=args.dataset_text_field,
             )
@@ -926,9 +1053,8 @@ class SFTTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                dataset = dataset.select_columns(
-                    {"input_ids", "seq_lengths", "completion_mask"}.intersection(dataset.column_names)
-                )
+                collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
+                dataset = dataset.select_columns(collator_expected_keys.intersection(dataset.column_names))
 
         return dataset
 
@@ -939,7 +1065,7 @@ class SFTTrainer(Trainer):
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
             if self._is_vlm:
-                self._signature_columns = ["messages", "images"]
+                self._signature_columns = ["messages", "prompt", "completion", "images"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
@@ -948,6 +1074,8 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+        # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
+        inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
@@ -969,6 +1097,10 @@ class SFTTrainer(Trainer):
             with torch.no_grad():
                 shift_logits = outputs.logits[..., :-1, :].contiguous()
                 shift_labels = inputs["labels"][..., 1:].contiguous()
+
+                # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
+                # not correspond to actual input labels.
+                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 # Get predictions
                 predictions = shift_logits.argmax(dim=-1)
