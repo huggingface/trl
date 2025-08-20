@@ -16,7 +16,6 @@ import inspect
 import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -27,7 +26,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset, IterableDataset
 from torch import autocast
@@ -93,6 +92,9 @@ if is_wandb_available():
 
 if is_mlflow_available():
     import mlflow
+
+
+logger = logging.get_logger(__name__)
 
 
 def shift_tokens_right(input_ids: torch.Tensor, decoder_start_token_id: int) -> torch.Tensor:
@@ -212,7 +214,8 @@ class DPOTrainer(Trainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -229,13 +232,16 @@ class DPOTrainer(Trainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to
+        `None`):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to
+        `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.
@@ -298,7 +304,7 @@ class DPOTrainer(Trainer):
             )
 
         if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
+            logger.warning(
                 "You passed model_init_kwargs to the `DPOConfig`, but your model is already instantiated. "
                 "The `model_init_kwargs` will be ignored."
             )
@@ -306,7 +312,7 @@ class DPOTrainer(Trainer):
             model = self._create_model_from_path(model, args)
 
         if args.ref_model_init_kwargs is not None and not isinstance(ref_model, str):
-            warnings.warn(
+            logger.warning(
                 "You passed ref_model_init_kwargs to the `DPOConfig`, but your ref_model is already instantiated. "
                 "The `ref_model_init_kwargs` will be ignored."
             )
@@ -386,7 +392,7 @@ class DPOTrainer(Trainer):
 
         if args.padding_free:
             if model.config._attn_implementation != "flash_attention_2":
-                warnings.warn(
+                logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to "
                     "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
                     "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
@@ -395,7 +401,7 @@ class DPOTrainer(Trainer):
                     "attention mechanism can handle flattened sequences."
                 )
             if args.per_device_train_batch_size == 1:
-                warnings.warn(
+                logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
@@ -415,22 +421,21 @@ class DPOTrainer(Trainer):
         self.use_weighting = args.use_weighting
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
         for loss_type in self.loss_type:
             if (
                 loss_type in ["hinge", "ipo", "bco_pair", "sppo_hard", "nca_pair", "apo_zero", "apo_down"]
                 and args.label_smoothing > 0
             ):
-                warnings.warn(
+                logger.warning(
                     f"You are using the {loss_type} loss type that does not support label smoothing. The "
-                    "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
-                    UserWarning,
+                    "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this "
+                    "warning.",
                 )
             if loss_type == "kto_pair":
                 raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
@@ -533,9 +538,6 @@ class DPOTrainer(Trainer):
                 "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
                 f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
             )
-        # Disable caching if gradient checkpointing is enabled (not supported)
-        # if args.gradient_checkpointing:
-        #     model_init_kwargs["use_cache"] = False
 
         # Create model
         model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
@@ -1550,7 +1552,7 @@ class DPOTrainer(Trainer):
                 loss_mask = loss_mask[:, -logits_to_keep:]
 
         if logits.shape[:2] != labels.shape[:2]:
-            # for llava, the returned logits include the image tokens (placed before the text tokens)
+            # for LLaVA, the returned logits include the image tokens (placed before the text tokens)
             seq_len = labels.shape[1]
             logits = logits[:, -seq_len:]
 
@@ -1964,6 +1966,7 @@ class DPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent(
             """\
             @inproceedings{rafailov2023direct,

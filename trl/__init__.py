@@ -25,11 +25,13 @@ _import_structure = {
         "apply_chat_template",
         "extract_prompt",
         "is_conversational",
+        "is_conversational_from_value",
         "maybe_apply_chat_template",
         "maybe_convert_to_chatml",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
         "pack_dataset",
+        "prepare_multimodal_messages",
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
@@ -69,7 +71,6 @@ _import_structure = {
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
-        "MergeModelCallback",
         "ModelConfig",
         "NashMDConfig",
         "NashMDTrainer",
@@ -93,7 +94,7 @@ _import_structure = {
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.callbacks": ["BEMACallback", "MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
@@ -118,11 +119,13 @@ if TYPE_CHECKING:
         apply_chat_template,
         extract_prompt,
         is_conversational,
+        is_conversational_from_value,
         maybe_apply_chat_template,
         maybe_convert_to_chatml,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
         pack_dataset,
+        prepare_multimodal_messages,
         truncate_dataset,
         unpair_preference_dataset,
     )
@@ -163,7 +166,6 @@ if TYPE_CHECKING:
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
-        MergeModelCallback,
         ModelConfig,
         NashMDConfig,
         NashMDTrainer,
@@ -187,7 +189,7 @@ if TYPE_CHECKING:
         XPOConfig,
         XPOTrainer,
     )
-    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
+    from .trainer.callbacks import BEMACallback, MergeModelCallback, RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
     try:

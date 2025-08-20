@@ -48,9 +48,9 @@ class DatasetConfig:
         name (`str`, *optional*, defaults to `None`):
             Defining the name of the dataset configuration.
         data_dir (`str`, *optional*, defaults to `None`):
-            Defining the `data_dir` of the dataset configuration. If specified for the generic builders(csv, text
-            etc.) or the Hub datasets and `data_files` is `None`, the behavior is equal to passing
-            `os.path.join(data_dir, **)` as `data_files` to reference all the files in a directory.
+            Defining the `data_dir` of the dataset configuration. If specified for the generic builders(csv, text etc.)
+            or the Hub datasets and `data_files` is `None`, the behavior is equal to passing `os.path.join(data_dir,
+            **)` as `data_files` to reference all the files in a directory.
         data_files (`str` or `Sequence` or `Mapping`, *optional*, defaults to `None`):
             Path(s) to source data file(s).
         split (`str`, *optional*, defaults to `"train"`):
@@ -451,7 +451,7 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
             logger.info(f"Created dataset mixture with {len(combined_dataset)} examples")
 
         if mixture_config.test_split_size is not None:
-            logger.info(f"Spliting dataset into train and test sets with test size: {mixture_config.test_split_size}")
+            logger.info(f"Splitting dataset into train and test sets with test size: {mixture_config.test_split_size}")
             combined_dataset = combined_dataset.train_test_split(test_size=mixture_config.test_split_size)
             return combined_dataset
         else:

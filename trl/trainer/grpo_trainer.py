@@ -17,7 +17,6 @@ import inspect
 import os
 import re
 import textwrap
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Sequence, Sized
 from contextlib import nullcontext
@@ -29,6 +28,7 @@ import datasets
 import torch
 import torch.utils.data
 import transformers
+from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -50,7 +50,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
@@ -82,6 +82,9 @@ if is_vllm_available():
 if is_wandb_available():
     import wandb
 
+
+logger = logging.get_logger(__name__)
+
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
@@ -107,9 +110,7 @@ class RepeatSampler(Sampler):
 
     Example:
     ```python
-    >>> sampler = RepeatSampler(
-    ...     ["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4
-    ... )
+    >>> sampler = RepeatSampler(["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4)
     >>> list(sampler)
     [4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
@@ -319,8 +320,8 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Unio
 
 def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
     """
-    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]`
-    back into a single tensor along the first dimension.
+    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]` back into a single
+    tensor along the first dimension.
     """
     pixel_values = batch.get("pixel_values")
 
@@ -348,10 +349,12 @@ def truncate_with_protected_tokens(
             List of token IDs that should be preserved in the output.
     """
     protected_set = set(protected_tokens)
+    # Create protected_tokens tensor once to avoid recreating it on every call
+    protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
 
     def process_sequence(ids, mask):
         # Create boolean masks
-        is_protected = torch.tensor([x.item() in protected_set for x in ids])
+        is_protected = torch.isin(ids, protected_tokens_tensor)
         is_non_protected = ~is_protected
 
         # Count tokens
@@ -460,9 +463,10 @@ class GRPOTrainer(Trainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
@@ -483,7 +487,8 @@ class GRPOTrainer(Trainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
@@ -534,9 +539,9 @@ class GRPOTrainer(Trainer):
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
-                raise ValueError(
+                logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
-                    "This argument can only be used when the `model` argument is a string."
+                    "The `model_init_kwargs` will be ignored."
                 )
 
         # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
@@ -604,9 +609,11 @@ class GRPOTrainer(Trainer):
             reward_processing_classes = [None] * len(reward_funcs)
         elif not isinstance(reward_processing_classes, list):
             reward_processing_classes = [reward_processing_classes]
-        else:
-            if len(reward_processing_classes) != len(reward_funcs):
-                raise ValueError("The number of reward processing classes must match the number of reward functions.")
+        if len(reward_processing_classes) != len(reward_funcs):
+            raise ValueError(
+                f"The number of reward processing classes ({len(reward_processing_classes)}) must match the number of "
+                f"reward functions ({len(reward_funcs)})."
+            )
 
         for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
             if isinstance(reward_func, PreTrainedModel):
@@ -618,6 +625,7 @@ class GRPOTrainer(Trainer):
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
+
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
@@ -1031,8 +1039,8 @@ class GRPOTrainer(Trainer):
 
         Returns:
             `torch.Tensor`:
-                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
-                `False` otherwise.
+                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold
+                and `False` otherwise.
         """
         non_pad_entropies = entropies[mask.bool()].float()
         if non_pad_entropies.numel() == 0:
@@ -1311,7 +1319,7 @@ class GRPOTrainer(Trainer):
             row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()}
             row_reward_kwargs["prompt"] = prompts[nan_row_idx]
             row_reward_kwargs["completion"] = completions[nan_row_idx]
-            warnings.warn(
+            logger.warning(
                 f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
                 "Please ensure that at least one reward function returns a valid reward."
             )
@@ -1343,17 +1351,8 @@ class GRPOTrainer(Trainer):
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
-                if isinstance(prompt, list):
-                    for message in prompt:
-                        if not isinstance(message, dict):
-                            continue
-                        content = message.get("content")
-                        role = message.get("role")
-                        if isinstance(content, str):
-                            if role == "user":
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
-                            elif role == "system":
-                                message["content"] = [{"type": "text", "text": content}]
+                if isinstance(prompt, list):  # i.e., when using conversational data
+                    prepare_multimodal_messages(prompt, num_images=1)
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1588,9 +1587,7 @@ class GRPOTrainer(Trainer):
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [
-            [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
-        ]
+        completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
 
         # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
         completion_lengths = completion_mask.sum(1)
@@ -2032,6 +2029,7 @@ class GRPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent(
             """\
             @article{zhihong2024deepseekmath,

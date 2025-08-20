@@ -796,6 +796,7 @@ class PPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{mziegler2019fine-tuning,
             title        = {{Fine-Tuning Language Models from Human Preferences}},

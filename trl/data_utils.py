@@ -28,6 +28,54 @@ from transformers import PreTrainedTokenizerBase
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
+def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int) -> None:
+    """
+    Convert messages into a structured multimodal format if needed.
+
+    Each message's content is transformed from a raw string into a list of typed parts. The first user message is
+    prefixed with an image placeholder, while all other user and assistant messages are wrapped as text entries.
+
+    Args:
+        messages (`list[dict[str, Any]]`):
+            Messages with `"role"` and `"content"`. Content may be a raw string before transformation.
+        num_images (`int`):
+            Number of images to include in the first user message. This is used to determine how many image
+            placeholders to add.
+
+    Example:
+    ```python
+    # Input
+    [
+        {"role": "user", "content": "What's in this image?"},
+        {"role": "assistant", "content": "It looks like a cat."},
+    ]
+
+    # Output (num_images=1)
+    [
+        {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
+    ]
+    ```
+    """
+    image_included = False
+    for message in messages:
+        if message["role"] == "system":
+            if isinstance(message["content"], str):  # if already prepared, the content will be a list
+                message["content"] = [{"type": "text", "text": message["content"]}]
+        if message["role"] == "user":
+            if isinstance(message["content"], str) and not image_included:
+                placeholders = [{"type": "image"}] * num_images
+                message["content"] = [*placeholders, {"type": "text", "text": message["content"]}]
+                image_included = True
+            elif isinstance(message["content"], str) and image_included:
+                message["content"] = [{"type": "text", "text": message["content"]}]
+        if message["role"] == "assistant":
+            if isinstance(message["content"], str):
+                message["content"] = [{"type": "text", "text": message["content"]}]
+        else:
+            raise ValueError(f"Invalid role in message: {message['role']}. Expected 'user', 'assistant', or 'system'.")
+
+
 def is_conversational(example: dict[str, Any]) -> bool:
     r"""
     Check if the example is in a conversational format.
@@ -123,7 +171,7 @@ def apply_chat_template(
             prompt_chosen = tokenizer.apply_chat_template(
                 example["prompt"] + example["chosen"], tools=tools, tokenize=False, **template_kwargs
             )
-            # DeepSeek-R1 inserts a <think> token when using `add_generation_prompt`, which can cause discrepancies
+            # DeepSeek-R1 inserts a <tool_call> token when using `add_generation_prompt`, which can cause discrepancies
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
             # common prefix between the two. In most cases, this is a no-op.
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen)))
@@ -133,14 +181,14 @@ def apply_chat_template(
             prompt_rejected = tokenizer.apply_chat_template(
                 example["prompt"] + example["rejected"], tools=tools, tokenize=False, **template_kwargs
             )
-            # Handle DeepSeek-R1 <think> token, see the above comment for details
+            # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
                 example["prompt"] + example["completion"], tools=tools, tokenize=False, **template_kwargs
             )
-            # Handle DeepSeek-R1 <think> token, see the above comment for details
+            # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
@@ -222,7 +270,7 @@ def maybe_apply_chat_template(
     ...     "completion": [{"role": "assistant", "content": "It is blue."}],
     ... }
     >>> apply_chat_template(example, tokenizer)
-    {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n<|endoftext|>'}
+    {'prompt': '<|user|>\nWhat color is the sky?<|end|>\n<|assistant|>\n', 'completion': 'It is blue.<|end|>\n'}
     ```
     """
     if is_conversational(example):
@@ -457,11 +505,13 @@ class _SegmentTree:
 
     def __init__(self, maxval: int):
         self.maxval = maxval
-        self.tree = [0] * (2 * maxval)
+        # For non-power-of-2 values, we need to round up to the next power of 2 for the tree size
+        self.tree_size = 1 << (maxval - 1).bit_length()
+        self.tree = [0] * (2 * self.tree_size)
 
     def add(self, val):
         assert 0 < val <= self.maxval
-        i = self.maxval + val - 1
+        i = self.tree_size + val - 1
         self.tree[i] = val
         while i > 1:
             i >>= 1
@@ -471,7 +521,7 @@ class _SegmentTree:
 
     def remove(self, val):
         assert 0 < val <= self.maxval
-        i = self.maxval + val - 1
+        i = self.tree_size + val - 1
         self.tree[i] = 0
         while i > 1:
             i >>= 1
@@ -482,7 +532,7 @@ class _SegmentTree:
     def search(self, val):
         assert 0 < val <= self.maxval
         i = 1
-        while i < self.maxval:
+        while i < self.tree_size:
             if self.tree[i << 1] >= val:
                 i = i << 1
             else:
@@ -519,8 +569,10 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
         space = segment_tree.search(length)
 
         if space < seq_length:
+            # Use existing bin with exactly this amount of space
             bin = space_to_bin[space].popleft()
         else:
+            # Create a new bin
             bin = {"ids": [], "length": 0}
             bins.append(bin)
 
@@ -633,7 +685,7 @@ def truncate_dataset(
     dataset: DatasetType, max_length: int, map_kwargs: Optional[dict[str, Any]] = None
 ) -> DatasetType:
     r"""
-    Truncate sequences in a dataset to a specifed `max_length`.
+    Truncate sequences in a dataset to a specified `max_length`.
 
     Args:
         dataset (`Dataset` or `DatasetDict`):
@@ -713,10 +765,12 @@ def is_conversational_from_value(example: dict[str, Any]) -> bool:
     >>> example = {"conversations": [{"from": "user", "value": "What color is the sky?"}]}
     >>> is_conversational_from_value(example)
     True
+
     >>> example = {"conversations": [{"role": "user", "content": "What color is the sky?"}]}
     >>> is_conversational_from_value(example)
     False
-    >>> example = {"conversations": "The sky is"})
+
+    >>> example = {"conversations": "The sky is"}
     >>> is_conversational_from_value(example)
     False
     ```

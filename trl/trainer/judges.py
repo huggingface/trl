@@ -162,7 +162,7 @@ class BaseBinaryJudge(BaseJudge):
 
         This base class should be used to implement binary evaluations as done in section 4.1.4 of the [CGPO
         paper](https://huggingface.co/papers/2409.20370). It is relevant for assessing whether a prompt-completion pair
-        satisfies a specific contraint.
+        satisfies a specific constraint.
 
         Args:
             prompts (`list[str]`): List of prompts.
@@ -177,7 +177,7 @@ class BaseBinaryJudge(BaseJudge):
 
         Note:
             If the judge returns -1 for any prompt, it indicates that the inner process used to compute the preference
-            has failed. For instance, this could occur if the underlying language model or rule based contraint
+            has failed. For instance, this could occur if the underlying language model or rule based constraint
             returned an invalid answer. In such cases, the caller should handle these invalid indices appropriately,
             possibly by implementing fallback logic or error handling.
         """

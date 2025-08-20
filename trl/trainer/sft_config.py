@@ -49,7 +49,8 @@ class SFTConfig(TrainingArguments):
             Name of the column that contains text data in the dataset.
         dataset_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
-            `skip_prepare_dataset`.
+            `skip_prepare_dataset`. When the model is a VLM, `skip_prepare_dataset` is automatically treated as `True`
+            regardless of the provided value, since preprocessing is done on the fly.
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
         eos_token (`str` or `None`, *optional*, defaults to `None`):
@@ -86,9 +87,9 @@ class SFTConfig(TrainingArguments):
             loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
             sequence for [language modeling](#language-modeling) datasets.
         assistant_only_loss (`bool`, *optional*, defaults to `False`):
-            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed
-            only on the assistant responses, which is supported only for [conversational](#conversational) datasets. If `False`,
-            loss is computed on the entire sequence.
+            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
+            on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
+            `False`, loss is computed on the entire sequence.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -159,7 +160,9 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
-            "`skip_prepare_dataset`."
+            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
+            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
+            "since preprocessing is done on the fly."
         },
     )
     dataset_num_proc: Optional[int] = field(
