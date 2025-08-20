@@ -428,11 +428,6 @@ class TestComputeAccuracy(TrlTestCase):
         self.assertAlmostEqual(result["accuracy"], expected_accuracy)
 
     def test_rewards_comparison_task(self):
-        from accelerate import PartialState
-
-        # Initialize accelerate state for logging
-        _ = PartialState()
-
         eval_pred = (
             np.array(
                 [
