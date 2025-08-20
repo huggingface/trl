@@ -14,7 +14,6 @@
 
 import os
 import textwrap
-import warnings
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
@@ -25,6 +24,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+from accelerate import logging
 from datasets import Dataset
 from packaging import version
 from torch.utils.data import DataLoader, IterableDataset
@@ -44,7 +44,7 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalPrediction, seed_worker
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_peft_available, is_sagemaker_mp_enabled, logging
+from transformers.utils import is_peft_available, is_sagemaker_mp_enabled
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
 from ..import_utils import is_vllm_available
@@ -169,10 +169,9 @@ class OnlineDPOTrainer(Trainer):
         self.ref_model = ref_model
 
         if reward_model is not None and judge is not None:
-            warnings.warn(
+            logger.warning(
                 "Both `reward_model` and `judge` are provided. Please choose provide only one of them. "
                 "Ignoring `judge` and using `reward_model`.",
-                UserWarning,
             )
             judge = None
         elif reward_model is None and judge is None:

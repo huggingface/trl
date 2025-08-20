@@ -14,7 +14,6 @@
 
 import contextlib
 import os
-import warnings
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -24,7 +23,7 @@ from typing import Any, Callable, Optional, TypeVar, Union
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
 from transformers import (
     AutoConfig,
@@ -64,6 +63,7 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
+logger = logging.get_logger(__name__)
 
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
@@ -381,7 +381,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                prepare_multimodal_messages(example["messages"])
+                prepare_multimodal_messages(example["messages"], len(example["images"]))
             messages = [example["messages"] for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
@@ -396,6 +396,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images=images,
             text=texts,
             padding=True,
+            padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
             truncation=self.max_length is not None,
             max_length=self.max_length,
@@ -419,7 +420,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         images = [example["images"] for example in examples]
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                prepare_multimodal_messages(example["prompt"] + example["completion"])
+                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
@@ -602,7 +603,7 @@ class SFTTrainer(Trainer):
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
-                warnings.warn(
+                logger.warning(
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
@@ -673,7 +674,7 @@ class SFTTrainer(Trainer):
 
                 # Ensure that the lm_head is trainable
                 if peft_config.modules_to_save is None or "lm_head" not in peft_config.modules_to_save:
-                    warnings.warn(
+                    logger.warning(
                         "Cloning chat template added new tokens to the tokenizer, but 'lm_head' is not in PEFT's "
                         "`modules_to_save`. As a result, the model may not learn to generate outputs with these new "
                         "tokens, leading to degraded generation quality. To fix this, add "
@@ -707,12 +708,12 @@ class SFTTrainer(Trainer):
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if args.packing and args.packing_strategy == "wrapped":
-                warnings.warn(
+                logger.warning(
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
                     "recommended. Please refer to the documentation to understand why this is not recommended."
                 )
             if not use_flash_attention:
-                warnings.warn(
+                logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to "
                     "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
                     "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
@@ -721,7 +722,7 @@ class SFTTrainer(Trainer):
                     "attention mechanism can handle flattened sequences."
                 )
             if args.per_device_train_batch_size == 1 and not args.packing:
-                warnings.warn(
+                logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
@@ -731,7 +732,7 @@ class SFTTrainer(Trainer):
         # is prompt-completion, and False if the dataset format is language modeling.
         dataset_sample = next(iter(train_dataset))
         if args.completion_only_loss is None:
-            self.completion_only_loss = "prompt" in dataset_sample
+            self.completion_only_loss = "prompt" in dataset_sample and "completion" in dataset_sample
         else:
             self.completion_only_loss = args.completion_only_loss
 
@@ -764,7 +765,7 @@ class SFTTrainer(Trainer):
             )
 
         if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
-            warnings.warn(
+            logger.warning(
                 "You are using packing, but the attention implementation is not set to 'flash_attention_2' or "
                 "'kernels-community/vllm-flash-attn3'. Packing flattens batches into a single sequence, and Flash "
                 "Attention is the only known attention mechanisms that reliably support this. Using other "
@@ -868,11 +869,10 @@ class SFTTrainer(Trainer):
         with PartialState().main_process_first():
             # Apply the formatting function if any
             if formatting_func is not None and is_processed:
-                warnings.warn(
+                logger.warning(
                     "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
                     "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
                     "`formatting_func` or pass a dataset that is not already processed.",
-                    UserWarning,
                 )
 
             if formatting_func is not None and not is_processed:
@@ -948,7 +948,7 @@ class SFTTrainer(Trainer):
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            warnings.warn(
+                            logger.warning(
                                 "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
                                 "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
                                 "token handling. Verify that the tokenizer is processing text consistently."

@@ -18,12 +18,15 @@
 # This source code is licensed under the BSD-style license found in the
 # LICENSE file in the root directory of https://github.com/pytorch/torchtune.
 
-import warnings
 
 import psutil
 import torch
+from accelerate import logging
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
+
+
+logger = logging.get_logger(__name__)
 
 
 class OffloadActivations(saved_tensors_hooks):
@@ -111,7 +114,7 @@ class OffloadActivations(saved_tensors_hooks):
         def verify_sufficient_virtual_memory():
             curr_pct = get_cpu_ram_pct()
             if curr_pct > self.virtual_memory_safe_pct:
-                warnings.warn(f"{curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
+                logger.warning(f"{curr_pct=}% > {self.virtual_memory_safe_pct=}% of virtual memory used")
 
         def get_cpu_ram_pct() -> float:
             # get the percentage of memory used by the system
@@ -448,7 +451,7 @@ def get_act_offloading_ctx_manager(
         output_head_detected = True
 
     if not output_head_detected and warn_if_no_head:
-        warnings.warn(
+        logger.warning(
             "During activation offloading, no output head was detected. If your model has an output head, it will be "
             "offloaded. This usually greatly slows training, given the large vocabulary size. To change this "
             "behavior, set your output head as model.output and make it an nn.Module. You can disable this warning by "

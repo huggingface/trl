@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable, Optional, Union
 
 import torch
+from accelerate import logging
 from datasets import Dataset
 from torch.utils.data import DataLoader
 from transformers import (
@@ -49,6 +50,8 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+logger = logging.get_logger(__name__)
 
 
 class IterativeSFTTrainer(Trainer):
@@ -133,7 +136,7 @@ class IterativeSFTTrainer(Trainer):
 
         # Model
         if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
+            logger.warning(
                 "You passed model_init_kwargs to the `IterativeSFTConfig`, but your model is already instantiated. "
                 "The `model_init_kwargs` will be ignored."
             )
@@ -322,10 +325,9 @@ class IterativeSFTTrainer(Trainer):
         if input_ids is None and texts is None:
             raise ValueError("Step should include `input_ids` or `texts` as keyword arguments.")
         elif input_ids is not None and texts is not None:
-            warnings.warn(
+            logger.warning(
                 "Both `input_ids` and `texts` argument are provided. `input_ids` will be ignored. "
                 "Please provide only one of the two.",
-                UserWarning,
             )
 
         if labels is None and texts_labels is None and self.is_encoder_decoder:
