@@ -50,7 +50,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
@@ -58,7 +58,6 @@ from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
-from .sft_trainer import DataCollatorForVisionLanguageModeling
 from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
@@ -1351,7 +1350,7 @@ class GRPOTrainer(Trainer):
             for prompt in prompts:
                 if isinstance(prompt, list):
                     # Use the same multimodal message preparation as in SFTTrainer
-                    DataCollatorForVisionLanguageModeling.prepare_multimodal_messages(prompt)
+                    prepare_multimodal_messages(prompt)
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
