@@ -921,7 +921,7 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
+                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss, max_length):
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
@@ -968,7 +968,7 @@ class SFTTrainer(Trainer):
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
-                            if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
+                            if "assistant_masks" in processed and 1 not in processed["assistant_masks"][:max_length]:
                                 raise RuntimeError(
                                     "You're using `assistant_only_loss=True`, but at least one example has no "
                                     "assistant tokens. This usually means the tokenizer's chat template doesn't "
@@ -987,6 +987,7 @@ class SFTTrainer(Trainer):
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
                         "assistant_only_loss": args.assistant_only_loss,
+                        "max_length": args.max_length if args.max_length is not None else -1,
                     },
                     **map_kwargs,
                 )
