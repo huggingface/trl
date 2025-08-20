@@ -8,6 +8,10 @@
 
 [[autodoc]] is_conversational
 
+## is_conversational_from_value
+
+[[autodoc]] is_conversational_from_value
+
 ## apply_chat_template
 
 [[autodoc]] apply_chat_template
@@ -43,7 +47,3 @@
 ## truncate_dataset
 
 [[autodoc]] truncate_dataset
-
-## maybe_convert_to_chatml
-
-[[autodoc]] maybe_convert_to_chatml
