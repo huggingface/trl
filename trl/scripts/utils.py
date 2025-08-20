@@ -451,7 +451,7 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
             logger.info(f"Created dataset mixture with {len(combined_dataset)} examples")
 
         if mixture_config.test_split_size is not None:
-            logger.info(f"Spliting dataset into train and test sets with test size: {mixture_config.test_split_size}")
+            logger.info(f"Splitting dataset into train and test sets with test size: {mixture_config.test_split_size}")
             combined_dataset = combined_dataset.train_test_split(test_size=mixture_config.test_split_size)
             return combined_dataset
         else:

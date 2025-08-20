@@ -14,7 +14,6 @@
 
 import contextlib
 import os
-import warnings
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -24,7 +23,7 @@ from typing import Any, Callable, Optional, TypeVar, Union
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
 from transformers import (
     AutoConfig,
@@ -45,15 +44,17 @@ from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..data_utils import (
+    apply_chat_template,
     is_conversational,
     is_conversational_from_value,
     maybe_convert_to_chatml,
     pack_dataset,
+    prepare_multimodal_messages,
     truncate_dataset,
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad
+from .utils import flush_left, generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
@@ -62,6 +63,7 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
+logger = logging.get_logger(__name__)
 
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
@@ -288,7 +290,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Each input example should be a dictionary containing at least:
     - An `"images"` key holding the image data.
-    - Either a `"messages"` key for conversational inputs or a `"text"` key for standard text inputs.
+    - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
+      key for standard text inputs.
+    - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
 
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
@@ -304,6 +308,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int` or `None`, optional, defaults to `None`):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
+        completion_only_loss (`bool`, *optional*, defaults to `False`):
+            Whether to compute loss only on the completion part of the sequence. When `True`, the labels for the prompt
+            part are set to -100. It requires the dataset type to be prompt-completion.
         pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         dataset_text_field (`str`, optional, defaults to `"text"`):
@@ -352,28 +359,31 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     processor: ProcessorMixin
     max_length: Optional[int] = None
+    completion_only_loss: bool = False  # default not used in practice; SFTTrainer always passes the relevant value
     pad_to_multiple_of: Optional[int] = None
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        if "messages" in examples[0] or self.dataset_text_field in examples[0]:
+            if self.completion_only_loss:
+                raise ValueError(
+                    "The `completion_only_loss` argument is not supported for language modeling datasets."
+                )
+            return self._collate_language_modeling(examples)
+        elif "prompt" in examples[0] and "completion" in examples[0]:
+            return self._collate_prompt_completion(examples)
+        else:
+            raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
+
+    def _collate_language_modeling(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                image_included = False
-                for message in example["messages"]:
-                    if message["role"] == "user":
-                        if isinstance(message["content"], str) and not image_included:
-                            message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
-                            image_included = True
-                        elif isinstance(message["content"], str) and image_included:
-                            message["content"] = [{"type": "text", "text": message["content"]}]
-                    if message["role"] == "assistant":
-                        if isinstance(message["content"], str):
-                            message["content"] = [{"type": "text", "text": message["content"]}]
+                prepare_multimodal_messages(example["messages"], len(example["images"]))
             messages = [example["messages"] for example in examples]
-            texts = self.processor.apply_chat_template(messages, images=images)
+            texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
         else:
@@ -386,6 +396,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images=images,
             text=texts,
             padding=True,
+            padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
             truncation=self.max_length is not None,
             max_length=self.max_length,
@@ -393,10 +404,70 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
         labels = output["input_ids"].clone()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[output["attention_mask"] == 0] = -100
         # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
         # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
         # token definitions vary across architectures.
+        output["labels"] = labels
+        return output
+
+    def _collate_prompt_completion(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+        if self.pad_to_multiple_of is not None:
+            raise NotImplementedError(
+                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
+                "prompt-completion data yet."
+            )
+        images = [example["images"] for example in examples]
+        if is_conversational(examples[0]):  # conversational case
+            for example in examples:
+                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
+            examples = [apply_chat_template(example, self.processor) for example in examples]
+
+        prompts = [example["prompt"] for example in examples]
+        completions = [example["completion"] for example in examples]
+
+        processed_prompts = self.processor(
+            images=images,
+            text=prompts,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+        processed_completions = self.processor(
+            text=completions,
+            padding=True,
+            padding_side="right",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+
+        # Concatenate prompts and completions
+        prompt_ids, completion_ids = processed_prompts["input_ids"], processed_completions["input_ids"]
+        prompt_mask, completion_mask = processed_prompts["attention_mask"], processed_completions["attention_mask"]
+        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+
+        # Flush left to reduce padding
+        attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+
+        # Truncate if necessary
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
+
+        # Create labels and mask padding tokens
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+        if self.completion_only_loss:
+            labels[completion_mask == 0] = -100
+
+        # Build the output dictionary
+        output = processed_prompts  # we take processed_prompts because it contains the images
+        output["input_ids"] = input_ids
+        output["attention_mask"] = attention_mask
         output["labels"] = labels
         return output
 
@@ -532,7 +603,7 @@ class SFTTrainer(Trainer):
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
-                warnings.warn(
+                logger.warning(
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
@@ -584,21 +655,10 @@ class SFTTrainer(Trainer):
                 "Padding-free training is yet not supported for vision-language models. Please set "
                 "`padding_free=False` in the `SFTConfig`."
             )
-        if self._is_vlm and args.completion_only_loss:
-            raise ValueError(
-                "Completion-only loss is not yet supported for vision-language models. Please set "
-                "`completion_only_loss=False` in the `SFTConfig`."
-            )
         if self._is_vlm and args.assistant_only_loss:
             raise ValueError(
                 "Assistant-only loss is not yet supported for vision-language models. Please set "
                 "`assistant_only_loss=False` in the `SFTConfig`."
-            )
-        first_example = next(iter(train_dataset))
-        if self._is_vlm and "prompt" in first_example and "completion" in first_example:
-            raise ValueError(
-                "Prompt-completion datasets are not yet supported for vision-language models in `SFTTrainer`. "
-                "Please use a language-modeling type dataset instead."
             )
 
         # PEFT configuration and model wrapping
@@ -614,7 +674,7 @@ class SFTTrainer(Trainer):
 
                 # Ensure that the lm_head is trainable
                 if peft_config.modules_to_save is None or "lm_head" not in peft_config.modules_to_save:
-                    warnings.warn(
+                    logger.warning(
                         "Cloning chat template added new tokens to the tokenizer, but 'lm_head' is not in PEFT's "
                         "`modules_to_save`. As a result, the model may not learn to generate outputs with these new "
                         "tokens, leading to degraded generation quality. To fix this, add "
@@ -648,12 +708,12 @@ class SFTTrainer(Trainer):
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if args.packing and args.packing_strategy == "wrapped":
-                warnings.warn(
+                logger.warning(
                     "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
                     "recommended. Please refer to the documentation to understand why this is not recommended."
                 )
             if not use_flash_attention:
-                warnings.warn(
+                logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to "
                     "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
                     "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
@@ -662,7 +722,7 @@ class SFTTrainer(Trainer):
                     "attention mechanism can handle flattened sequences."
                 )
             if args.per_device_train_batch_size == 1 and not args.packing:
-                warnings.warn(
+                logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
@@ -672,7 +732,7 @@ class SFTTrainer(Trainer):
         # is prompt-completion, and False if the dataset format is language modeling.
         dataset_sample = next(iter(train_dataset))
         if args.completion_only_loss is None:
-            self.completion_only_loss = "prompt" in dataset_sample
+            self.completion_only_loss = "prompt" in dataset_sample and "completion" in dataset_sample
         else:
             self.completion_only_loss = args.completion_only_loss
 
@@ -699,12 +759,13 @@ class SFTTrainer(Trainer):
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
                 max_length=args.max_length,
+                completion_only_loss=self.completion_only_loss,
                 pad_to_multiple_of=args.pad_to_multiple_of,
                 dataset_text_field=args.dataset_text_field,
             )
 
         if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
-            warnings.warn(
+            logger.warning(
                 "You are using packing, but the attention implementation is not set to 'flash_attention_2' or "
                 "'kernels-community/vllm-flash-attn3'. Packing flattens batches into a single sequence, and Flash "
                 "Attention is the only known attention mechanisms that reliably support this. Using other "
@@ -808,11 +869,10 @@ class SFTTrainer(Trainer):
         with PartialState().main_process_first():
             # Apply the formatting function if any
             if formatting_func is not None and is_processed:
-                warnings.warn(
+                logger.warning(
                     "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
                     "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
                     "`formatting_func` or pass a dataset that is not already processed.",
-                    UserWarning,
                 )
 
             if formatting_func is not None and not is_processed:
@@ -888,7 +948,7 @@ class SFTTrainer(Trainer):
 
                         # Check if the tokenized prompt starts with the tokenized prompt+completion
                         if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            warnings.warn(
+                            logger.warning(
                                 "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
                                 "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
                                 "token handling. Verify that the tokenizer is processing text consistently."
@@ -966,7 +1026,7 @@ class SFTTrainer(Trainer):
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
             if self._is_vlm:
-                self._signature_columns = ["messages", "images"]
+                self._signature_columns = ["messages", "prompt", "completion", "images"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
@@ -975,6 +1035,8 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+        # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
+        inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )

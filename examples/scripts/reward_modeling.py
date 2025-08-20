@@ -50,10 +50,9 @@ python examples/scripts/reward_modeling.py \
     --lora_alpha 16
 """
 
-import warnings
-
 import torch
 import trackio
+from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
@@ -67,6 +66,9 @@ from trl import (
     get_quantization_config,
     setup_chat_format,
 )
+
+
+logger = logging.get_logger(__name__)
 
 
 if __name__ == "__main__":
@@ -102,10 +104,9 @@ if __name__ == "__main__":
         model, tokenizer = setup_chat_format(model, tokenizer)
 
     if model_args.use_peft and model_args.lora_task_type != "SEQ_CLS":
-        warnings.warn(
+        logger.warning(
             "You are using a `task_type` that is different than `SEQ_CLS` for PEFT. This will lead to silent bugs"
             " Make sure to pass --lora_task_type SEQ_CLS when using this script with PEFT.",
-            UserWarning,
         )
 
     ##############

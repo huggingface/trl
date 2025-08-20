@@ -24,11 +24,11 @@ import argparse
 import importlib
 import os
 import sys
-import warnings
 from dataclasses import dataclass, field
 from typing import Optional
 
 import trackio
+from accelerate import logging
 from datasets import load_dataset
 
 from trl import (
@@ -41,11 +41,14 @@ from trl import (
     get_dataset,
     get_peft_config,
 )
-from trl.rewards import think_format_reward
+from trl.rewards import get_soft_overlong_punishment, think_format_reward
 
+
+logger = logging.get_logger(__name__)
 
 reward_funcs_registry = {
     "think_format_reward": think_format_reward,
+    "get_soft_overlong_punishment": get_soft_overlong_punishment,
 }
 
 
@@ -103,7 +106,7 @@ def main(script_args, training_args, model_args, dataset_args):
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
-        warnings.warn(
+        logger.warning(
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
             "dataset and `dataset_name` will be ignored."
         )
