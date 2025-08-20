@@ -354,6 +354,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                         [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
                          151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,  74785,    419,
                            2168,     13, 151645,    198]])}
+    ```
     """
 
     processor: ProcessorMixin

@@ -1348,8 +1348,7 @@ class GRPOTrainer(Trainer):
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
-                if isinstance(prompt, list):
-                    # Use the same multimodal message preparation as in SFTTrainer
+                if isinstance(prompt, list):  # i.e., when using conversational data
                     prepare_multimodal_messages(prompt)
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]

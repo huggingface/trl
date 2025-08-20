@@ -1,5 +1,9 @@
 # Data Utilities
 
+## prepare_multimodal_messages
+
+[[autodoc]] prepare_multimodal_messages
+
 ## is_conversational
 
 [[autodoc]] is_conversational
@@ -13,7 +17,7 @@
 [[autodoc]] maybe_apply_chat_template
 
 ## maybe_convert_to_chatml
-    
+
 [[autodoc]] maybe_convert_to_chatml
 
 ## extract_prompt
@@ -39,3 +43,7 @@
 ## truncate_dataset
 
 [[autodoc]] truncate_dataset
+
+## maybe_convert_to_chatml
+
+[[autodoc]] maybe_convert_to_chatml

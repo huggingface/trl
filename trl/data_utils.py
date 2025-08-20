@@ -37,7 +37,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]]) -> None:
 
     Args:
         messages (`list[dict[str, Any]]`):
-            Messages with "role" and "content". Content may be a raw string before transformation.
+            Messages with `"role"` and `"content"`. Content may be a raw string before transformation.
 
     Example:
     ```python
@@ -53,11 +53,13 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]]) -> None:
         {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
     ]
     ```
-
     """
 
     image_included = False
     for message in messages:
+        if message["role"] == "system":
+            if isinstance(message["content"], str):  # if already prepared, the content will be a list
+                message["content"] = [{"type": "text", "text": message["content"]}]
         if message["role"] == "user":
             if isinstance(message["content"], str) and not image_included:
                 message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
