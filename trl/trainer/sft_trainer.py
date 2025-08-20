@@ -376,9 +376,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
 
     @staticmethod
-    def prepare_multimodal_messages(messages: list[dict[str, Any]]) -> None:
+    def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int) -> None:
         """
-        Convert messages into a structured multimodal format.
+        Convert messages into a structured multimodal format if needed.
 
         Each message's content is transformed from a raw string into a list of typed parts. The first user message is
         prefixed with an image placeholder, while all other user and assistant messages are wrapped as text entries.
@@ -386,6 +386,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         Args:
             messages (`list[dict[str, Any]]`):
                 Messages with "role" and "content". Content may be a raw string before transformation.
+            num_images (`int`):
+                Number of images to include in the first user message. This is used to determine how many image
+                placeholders to add.
 
         Example:
         ```python
@@ -395,19 +398,19 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             {"role": "assistant", "content": "It looks like a cat."},
         ]
 
-        # Output
+        # Output (num_images=1)
         [
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
             {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
         ]
         ```
         """
-
         image_included = False
         for message in messages:
             if message["role"] == "user":
                 if isinstance(message["content"], str) and not image_included:
-                    message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
+                    placeholders = [{"type": "image"}] * num_images
+                    message["content"] = [*placeholders, {"type": "text", "text": message["content"]}]
                     image_included = True
                 elif isinstance(message["content"], str) and image_included:
                     message["content"] = [{"type": "text", "text": message["content"]}]
@@ -420,7 +423,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                self.prepare_multimodal_messages(example["messages"])
+                self.prepare_multimodal_messages(example["messages"], len(example["images"]))
             messages = [example["messages"] for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
@@ -435,6 +438,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images=images,
             text=texts,
             padding=True,
+            padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
             truncation=self.max_length is not None,
             max_length=self.max_length,
@@ -458,7 +462,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         images = [example["images"] for example in examples]
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                self.prepare_multimodal_messages(example["prompt"] + example["completion"])
+                self.prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
