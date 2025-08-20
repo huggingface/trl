@@ -48,7 +48,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "assistant", "content": "It is blue."},
         ]
 
-        prepare_multimodal_messages(messages)
+        prepare_multimodal_messages(messages, num_images=1)
 
         expected = [
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
@@ -65,12 +65,36 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "How about the grass?"},
         ]
 
-        prepare_multimodal_messages(messages)
+        prepare_multimodal_messages(messages, num_images=1)
 
         expected = [
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
             {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
             {"role": "user", "content": [{"type": "text", "text": "How about the grass?"}]},
+        ]
+
+        self.assertEqual(messages, expected)
+
+    def test_multiple_images(self):
+        """Test that multiple images are added to the first user message."""
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+        ]
+
+        prepare_multimodal_messages(messages, num_images=3)
+
+        expected = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "image"},
+                    {"type": "image"},
+                    {"type": "text", "text": "What color is the sky?"},
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
         ]
 
         self.assertEqual(messages, expected)
@@ -82,7 +106,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "What color is the sky?"},
         ]
 
-        prepare_multimodal_messages(messages)
+        prepare_multimodal_messages(messages, num_images=1)
 
         expected = [
             {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant"}]},
@@ -100,7 +124,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
         ]
 
         original = copy.deepcopy(messages)
-        prepare_multimodal_messages(messages)
+        prepare_multimodal_messages(messages, num_images=1)
 
         self.assertEqual(messages, original)
 
@@ -112,7 +136,7 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "What about the grass?"},
         ]
 
-        prepare_multimodal_messages(messages)
+        prepare_multimodal_messages(messages, num_images=1)
 
         expected = [
             {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
