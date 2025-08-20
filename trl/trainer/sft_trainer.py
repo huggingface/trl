@@ -325,6 +325,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
     >>> collator = DataCollatorForVisionLanguageModeling(processor)
+    >>> # Conversational format
     >>> examples = [
     ...     {"images": [Image.open("image_0.png")], "messages": [{"role": "user", "content": "What is this?"}]},
     ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]},
@@ -353,6 +354,32 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                         [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
                          151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,  74785,    419,
                            2168,     13, 151645,    198]])}
+
+    >>> # Prompt-completion format
+    >>> examples = [
+    ...     {
+    ...         'images': [Image.open("tiger.jpeg")],
+    ...         'prompt': [{'role': 'user', 'content': 'What is this?'}], 
+    ...         'completion': [{'role': 'assistant', 'content': "It is a tiger."}]
+    ...     },
+    ...     {
+    ...         'images': [Image.open("tiger.jpeg"), Image.open("det.jpg")],
+    ...         'prompt': [{'role': 'user', 'content': [{'type': 'text', 'text': 'Image-1'}, {'type': 'image'}, {'type': 'text', 'text': 'Image-2'}, {'type': 'image'}, {'type': 'text', 'text': 'Describe the two images in detail.'}]}], 
+    ...         'completion': [{'role': 'assistant', 'content': [{'type': 'text', 'text': "Image-1 is a tiger and Image-2 is a chair."}]}]
+    ...     }
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[151644, 8948, 198, 2610, 525, 264, 10950, 17847, 13, 151645, 198,    
+                        151644, ..., 151643, 151643, 151643, 151643],
+                          [151644, 8948, 198, 2610, 525, 264, 10950, 17847, 13, 151645, 198, 151644, ..., 10496, 13, 151645, 198]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ..., 0, 0, 0, 0],
+                               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ..., 1, 1, 1, 1]]),
+     'labels': tensor([[-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 
+                       -100, ..., -100, -100, -100, -100],
+                       [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, ..., 10496, 13, 151645, 198]]),
+     'pixel_values': tensor([[0.1931, 0.3537, 1.3902, ..., 0.0982, 0.3399, -0.5275],
+                             [0.4705, 0.5581, 0.1785, ..., -0.7266, -0.2431, -0.4137]]),
+     'image_grid_thw': tensor([[1, 12, 20], [1, 12, 20], [1, 24, 16]])}
     ```
     """
 
@@ -376,7 +403,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
 
     @staticmethod
-    def prepare_multimodal_messages(messages: list[dict[str, Any]]) -> None:
+    def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list[Any]) -> None:
         """
         Convert messages into a structured multimodal format.
 
@@ -386,6 +413,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         Args:
             messages (`list[dict[str, Any]]`):
                 Messages with "role" and "content". Content may be a raw string before transformation.
+            images (`list[Any]`):
+                List of images to be added to the messages.
 
         Example:
         ```python
@@ -394,20 +423,22 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             {"role": "user", "content": "What's in this image?"},
             {"role": "assistant", "content": "It looks like a cat."},
         ]
+        [Image.open("image_0.png"), Image.open("image_0.png")]
 
         # Output
         [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
+            {"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
             {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
         ]
         ```
         """
 
         image_included = False
+        images_content = [{"type": "image"} for _ in images]
         for message in messages:
             if message["role"] == "user":
                 if isinstance(message["content"], str) and not image_included:
-                    message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
+                    message["content"] = images_content + [{"type": "text", "text": message["content"]}]
                     image_included = True
                 elif isinstance(message["content"], str) and image_included:
                     message["content"] = [{"type": "text", "text": message["content"]}]
@@ -420,7 +451,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                self.prepare_multimodal_messages(example["messages"])
+                self.prepare_multimodal_messages(example["messages"], example["images"])
             messages = [example["messages"] for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
@@ -458,7 +489,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         images = [example["images"] for example in examples]
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                self.prepare_multimodal_messages(example["prompt"] + example["completion"])
+                self.prepare_multimodal_messages(example["prompt"] + example["completion"], example["images"])
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
@@ -697,6 +728,12 @@ class SFTTrainer(Trainer):
             raise ValueError(
                 "Assistant-only loss is not yet supported for vision-language models. Please set "
                 "`assistant_only_loss=False` in the `SFTConfig`."
+            )
+        if self._is_vlm and args.max_length is not None:
+            warnings.warn(
+                "For VLMs, truncating may remove image tokens, leading to errors during training."
+                "To avoid this, set `max_length=None` in the `SFTConfig`. Only use `max_length` "
+                "when you've verified that truncation won't remove image tokens for the entire dataset."
             )
 
         # PEFT configuration and model wrapping
