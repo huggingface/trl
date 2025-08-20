@@ -987,7 +987,9 @@ class SFTTrainer(Trainer):
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
                         "assistant_only_loss": args.assistant_only_loss,
-                        "max_length": args.max_length if args.max_length is not None else -1,
+                        "max_length": args.max_length
+                        if args.max_length is not None
+                        else processing_class.model_max_length,
                     },
                     **map_kwargs,
                 )
