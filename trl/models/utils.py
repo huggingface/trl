@@ -14,6 +14,7 @@
 
 import dataclasses
 import itertools
+import warnings
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -95,7 +96,7 @@ def setup_chat_format(
 
     <Tip warning="true">
 
-    We recommend using [`clone_chat_template`] instead of this function.
+    This function is deprecated and will be removed in version 0.26.0. Please use [`clone_chat_template`] instead.
 
     </Tip>
 
@@ -114,6 +115,11 @@ def setup_chat_format(
         tokenizer (`~transformers.PreTrainedTokenizer`):
             The modified tokenizer.
     """
+    warnings.warn(
+        "The `setup_chat_format` function is deprecated and will be removed in version 0.26.0. Please use "
+        "`clone_chat_template` instead.",
+        DeprecationWarning,
+    )
     # check if model already had a chat template
     if tokenizer.chat_template is not None:
         raise ValueError(
