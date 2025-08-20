@@ -14,8 +14,8 @@ env:
   CI_SLACK_CHANNEL: ${{ secrets.CI_DOCKER_CHANNEL }}
 
 jobs:
-  trl-latest:
-    name: "Latest TRL GPU"
+  trl:
+    name: "TRL"
     runs-on: ubuntu-latest
     steps:
       - name: Cleanup disk
@@ -38,58 +38,18 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
-      - name: Build and Push GPU
+      - name: Build and Push
         uses: docker/build-push-action@v4
         with:
-          context: ./docker/trl-latest-gpu
+          context: ./docker/trl
           push: true
-          tags: huggingface/trl-latest-gpu
+          tags: huggingface/trl:0.21.0
 
       - name: Post to Slack
         if: always()
         uses: huggingface/hf-workflows/.github/actions/post-slack@main
         with:
           slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: 🤗 Results of the trl-latest-gpu Docker Image build
+          title: 🤗 Results of the TRL Docker Image build
           status: ${{ job.status }}
           slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}
-
-  trl-source:
-    name: "Latest TRL + HF ecosystem from source"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Cleanup disk
-        run: |
-          sudo ls -l /usr/local/lib/
-          sudo ls -l /usr/share/
-          sudo du -sh /usr/local/lib/
-          sudo du -sh /usr/share/
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /usr/share/dotnet
-          sudo du -sh /usr/local/lib/
-          sudo du -sh /usr/share/
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v1
-      - name: Check out code
-        uses: actions/checkout@v4
-      - name: Login to DockerHub
-        uses: docker/login-action@v1
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_PASSWORD }}
-
-      - name: Build and Push GPU
-        uses: docker/build-push-action@v4
-        with:
-          context: ./docker/trl-source-gpu
-          push: true
-          tags: huggingface/trl-source-gpu
-
-      - name: Post to Slack
-        if: always()
-        uses: huggingface/hf-workflows/.github/actions/post-slack@main
-        with:
-          slack_channel: ${{ env.CI_SLACK_CHANNEL }}
-          title: 🤗 Results of the trl-source-gpu Docker Image build
-          status: ${{ job.status }}
-          slack_token: ${{ secrets.SLACK_CIFEEDBACK_BOT_TOKEN }}  
