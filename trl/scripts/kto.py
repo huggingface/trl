@@ -79,7 +79,6 @@ from trl import (
     TrlParser,
     get_dataset,
     get_peft_config,
-    setup_chat_format,
 )
 
 
@@ -100,10 +99,6 @@ def main(script_args, training_args, model_args, dataset_args):
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    # If we are aligning a base model, we use ChatML as the default template
-    if tokenizer.chat_template is None:
-        model, tokenizer = setup_chat_format(model, tokenizer)
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
