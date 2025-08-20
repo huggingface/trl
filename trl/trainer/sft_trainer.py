@@ -413,6 +413,8 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         Args:
             messages (`list[dict[str, Any]]`):
                 Messages with "role" and "content". Content may be a raw string before transformation.
+            images (`list[Any]`):
+                List of images to be added to the messages.
 
         Example:
         ```python
@@ -421,10 +423,11 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             {"role": "user", "content": "What's in this image?"},
             {"role": "assistant", "content": "It looks like a cat."},
         ]
+        [Image.open("image_0.png"), Image.open("image_0.png")]
 
         # Output
         [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
+            {"role": "user", "content": [{"type": "image"}, {"type": "image"}, {"type": "text", "text": "What's in this image?"}]},
             {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
         ]
         ```
