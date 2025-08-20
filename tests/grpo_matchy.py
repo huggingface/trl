@@ -17,6 +17,7 @@ def main():
     tokenizer.add_special_tokens({"pad_token": "[PAD]"})
     dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         training_args = GRPOConfig(
             output_dir=tmp_dir,
