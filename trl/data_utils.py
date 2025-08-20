@@ -72,6 +72,8 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int)
         if message["role"] == "assistant":
             if isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
+        else:
+            raise ValueError(f"Invalid role in message: {message['role']}. Expected 'user', 'assistant', or 'system'.")
 
 
 def is_conversational(example: dict[str, Any]) -> bool:
