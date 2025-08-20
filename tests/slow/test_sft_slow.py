@@ -32,7 +32,6 @@ from transformers.testing_utils import (
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.models.utils import setup_chat_format
 
 from ..testing_utils import TrlTestCase, require_bitsandbytes
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
@@ -364,9 +363,6 @@ class SFTTrainerSlowTester(TrlTestCase):
 
         model = AutoModelForCausalLM.from_pretrained(model_name, quantization_config=quantization_config)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-        if tokenizer.chat_template is None:
-            model, tokenizer = setup_chat_format(model, tokenizer)
 
         trainer = SFTTrainer(
             model,
