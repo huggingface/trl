@@ -494,6 +494,10 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
         equal_predictions_count = int(equal_mask.sum())
 
         if equal_predictions_count > 0:
+            # Before using the logger, the accelerate state must be initialized. It'susually the case when using this
+            # function inside a Trainer, but it may not be the case otherwise, in particular when unit testing.
+            PartialState()
+
             logger.warning(
                 f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
                 "for both options are equal. These instances are ignored in the accuracy computation.",
