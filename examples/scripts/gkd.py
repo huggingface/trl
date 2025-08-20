@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
+
 """
 # Full training:
 python examples/scripts/gkd.py \
@@ -22,7 +29,6 @@ python examples/scripts/gkd.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
-    --logging_steps 10 \
     --num_train_epochs 1 \
     --push_to_hub \
     --gradient_checkpointing
@@ -36,7 +42,6 @@ python examples/scripts/gkd.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 8 \
     --output_dir gkd-model \
-    --logging_steps 10 \
     --num_train_epochs 1 \
     --push_to_hub \
     --gradient_checkpointing \
@@ -45,7 +50,6 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
-from accelerate import PartialState
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -105,14 +109,6 @@ if __name__ == "__main__":
     # Dataset
     ################
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
-
-    with PartialState().local_main_process_first():
-        dataset = dataset.map(
-            lambda x: {
-                "prompt": tokenizer.apply_chat_template(x["prompt"], tokenize=False, add_generation_prompt=True)
-            },
-            num_proc=training_args.dataset_num_proc,
-        )
 
     ################
     # Training

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,14 +23,15 @@ class ORPOConfig(TrainingArguments):
     r"""
     Configuration class for the [`ORPOTrainer`].
 
+    This class includes only the parameters that are specific to ORPO training. For a full list of training arguments,
+    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+    differ from those in [`~transformers.TrainingArguments`].
+
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
     command line.
 
     Parameters:
-        learning_rate (`float`, *optional*, defaults to `1e-6`):
-            Initial learning rate for [`AdamW`] optimizer. The default value replaces that of
-            [`~transformers.TrainingArguments`].
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
             to use the default data collator.
@@ -40,8 +41,9 @@ class ORPOConfig(TrainingArguments):
             Maximum length of the completion. This argument is required if you want to use the default data collator
             and your model is an encoder-decoder.
         beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the relative ratio loss weight in the ORPO loss. In the [paper](https://huggingface.co/papers/2403.07691),
-            it is denoted by λ. In the [code](https://github.com/xfactlab/orpo), it is denoted by `alpha`.
+            Parameter controlling the relative ratio loss weight in the ORPO loss. In the
+            [paper](https://huggingface.co/papers/2403.07691), it is denoted by λ. In the
+            [code](https://github.com/xfactlab/orpo), it is denoted by `alpha`.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
@@ -64,17 +66,39 @@ class ORPOConfig(TrainingArguments):
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use Liger loss.
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
-            Name of the attribute in the model that contains the base model. This is used to get the base model from the
-            model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
+            Name of the attribute in the model that contains the base model. This is used to get the base model from
+            the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
     """
 
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+
+    # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
         default=1e-6,
+        metadata={"help": "The initial learning rate for AdamW."},
+    )
+    logging_steps: float = field(
+        default=10,
         metadata={
-            "help": "Initial learning rate for `AdamW` optimizer. The default value replaces that of "
-            "transformers.TrainingArguments."
+            "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
+            "will be interpreted as ratio of total training steps."
         },
     )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
+    bf16: Optional[bool] = field(
+        default=None,
+        metadata={
+            "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
+            "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
+            "`fp16` is not set."
+        },
+    )
+
     max_length: Optional[int] = field(
         default=1024,
         metadata={"help": "Maximum length of the sequences (prompt + completion) in the batch."},
@@ -150,7 +174,13 @@ class ORPOConfig(TrainingArguments):
     base_model_attribute_name: str = field(
         default="model",
         metadata={
-            "help": "Name of the attribute in the model that contains the base model. This is used to get the base model "
-            "from the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`."
+            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
+            "model from the model when the model does not have a `get_decoder` method in the case when "
+            "`use_liger_loss` is `True`."
         },
     )
+
+    def __post_init__(self):
+        self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        super().__post_init__()

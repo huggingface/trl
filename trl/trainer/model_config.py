@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -55,6 +55,8 @@ class ModelConfig:
             LoRA dropout.
         lora_target_modules (`Union[str, list[str]]` or `None`, *optional*, defaults to `None`):
             LoRA target modules.
+        lora_target_parameters (`Union[str, list[str]]` or `None`, *optional*, defaults to `None`):
+            List of target parameters for LoRA.
         lora_modules_to_save (`list[str]` or `None`, *optional*, defaults to `None`):
             Model layers to unfreeze & train.
         lora_task_type (`str`, *optional*, defaults to `"CAUSAL_LM"`):
@@ -62,6 +64,13 @@ class ModelConfig:
         use_rslora (`bool`, *optional*, defaults to `False`):
             Whether to use Rank-Stabilized LoRA, which sets the adapter scaling factor to `lora_alpha/√r`, instead of
             the original default value of `lora_alpha/r`.
+        use_dora (`bool`, *optional*, defaults to `False`):
+            Enable [Weight-Decomposed Low-Rank Adaptation (DoRA)](https://huggingface.co/papers/2402.09353). This
+            technique decomposes the updates of the weights into two parts, magnitude and direction. Direction is
+            handled by normal LoRA, whereas the magnitude is handled by a separate learnable parameter. This can
+            improve the performance of LoRA, especially at low ranks. Right now, DoRA only supports linear and Conv2D
+            layers. DoRA introduces a bigger overhead than pure LoRA, so it is recommended to merge weights for
+            inference.
         load_in_8bit (`bool`, *optional*, defaults to `False`):
             Whether to use 8 bit precision for the base model. Works only with LoRA.
         load_in_4bit (`bool`, *optional*, defaults to `False`):
@@ -122,6 +131,10 @@ class ModelConfig:
         default=None,
         metadata={"help": "LoRA target modules."},
     )
+    lora_target_parameters: Optional[list[str]] = field(
+        default=None,
+        metadata={"help": "List of target parameters for LoRA."},
+    )
     lora_modules_to_save: Optional[list[str]] = field(
         default=None,
         metadata={"help": "Model layers to unfreeze & train."},
@@ -135,6 +148,16 @@ class ModelConfig:
         metadata={
             "help": "Whether to use Rank-Stabilized LoRA, which sets the adapter scaling factor to `lora_alpha/√r`, "
             "instead of the original default value of `lora_alpha/r`."
+        },
+    )
+    use_dora: bool = field(
+        default=False,
+        metadata={
+            "help": "Enable Weight-Decomposed Low-Rank Adaptation (DoRA). This technique decomposes the updates of "
+            "the weights into two parts, magnitude and direction. Direction is handled by normal LoRA, whereas the "
+            "magnitude is handled by a separate learnable parameter. This can improve the performance of LoRA, "
+            "especially at low ranks. Right now, DoRA only supports linear and Conv2D layers. DoRA introduces a "
+            "bigger overhead than pure LoRA, so it is recommended to merge weights for inference."
         },
     )
     load_in_8bit: bool = field(

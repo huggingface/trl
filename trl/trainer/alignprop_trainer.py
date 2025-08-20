@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,9 +14,10 @@
 
 import os
 import textwrap
+import warnings
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
-from warnings import warn
 
 import torch
 from accelerate import Accelerator
@@ -38,9 +39,9 @@ logger = get_logger(__name__)
 
 class AlignPropTrainer(PyTorchModelHubMixin):
     """
-    The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models.
-    Note, this trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
-    As of now only Stable Diffusion based pipelines are supported
+    The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models. Note, this trainer is
+    heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/ As of now only Stable Diffusion based
+    pipelines are supported
 
     Attributes:
         config (`AlignPropConfig`):
@@ -65,8 +66,12 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         sd_pipeline: DDPOStableDiffusionPipeline,
         image_samples_hook: Optional[Callable[[Any, Any, Any], Any]] = None,
     ):
+        warnings.warn(
+            "AlignPropTrainer is deprecated and will be removed in version 0.23.0.",
+            DeprecationWarning,
+        )
         if image_samples_hook is None:
-            warn("No image_samples_hook provided; no images will be logged")
+            warnings.warn("No image_samples_hook provided; no images will be logged")
 
         self.prompt_fn = prompt_function
         self.reward_fn = reward_function
@@ -202,7 +207,8 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         Side Effects:
             - Model weights are updated
             - Logs the statistics to the accelerator trackers.
-            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step, and the accelerator tracker.
+            - If `self.image_samples_callback` is not None, it will be called with the prompt_image_pairs, global_step,
+              and the accelerator tracker.
 
         Returns:
             global_step (int): The updated global step.
@@ -273,8 +279,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
                 Differentiable reward scalars for each generated image, shape: [batch_size]
 
         Returns:
-            loss (torch.Tensor)
-            (all of these are of shape (1,))
+            loss (torch.Tensor) (all of these are of shape (1,))
         """
         #  Loss is specific to Aesthetic Reward function used in AlignProp (https://huggingface.co/papers/2310.03739)
         loss = 10.0 - (rewards).mean()
@@ -392,6 +397,15 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         self.sd_pipeline.save_pretrained(save_directory)
         self.create_model_card()
 
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
+
     def create_model_card(
         self,
         model_name: Optional[str] = None,
@@ -417,13 +431,20 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
 
+        tags.update(self._tag_names)
+
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{prabhudesai2024aligning,
             title        = {{Aligning Text-to-Image Diffusion Models with Reward Backpropagation}},
@@ -438,7 +459,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="AlignProp",
             trainer_citation=citation,

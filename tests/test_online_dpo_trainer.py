@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,26 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
-import unittest
 
+import pytest
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft, require_torch_accelerator
 from transformers.utils import is_peft_available
 
-from trl import OnlineDPOConfig, OnlineDPOTrainer, is_llm_blender_available, is_vllm_available
+from trl import OnlineDPOConfig, OnlineDPOTrainer
 
-from .testing_utils import RandomPairwiseJudge
+from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, get_peft_model
 
 
-class TestOnlineDPOTrainer(unittest.TestCase):
+class TestOnlineDPOTrainer(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -45,140 +45,160 @@ class TestOnlineDPOTrainer(unittest.TestCase):
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training(self, config_name):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                learning_rate=5.0e-7,
-                eval_strategy="steps",
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            eval_strategy="steps",
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            trainer = OnlineDPOTrainer(
-                model=self.model,
-                reward_model=self.reward_model,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                processing_class=self.tokenizer,
-                reward_processing_class=self.reward_tokenizer,
-            )
-            trainer.train()
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            reward_model=self.reward_model,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+            reward_processing_class=self.reward_tokenizer,
+        )
+        trainer.train()
 
-            # Check if training loss is available
-            self.assertIn("train_loss", trainer.state.log_history[-1])
+        # Check if training loss is available
+        self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    def test_training_model_str(self):
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            eval_strategy="steps",
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        trainer = OnlineDPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_model=self.reward_model,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+            reward_processing_class=self.reward_tokenizer,
+        )
+        trainer.train()
+
+        # Check if training loss is available
+        self.assertIn("train_loss", trainer.state.log_history[-1])
 
     def test_training_with_ref_model(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                learning_rate=5.0e-7,
-                eval_strategy="steps",
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            eval_strategy="steps",
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = OnlineDPOTrainer(
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+            reward_processing_class=self.reward_tokenizer,
+        )
+        trainer.train()
+
+        # Check if training loss is available
+        self.assertIn("train_loss", trainer.state.log_history[-1])
+
+    def test_ref_model_is_model(self):
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            report_to="none",
+        )
+
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+
+        with self.assertRaises(ValueError):
+            OnlineDPOTrainer(
                 model=self.model,
-                ref_model=self.ref_model,
+                ref_model=self.model,  # ref_model can't be the same as model
                 reward_model=self.reward_model,
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
                 processing_class=self.tokenizer,
                 reward_processing_class=self.reward_tokenizer,
             )
-            trainer.train()
-
-            # Check if training loss is available
-            self.assertIn("train_loss", trainer.state.log_history[-1])
-
-    def test_ref_model_is_model(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                report_to="none",
-            )
-
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
-
-            with self.assertRaises(ValueError):
-                OnlineDPOTrainer(
-                    model=self.model,
-                    ref_model=self.model,  # ref_model can't be the same as model
-                    reward_model=self.reward_model,
-                    args=training_args,
-                    train_dataset=dummy_dataset["train"],
-                    processing_class=self.tokenizer,
-                    reward_processing_class=self.reward_tokenizer,
-                )
 
     @require_peft
     def test_training_with_peft(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                learning_rate=5.0e-7,
-                eval_strategy="steps",
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            eval_strategy="steps",
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = OnlineDPOTrainer(
-                model=self.model,
-                reward_model=self.reward_model,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                processing_class=self.tokenizer,
-                reward_processing_class=self.reward_tokenizer,
-                peft_config=lora_config,
-            )
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            reward_model=self.reward_model,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+            reward_processing_class=self.reward_tokenizer,
+            peft_config=lora_config,
+        )
 
-            trainer.train()
+        trainer.train()
 
-            # Check if training loss is available
-            self.assertIn("train_loss", trainer.state.log_history[-1])
+        # Check if training loss is available
+        self.assertIn("train_loss", trainer.state.log_history[-1])
 
     @require_peft
     def test_training_with_peft_and_ref_model(self):
         lora_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                learning_rate=5.0e-7,
-                eval_strategy="steps",
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            eval_strategy="steps",
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = OnlineDPOTrainer(
-                model=self.model,
-                ref_model=self.ref_model,
-                reward_model=self.reward_model,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                processing_class=self.tokenizer,
-                reward_processing_class=self.reward_tokenizer,
-                peft_config=lora_config,
-            )
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            ref_model=self.ref_model,
+            reward_model=self.reward_model,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+            reward_processing_class=self.reward_tokenizer,
+            peft_config=lora_config,
+        )
 
-            trainer.train()
+        trainer.train()
 
-            # Check if training loss is available
-            self.assertIn("train_loss", trainer.state.log_history[-1])
+        # Check if training loss is available
+        self.assertIn("train_loss", trainer.state.log_history[-1])
 
     @require_peft
     def test_training_with_peft_model_and_peft_config(self):
@@ -186,86 +206,85 @@ class TestOnlineDPOTrainer(unittest.TestCase):
         model = get_peft_model(self.model, model_lora_config)
         # we want only the "train adapter" to be trained
         lora_train_config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM")
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                learning_rate=5.0e-7,
-                eval_strategy="steps",
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            eval_strategy="steps",
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-            trainer = OnlineDPOTrainer(
-                model=model,
-                reward_model=self.reward_model,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                processing_class=self.tokenizer,
-                reward_processing_class=self.reward_tokenizer,
-                peft_config=lora_train_config,
-            )
+        trainer = OnlineDPOTrainer(
+            model=model,
+            reward_model=self.reward_model,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+            reward_processing_class=self.reward_tokenizer,
+            peft_config=lora_train_config,
+        )
 
-            trainer.train()
+        trainer.train()
 
-            # Check if training loss is available
-            self.assertIn("train_loss", trainer.state.log_history[-1])
+        # Check if training loss is available
+        self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_llm_blender_available(), "llm-blender is not available")
+    @require_llm_blender
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_judge(self, config_name):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                max_steps=3,
-                learning_rate=5.0e-7,
-                eval_strategy="steps",
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            learning_rate=5.0e-7,
+            eval_strategy="steps",
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            trainer = OnlineDPOTrainer(
-                model=self.model,
-                judge=RandomPairwiseJudge(),
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-                processing_class=self.tokenizer,
-            )
-            trainer.train()
+        trainer = OnlineDPOTrainer(
+            model=self.model,
+            judge=RandomPairwiseJudge(),
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+            processing_class=self.tokenizer,
+        )
+        trainer.train()
 
-            # Check if training loss is available
-            self.assertIn("train_loss", trainer.state.log_history[-1])
+        # Check if training loss is available
+        self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @unittest.skipIf(not is_vllm_available(), "vllm is not available")
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     @require_torch_accelerator
+    @require_vllm
+    @pytest.mark.slow
     def test_training_with_vllm(self, config_name):
-        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We neeed a bigger model
+        model_id = "trl-internal-testing/small-Qwen2ForCausalLM-2.5"  # We need a bigger model
         model = AutoModelForCausalLM.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = OnlineDPOConfig(
-                output_dir=tmp_dir,
-                use_vllm=True,
-                report_to="none",
-            )
-            dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+        training_args = OnlineDPOConfig(
+            output_dir=self.tmp_dir,
+            use_vllm=True,
+            gpu_memory_utilization=0.2,
+            report_to="none",
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-            trainer = OnlineDPOTrainer(
-                model=model,
-                reward_model=self.reward_model,
-                args=training_args,
-                train_dataset=dummy_dataset["train"],
-                processing_class=tokenizer,
-                reward_processing_class=self.reward_tokenizer,
-            )
-            trainer.train()
+        trainer = OnlineDPOTrainer(
+            model=model,
+            reward_model=self.reward_model,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            processing_class=tokenizer,
+            reward_processing_class=self.reward_tokenizer,
+        )
+        trainer.train()
 
-            # Check if training loss is available
-            self.assertIn("train_loss", trainer.state.log_history[-1])
+        # Check if training loss is available
+        self.assertIn("train_loss", trainer.state.log_history[-1])

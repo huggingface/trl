@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,15 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
 import torch
 
 from trl.trainer.dpo_trainer import DataCollatorForPreference
 
+from .testing_utils import TrlTestCase
 
-class TestDataCollatorForPreference(unittest.TestCase):
+
+class TestDataCollatorForPreference(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.collator = DataCollatorForPreference(pad_token_id=0)
 
     def assertTensorEqual(self, tensor1, tensor2):

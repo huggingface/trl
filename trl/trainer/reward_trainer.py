@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,11 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 import os
 import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import pandas as pd
@@ -38,9 +38,10 @@ from transformers import (
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_pt_utils import nested_detach
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
+from ..models import prepare_peft_model
 from .reward_config import RewardConfig
 from .utils import (
     RewardDataCollatorWithPadding,
@@ -55,7 +56,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+    from peft import PeftModel
 
 if is_wandb_available():
     import wandb
@@ -112,20 +113,23 @@ class RewardTrainer(Trainer):
             args (`RewardConfig`):
                 The arguments to use for training.
             data_collator (`transformers.DataCollator`):
-                The data collator to use for training. If None is specified, the default data collator (`RewardDataCollatorWithPadding`) will be used
-                which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+                The data collator to use for training. If None is specified, the default data collator
+                (`RewardDataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of
+                the sequences in the batch, given a dataset of paired sequences.
             train_dataset (`datasets.Dataset`):
                 The dataset to use for training.
             eval_dataset (`datasets.Dataset`):
                 The dataset to use for evaluation.
-            processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
-                Processing class used to process the data. If provided, will be used to automatically process the inputs
-                for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-                reuse the fine-tuned model.
+            processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+                Processing class used to process the data. If provided, will be used to automatically process the
+                inputs for the model, and it will be saved along the model to make it easier to rerun an interrupted
+                training or reuse the fine-tuned model.
             model_init (`Callable[[], transformers.PreTrainedModel]`):
-                The model initializer to use for training. If None is specified, the default model initializer will be used.
+                The model initializer to use for training. If None is specified, the default model initializer will be
+                used.
             compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to `compute_accuracy`):
-                The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`) will be used.
+                The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`)
+                will be used.
             callbacks (`list[transformers.TrainerCallback]`):
                 The callbacks to use for training.
             optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -133,33 +137,11 @@ class RewardTrainer(Trainer):
             preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
                 The function to use to preprocess the logits before computing the metrics.
             peft_config (`dict`, defaults to `None`):
-                The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+                The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped
+                in a PEFT model.
         """
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
-            if not isinstance(model, PeftModel):
-                if getattr(model, "is_loaded_in_8bit", False) or getattr(model, "is_quantized", False):
-                    _supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
-                        inspect.signature(prepare_model_for_kbit_training).parameters
-                    )
-
-                    prepare_model_kwargs = {"use_gradient_checkpointing": args.gradient_checkpointing}
-
-                    if not _supports_gc_kwargs and args.gradient_checkpointing_kwargs is not None:
-                        warnings.warn(
-                            "You passed `gradient_checkpointing_kwargs` in the trainer's kwargs, but your peft version does not support it. "
-                            "please update to the latest version of peft to use `gradient_checkpointing_kwargs`.",
-                            UserWarning,
-                        )
-                    elif _supports_gc_kwargs and args.gradient_checkpointing_kwargs is not None:
-                        prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
-
-                    model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-
-                model = get_peft_model(model, peft_config)
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+            model = prepare_peft_model(model, peft_config, args)
 
         # Disable dropout in the model
         if args.disable_dropout:
@@ -204,7 +186,7 @@ class RewardTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         if "input_ids_chosen" not in train_dataset.column_names:
-            with PartialState().local_main_process_first():
+            with PartialState().main_process_first():
                 fn_kwargs = {"tokenizer": processing_class}
                 train_dataset = train_dataset.map(maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class})
                 train_dataset = train_dataset.map(
@@ -350,7 +332,8 @@ class RewardTrainer(Trainer):
                 break
         df = pd.DataFrame(table)
         if self.accelerator.process_index == 0:
-            print_rich_table(df[:num_print_samples])
+            if is_rich_available():
+                print_rich_table(df[:num_print_samples])
             if "wandb" in self.args.report_to:
                 import wandb
 
@@ -362,6 +345,15 @@ class RewardTrainer(Trainer):
                     name="completions.csv",
                     table=df,
                 )
+
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
 
     def create_model_card(
         self,
@@ -388,12 +380,18 @@ class RewardTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
+
+        tags.update(self._tag_names)
 
         model_card = generate_model_card(
             base_model=base_model,
@@ -401,7 +399,7 @@ class RewardTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="Reward",
         )

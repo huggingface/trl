@@ -1,7 +1,7 @@
 # TRL - Transformer Reinforcement Learning
 
 <div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl_banner_dark.png" alt="TRL Banner">
 </div>
 
 <hr> <br>
@@ -12,9 +12,18 @@
 
 <p align="center">
     <a href="https://github.com/huggingface/trl/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/huggingface/trl.svg?color=blue"></a>
-    <a href="https://huggingface.co/docs/trl/index"><img alt="Documentation" src="https://img.shields.io/website/http/huggingface.co/docs/trl/index.svg?down_color=red&down_message=offline&up_color=blue&up_message=online"></a>
+    <a href="https://huggingface.co/docs/trl/index"><img alt="Documentation" src="https://img.shields.io/website?label=documentation&url=https%3A%2F%2Fhuggingface.co%2Fdocs%2Ftrl%2Findex&down_color=red&down_message=offline&up_color=blue&up_message=online"></a>
     <a href="https://github.com/huggingface/trl/releases"><img alt="GitHub release" src="https://img.shields.io/github/release/huggingface/trl.svg"></a>
+    <a href="https://huggingface.co/trl-lib"><img alt="Hugging Face Hub" src="https://img.shields.io/badge/🤗%20Hub-trl--lib-yellow"></a>
 </p>
+
+## 🎉 What's New
+
+> **✨ OpenAI GPT OSS Support**: TRL now fully supports fine-tuning the latest [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4)! Check out the:
+>
+> - [OpenAI Cookbook](https://cookbook.openai.com/articles/gpt-oss/fine-tune-transfomers)
+> - [GPT OSS recipes](https://github.com/huggingface/gpt-oss-recipes)
+> - [Our example script](https://github.com/huggingface/trl/blob/main/examples/scripts/sft_gpt_oss.py)
 
 ## Overview
 
@@ -22,16 +31,14 @@ TRL is a cutting-edge library designed for post-training foundation models using
 
 ## Highlights
 
-- **Efficient and scalable**: 
-    - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like DDP and DeepSpeed.
-    - Full integration with [`PEFT`](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
-    - Integrates [Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
+- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer) and more.
 
-- **Command Line Interface (CLI)**: A simple interface lets you fine-tune and interact with models without needing to write code.
+- **Efficient and scalable**:
+  - Leverages [🤗 Accelerate](https://github.com/huggingface/accelerate) to scale from single GPU to multi-node clusters using methods like [DDP](https://pytorch.org/tutorials/intermediate/ddp_tutorial.html) and [DeepSpeed](https://github.com/deepspeedai/DeepSpeed).
+  - Full integration with [🤗 PEFT](https://github.com/huggingface/peft) enables training on large models with modest hardware via quantization and LoRA/QLoRA.
+  - Integrates [🦥 Unsloth](https://github.com/unslothai/unsloth) for accelerating training using optimized kernels.
 
-- **Trainers**: Various fine-tuning methods are easily accessible via trainers like [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer), [`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer), [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer), [`ORPOTrainer`](https://huggingface.co/docs/trl/orpo_trainer) and more.
-
-- **AutoModels**: Use pre-defined model classes like [`AutoModelForCausalLMWithValueHead`](https://huggingface.co/docs/trl/models#trl.AutoModelForCausalLMWithValueHead) to simplify reinforcement learning (RL) with LLMs.
+- **Command Line Interface (CLI)**: A simple interface lets you fine-tune with models without needing to write code.
 
 ## Installation
 
@@ -59,60 +66,74 @@ If you want to use the examples you can clone the repository with the following 
 git clone https://github.com/huggingface/trl.git
 ```
 
-## Command Line Interface (CLI)
-
-You can use the TRL Command Line Interface (CLI) to quickly get started with Supervised Fine-tuning (SFT) and Direct Preference Optimization (DPO), or vibe check your model with the chat CLI: 
-
-**SFT:**
-
-```bash
-trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
-    --dataset_name trl-lib/Capybara \
-    --output_dir Qwen2.5-0.5B-SFT
-```
-
-**DPO:**
-
-```bash
-trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
-    --dataset_name argilla/Capybara-Preferences \
-    --output_dir Qwen2.5-0.5B-DPO 
-```
-
-**Chat:**
-
-```bash
-trl chat --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct
-```
-
-Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
-
-## How to use
+## Quick Start
 
 For more flexibility and control over training, TRL provides dedicated trainer classes to post-train language models or PEFT adapters on a custom dataset. Each trainer in TRL is a light wrapper around the 🤗 Transformers trainer and natively supports distributed training methods like DDP, DeepSpeed ZeRO, and FSDP.
 
 ### `SFTTrainer`
 
-Here is a basic example of how to use the `SFTTrainer`:
+Here is a basic example of how to use the [`SFTTrainer`](https://huggingface.co/docs/trl/sft_trainer):
 
 ```python
-from trl import SFTConfig, SFTTrainer
+from trl import SFTTrainer
 from datasets import load_dataset
 
 dataset = load_dataset("trl-lib/Capybara", split="train")
 
-training_args = SFTConfig(output_dir="Qwen/Qwen2.5-0.5B-SFT")
 trainer = SFTTrainer(
-    args=training_args,
     model="Qwen/Qwen2.5-0.5B",
     train_dataset=dataset,
 )
 trainer.train()
 ```
 
+### `GRPOTrainer`
+
+[`GRPOTrainer`](https://huggingface.co/docs/trl/grpo_trainer) implements the [Group Relative Policy Optimization (GRPO) algorithm](https://huggingface.co/papers/2402.03300) that is more memory-efficient than PPO and was used to train [Deepseek AI's R1](https://huggingface.co/deepseek-ai/DeepSeek-R1).
+
+```python
+from datasets import load_dataset
+from trl import GRPOTrainer
+
+dataset = load_dataset("trl-lib/tldr", split="train")
+
+# Dummy reward function: count the number of unique characters in the completions
+def reward_num_unique_chars(completions, **kwargs):
+    return [len(set(c)) for c in completions]
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=reward_num_unique_chars,
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
+### `DPOTrainer`
+
+[`DPOTrainer`](https://huggingface.co/docs/trl/dpo_trainer) implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train [Llama 3](https://huggingface.co/papers/2407.21783) and many other models. Here is a basic example of how to use the `DPOTrainer`:
+
+```python
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import DPOConfig, DPOTrainer
+
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
+trainer = DPOTrainer(
+    model=model,
+    args=training_args,
+    train_dataset=dataset,
+    processing_class=tokenizer
+)
+trainer.train()
+```
+
 ### `RewardTrainer`
 
-Here is a basic example of how to use the `RewardTrainer`:
+Here is a basic example of how to use the [`RewardTrainer`](https://huggingface.co/docs/trl/reward_trainer):
 
 ```python
 from trl import RewardConfig, RewardTrainer
@@ -137,46 +158,27 @@ trainer = RewardTrainer(
 trainer.train()
 ```
 
-### `GRPOTrainer`
+## Command Line Interface (CLI)
 
-`GRPOTrainer` implements the [Group Relative Policy Optimization (GRPO) algorithm](https://huggingface.co/papers/2402.03300) that is more memory-efficient than PPO and was used to train [Deepseek AI's R1](https://huggingface.co/deepseek-ai/DeepSeek-R1).
+You can use the TRL Command Line Interface (CLI) to quickly get started with post-training methods like Supervised Fine-Tuning (SFT) or Direct Preference Optimization (DPO):
 
-```python
-from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
+**SFT:**
 
-dataset = load_dataset("trl-lib/tldr", split="train")
-
-# Dummy reward function: rewards completions that are close to 20 characters
-def reward_len(completions, **kwargs):
-    return [-abs(20 - len(completion)) for completion in completions]
-
-training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO", logging_steps=10)
-trainer = GRPOTrainer(
-    model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_len,
-    args=training_args,
-    train_dataset=dataset,
-)
-trainer.train()
+```bash
+trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --output_dir Qwen2.5-0.5B-SFT
 ```
 
-### `DPOTrainer`
+**DPO:**
 
-`DPOTrainer` implements the popular [Direct Preference Optimization (DPO) algorithm](https://huggingface.co/papers/2305.18290) that was used to post-train Llama 3 and many other models. Here is a basic example of how to use the `DPOTrainer`:
-
-```python
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DPOConfig, DPOTrainer
-
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")
-dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
-training_args = DPOConfig(output_dir="Qwen2.5-0.5B-DPO")
-trainer = DPOTrainer(model=model, args=training_args, train_dataset=dataset, processing_class=tokenizer)
-trainer.train()
+```bash
+trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --dataset_name argilla/Capybara-Preferences \
+    --output_dir Qwen2.5-0.5B-DPO 
 ```
+
+Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
 
 ## Development
 

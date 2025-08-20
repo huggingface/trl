@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ _import_structure = {
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "callbacks": [
+        "BEMACallback",
         "LogCompletionsCallback",
         "MergeModelCallback",
         "RichProgressCallback",
@@ -38,6 +39,7 @@ _import_structure = {
     "gkd_trainer": ["GKDTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
+    "iterative_sft_config": ["IterativeSFTConfig"],
     "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
         "AllTrueJudge",
@@ -69,8 +71,6 @@ _import_structure = {
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
     "utils": [
-        "ConstantLengthDataset",
-        "DataCollatorForCompletionOnlyLM",
         "RunningMoments",
         "compute_accuracy",
         "disable_dropout_in_model",
@@ -94,6 +94,7 @@ if TYPE_CHECKING:
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .callbacks import (
+        BEMACallback,
         LogCompletionsCallback,
         MergeModelCallback,
         RichProgressCallback,
@@ -109,7 +110,7 @@ if TYPE_CHECKING:
     from .gkd_trainer import GKDTrainer
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
-    from .iterative_sft_trainer import IterativeSFTTrainer
+    from .iterative_sft_trainer import IterativeSFTConfig, IterativeSFTTrainer
     from .judges import (
         AllTrueJudge,
         BaseBinaryJudge,
@@ -140,8 +141,6 @@ if TYPE_CHECKING:
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
     from .utils import (
-        ConstantLengthDataset,
-        DataCollatorForCompletionOnlyLM,
         RunningMoments,
         compute_accuracy,
         disable_dropout_in_model,

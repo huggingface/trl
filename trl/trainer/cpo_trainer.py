@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,18 +19,17 @@ import textwrap
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional, Union
 
 import numpy as np
 import pandas as pd
 import torch
-import torch.amp as amp
 import torch.nn as nn
 import torch.nn.functional as F
-import transformers
 from accelerate import PartialState
 from datasets import Dataset
-from packaging import version
+from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
     AutoModelForCausalLM,
@@ -82,18 +81,20 @@ class CPOTrainer(Trainer):
         args (`CPOConfig`):
             The CPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
-            The data collator to use for training. If None is specified, the default data collator (`DPODataCollatorWithPadding`) will be used
-            which will pad the sequences to the maximum length of the sequences in the batch, given a dataset of paired sequences.
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        processing_class (`PreTrainedTokenizerBase` or `BaseImageProcessor` or `FeatureExtractionMixin` or `ProcessorMixin`, *optional*):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
         model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be used.
+            The model initializer to use for training. If None is specified, the default model initializer will be
+            used.
         callbacks (`list[transformers.TrainerCallback]`):
             The callbacks to use for training.
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
@@ -101,10 +102,11 @@ class CPOTrainer(Trainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
         peft_config (`dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in a PEFT model.
+            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
+            a PEFT model.
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return
-            a dictionary string to metric values.
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
     """
 
     _tag_names = ["trl", "cpo"]
@@ -172,7 +174,7 @@ class CPOTrainer(Trainer):
                     prepare_model_kwargs["gradient_checkpointing_kwargs"] = args.gradient_checkpointing_kwargs
 
                 model = prepare_model_for_kbit_training(model, **prepare_model_kwargs)
-            elif getattr(args, "gradient_checkpointing", False):
+            elif args.gradient_checkpointing:
                 # For backward compatibility with older versions of transformers
                 if hasattr(model, "enable_input_require_grads"):
                     model.enable_input_require_grads()
@@ -193,7 +195,7 @@ class CPOTrainer(Trainer):
         # For models that use gradient_checkpointing, we need to attach a hook that enables input
         # to explicitly have `requires_grad=True`, otherwise training will either silently
         # fail or completely fail.
-        elif getattr(args, "gradient_checkpointing", False):
+        elif args.gradient_checkpointing:
             # For backward compatibility with older versions of transformers
             if hasattr(model, "enable_input_require_grads"):
                 model.enable_input_require_grads()
@@ -241,6 +243,11 @@ class CPOTrainer(Trainer):
             max_prompt_length = 128
         else:
             max_prompt_length = args.max_prompt_length
+
+        if not max_prompt_length < max_length:
+            raise ValueError(
+                f"max_prompt_length ({max_prompt_length}) should be strictly less than max_length ({max_length})."
+            )
 
         if args.max_completion_length is None and self.is_encoder_decoder:
             warnings.warn(
@@ -312,6 +319,9 @@ class CPOTrainer(Trainer):
         if args.loss_type == "simpo":
             self.simpo_gamma = args.simpo_gamma
 
+        # AlphaPO parameter for reward shaping
+        self.alpha = args.alpha
+
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
@@ -325,7 +335,7 @@ class CPOTrainer(Trainer):
 
         # Compute that only on the main process for faster data processing.
         # see: https://github.com/huggingface/trl/pull/1255
-        with PartialState().local_main_process_first():
+        with PartialState().main_process_first():
             # Extract the prompt if needed, and apply the chat template if needed
             train_dataset = train_dataset.map(maybe_extract_prompt, num_proc=args.dataset_num_proc)
             train_dataset = train_dataset.map(
@@ -374,9 +384,8 @@ class CPOTrainer(Trainer):
 
     def build_tokenized_answer(self, prompt, answer):
         """
-        Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`.
-        It does ensure `enc(a + b) = enc(a) + enc(a + b)[len(enc(a)):]`.
-        Reference:
+        Llama tokenizer does satisfy `enc(a + b) = enc(a) + enc(b)`. It does ensure `enc(a + b) = enc(a) + enc(a +
+        b)[len(enc(a)):]`. Reference:
             https://github.com/EleutherAI/lm-evaluation-harness/pull/531#issuecomment-1595586257
         """
 
@@ -425,13 +434,12 @@ class CPOTrainer(Trainer):
     def tokenize_row(self, feature, model: Optional[Union[PreTrainedModel, nn.Module]] = None) -> dict:
         """Tokenize a single row from a CPO specific dataset.
 
-        At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation
-        in case the prompt + chosen or prompt + rejected responses is/are too long. First
-        we truncate the prompt; if we're still too long, we truncate the chosen/rejected.
+        At this stage, we don't convert to PyTorch tensors yet; we just handle the truncation in case the prompt +
+        chosen or prompt + rejected responses is/are too long. First we truncate the prompt; if we're still too long,
+        we truncate the chosen/rejected.
 
-        We also create the labels for the chosen/rejected responses, which are of length equal to
-        the sum of the length of the prompt and the chosen/rejected response, with
-        label_pad_token_id  for the prompt tokens.
+        We also create the labels for the chosen/rejected responses, which are of length equal to the sum of the length
+        of the prompt and the chosen/rejected response, with label_pad_token_id for the prompt tokens.
         """
         batch = {}
         prompt = feature["prompt"]
@@ -579,11 +587,17 @@ class CPOTrainer(Trainer):
         """Concatenate the chosen and rejected inputs into a single tensor.
 
         Args:
-            batch: A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors of shape (batch_size, sequence_length).
-            is_encoder_decoder: Whether the model is an encoder-decoder model.
-            label_pad_token_id: The label pad token id.
-            padding_value: The padding value to use for the concatenated inputs_ids.
-            device: The device for the concatenated inputs.
+            batch:
+                A batch of data. Must contain the keys 'chosen_input_ids' and 'rejected_input_ids', which are tensors
+                of shape (batch_size, sequence_length).
+            is_encoder_decoder:
+                Whether the model is an encoder-decoder model.
+            label_pad_token_id:
+                The label pad token id.
+            padding_value:
+                The padding value to use for the concatenated inputs_ids.
+            device:
+                The device for the concatenated inputs.
 
         Returns:
             A dictionary containing the concatenated inputs under the key 'concatenated_input_ids'.
@@ -638,15 +652,30 @@ class CPOTrainer(Trainer):
         """Compute the CPO loss for a batch of policy and reference model log probabilities.
 
         Args:
-            policy_chosen_logps: Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
-            policy_rejected_logps: Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
+            policy_chosen_logps:
+                Log probabilities of the policy model for the chosen responses. Shape: (batch_size,)
+            policy_rejected_logps:
+                Log probabilities of the policy model for the rejected responses. Shape: (batch_size,)
 
         Returns:
-            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards).
-            The losses tensor contains the CPO loss for each example in the batch.
-            The chosen_rewards and rejected_rewards tensors contain the rewards for the chosen and rejected responses, respectively.
+            A tuple of three tensors: (losses, chosen_rewards, rejected_rewards). The losses tensor contains the CPO
+            loss for each example in the batch. The chosen_rewards and rejected_rewards tensors contain the rewards for
+            the chosen and rejected responses, respectively.
         """
-        logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
+        # Apply AlphaPO reward transformation if alpha != 0
+        if self.alpha != 0.0:
+            # Compute probabilities
+            chosen_probs = torch.exp(policy_chosen_logps)
+            rejected_probs = torch.exp(policy_rejected_logps)
+
+            # Apply AlphaPO transformation: r = (1 - p^(-alpha)) / alpha
+            policy_chosen_rewards = (1 - chosen_probs.pow(-self.alpha)) / self.alpha
+            policy_rejected_rewards = (1 - rejected_probs.pow(-self.alpha)) / self.alpha
+
+            logits = (policy_chosen_rewards - policy_rejected_rewards).to(self.accelerator.device)
+        else:
+            # Standard log probability rewards when alpha = 0
+            logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
 
         # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
@@ -676,8 +705,15 @@ class CPOTrainer(Trainer):
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'simpo']"
             )
 
-        chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
-        rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
+        # Calculate rewards for logging
+        if self.alpha != 0.0:
+            # When using AlphaPO transformation, use the transformed rewards
+            chosen_rewards = self.beta * policy_chosen_rewards.to(self.accelerator.device).detach()
+            rejected_rewards = self.beta * policy_rejected_rewards.to(self.accelerator.device).detach()
+        else:
+            # Standard log probability rewards
+            chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
+            rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
 
         return losses, chosen_rewards, rejected_rewards
 
@@ -693,13 +729,18 @@ class CPOTrainer(Trainer):
 
         Args:
             logits: Logits of the model (unnormalized). Shape: (batch_size, sequence_length, vocab_size)
-            labels: Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are ignored. Shape: (batch_size, sequence_length)
-            average_log_prob: If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the log probabilities of the (non-masked) tokens.
+            labels:
+                Labels for which to compute the log probabilities. Label tokens with a value of label_pad_token_id are
+                ignored. Shape: (batch_size, sequence_length)
+            average_log_prob:
+                If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
+                log probabilities of the (non-masked) tokens.
             label_pad_token_id: The label pad token id.
             is_encoder_decoder: Whether the model is an encoder-decoder model.
 
         Returns:
-            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the given logits.
+            A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
+            given logits.
         """
         if logits.shape[:-1] != labels.shape:
             raise ValueError("Logits (batch and sequence length dim) and labels must have the same shape.")
@@ -836,10 +877,10 @@ class CPOTrainer(Trainer):
             self.accelerator.gather_for_metrics(policy_chosen_logps).detach().mean().item()
         )
         metrics[f"{prefix}logits/rejected"] = (
-            self.accelerator.gather_for_metrics(policy_rejected_logits).detach().mean().item()
+            self.accelerator.gather_for_metrics(policy_rejected_logits.detach().mean()).mean().item()
         )
         metrics[f"{prefix}logits/chosen"] = (
-            self.accelerator.gather_for_metrics(policy_chosen_logits).detach().mean().item()
+            self.accelerator.gather_for_metrics(policy_chosen_logits.detach().mean()).mean().item()
         )
         metrics[f"{prefix}nll_loss"] = self.accelerator.gather_for_metrics(policy_nll_loss).detach().mean().item()
 
@@ -855,7 +896,9 @@ class CPOTrainer(Trainer):
         return_outputs=False,
         num_items_in_batch=None,
     ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, torch.Tensor]]]:
-        compute_loss_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        compute_loss_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with compute_loss_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="train")
@@ -871,8 +914,10 @@ class CPOTrainer(Trainer):
         """Generate samples from the model and reference model for the given batch of inputs."""
 
         # If one uses `generate_during_eval` with peft + bf16, we need to explicitly call generate with
-        # the torch cuda amp context manager as some hidden states are silently casted to full precision.
-        generate_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        # the torch amp context manager as some hidden states are silently casted to full precision.
+        generate_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with generate_context_manager:
             policy_output = model.generate(
@@ -901,7 +946,9 @@ class CPOTrainer(Trainer):
             else:
                 ignore_keys = []
 
-        prediction_context_manager = amp.autocast("cuda") if self._peft_has_been_casted_to_bf16 else nullcontext()
+        prediction_context_manager = (
+            autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
+        )
 
         with torch.no_grad(), prediction_context_manager:
             loss, metrics = self.get_batch_loss_metrics(model, inputs, train_eval="eval")
@@ -917,8 +964,8 @@ class CPOTrainer(Trainer):
             "eval_logits/chosen": metrics["eval_logits/chosen"],
             "eval_logits/rejected": metrics["eval_logits/rejected"],
         }
-        logits = tuple(v.unsqueeze(dim=0) for k, v in logits_dict.items() if k not in ignore_keys)
-        logits = torch.stack(logits).mean(axis=1).to(self.accelerator.device)
+        logits = [v for k, v in logits_dict.items() if k not in ignore_keys]
+        logits = torch.tensor(logits, device=self.accelerator.device)
         labels = torch.zeros(logits.shape[0], device=self.accelerator.device)
 
         return (loss.detach(), logits, labels)
@@ -936,8 +983,8 @@ class CPOTrainer(Trainer):
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
-        Overriding built-in evaluation loop to store metrics for each batch.
-        Prediction/evaluation loop, shared by `Trainer.evaluate()` and `Trainer.predict()`.
+        Overriding built-in evaluation loop to store metrics for each batch. Prediction/evaluation loop, shared by
+        `Trainer.evaluate()` and `Trainer.predict()`.
 
         Works both with or without labels.
         """
@@ -993,11 +1040,7 @@ class CPOTrainer(Trainer):
         for key, metrics in self._stored_metrics[train_eval].items():
             logs[key] = torch.tensor(metrics).mean().item()
         del self._stored_metrics[train_eval]
-
-        if version.parse(transformers.__version__) >= version.parse("4.47.0.dev0"):
-            return super().log(logs, start_time)
-        else:  # transformers<=4.46
-            return super().log(logs)
+        return super().log(logs, start_time)
 
     def _shift_right(self, input_ids):
         if self.decoder_start_token_id is None:
@@ -1021,6 +1064,15 @@ class CPOTrainer(Trainer):
         shifted_input_ids.masked_fill_(shifted_input_ids == -100, self.pad_token_id)
 
         return shifted_input_ids
+
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
 
     def create_model_card(
         self,
@@ -1047,13 +1099,20 @@ class CPOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
 
+        tags.update(self._tag_names)
+
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{xu2024contrastive,
             title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
@@ -1070,7 +1129,7 @@ class CPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="CPO",
             trainer_citation=citation,

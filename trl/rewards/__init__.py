@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-################################################################################################
-# This file has been moved to https://github.com/huggingface/trl/blob/main/trl/scripts/chat.py #
-################################################################################################
+
+import sys
+from typing import TYPE_CHECKING
+
+from ..import_utils import _LazyModule
+
+
+_import_structure = {
+    "format_rewards": ["think_format_reward"],
+    "other_rewards": ["get_soft_overlong_punishment"],
+}
+
+
+if TYPE_CHECKING:
+    from .format_rewards import think_format_reward
+    from .other_rewards import get_soft_overlong_punishment
+
+
+else:
+    sys.modules[__name__] = _LazyModule(__name__, __file__, _import_structure, module_spec=__spec__)

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,13 +15,11 @@
 import os
 import random
 import textwrap
-from copy import deepcopy
 from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate.utils import is_deepspeed_available
 from datasets import Dataset
 from transformers import (
     AutoModelForCausalLM,
@@ -36,9 +34,9 @@ from transformers import (
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_liger_kernel_available, is_peft_available
+from transformers.utils import is_peft_available
 
-from ..models import PreTrainedModelWrapper
+from ..models import prepare_deepspeed
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
@@ -50,12 +48,6 @@ from .utils import (
     get_comet_experiment_url,
 )
 
-
-if is_deepspeed_available():
-    import deepspeed
-
-if is_liger_kernel_available():
-    from liger_kernel.transformers import AutoLigerKernelForCausalLM
 
 if is_peft_available():
     from peft import PeftConfig
@@ -119,17 +111,14 @@ class GKDTrainer(SFTTrainer):
             )
 
         if isinstance(teacher_model, str):
-            if args.use_liger:
-                teacher_model = AutoLigerKernelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
-            else:
-                teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
+            teacher_model = AutoModelForCausalLM.from_pretrained(teacher_model, **teacher_model_init_kwargs)
 
         # Disable dropout in the model
         if args.disable_dropout:
             disable_dropout_in_model(self.model)
 
         if self.is_deepspeed_enabled:
-            self.teacher_model = self._prepare_deepspeed(teacher_model)
+            self.teacher_model = prepare_deepspeed(teacher_model, self.accelerator)
         else:
             self.teacher_model = self.accelerator.prepare_model(teacher_model, evaluation_mode=True)
 
@@ -156,14 +145,6 @@ class GKDTrainer(SFTTrainer):
         ):
             self.generation_config.eos_token_id = self.model.generation_config.eos_token_id
 
-    def _prepare_dataset(self, dataset, *args):
-        # SFTTrainer._prepare_dataset() applies the chat template and rename the messages column to text. However, we
-        # need to keep the messages column as it is. We use the following workaround to keep the messages column.
-        dataset = dataset.add_column("_messages", dataset["messages"])
-        dataset = super()._prepare_dataset(dataset, *args)
-        dataset = dataset.rename_column("_messages", "messages")
-        return dataset
-
     @staticmethod
     def generalized_jsd_loss(
         student_logits, teacher_logits, labels=None, beta=0.5, temperature=1.0, reduction="batchmean"
@@ -173,12 +154,19 @@ class GKDTrainer(SFTTrainer):
         of https://huggingface.co/papers/2306.13649 for the definition.
 
         Args:
-            student_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
-            teacher_logits: Tensor of shape (batch_size, sequence_length, vocab_size)
-            labels: Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing loss
-            beta: Interpolation coefficient between 0 and 1 (default: 0.5)
-            temperature: Softmax temperature (default: 1.0)
-            reduction: Specifies the reduction to apply to the output (default: 'batchmean')
+            student_logits:
+                Tensor of shape (batch_size, sequence_length, vocab_size)
+            teacher_logits:
+                Tensor of shape (batch_size, sequence_length, vocab_size)
+            labels:
+                Tensor of shape (batch_size, sequence_length) with -100 for padding tokens to ignore when computing
+                loss
+            beta:
+                Interpolation coefficient between 0 and 1 (default: 0.5)
+            temperature:
+                Softmax temperature (default: 1.0)
+            reduction:
+                Specifies the reduction to apply to the output (default: 'batchmean')
 
         Returns:
             loss: Scalar tensor with the generalized JSD loss
@@ -192,21 +180,26 @@ class GKDTrainer(SFTTrainer):
         student_log_probs = F.log_softmax(student_logits, dim=-1)
         teacher_log_probs = F.log_softmax(teacher_logits, dim=-1)
 
-        # Compute the log of the mixture distribution
-        # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
-        beta = torch.tensor(beta, dtype=student_log_probs.dtype)
-        mixture_log_probs = torch.logsumexp(
-            torch.stack([student_log_probs + torch.log(beta), teacher_log_probs + torch.log(1 - beta)]),
-            dim=0,
-        )
+        if beta == 0:
+            jsd = F.kl_div(student_log_probs, teacher_log_probs, reduction="none", log_target=True)
+        elif beta == 1:
+            jsd = F.kl_div(teacher_log_probs, student_log_probs, reduction="none", log_target=True)
+        else:
+            # Compute the log of the mixture distribution
+            # log(a + b) = log(exp(log(a)) + exp(log(b))) -> for mixture
+            beta = torch.tensor(beta, dtype=student_log_probs.dtype)
+            mixture_log_probs = torch.logsumexp(
+                torch.stack([student_log_probs + torch.log(1 - beta), teacher_log_probs + torch.log(beta)]),
+                dim=0,
+            )
 
-        # Compute KL divergences using F.kl_div
-        # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
-        kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
-        kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
+            # Compute KL divergences using F.kl_div
+            # PyTorch differs from the standard mathematical definition, so the order of the probability distributions is swapped compared to that defined in the paper.
+            kl_teacher = F.kl_div(mixture_log_probs, teacher_log_probs, reduction="none", log_target=True)
+            kl_student = F.kl_div(mixture_log_probs, student_log_probs, reduction="none", log_target=True)
 
-        # Compute the Generalized Jensen-Shannon Divergence
-        jsd = beta * kl_teacher + (1 - beta) * kl_student
+            # Compute the Generalized Jensen-Shannon Divergence
+            jsd = beta * kl_teacher + (1 - beta) * kl_student
 
         # Masking
         if labels is not None:
@@ -260,7 +253,7 @@ class GKDTrainer(SFTTrainer):
 
     @staticmethod
     def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
-        # Generate output with respect to the prompt only
+        # Generate output with respect to the prompt-only
         generated_outputs = model.generate(
             input_ids=inputs["prompts"],
             attention_mask=inputs.get("prompt_attention_mask", None),
@@ -287,9 +280,9 @@ class GKDTrainer(SFTTrainer):
         """
         Perform a training step for the Generalized Knowledge Distillation (GKD) model.
 
-        This method implements the on-policy learning approach described in the GKD paper.
-        With probability `self.lmbda`, it generates new responses using the student model,
-        which are then used for training instead of the original inputs.
+        This method implements the on-policy learning approach described in the GKD paper. With probability
+        `self.lmbda`, it generates new responses using the student model, which are then used for training instead of
+        the original inputs.
         """
         if self.seq_kd:
             with unwrap_model_for_generation(self.teacher_model, self.accelerator) as unwrapped_model:
@@ -310,37 +303,6 @@ class GKDTrainer(SFTTrainer):
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
-
-    def _prepare_deepspeed(self, model: PreTrainedModelWrapper):
-        # Adapted from accelerate: https://github.com/huggingface/accelerate/blob/739b135f8367becb67ffaada12fe76e3aa60fefd/src/accelerate/accelerator.py#L1473
-        deepspeed_plugin = self.accelerator.state.deepspeed_plugin
-        config_kwargs = deepcopy(deepspeed_plugin.deepspeed_config)
-
-        if model is not None:
-            if hasattr(model, "config"):
-                hidden_size = (
-                    max(model.config.hidden_sizes)
-                    if getattr(model.config, "hidden_sizes", None)
-                    else getattr(model.config, "hidden_size", None)
-                )
-                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
-                    # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
-                    # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
-                    config_kwargs.update(
-                        {
-                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
-                        }
-                    )
-
-        # If ZeRO-3 is used, we shard both the active and reference model.
-        # Otherwise, we assume the reference model fits in memory and is initialized on each device with ZeRO disabled (stage 0)
-        if config_kwargs["zero_optimization"]["stage"] != 3:
-            config_kwargs["zero_optimization"]["stage"] = 0
-        model, *_ = deepspeed.initialize(model=model, config=config_kwargs)
-        model.eval()
-        return model
 
     def create_model_card(
         self,
@@ -367,13 +329,20 @@ class GKDTrainer(SFTTrainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
 
+        tags.update(self._tag_names)
+
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{agarwal2024on-policy,
             title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
@@ -390,7 +359,7 @@ class GKDTrainer(SFTTrainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="GKD",
             trainer_citation=citation,

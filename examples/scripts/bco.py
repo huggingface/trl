@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "peft",
+# ]
+# ///
 
 """
 Run the BCO training script with the commands below. In general, the optimal configuration for BCO will be similar to that of KTO.
@@ -26,7 +33,6 @@ python examples/scripts/bco.py \
     --learning_rate 1e-6 \
     --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
-    --logging_steps 0.01 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir=bco-aligned-model \
@@ -36,7 +42,6 @@ python examples/scripts/bco.py \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
-    --bf16 \
     --report_to wandb
 
 # QLoRA:
@@ -48,7 +53,6 @@ python examples/scripts/bco.py \
     --learning_rate 1e-6 \
     --gradient_checkpointing \
     --gradient_accumulation_steps 1 \
-    --logging_steps 0.01 \
     --eval_steps 0.2 \
     --save_strategy no \
     --output_dir=bco-aligned-model-lora \
@@ -60,7 +64,6 @@ python examples/scripts/bco.py \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
     --warmup_ratio 0.1 \
-    --bf16 \
     --use_peft \
     --load_in_4bit \
     --lora_target_modules=all-linear \

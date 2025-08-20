@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
+import textwrap
+from io import StringIO
+from unittest.mock import patch
 
 import numpy as np
 import torch
@@ -28,19 +30,24 @@ from trl.trainer.utils import (
     DataCollatorForChatML,
     batch_generation,
     decode_and_strip_padding,
+    entropy_from_logits,
     flush_left,
+    flush_right,
     generate_model_card,
     get_peft_config,
     pad,
+    print_prompt_completions_sample,
     selective_log_softmax,
 )
+
+from .testing_utils import TrlTestCase, require_rich
 
 
 if is_peft_available():
     from peft import LoraConfig
 
 
-class TestPad(unittest.TestCase):
+class TestPad(TrlTestCase):
     def test_pad_1_dim_left(self):
         x = torch.tensor([1, 2, 3])
         y = torch.tensor([4, 5])
@@ -91,9 +98,41 @@ class TestPad(unittest.TestCase):
         )
         self.assertTrue(torch.equal(output, expected))
 
+    def test_pad_to_multiple_of_1(self):
+        x = torch.tensor([1, 2, 3])
+        y = torch.tensor([4, 5])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]])
+        self.assertTrue(torch.equal(output, expected))
+
+    def test_pad_to_multiple_of_2(self):
+        x = torch.tensor([1, 2, 3, 4, 5])
+        y = torch.tensor([6, 7, 8])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0], [6, 7, 8, 0, 0, 0, 0, 0]])
+        self.assertTrue(torch.equal(output, expected))
+
+    def test_pad_to_multiple_of_side_left(self):
+        x = torch.tensor([1, 2, 3, 4, 5])
+        y = torch.tensor([6, 7, 8])
+        # Max length is 3, pad to multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
+        expected = torch.tensor([[0, 0, 0, 1, 2, 3, 4, 5], [0, 0, 0, 0, 0, 6, 7, 8]])
+        self.assertTrue(torch.equal(output, expected))
+
+    def test_pad_to_multiple_of_no_extra_padding(self):
+        x = torch.tensor([1, 2, 3, 4])
+        y = torch.tensor([5, 6, 7, 8])
+        # Already multiple of 4
+        output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
+        expected = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
+        self.assertTrue(torch.equal(output, expected))
+
 
 @require_peft
-class TestGetPEFTConfig(unittest.TestCase):
+class TestGetPEFTConfig(TrlTestCase):
     def test_create_peft_config_use_peft_false(self):
         """Test that when use_peft is False, the function returns None."""
         model_args = ModelConfig(use_peft=False)
@@ -126,8 +165,9 @@ class TestGetPEFTConfig(unittest.TestCase):
             self.assertEqual(getattr(peft_config, arg), value)
 
 
-class TestDecodeAndStripPadding(unittest.TestCase):
+class TestDecodeAndStripPadding(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
     def test_example_with_padding(self):
@@ -141,7 +181,7 @@ class TestDecodeAndStripPadding(unittest.TestCase):
         self.assertEqual(decoded, ["Hello", "Hello"])
 
 
-class TestGenerateModelCard(unittest.TestCase):
+class TestGenerateModelCard(TrlTestCase):
     def test_full(self):
         model_card = generate_model_card(
             base_model="username/my_base_model",
@@ -187,8 +227,9 @@ class TestGenerateModelCard(unittest.TestCase):
         self.assertIn("My Trainer", card_text)
 
 
-class TestDataCollatorForChatML(unittest.TestCase):
+class TestDataCollatorForChatML(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Initialize the tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         if self.tokenizer.pad_token is None:
@@ -283,8 +324,9 @@ class TestDataCollatorForChatML(unittest.TestCase):
         )
 
 
-class TestBatchGeneration(unittest.TestCase):
+class TestBatchGeneration(TrlTestCase):
     def setUp(self):
+        super().setUp()
         # Initialize the tokenizer
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -342,7 +384,7 @@ class TestBatchGeneration(unittest.TestCase):
         self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
 
 
-class TestComputeAccuracy(unittest.TestCase):
+class TestComputeAccuracy(TrlTestCase):
     def test_token_classification_task(self):
         eval_pred = (
             np.array(
@@ -409,7 +451,7 @@ class TestComputeAccuracy(unittest.TestCase):
         self.assertEqual(str(cm.warning), expected_warning)
 
 
-class TestFlushLeft(unittest.TestCase):
+class TestFlushLeft(TrlTestCase):
     def test_basic_case(self):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         tensor1 = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 0, 0]])
@@ -436,12 +478,12 @@ class TestFlushLeft(unittest.TestCase):
         self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
 
     def test_no_shift_needed(self):
-        mask = torch.tensor([[1, 1, 0, 0], [1, 1, 0, 0]])
-        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 8, 0, 0]])
+        mask = torch.tensor([[1, 1, 0, 0], [1, 0, 0, 0]])
+        tensor1 = torch.tensor([[5, 6, 0, 0], [7, 0, 0, 0]])
         new_mask, new_tensor1 = flush_left(mask, tensor1)
 
-        expected_mask = torch.tensor([[1, 1], [1, 1]])
-        expected_tensor1 = torch.tensor([[5, 6], [7, 8]])
+        expected_mask = torch.tensor([[1, 1], [1, 0]])
+        expected_tensor1 = torch.tensor([[5, 6], [7, 0]])
 
         self.assertTrue(torch.equal(new_mask, expected_mask))
         self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
@@ -449,13 +491,55 @@ class TestFlushLeft(unittest.TestCase):
     def test_no_tensors(self):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         new_mask = flush_left(mask)
-
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
-
         self.assertTrue(torch.equal(new_mask, expected_mask))
 
 
-class TestSelectiveLogSoftmax(unittest.TestCase):
+class TestFlushRight(TrlTestCase):
+    def test_basic_case(self):
+        mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
+        tensor1 = torch.tensor([[2, 3, 4, 0, 0], [0, 0, 5, 6, 0]])
+        tensor2 = torch.tensor([[7, 8, 9, 0, 0], [0, 0, 10, 11, 0]])
+        new_mask, new_tensor1, new_tensor2 = flush_right(mask, tensor1, tensor2)
+
+        expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
+        expected_tensor1 = torch.tensor([[2, 3, 4], [0, 5, 6]])
+        expected_tensor2 = torch.tensor([[7, 8, 9], [0, 10, 11]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        self.assertTrue(torch.equal(new_tensor2, expected_tensor2))
+
+    def test_single_row(self):
+        mask = torch.tensor([[1, 1, 0, 0]])
+        tensor1 = torch.tensor([[2, 3, 0, 0]])
+        new_mask, new_tensor1 = flush_right(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1]])
+        expected_tensor1 = torch.tensor([[2, 3]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_shift_needed(self):
+        mask = torch.tensor([[0, 0, 1, 1], [0, 0, 0, 1]])
+        tensor1 = torch.tensor([[0, 0, 5, 6], [0, 0, 0, 7]])
+        new_mask, new_tensor1 = flush_right(mask, tensor1)
+
+        expected_mask = torch.tensor([[1, 1], [0, 1]])
+        expected_tensor1 = torch.tensor([[5, 6], [0, 7]])
+
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+
+    def test_no_tensors(self):
+        mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
+        new_mask = flush_right(mask)
+        expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
+        self.assertTrue(torch.equal(new_mask, expected_mask))
+
+
+class TestSelectiveLogSoftmax(TrlTestCase):
     @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
     def test_selective_log_softmax(self, dtype):
         """Test selective_log_softmax with logits of different dtypes"""
@@ -474,3 +558,89 @@ class TestSelectiveLogSoftmax(unittest.TestCase):
             self.assertTrue(torch.equal(actual_output, expected_output))
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
+
+
+@require_rich
+class TestPrintPromptCompletionsSample(TrlTestCase):
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_output(self, mock_stdout):
+        prompts = ["The sky is", "The sun is"]
+        completions = [" blue.", " in the sky."]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭──────────────────────────── Step 42 ─────────────────────────────╮
+        │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt     ┃ Completion   ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ The sky is │  blue.       │        0.12 │   0.79 │      0.99 │ │
+        │ ├────────────┼──────────────┼─────────────┼────────┼───────────┤ │
+        │ │ The sun is │  in the sky. │        0.46 │   0.10 │      0.65 │ │
+        │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────╯
+        """)
+
+        self.assertEqual(output, expected_output)
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_num_samples(self, mock_stdout):
+        prompts = ["A", "B"]
+        completions = ["1", "2"]
+        rewards = {"Score": [0.1, 0.2]}
+        advantages = [0.3, 0.4]
+        step = 10
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        possible_outputs = [
+            textwrap.dedent("""\
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ A      │ 1          │  0.10 │      0.30 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
+                """),
+            # docstyle-ignore
+            textwrap.dedent("""\
+            ╭────────────────── Step 10 ──────────────────╮
+            │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │
+            │ ┃ Prompt ┃ Completion ┃ Score ┃ Advantage ┃ │
+            │ ┡━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━┩ │
+            │ │ B      │ 2          │  0.20 │      0.40 │ │
+            │ └────────┴────────────┴───────┴───────────┘ │
+            ╰─────────────────────────────────────────────╯
+                """),
+        ]
+        self.assertIn(output, possible_outputs)
+
+
+class TestEntropyFromLogits(TrlTestCase):
+    @parameterized.expand(
+        [
+            (dtype, chunk_size)
+            for dtype in (torch.float64, torch.float32, torch.float16, torch.bfloat16)
+            for chunk_size in (1, 16)
+        ]
+    )
+    def test_entropy_from_logits(self, dtype, chunk_size):
+        batch_size, seq_len, vocab_size = 64, 384, 768
+        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+        if dtype in (torch.float64, torch.float32):
+            p = logits.softmax(-1)
+            entropy = -torch.sum(p * p.log(), dim=-1)
+        else:
+            logps = logits.log_softmax(dim=-1)
+            entropy = -(torch.exp(logps) * logps).sum(-1)
+        predicted_entropy = entropy_from_logits(logits, chunk_size=chunk_size)
+        torch.testing.assert_close(predicted_entropy, entropy, rtol=1e-5, atol=1e-5)

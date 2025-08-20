@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,6 +11,13 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
+# /// script
+# dependencies = [
+#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "vllm",
+# ]
+# ///
 
 from dataclasses import dataclass, field
 from typing import Optional
@@ -99,4 +106,4 @@ else:
 completions = [[c0, c1] for c0, c1 in zip(reference_completions, model_completions)]
 best_idxs = judge.judge(prompts, completions)
 model_win_rate = best_idxs.count(1) / len(best_idxs)
-print(f"Model win rate: {model_win_rate*100:.2f}%")
+print(f"Model win rate: {model_win_rate * 100:.2f}%")

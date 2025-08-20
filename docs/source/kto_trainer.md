@@ -38,7 +38,7 @@ model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2-0.5B-Instruct")
 train_dataset = load_dataset("trl-lib/kto-mix-14k", split="train")
 
-training_args = KTOConfig(output_dir="Qwen2-0.5B-KTO", logging_steps=10)
+training_args = KTOConfig(output_dir="Qwen2-0.5B-KTO")
 trainer = KTOTrainer(model=model, args=training_args, processing_class=tokenizer, train_dataset=train_dataset)
 trainer.train()
 ```
@@ -53,9 +53,9 @@ Distributed across 8 x H100 GPUs, the training takes approximately 30 minutes. Y
 
 ![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kto-qwen2-reward-margin.png)
 
-To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-KTO) performs, you can use the [TRL Chat CLI](clis#chat-interface).
+To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-KTO) performs, you can use the [Transformers Chat CLI](https://huggingface.co/docs/transformers/quicktour#chat-with-text-generation-models).
 
-<pre><code>$ trl chat --model_name_or_path trl-lib/Qwen2-0.5B-KTO
+<pre><code>$ transformers chat trl-lib/Qwen2-0.5B-KTO
 <strong><span style="color: red;">&lt;quentin_gallouedec&gt;:</span></strong>
 What is the best programming language?
 
@@ -74,7 +74,7 @@ Here are some other factors to consider when choosing a programming language for
 
 KTO requires an [unpaired preference dataset](dataset_formats#unpaired-preference). Alternatively, you can provide a *paired* preference dataset (also known simply as a *preference dataset*). In this case, the trainer will automatically convert it to an unpaired format by separating the chosen and rejected responses, assigning `label = True` to the chosen completions and `label = False` to the rejected ones.
 
-The [`KTOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+The [`KTOTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 In theory, the dataset should contain at least one chosen and one rejected completion. However, some users have successfully run KTO using *only* chosen or only rejected data. If using only rejected data, it is advisable to adopt a conservative learning rate.
 
@@ -89,7 +89,6 @@ accelerate launch trl/scripts/kto.py \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --dataset_name trl-lib/kto-mix-14k \
     --num_train_epochs 1 \
-    --logging_steps 25 \
     --output_dir Qwen2-0.5B-KTO
 ```
 
@@ -119,20 +118,23 @@ By default, they are both 1. However, if you have more of one or the other, then
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following reward metrics:
 
-- `rewards/chosen`: the mean log probabilities of the policy model for the chosen responses scaled by beta
-- `rewards/rejected`: the mean log probabilities of the policy model for the rejected responses scaled by beta
-- `rewards/margins`: the mean difference between the chosen and corresponding rejected rewards
-- `logps/chosen`: the mean log probabilities of the chosen completions
-- `logps/rejected`: the mean log probabilities of the rejected completions
-- `logits/chosen`: the mean logits of the chosen completions
-- `logits/rejected`: the mean logits of the rejected completions
-- `kl`: the KL divergence between the policy model and the reference model
+- `rewards/chosen_sum`: the sum of log probabilities of the policy model for the chosen responses scaled by beta
+- `rewards/rejected_sum`: the sum of log probabilities of the policy model for the rejected responses scaled by beta
+- `logps/chosen_sum`: the sum of log probabilities of the chosen completions
+- `logps/rejected_sum`: the sum of log probabilities of the rejected completions
+- `logits/chosen_sum`: the sum of logits of the chosen completions
+- `logits/rejected_sum`: the sum of logits of the rejected completions
+- `count/chosen`: the count of chosen samples in a batch
+- `count/rejected`: the count of rejected samples in a batch
 
 ## KTOTrainer
 
 [[autodoc]] KTOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## KTOConfig
 

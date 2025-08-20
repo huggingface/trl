@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import itertools
+import textwrap
 import unittest
+from time import strftime
 
 from datasets import Dataset, DatasetDict
 from parameterized import parameterized
@@ -23,16 +25,20 @@ from trl.data_utils import (
     apply_chat_template,
     extract_prompt,
     is_conversational,
+    is_conversational_from_value,
     maybe_apply_chat_template,
     maybe_convert_to_chatml,
     maybe_extract_prompt,
     maybe_unpair_preference_dataset,
-    pack_examples,
+    pack_dataset,
+    truncate_dataset,
     unpair_preference_dataset,
 )
 
+from .testing_utils import TrlTestCase
 
-class IsConversationalTester(unittest.TestCase):
+
+class IsConversationalTester(TrlTestCase):
     conversational_examples = [
         {  # Language modeling
             "messages": [
@@ -40,7 +46,7 @@ class IsConversationalTester(unittest.TestCase):
                 {"role": "assistant", "content": "It is blue."},
             ],
         },
-        {  # Prompt only
+        {  # Prompt-only
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
         },
         {  # Prompt-completion
@@ -65,6 +71,62 @@ class IsConversationalTester(unittest.TestCase):
         {  # Unpaired preference
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
             "completion": [{"role": "assistant", "content": "It is blue."}],
+            "label": True,
+        },
+        {  # Language modeling with harmony
+            "messages": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+        },
+        {  # Prompt-only with harmony
+            "prompt": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+        },
+        {  # Prompt-completion with harmony
+            "prompt": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            "completion": [
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+        },
+        {  # Preference with harmony
+            "prompt": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            "chosen": [
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "assistant", "thinking": "The user asks the color of the tree...", "content": "It is green."},
+            ],
+        },
+        {  # Preference with implicit prompt and harmony
+            "chosen": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "thinking": "The user asks the color of the tree...", "content": "It is green."},
+            ],
+        },
+        {  # Unpaired preference with harmony
+            "prompt": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            "completion": [
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
             "label": True,
         },
     ]
@@ -86,13 +148,40 @@ class IsConversationalTester(unittest.TestCase):
         self.assertFalse(is_conversational(example))
 
 
-class ApplyChatTemplateTester(unittest.TestCase):
+class IsConversationalFromValueTester(TrlTestCase):
+    def test_positive_1(self):
+        example = {
+            "conversations": [
+                {"from": "user", "value": "What color is the sky?"},
+                {"from": "assistant", "value": "It is blue."},
+            ],
+        }
+        self.assertTrue(is_conversational_from_value(example))
+
+    def test_negative_1(self):
+        example = {
+            "messages": [
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "content": "It is blue."},
+            ],
+        }
+        self.assertFalse(is_conversational_from_value(example))
+
+    def test_negative_2(self):
+        example = {"text": "The sky is blue."}
+        self.assertFalse(is_conversational_from_value(example))
+
+
+class ApplyChatTemplateTester(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
         "trl-internal-testing/tiny-DbrxForCausalLM",
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM",
+        "trl-internal-testing/tiny-DeepseekV3ForCausalLM-0528",
         "trl-internal-testing/tiny-FalconMambaForCausalLM",
         "trl-internal-testing/tiny-Gemma2ForCausalLM",
         "trl-internal-testing/tiny-GemmaForCausalLM",
+        "trl-internal-testing/tiny-GptOssForCausalLM",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.1",
         "trl-internal-testing/tiny-LlamaForCausalLM-3.2",
         "trl-internal-testing/tiny-LlamaForCausalLM-3",
@@ -100,6 +189,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
         "trl-internal-testing/tiny-MistralForCausalLM-0.2",
         "trl-internal-testing/tiny-Phi3ForCausalLM",
         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+        "trl-internal-testing/tiny-Qwen3ForCausalLM",
     ]
 
     conversational_examples = [
@@ -109,7 +199,7 @@ class ApplyChatTemplateTester(unittest.TestCase):
                 {"role": "assistant", "content": "It is blue."},
             ],
         },
-        {  # Prompt only
+        {  # Prompt-only
             "prompt": [{"role": "user", "content": "What color is the sky?"}],
         },
         {  # Prompt-completion
@@ -139,12 +229,12 @@ class ApplyChatTemplateTester(unittest.TestCase):
     ]
 
     non_conversational_examples = [
-        {"prompt": "The sky is", "completion": " blue."},
-        {"text": "The sky is blue."},
-        {"prompt": "The sky is"},
-        {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},
-        {"chosen": "The sky is blue.", "rejected": "The sky is green."},
-        {"prompt": "The sky is", "completion": " blue.", "label": True},
+        {"text": "The sky is blue."},  # Language modeling
+        {"prompt": "The sky is"},  # Prompt-only
+        {"prompt": "The sky is", "completion": " blue."},  # Prompt-completion
+        {"prompt": "The sky is", "chosen": " blue.", "rejected": " green."},  # Preference
+        {"chosen": "The sky is blue.", "rejected": "The sky is green."},  # Preference with implicit prompt
+        {"prompt": "The sky is", "completion": " blue.", "label": True},  # Unpaired preference
     ]
 
     @parameterized.expand(itertools.product(tokenizers, conversational_examples))
@@ -230,7 +320,219 @@ class ApplyChatTemplateTester(unittest.TestCase):
         self.assertNotIn("get_current_temperature", result_without_tools["prompt"])
 
 
-class UnpairPreferenceDatasetTester(unittest.TestCase):
+class ApplyChatTemplateHarmonyTester(TrlTestCase):
+    def test_language_modeling(self):
+        messages = {
+            "messages": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+        }
+        output = apply_chat_template(
+            messages,
+            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            reasoning_effort="low",
+            model_identity="You are HuggingGPT.",
+        )
+
+        # docstyle-ignore
+        expected = textwrap.dedent(f"""\
+        <|start|>system<|message|>You are HuggingGPT.
+        Knowledge cutoff: 2024-06
+        Current date: {strftime("%Y-%m-%d")}
+
+        Reasoning: low
+
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
+
+        self.assertEqual(output["text"], expected)
+
+    def test_prompt_only(self):
+        messages = {
+            "prompt": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+        }
+        output = apply_chat_template(
+            messages,
+            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            reasoning_effort="low",
+            model_identity="You are HuggingGPT.",
+        )
+
+        # docstyle-ignore
+        expected = textwrap.dedent(f"""\
+        <|start|>system<|message|>You are HuggingGPT.
+        Knowledge cutoff: 2024-06
+        Current date: {strftime("%Y-%m-%d")}
+
+        Reasoning: low
+
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
+
+        self.assertEqual(output["prompt"], expected)
+
+    def test_prompt_completion(self):
+        messages = {
+            "prompt": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            "completion": [
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+        }
+        output = apply_chat_template(
+            messages,
+            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            reasoning_effort="low",
+            model_identity="You are HuggingGPT.",
+        )
+
+        # docstyle-ignore
+        expected_prompt = textwrap.dedent(f"""\
+        <|start|>system<|message|>You are HuggingGPT.
+        Knowledge cutoff: 2024-06
+        Current date: {strftime("%Y-%m-%d")}
+
+        Reasoning: low
+
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
+        expected_completion = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
+
+        self.assertEqual(output["prompt"], expected_prompt)
+        self.assertEqual(output["completion"], expected_completion)
+
+    def test_preference(self):
+        messages = {
+            "prompt": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            "chosen": [
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "assistant", "thinking": "The user asks the color of the tree...", "content": "It is green."},
+            ],
+        }
+        output = apply_chat_template(
+            messages,
+            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            reasoning_effort="low",
+            model_identity="You are HuggingGPT.",
+        )
+
+        # docstyle-ignore
+        expected_prompt = textwrap.dedent(f"""\
+        <|start|>system<|message|>You are HuggingGPT.
+        Knowledge cutoff: 2024-06
+        Current date: {strftime("%Y-%m-%d")}
+
+        Reasoning: low
+
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
+        expected_chosen = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
+        expected_rejected = "<|channel|>analysis<|message|>The user asks the color of the tree...<|end|><|start|>assistant<|channel|>final<|message|>It is green.<|return|>"
+
+        self.assertEqual(output["prompt"], expected_prompt)
+        self.assertEqual(output["chosen"], expected_chosen)
+        self.assertEqual(output["rejected"], expected_rejected)
+
+    def test_preference_with_implicit_prompt(self):
+        messages = {
+            "chosen": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+            "rejected": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+                {"role": "assistant", "thinking": "The user asks the color of the tree...", "content": "It is green."},
+            ],
+        }
+        output = apply_chat_template(
+            messages,
+            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            reasoning_effort="low",
+            model_identity="You are HuggingGPT.",
+        )
+
+        # docstyle-ignore
+        expected_chosen = textwrap.dedent(f"""\
+        <|start|>system<|message|>You are HuggingGPT.
+        Knowledge cutoff: 2024-06
+        Current date: {strftime("%Y-%m-%d")}
+
+        Reasoning: low
+
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
+
+        # docstyle-ignore
+        expected_rejected = textwrap.dedent(f"""\
+        <|start|>system<|message|>You are HuggingGPT.
+        Knowledge cutoff: 2024-06
+        Current date: {strftime("%Y-%m-%d")}
+
+        Reasoning: low
+
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the tree...<|end|><|start|>assistant<|channel|>final<|message|>It is green.<|return|>""")
+
+        self.assertEqual(output["chosen"], expected_chosen)
+        self.assertEqual(output["rejected"], expected_rejected)
+
+    def test_unpaired_preference(self):
+        messages = {
+            "prompt": [
+                {"role": "system", "content": "Respond in a friendly manner."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            "completion": [
+                {"role": "assistant", "thinking": "The user asks the color of the sky...", "content": "It is blue."},
+            ],
+            "label": True,
+        }
+        output = apply_chat_template(
+            messages,
+            tokenizer=AutoTokenizer.from_pretrained("trl-internal-testing/tiny-GptOssForCausalLM"),
+            reasoning_effort="low",
+            model_identity="You are HuggingGPT.",
+        )
+
+        # docstyle-ignore
+        expected_prompt = textwrap.dedent(f"""\
+        <|start|>system<|message|>You are HuggingGPT.
+        Knowledge cutoff: 2024-06
+        Current date: {strftime("%Y-%m-%d")}
+
+        Reasoning: low
+
+        # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
+
+        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
+        expected_completion = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
+
+        self.assertEqual(output["prompt"], expected_prompt)
+        self.assertEqual(output["completion"], expected_completion)
+        self.assertTrue(output["label"])
+
+
+class UnpairPreferenceDatasetTester(TrlTestCase):
     paired_dataset = Dataset.from_dict(
         {
             "prompt": ["The sky is", "The sun is"],
@@ -304,7 +606,7 @@ class UnpairPreferenceDatasetTester(unittest.TestCase):
         )
 
 
-class ExtractPromptTester(unittest.TestCase):
+class ExtractPromptTester(TrlTestCase):
     example_implicit_prompt_conversational = {
         "chosen": [
             {"role": "user", "content": "What color is the sky?"},
@@ -394,34 +696,8 @@ class ExtractPromptTester(unittest.TestCase):
         )
 
 
-class TestPackExamples(unittest.TestCase):
-    def test_pack_examples_larger_chunks(self):
-        examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-        }
-        seq_length = 5
-        expected_output = {
-            "input_ids": [[1, 2, 3, 4, 5], [6, 7, 8]],
-            "attention_mask": [[0, 1, 1, 0, 0], [1, 1, 1]],
-        }
-        result = pack_examples(examples, seq_length)
-        self.assertEqual(result, expected_output)
-
-    def test_pack_examples_smaller_chunks(self):
-        examples = {
-            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
-            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
-        }
-        seq_length = 2
-        expected_output = {
-            "input_ids": [[1, 2], [3, 4], [5, 6], [7, 8]],
-            "attention_mask": [[0, 1], [1, 0], [0, 1], [1, 1]],
-        }
-        result = pack_examples(examples, seq_length)
-        self.assertEqual(result, expected_output)
-
-    def test_pack_with_dataset(self):
+class TestPackDatasetWrapped(TrlTestCase):
+    def test_with_dataset(self):
         examples = {
             "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
@@ -432,11 +708,136 @@ class TestPackExamples(unittest.TestCase):
             "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
             "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
         }
-        dataset = dataset.map(pack_examples, batched=True, fn_kwargs={"seq_length": seq_length})
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        seq_length = 3
+        expected_output = {
+            "input_ids": [[1, 2, 3], [4, 5, 6], [7, 8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1], [1, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="wrapped")
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+
+class TestPackDatasetBfd(TrlTestCase):
+    def test_simple(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
+            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
+            "seq_lengths": [[4], [3, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[4, 5, 6, 7], [1, 2, 3, 8]],
+            "attention_mask": [[0, 0, 1, 1], [0, 1, 1, 1]],
+            "seq_lengths": [[4], [3, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+    def test_with_truncation(self):
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6, 7], [8, 9, 10, 11], [12]],
+            "attention_mask": [[1, 1, 1, 1, 1], [1, 1], [1, 1, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 4
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
+            "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
+            "seq_lengths": [[4], [4], [2, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_non_power_of_2(self):
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6], [7, 8, 9, 10], [11, 12, 13]],
+            "attention_mask": [[1, 0, 0, 1, 1], [0], [0, 1, 0, 0], [1, 0, 1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 5
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
+            "attention_mask": [[1, 0, 0, 1, 1], [0, 1, 0, 0, 0], [1, 0, 1]],
+            "seq_lengths": [[5], [4, 1], [3]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         self.assertEqual(dataset.to_dict(), expected_output)
 
 
-class TestMaybeConvertToChatML(unittest.TestCase):
+class TestTruncateExamples(TrlTestCase):
+    def test_with_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_iterable_dataset(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+        }
+        dataset = Dataset.from_dict(examples).to_iterable_dataset()
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        num_examples = len(examples[next(iter(examples))])
+        self.assertEqual(next(iter(dataset.batch(batch_size=num_examples))), expected_output)
+
+    def test_with_extra_column(self):
+        examples = {
+            "input_ids": [[1, 2, 3], [4, 5, 6, 7], [8]],
+            "attention_mask": [[0, 1, 1], [0, 0, 1, 1], [1]],
+            "my_column": ["a", "b", "c"],
+        }
+        dataset = Dataset.from_dict(examples)
+        max_length = 2
+        expected_output = {
+            "input_ids": [[1, 2], [4, 5], [8]],
+            "attention_mask": [[0, 1], [0, 0], [1]],
+            "my_column": ["a", "b", "c"],
+        }
+        dataset = truncate_dataset(dataset, max_length)
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+
+class TestMaybeConvertToChatML(TrlTestCase):
     def test_with_conversations_key(self):
         # Particular case where the key is "conversations": we rename it to "messages"
         example = {

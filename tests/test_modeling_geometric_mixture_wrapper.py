@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,16 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
 import torch
 from transformers import AutoModelForCausalLM, GenerationConfig
 
 from trl.models.modeling_base import GeometricMixtureWrapper, create_reference_model
 
+from .testing_utils import TrlTestCase
 
-class TestGeometricMixtureWrapper(unittest.TestCase):
+
+class TestGeometricMixtureWrapper(TrlTestCase):
     def setUp(self):
+        super().setUp()
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(model_id)
         self.ref_model = create_reference_model(self.model)

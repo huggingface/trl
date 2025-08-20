@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import textwrap
 import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
+from pathlib import Path
 from typing import Optional, Union
 
 import numpy as np
@@ -44,7 +45,7 @@ from transformers import (
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
 from transformers.trainer_callback import CallbackHandler, ExportableState, PrinterCallback
-from transformers.utils import is_peft_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
@@ -54,6 +55,7 @@ from .utils import (
     OnlineTrainerState,
     batch_generation,
     disable_dropout_in_model,
+    empty_cache,
     exact_div,
     first_true_indices,
     forward,
@@ -87,6 +89,7 @@ class PolicyAndValueWrapper(nn.Module):
         self.policy = policy
         self.value_model = value_model
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
+        self.is_gradient_checkpointing = policy.is_gradient_checkpointing
 
     def forward(self, **kwargs):
         output = self.critic_backbone(**kwargs)
@@ -107,7 +110,7 @@ class PPOTrainer(Trainer):
         ref_model: Optional[nn.Module],
         reward_model: nn.Module,
         train_dataset: Dataset,
-        value_model: Optional[nn.Module] = None,
+        value_model: nn.Module,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         # less commonly used
@@ -141,6 +144,14 @@ class PPOTrainer(Trainer):
                 )
         else:
             self.policy_model.generation_config.eos_token_id = self.stop_token_id = args.stop_token_id  # None or int
+
+        # Check that the kl estimator is valid
+        if self.args.kl_estimator not in {"k1", "k3"}:
+            raise ValueError(
+                "kl_estimator must be either 'k1' (straightforward, unbiased) or 'k3' (lower variance, unbiased, "
+                "appears to be a strictly better estimator). See "
+                "[Approximating KL Divergence](http://joschu.net/blog/kl-approx.html) for details."
+            )
 
         # peft support
         if not is_peft_available() and peft_config is not None:
@@ -185,9 +196,7 @@ class PPOTrainer(Trainer):
         accelerator = Accelerator(gradient_accumulation_steps=args.gradient_accumulation_steps)
         self.accelerator = accelerator
         args.world_size = accelerator.num_processes
-        args.local_batch_size = (
-            args.per_device_train_batch_size * args.gradient_accumulation_steps * args.num_mini_batches
-        )
+        args.local_batch_size = args.per_device_train_batch_size * args.gradient_accumulation_steps
         args.micro_batch_size = int(args.per_device_train_batch_size * args.world_size)
         args.batch_size = int(args.local_batch_size * args.world_size)
         args.mini_batch_size = exact_div(
@@ -197,9 +206,9 @@ class PPOTrainer(Trainer):
             args.local_batch_size, args.num_mini_batches, "`local_batch_size` must be a multiple of `num_mini_batches`"
         )
         if args.whiten_rewards:
-            assert (
-                args.local_mini_batch_size >= 8
-            ), f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
+            assert args.local_mini_batch_size >= 8, (
+                f"Per-rank minibatch size {args.local_mini_batch_size} is insufficient for whitening"
+            )
         # `per_rank_rollout_batch_size` is our `args.local_batch_size`
         # `per_rank_minibatch_size` is our `args.local_mini_batch_size`
         args.num_total_batches = math.ceil(
@@ -375,7 +384,7 @@ class PPOTrainer(Trainer):
         # trainer state initialization
         self.state.global_step = 0
         self.state.episode = 0
-        self.state.max_steps = args.num_total_batches * args.num_mini_batches
+        self.state.max_steps = args.num_total_batches
         self.state.num_train_epochs = args.total_episodes / self.train_dataset_len
         # Compute absolute values for logging, eval, and save if given as ratio
         if args.logging_steps is not None:
@@ -431,7 +440,7 @@ class PPOTrainer(Trainer):
                     logits = logitss[i : i + args.local_rollout_forward_batch_size]
                     logprob = selective_log_softmax(logits, response)
                     del logits
-                    torch.cuda.empty_cache()
+                    empty_cache()
 
                     if ref_policy is None:
                         with self.null_ref_context():
@@ -442,7 +451,7 @@ class PPOTrainer(Trainer):
                     ref_logits /= args.temperature + 1e-7
                     ref_logprob = selective_log_softmax(ref_logits, response)
                     del ref_output, ref_logits
-                    torch.cuda.empty_cache()
+                    empty_cache()
 
                     # Response Processing 1. truncate response after the first occurrence of `stop_token_id`
                     postprocessed_response = response
@@ -478,7 +487,7 @@ class PPOTrainer(Trainer):
                 scores = torch.cat(scores, 0)
                 values = torch.cat(values, 0)
                 del (logprob, ref_logprob, full_value, value, score, unwrapped_model)
-                torch.cuda.empty_cache()
+                empty_cache()
                 gc.collect()
 
                 # Response Processing 3. Filter completion. Ensure that the sample contains stop_token_id
@@ -498,7 +507,9 @@ class PPOTrainer(Trainer):
                 values = torch.masked_fill(values, padding_mask_p1, 0)
 
                 # 4. compute rewards
-                kl = logprobs - ref_logprobs
+                # Formula used by http://joschu.net/blog/kl-approx.html for the k1 and k3 estimators
+                logr = ref_logprobs - logprobs
+                kl = -logr if args.kl_estimator == "k1" else (logr.exp() - 1) - logr  # Else statement is k3
                 non_score_reward = -args.kl_coef * kl
                 rewards = non_score_reward.clone()
                 actual_start = torch.arange(rewards.size(0), device=rewards.device)
@@ -523,7 +534,7 @@ class PPOTrainer(Trainer):
                 returns = advantages + values
                 advantages = masked_whiten(advantages, ~padding_mask)
                 advantages = torch.masked_fill(advantages, padding_mask, 0)
-                torch.cuda.empty_cache()
+                empty_cache()
 
             # Do multiple epochs of PPO training, with a fresh random shuffle in each epoch
             for ppo_epoch_idx in range(args.num_ppo_epochs):
@@ -604,7 +615,7 @@ class PPOTrainer(Trainer):
                         mb_advantage, mb_values, mb_responses, mb_query_responses, mb_logprobs,
                     )
                     # fmt: on
-                    torch.cuda.empty_cache()
+                    empty_cache()
             with torch.no_grad():
                 mean_kl = kl.sum(1).mean()
                 mean_entropy = (-logprobs).sum(1).mean()
@@ -641,12 +652,12 @@ class PPOTrainer(Trainer):
                 self._save_checkpoint(model, trial=None)
                 self.control = self.callback_handler.on_save(self.args, self.state, self.control)
             del kl, mean_kl, mean_entropy, mean_non_score_reward, scores, metrics, non_score_reward
-            torch.cuda.empty_cache()
+            empty_cache()
             gc.collect()
 
             if args.num_sample_generations > 0 and (update - 1) % self.sample_generations_freq == 0:
                 self.generate_completions(sampling=True)
-                torch.cuda.empty_cache()
+                empty_cache()
             del (
                 query_responses,
                 responses,
@@ -666,7 +677,7 @@ class PPOTrainer(Trainer):
                 advantages,
                 returns,
             )
-            torch.cuda.empty_cache()
+            empty_cache()
 
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
@@ -724,7 +735,8 @@ class PPOTrainer(Trainer):
         df = pd.DataFrame(table)
 
         if self.accelerator.is_main_process:
-            print_rich_table(df.iloc[0 : 0 + 5])
+            if is_rich_available():
+                print_rich_table(df.iloc[0 : 0 + 5])
             if "wandb" in args.report_to:
                 import wandb
 
@@ -736,6 +748,15 @@ class PPOTrainer(Trainer):
                     name="completions.csv",
                     table=df,
                 )
+
+    # Ensure the model card is saved along with the checkpoint
+    def _save_checkpoint(self, model, trial):
+        if self.args.hub_model_id is None:
+            model_name = Path(self.args.output_dir).name
+        else:
+            model_name = self.args.hub_model_id.split("/")[-1]
+        self.create_model_card(model_name=model_name)
+        super()._save_checkpoint(model, trial)
 
     def create_model_card(
         self,
@@ -762,13 +783,20 @@ class PPOTrainer(Trainer):
         else:
             base_model = None
 
-        tags = tags or []
-        if isinstance(tags, str):
-            tags = [tags]
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
 
         if hasattr(self.model.config, "unsloth_version"):
-            tags.append("unsloth")
+            tags.add("unsloth")
 
+        tags.update(self._tag_names)
+
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{mziegler2019fine-tuning,
             title        = {{Fine-Tuning Language Models from Human Preferences}},
@@ -783,7 +811,7 @@ class PPOTrainer(Trainer):
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
             tags=tags,
-            wandb_url=wandb.run.get_url() if is_wandb_available() and wandb.run is not None else None,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="PPO",
             trainer_citation=citation,

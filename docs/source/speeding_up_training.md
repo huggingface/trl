@@ -37,7 +37,13 @@ training_args = OnlineDPOConfig(..., use_vllm=True)
 </hfoption>
 <hfoption id="GRPO">
 
-Then, enable it by passing `use_vllm=True` in the training arguments.
+First, start a vLLM server by running:
+
+```bash
+trl vllm-serve --model <model_name>
+```
+
+Then, run the training script and pass `use_vllm=True` in the training arguments.
 
 ```python
 from trl import GRPOConfig
@@ -45,31 +51,23 @@ from trl import GRPOConfig
 training_args = GRPOConfig(..., use_vllm=True)
 ```
 
-The strategy here is to use a dedicated GPU for generation powered by vLLM, while using the remainder for training.
+You can customize the server configuration by passing additional arguments. For more information, see [vLLM integration](vllm_integration).
 
 <Tip warning={true}>
 
-When using vLLM, an additional GPU is required exclusively for generation. This means you need at least two available GPUs and must ensure that one remains unused by the trainer. To achieve this, run the training with `--num_processes <NUMBER_OF_GPUs - 1>`.
+When using vLLM, ensure that the GPUs assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation using `CUDA_VISIBLE_DEVICES`.  
 
-For example, if you have 4 GPUs, set `--num_processes 3` to allocate three GPUs for training while reserving one for generation.
-```bash
-accelerate launch --multi_gpu --num_processes 3 train_grpo.py
-```
+Set GPUs **0-3** for vLLM generation:  
+```sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model <model_name>
+```  
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/1_gpu_for_generation.png)
+And GPUs **4-7** for training:  
+```sh
+CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+```  
 
 </Tip>
-
-You can further tune the vLLM configuration by setting a specific `vllm_device` and `vllm_gpu_memory_utilization` in the [`GRPOConfig`].
-
-```python
-training_args = GRPOConfig(
-    ...,
-    use_vllm=True,
-    vllm_device="cuda:4",
-    vllm_gpu_memory_utilization=0.7,
-)
-```
 
 </hfoption>
 </hfoptions>

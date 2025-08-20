@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,8 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tempfile
-import unittest
 
 import torch
 from datasets import Dataset
@@ -21,9 +19,12 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 
 from trl import RLOOConfig, RLOOTrainer
 
+from .testing_utils import TrlTestCase
 
-class RLOOTrainerTester(unittest.TestCase):
+
+class RLOOTrainerTester(TrlTestCase):
     def setUp(self):
+        super().setUp()
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
 
         self.policy_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -34,29 +35,28 @@ class RLOOTrainerTester(unittest.TestCase):
         self.tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     def test_rloo_checkpoint(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = RLOOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                total_episodes=1,
-                report_to="none",
-            )
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            total_episodes=1,
+            report_to="none",
+        )
 
-            dummy_text = [{"content": "Hello World!", "role": "user"}]
-            dummy_data = self.tokenizer.apply_chat_template(dummy_text)
-            dummy_dataset = Dataset.from_dict({"input_ids": dummy_data})
+        dummy_text = [{"content": "Hello World!", "role": "user"}]
+        dummy_data = self.tokenizer.apply_chat_template(dummy_text)
+        dummy_dataset = Dataset.from_dict({"input_ids": dummy_data})
 
-            trainer = RLOOTrainer(
-                config=training_args,
-                policy=self.policy_model,
-                reward_model=self.reward_model,
-                ref_policy=self.policy_ref_model,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
-            )
+        trainer = RLOOTrainer(
+            config=training_args,
+            policy=self.policy_model,
+            reward_model=self.reward_model,
+            ref_policy=self.policy_ref_model,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset,
+            eval_dataset=dummy_dataset,
+        )
 
-            trainer._save_checkpoint(trainer.model, trial=None)
+        trainer._save_checkpoint(trainer.model, trial=None)
 
     def test_rloo_reward(self):
         local_batch_size = 3
@@ -141,37 +141,36 @@ class RLOOTrainerTester(unittest.TestCase):
         torch.testing.assert_close(vec_advantages.flatten(), advantages)
 
     def test_rloo_training(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = RLOOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                per_device_eval_batch_size=2,
-                total_episodes=1,
-                num_train_epochs=1,
-                max_steps=2,
-                report_to="none",
-            )
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            total_episodes=1,
+            num_train_epochs=1,
+            max_steps=2,
+            report_to="none",
+        )
 
-            # Create a simple dataset
-            dummy_text = [{"content": "Hello World!", "role": "user"}]
-            dummy_data = self.tokenizer.apply_chat_template(dummy_text)
-            dummy_dataset = Dataset.from_dict({"input_ids": [dummy_data, dummy_data]})
+        # Create a simple dataset
+        dummy_text = [{"content": "Hello World!", "role": "user"}]
+        dummy_data = self.tokenizer.apply_chat_template(dummy_text)
+        dummy_dataset = Dataset.from_dict({"input_ids": [dummy_data, dummy_data]})
 
-            trainer = RLOOTrainer(
-                config=training_args,
-                policy=self.policy_model,
-                reward_model=self.reward_model,
-                ref_policy=self.policy_ref_model,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
-            )
+        trainer = RLOOTrainer(
+            config=training_args,
+            policy=self.policy_model,
+            reward_model=self.reward_model,
+            ref_policy=self.policy_ref_model,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset,
+            eval_dataset=dummy_dataset,
+        )
 
-            # Test that training completes without errors
-            trainer.train()
+        # Test that training completes without errors
+        trainer.train()
 
-            # Check if objective/rlhf_reward is available
-            self.assertIn("objective/rlhf_reward", trainer.state.log_history[-1])
+        # Check if objective/rlhf_reward is available
+        self.assertIn("objective/rlhf_reward", trainer.state.log_history[-1])
 
     def test_rloo_training_with_custom_reward(self):
         # dummy reward function
@@ -180,34 +179,33 @@ class RLOOTrainerTester(unittest.TestCase):
             rewards = [len(text) for text in texts]
             return rewards
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            training_args = RLOOConfig(
-                output_dir=tmp_dir,
-                per_device_train_batch_size=2,
-                per_device_eval_batch_size=2,
-                total_episodes=1,
-                num_train_epochs=1,
-                max_steps=2,
-                report_to="none",
-            )
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            total_episodes=1,
+            num_train_epochs=1,
+            max_steps=2,
+            report_to="none",
+        )
 
-            # Create a simple dataset
-            dummy_text = [{"content": "Hello World!", "role": "user"}]
-            dummy_data = self.tokenizer.apply_chat_template(dummy_text)
-            dummy_dataset = Dataset.from_dict({"input_ids": [dummy_data, dummy_data]})
+        # Create a simple dataset
+        dummy_text = [{"content": "Hello World!", "role": "user"}]
+        dummy_data = self.tokenizer.apply_chat_template(dummy_text)
+        dummy_dataset = Dataset.from_dict({"input_ids": [dummy_data, dummy_data]})
 
-            trainer = RLOOTrainer(
-                config=training_args,
-                policy=self.policy_model,
-                reward_model=reward_function,
-                ref_policy=self.policy_ref_model,
-                processing_class=self.tokenizer,
-                train_dataset=dummy_dataset,
-                eval_dataset=dummy_dataset,
-            )
+        trainer = RLOOTrainer(
+            config=training_args,
+            policy=self.policy_model,
+            reward_model=reward_function,
+            ref_policy=self.policy_ref_model,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset,
+            eval_dataset=dummy_dataset,
+        )
 
-            # Test that training completes without errors
-            trainer.train()
+        # Test that training completes without errors
+        trainer.train()
 
-            # Check if objective/rlhf_reward is available
-            self.assertIn("objective/rlhf_reward", trainer.state.log_history[-1])
+        # Check if objective/rlhf_reward is available
+        self.assertIn("objective/rlhf_reward", trainer.state.log_history[-1])

@@ -1,4 +1,4 @@
-# Copyright 2025 The HuggingFace Team. All rights reserved.
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,10 +17,10 @@ import unittest
 
 from trl import AllTrueJudge, HfPairwiseJudge, PairRMJudge
 
-from .testing_utils import RandomBinaryJudge, require_llm_blender
+from .testing_utils import RandomBinaryJudge, TrlTestCase, require_llm_blender
 
 
-class TestJudges(unittest.TestCase):
+class TestJudges(TrlTestCase):
     def _get_prompts_and_pairwise_completions(self):
         prompts = ["The capital of France is", "The biggest planet in the solar system is"]
         completions = [["Paris", "Marseille"], ["Saturn", "Jupiter"]]
