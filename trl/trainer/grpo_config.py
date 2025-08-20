@@ -94,7 +94,7 @@ class GRPOConfig(TrainingArguments):
         generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
             using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
-            as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
+            as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
             parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
@@ -364,7 +364,7 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
-            "generation behavior, such as setting `supress_tokens`, `num_beams`, etc. If it contains keys that "
+            "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
