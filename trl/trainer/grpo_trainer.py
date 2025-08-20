@@ -50,7 +50,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
@@ -1351,17 +1351,8 @@ class GRPOTrainer(Trainer):
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
-                if isinstance(prompt, list):
-                    for message in prompt:
-                        if not isinstance(message, dict):
-                            continue
-                        content = message.get("content")
-                        role = message.get("role")
-                        if isinstance(content, str):
-                            if role == "user":
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
-                            elif role == "system":
-                                message["content"] = [{"type": "text", "text": content}]
+                if isinstance(prompt, list):  # i.e., when using conversational data
+                    prepare_multimodal_messages(prompt, num_images=1)
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
