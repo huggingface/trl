@@ -292,8 +292,6 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
       key for standard text inputs.
     - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
-    Image data can be provided either embedded within the `"content"` lists of `"prompt"`/`"completion"`, or via an
-    individual `"images"` key. Both file paths and PIL.Image objects are supported.
 
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
@@ -360,12 +358,13 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     >>> # Prompt-completion format
     >>> examples = [
     ...     {
-    ...         'images': ['tiger.jpeg'],
-    ...         'prompt': [{'role': 'user', 'content': [{'type': 'text', 'text': 'What is this?'}]}], 
-    ...         'completion': [{'role': 'assistant', 'content': [{'type': 'text', 'text': "It is a tiger."}]}]
+    ...         'images': [Image.open("tiger.jpeg")],
+    ...         'prompt': [{'role': 'user', 'content': 'What is this?'}], 
+    ...         'completion': [{'role': 'assistant', 'content': "It is a tiger."}]
     ...     },
     ...     {
-    ...         'prompt': [{'role': 'user', 'content': [{'type': 'text', 'text': 'Image-1'}, {'type': 'image', 'url': 'tiger.jpeg'}, {'type': 'text', 'text': 'Image-2'}, {'type': 'image', 'url': 'det.jpg'}, {'type': 'text', 'text': 'Describe the two images in detail.'}]}], 
+    ...         'images': [Image.open("tiger.jpeg"), Image.open("det.jpg")],
+    ...         'prompt': [{'role': 'user', 'content': [{'type': 'text', 'text': 'Image-1'}, {'type': 'image'}, {'type': 'text', 'text': 'Image-2'}, {'type': 'image'}, {'type': 'text', 'text': 'Describe the two images in detail.'}]}], 
     ...         'completion': [{'role': 'assistant', 'content': [{'type': 'text', 'text': "Image-1 is a tiger and Image-2 is a chair."}]}]
     ...     }
     ... ]
@@ -404,105 +403,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
 
     @staticmethod
-    def prepare_multimodal_examples(examples: list[Union[list[int], Any, dict[str, Any]]]) -> list[dict[str, Any]]:
-        """
-        Convert examples into a structured multimodal format.
-        Clean prompt/completion messages by removing None values inside content lists.
-
-        Each message's content is transformed from a raw string into a list of typed parts. The image data is embedded in the content list of each message, while all other user and assistant messages are wrapped as text entries.
-
-        Args:
-            examples: List of examples in a prompt-completion schema. Each example may include:
-                - "images": *optional*, list of image paths or PIL.Image objects
-                - "prompt": list of messages
-                - "completion": list of messages
-                Each message is a dict with fields like:
-                - "role": str (e.g., "user", "assistant")
-                - "content": either a list[dict] for multimodal parts (e.g., text/image chunks) or a raw string.
-
-        Returns:
-            list[dict[str, Any]]: A new list of examples with "prompt"/"completion" messages cleaned so that
-            multimodal content lists contain only non-empty dict items and have no None-valued fields.
-
-        Example:
-        ```python
-        # Input:
-        [
-            {
-                "prompt": [
-                    {"role": "user", "content": [
-                        {"type": "image", "text": None, "url": "tiger.jpg"},
-                        {"type": "text", "text": "What is this?", "url": None}
-                    ]}
-                ],
-                "completion": [
-                    {"role": "assistant", "content": [
-                        {"type": "text", "text": "It is a tiger.", "url": None}
-                    ]}
-                ]
-            }
-        ]
-
-        # Output:
-        [
-            {
-                "prompt": [
-                    {"role": "user", "content": [
-                        {"type": "image", "url": "tiger.jpg"},
-                        {"type": "text", "text": "What is this?"}
-                    ]}
-                ],
-                "completion": [
-                    {"role": "assistant", "content": [
-                        {"type": "text", "text": "It is a tiger."}
-                    ]}
-                ]
-            }
-        ]
-        ```
-        """
-        def _clean_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-            cleaned_messages = []
-            for message in messages:
-                if "content" in message and isinstance(message["content"], list):
-                    cleaned_content = [
-                        {k: v for k, v in content_item.items() if v is not None}
-                        for content_item in message["content"]
-                        if isinstance(content_item, dict)
-                    ]
-                    cleaned_content = [item for item in cleaned_content if item]
-                    cleaned_messages.append({"role": message["role"], "content": cleaned_content})
-                elif "content" in message and isinstance(message["content"], str):
-                    cleaned_messages.append({"role": message["role"], "content": [{"type": "text", "text": message["content"]}]})
-                else:
-                    raise ValueError(
-                        f"Invalid message content type. Expected a list of dicts or a string, got {type(message['content'])}"
-                    )
-            return cleaned_messages
-
-        def _add_images_to_prompt(prompt_messages: list[dict[str, Any]], images: list[Any]) -> list[dict[str, Any]]:
-            img_parts = [{"type": "image", "url": image} for image in images]
-            for idx, msg in enumerate(prompt_messages):
-                if msg.get("role") == "user":
-                    new_content = img_parts + msg["content"]
-                    prompt_messages[idx] = {"role": "user", "content": new_content}
-                    return prompt_messages
-            return prompt_messages + [{"role": "user", "content": img_parts}]
-
-        processed_examples = []
-        for example in examples:
-            processed_example: dict[str, Any] = {}
-            if "prompt" in example:
-                processed_example["prompt"] = _clean_messages(example["prompt"])
-            if "images" in example and example["images"] is not None:
-                processed_example["prompt"] = _add_images_to_prompt(processed_example["prompt"], example["images"])
-            if "completion" in example:
-                processed_example["completion"] = _clean_messages(example["completion"])
-            processed_examples.append(processed_example)
-        return processed_examples
-
-    @staticmethod
-    def prepare_multimodal_messages(messages: list[dict[str, Any]]) -> None:
+    def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list[Any]) -> None:
         """
         Convert messages into a structured multimodal format.
 
@@ -530,10 +431,11 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         """
 
         image_included = False
+        images_content = [{"type": "image"} for _ in images]
         for message in messages:
             if message["role"] == "user":
                 if isinstance(message["content"], str) and not image_included:
-                    message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
+                    message["content"] = images_content + [{"type": "text", "text": message["content"]}]
                     image_included = True
                 elif isinstance(message["content"], str) and image_included:
                     message["content"] = [{"type": "text", "text": message["content"]}]
@@ -546,7 +448,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                self.prepare_multimodal_messages(example["messages"])
+                self.prepare_multimodal_messages(example["messages"], example["images"])
             messages = [example["messages"] for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
@@ -576,62 +478,63 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
     def _collate_prompt_completion(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
-        # Process and clean the examples first
-        processed_examples = self.prepare_multimodal_examples(examples)
+        if self.pad_to_multiple_of is not None:
+            raise NotImplementedError(
+                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
+                "prompt-completion data yet."
+            )
+        images = [example["images"] for example in examples]
+        if is_conversational(examples[0]):  # conversational case
+            for example in examples:
+                self.prepare_multimodal_messages(example["prompt"] + example["completion"], example["images"])
+            examples = [apply_chat_template(example, self.processor) for example in examples]
 
-        # Process prompt and completion separately
-        prompts = [example["prompt"] for example in processed_examples]
-        completions = [example["completion"] for example in processed_examples]
+        prompts = [example["prompt"] for example in examples]
+        completions = [example["completion"] for example in examples]
 
-        # Process prompt only
-        prompt_inputs = self.processor.apply_chat_template(
-            prompts,
+        processed_prompts = self.processor(
+            images=images,
+            text=prompts,
             padding=True,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
+            padding_side="left",
             return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+        processed_completions = self.processor(
+            text=completions,
+            padding=True,
+            padding_side="right",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
 
-        # Process prompt + completion together
-        # As the processor.apply_chat_template does not support to remove special tokens, we build full messages
-        # (prompt + completion) to obtain final input_ids/attention_mask and derive a completion mask. This will
-        # tokenize the prompts (and images) twice, which is slightly redundant but ensures correct alignment with
-        # special tokens.
-        full_messages = []
-        for prompt, completion in zip(prompts, completions):
-            full_message = prompt + completion
-            full_messages.append(full_message)
+        # Concatenate prompts and completions
+        prompt_ids, completion_ids = processed_prompts["input_ids"], processed_completions["input_ids"]
+        prompt_mask, completion_mask = processed_prompts["attention_mask"], processed_completions["attention_mask"]
+        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
 
-        full_inputs = self.processor.apply_chat_template(
-            full_messages,
-            padding=True,
-            add_generation_prompt=False,
-            tokenize=True,
-            return_dict=True,
-            return_tensors=self.return_tensors,
-        )
+        # Flush left to reduce padding
+        attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
 
-        # Create completion mask
-        full_attns = full_inputs["attention_mask"]
-        prompt_lengths = prompt_inputs["attention_mask"].sum(dim=1)
-        full_cumsum = full_attns.cumsum(dim=1)
-        completion_mask_bool = (full_cumsum > prompt_lengths.unsqueeze(1)) & full_attns.bool()
-        completion_mask = completion_mask_bool.to(full_inputs["input_ids"].dtype)
+        # Truncate if necessary
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
 
-        labels = full_inputs["input_ids"].clone()
+        # Create labels and mask padding tokens
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
         if self.completion_only_loss:
             labels[completion_mask == 0] = -100
 
         # Build the output dictionary
-        output = full_inputs
+        output = processed_prompts  # we take processed_prompts because it contains the images
+        output["input_ids"] = input_ids
+        output["attention_mask"] = attention_mask
         output["labels"] = labels
-
-        # Truncate if necessary
-        if self.max_length is not None:
-            output["input_ids"] = output["input_ids"][:, : self.max_length]
-            output["attention_mask"] = output["attention_mask"][:, : self.max_length]
-            output["labels"] = output["labels"][:, : self.max_length]
         return output
 
 
