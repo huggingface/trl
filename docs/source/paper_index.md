@@ -62,11 +62,13 @@ trainer = SFTTrainer(
 ```
 
 ## Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)
+
 **📜 Paper**: https://huggingface.co/papers/2508.08221
 
 The authors of this paper find that the combination of:
-1. scaling rewards by the standard deviation computed over the entire batch 
-2. Aggregating loss over the total number of tokens
+
+1. scaling rewards by the standard deviation computed over the entire batch and
+2. aggregating loss over the total number of tokens
 
 can unlock the learning capability of critic-free policies using vanilla PPO loss. Their results demonstrate that this simple combination consistently improves performance, surpassing strategies like GRPO and DAPO.
 
