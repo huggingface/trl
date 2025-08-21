@@ -15,18 +15,19 @@
 import contextlib
 import functools
 import time
+import importlib
 from collections.abc import Generator
 
 from transformers import Trainer
 from transformers.integrations import is_mlflow_available, is_wandb_available
 
-
+wandb = None
 if is_wandb_available():
-    import wandb
+    wandb = importlib.import_module("wandb")
 
+mlflow = None
 if is_mlflow_available():
-    import mlflow
-
+    mlflow = importlib.import_module("mlflow")
 
 @contextlib.contextmanager
 def profiling_context(trainer: Trainer, name: str) -> Generator[None, None, None]:
