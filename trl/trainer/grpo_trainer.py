@@ -1535,12 +1535,11 @@ class GRPOTrainer(Trainer):
                     completion_ids = completion_ids[tp_slice]
 
             # Pad the completions, and concatenate them with the prompts
-            completion_ids[0].append(24)
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-            vllm_logprobs = [torch.tensor(logp, device=device) for logp in logprobs]
-            vllm_logprobs = pad(vllm_logprobs, padding_value=0.0)
+            rollout_old_per_token_logps = [torch.tensor(logp, device=device) for logp in logprobs]
+            rollout_old_per_token_logps = pad(rollout_old_per_token_logps, padding_value=0.0)
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
@@ -1642,10 +1641,8 @@ class GRPOTrainer(Trainer):
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
                 )
-                rollout_old_per_token_logps = vllm_logprobs
             else:
                 old_per_token_logps = None
-                rollout_old_per_token_logps = None
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1757,13 +1754,15 @@ class GRPOTrainer(Trainer):
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
-        if old_per_token_logps is not None:
+        if self.use_vllm and old_per_token_logps is not None:
             probs_diff = torch.exp(old_per_token_logps - rollout_old_per_token_logps)
+            per_token_kl = probs_diff - (old_per_token_logps - rollout_old_per_token_logps) - 1
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            self._metrics[mode]["Rollout KL"].append(self.accelerator.gather(mean_kl).nanmean().item())
             self._metrics[mode]["Token Probability Difference/max"].append(probs_diff.max().exp().item())
             self._metrics[mode]["Token Probability Difference/mean"].append(probs_diff.mean().exp().item())
 
         output = {
-            "prompt_texts": prompts_text,
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
@@ -1772,7 +1771,7 @@ class GRPOTrainer(Trainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
-        if rollout_old_per_token_logps is not None:
+        if self.use_vllm:
             output["rollout_old_per_token_logps"] = rollout_old_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
@@ -1910,8 +1909,8 @@ class GRPOTrainer(Trainer):
         if self.use_vllm and self.rollout_importance_sampling_cap > 0 and old_per_token_logps is not None:
             rollout_old_per_token_logps = inputs.get("rollout_old_per_token_logps")
             rollout_imp_ratio = torch.exp(old_per_token_logps - rollout_old_per_token_logps)
-            rollout_imp_ratio = torch.min(rollout_imp_ratio, self.rollout_importance_sampling_cap)
-            per_token_loss = per_token_loss * rollout_imp_ratio
+            clammped_rollout_imp_ratio = torch.clamp(rollout_imp_ratio, max=self.rollout_importance_sampling_cap)
+            per_token_loss = per_token_loss * clammped_rollout_imp_ratio
 
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
@@ -1951,6 +1950,10 @@ class GRPOTrainer(Trainer):
         low_clip = masked_batch_mean(is_low_clipped.float())
         high_clip = masked_batch_mean(is_high_clipped.float())
         clip_ratio = masked_batch_mean(is_region_clipped.float())
+
+        is_clamped_mask = rollout_imp_ratio > self.rollout_importance_sampling_cap
+        mean_clamped = masked_batch_mean(is_clamped_mask.float())
+        self._metrics[mode]["TIS/clamp_ratio"].append(self.accelerator.gather(mean_clamped).nanmean().item())
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())

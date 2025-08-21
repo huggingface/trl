@@ -376,6 +376,24 @@ def chunk_list(lst: list, n: int) -> list[list]:
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
 
+def sanitize_float(logprob):
+    import math
+
+    value = logprob.logprob
+    """Replace inf, -inf, and nan with None for JSON compatibility."""
+    if math.isinf(value):
+        # print(f"Warning: Replacing {'positive' if value > 0 else 'negative'} infinity with None.")
+        # print(logprob)
+        exit()
+        return None
+    elif math.isnan(value):
+        # print("Warning: Replacing NaN with None.")
+        # print(logprob)
+        exit()
+        return None
+    return value
+
+
 def main(script_args: ScriptArguments):
     if not is_fastapi_available():
         raise ImportError(
@@ -560,7 +578,7 @@ def main(script_args: ScriptArguments):
 
         if request.logprobs is not None:
             logprobs: list[list[float]] = [
-                [next(iter(lp.values())).logprob for lp in output.logprobs]
+                [sanitize_float(next(iter(lp.values()))) for lp in output.logprobs]
                 for outputs in all_outputs
                 for output in outputs.outputs
             ]
