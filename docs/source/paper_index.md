@@ -70,7 +70,7 @@ The authors of this paper find that the combination of:
 1. scaling rewards by the standard deviation computed over the entire batch and
 2. aggregating loss over the total number of tokens
 
-can unlock the learning capability of critic-free policies using vanilla PPO loss. Their results demonstrate that this simple combination consistently improves performance, surpassing strategies like GRPO and DAPO.
+can unlock the learning capability of critic-free policies using vanilla PPO loss. Their results demonstrate that this simple combination consistently improves performance, surpassing strategies like GRPO and [DAPO](https://huggingface.co/papers/2503.14476).
 
 TRL supports using these learnings to train a GRPO model by:
 
@@ -80,5 +80,18 @@ from trl import GRPOConfig
 config = GRPOConfig(
     ...
     scale_rewards="group",
-    loss_type="bnpo"
+    loss_type="bnpo",
+    # Other parameters used
+    beta=0.0,  # = init_kl_coef in the paper
+    top_p=0.99,
+    top_k=100,
+    temperature=0.99,
+    num_completions=8, # = num_return_sequences in the paper
+    num_iterations=1,  # = ppo_epochs in the paper
+    per_device_train_batch_size=4
+    gradient_accumulation_steps=32,
+    steps_per_generation=8,  # (rollout_batch_size*num_return_sequences) / (per_device_train_batch_size*gradient_accumulation_steps)
 )
+```
+
+Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss_types).
