@@ -41,9 +41,9 @@ jobs:
       - name: Build and Push
         uses: docker/build-push-action@v4
         with:
-          context: ./docker/trl
+          context: ./docker/trl-latest-gpu
           push: true
-          tags: huggingface/trl:0.21.0
+          tags: huggingface/trl-latest-gpu:0.21.0
 
       - name: Post to Slack
         if: always()
