@@ -1385,6 +1385,35 @@ class GRPOTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
 
+    def test_warning_raised_all_rewards_none(self):
+        """Test that a proper warning is raised when all rewards are None."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def always_none_reward_func(completions, **kwargs):
+            """Reward function that always returns None."""
+            return [None] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=always_none_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with self.assertLogs("trl.trainer.grpo_trainer", level="WARNING") as cm:
+            trainer.train()
+
+        expected_warning = "All reward functions returned None for the following kwargs:"
+        self.assertIn(expected_warning, cm.output[0])
+
     def test_training_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
