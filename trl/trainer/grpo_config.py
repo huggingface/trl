@@ -166,13 +166,16 @@ class GRPOConfig(TrainingArguments):
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
-        scale_rewards (`Union[str, bool]`, *optional*, defaults to `"group"`):
-            The level at which the standard deviation is computed to scale the rewards. Valid values are `True, False, "batch", "group", and "none"`
+        scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
+            Specifies the scaling strategy for rewards. Supported values are:
 
-            - If `True or "group"` (default), the standard deviation is computed over the group a response belongs to.
-            - If `"batch"`, the standard deviation is computed over the entire batch.
-            - If `Fale or "none"`, no scaling is applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
-            as scaling by the standard deviation introduces a question-level difficulty bias.
+            - `True` or `"group"` (default): rewards are scaled by the standard deviation within each group, ensuring
+              unit variance within a group.
+            - `"batch"`: rewards are scaled by the standard deviation across the entire batch, as recommended in the
+              [PPO Lite paper](https://huggingface.co/papers/2508.08221).
+            - `False` or `"none"`: no scaling is applied. The [Dr. GRPO
+              paper](https://huggingface.co/papers/2503.20783) recommends not scaling rewards, as scaling by the
+              standard deviation introduces a question-level difficulty bias.
         loss_type (`str`, *optional*, defaults to `"bnpo"`):
             Specifies the loss formulation to use. Supported values are:
 
@@ -501,11 +504,13 @@ class GRPOConfig(TrainingArguments):
     scale_rewards: str = field(
         default="group",
         metadata={
-            "help": "The level at which the standard deviation is computed to scale the rewards. Valid values are "
-            "`True, False, 'batch', 'group', and 'none'`. If `True or 'group'` (default), the standard deviation is computed over the group "
-            "a response belongs to. If `'batch'`, the standard deviation is computed over the entire batch. If "
-            "`False or 'none'`, no scaling is applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends "
-            "not scaling the rewards, as scaling by the standard deviation introduces a question-level difficulty bias."
+            "help": "Specifies the scaling strategy for rewards. Supported values are: "
+            "`True` or 'group' (default): rewards are scaled by the standard deviation within each group, ensuring "
+            "unit variance within a group. "
+            "`'batch'`: rewards are scaled by the standard deviation across the entire batch, as recommended in the "
+            "PPO Lite paper. "
+            "`False` or 'none': no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
+            "scaling by the standard deviation introduces a question-level difficulty bias."
         },
     )
     loss_type: str = field(
