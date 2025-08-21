@@ -77,7 +77,7 @@ TRL supports using these learnings to train a GRPO model by:
 ```python
 from trl import GRPOConfig
 
-config = GRPOConfig(
+training_args = GRPOConfig(
     ...
     scale_rewards="group",
     loss_type="bnpo",
