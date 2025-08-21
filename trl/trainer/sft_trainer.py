@@ -1016,12 +1016,12 @@ class SFTTrainer(Trainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
                 if args.assistant_only_loss:
                     dataset = dataset.filter(lambda row: 1 in row["assistant_masks"])
-                    if dataset.num_rows == 0:
+                    total_assistant_tokens_after_truncation = sum(sum(row["assistant_masks"]) for row in dataset)
+                    if total_assistant_tokens_after_truncation == 0:
                         raise RuntimeError(
                             "After truncation, the dataset has no trainable assistant tokens. This usually means that "
                             "the max length is too short."
                         )
-                    total_assistant_tokens_after_truncation = sum(sum(row["assistant_masks"]) for row in dataset)
                     percentage_of_retained_assistant_tokens = (
                         total_assistant_tokens_after_truncation / total_assistant_tokens_before_truncation
                     ) * 100
