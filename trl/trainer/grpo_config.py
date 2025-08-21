@@ -501,7 +501,7 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
-    scale_rewards: Union[str, bool] = field(
+    scale_rewards: str = field(
         default="group",
         metadata={
             "help": "Specifies the scaling strategy for rewards. Supported values are: "
