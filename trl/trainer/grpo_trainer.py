@@ -1686,10 +1686,10 @@ class GRPOTrainer(Trainer):
             # Compute global std
             std_rewards = self.accelerator.gather(rewards).flatten().std()
         
-        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
+        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))        
         if self.scale_rewards != "none":
             advantages = advantages / (std_rewards + 1e-4)
-
+        
         # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts),
@@ -1724,10 +1724,12 @@ class GRPOTrainer(Trainer):
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
-            std_rewards = nanstd(rewards_per_func[:, i]).item()
-            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
+            std_func_rewards = nanstd(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
+        if isinstance(std_rewards, torch.Tensor):
+            std_rewards = std_rewards.mean().item()
+        self._metrics[mode]["reward_std"].append(std_rewards)
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
