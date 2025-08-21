@@ -505,11 +505,11 @@ class GRPOConfig(TrainingArguments):
         default="group",
         metadata={
             "help": "Specifies the scaling strategy for rewards. Supported values are: "
-            "`True` or 'group' (default): rewards are scaled by the standard deviation within each group, ensuring "
+            "`True` or `group'` (default): rewards are scaled by the standard deviation within each group, ensuring "
             "unit variance within a group. "
             "`'batch'`: rewards are scaled by the standard deviation across the entire batch, as recommended in the "
             "PPO Lite paper. "
-            "`False` or 'none': no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
+            "`False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
             "scaling by the standard deviation introduces a question-level difficulty bias."
         },
     )
