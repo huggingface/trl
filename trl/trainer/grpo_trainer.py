@@ -644,7 +644,6 @@ class GRPOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
-        self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
@@ -722,6 +721,11 @@ class GRPOTrainer(Trainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        if isinstance(args.scale_rewards, bool):
+            self.scale_rewards = "group" if args.scale_rewards else "none"
+        else:
+            self.scale_rewards = args.scale_rewards
 
         # Liger loss
         if self.use_liger_loss:

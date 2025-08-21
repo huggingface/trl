@@ -77,6 +77,6 @@ from trl import GRPOConfig
 
 config = GRPOConfig(
     ...
-    scale_rewards="grpo",
+    scale_rewards="group",
     loss_type="bnpo"
 )
