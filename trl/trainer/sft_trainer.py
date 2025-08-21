@@ -987,9 +987,6 @@ class SFTTrainer(Trainer):
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
                         "assistant_only_loss": args.assistant_only_loss,
-                        "max_length": args.max_length
-                        if args.max_length is not None
-                        else processing_class.model_max_length,
                     },
                     **map_kwargs,
                 )
@@ -1013,12 +1010,13 @@ class SFTTrainer(Trainer):
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
                 if args.assistant_only_loss:
-                    total_assistant_tokens_before_truncation = dataset["assistant_masks"].sum().item()
+                    total_assistant_tokens_before_truncation = sum([sum(row["assistant_masks"]) for row in dataset])
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
                 if args.assistant_only_loss:
-                    total_assistant_tokens_after_truncation = dataset["assistant_masks"].sum().item()
+                    dataset = dataset.filter(lambda row: 1 in row["assistant_masks"])
+                    total_assistant_tokens_after_truncation = sum([sum(row["assistant_masks"]) for row in dataset])
                     if total_assistant_tokens_after_truncation == 0:
                         raise RuntimeError(
                             "After truncation, the dataset has no trainable assistant tokens. This usually means that "
