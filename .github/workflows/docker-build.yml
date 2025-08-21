@@ -41,7 +41,7 @@ jobs:
       - name: Build and Push
         uses: docker/build-push-action@v4
         with:
-          context: ./docker/trl-latest-gpu
+          context: ./docker/trl
           push: true
           tags: huggingface/trl-latest-gpu:0.21.0
 
