@@ -1677,7 +1677,7 @@ class GRPOTrainer(Trainer):
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
-        
+
         if self.scale_rewards != "batch":
             # If self.scale_rewards = "none", we'll still log group level std.
             std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
@@ -1685,11 +1685,11 @@ class GRPOTrainer(Trainer):
         else:
             # Compute global std
             std_rewards = self.accelerator.gather(rewards).flatten().std()
-        
-        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))        
+
+        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
         if self.scale_rewards != "none":
             advantages = advantages / (std_rewards + 1e-4)
-        
+
         # Slice to keep only the local part of the data
         process_slice = slice(
             self.accelerator.process_index * len(prompts),
