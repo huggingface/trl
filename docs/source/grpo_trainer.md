@@ -169,7 +169,9 @@ While training and evaluating, we record the following reward metrics:
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after applying reward weights.
-- `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
+- `reward_std`: The standard deviation of rewards after applying reward weights.  
+  - If `scale_rewards` is `"group"` or `"none"`, this is the average of the per-group standard deviations.
+  - If `scale_rewards` is `"batch"`, this is the standard deviation computed over all rewards in the batch (ignoring groups).
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
