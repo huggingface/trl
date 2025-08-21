@@ -641,7 +641,7 @@ class GRPOConfig(TrainingArguments):
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
 
-        if not isinstance(self.scale_rewards, bool) or self.scale_rewards not in ["batch", "group", "none"]:
+        if not isinstance(self.scale_rewards, bool) and self.scale_rewards not in ["batch", "group", "none"]:
             raise ValueError(
-                f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
+                f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of True, False, 'batch', 'group', or 'none'."
             )
