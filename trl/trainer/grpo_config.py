@@ -498,7 +498,7 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
-    scale_rewards: Union[bool, str] = field(
+    scale_rewards: str = field(
         default="group",
         metadata={
             "help": "The level at which the standard deviation is computed to scale the rewards. Valid values are "
