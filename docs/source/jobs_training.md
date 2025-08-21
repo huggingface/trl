@@ -3,12 +3,14 @@
 [Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) lets you run training scripts on fully managed infrastructure (no need to handle GPUs, dependencies, or environment setup locally). This makes it easy to scale and monitor your experiments directly from the Hub.
 
 In this guide, you’ll learn how to:
+
 - Run TRL training scripts using Jobs.
 - Configure hardware, timeouts, environment variables, and secrets.
 - Monitor and manage jobs from the CLI or Python.
 
-**Requirements**
-- Pro, Team, or Enterprise plan.
+## Requirements
+
+- [Pro, Team, or Enterprise plan](https://huggingface.co/pricing).
 - Logged into the Hugging Face Hub (`hf auth login`).
 
 ## Preparing your Script
@@ -19,7 +21,7 @@ You can launch Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs
 <hfoption id="bash">
 
 ```bash
-hf jobs uv run --flavor a10g-small "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" 
+hf jobs uv run --flavor a10g-small "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" --model_name_or_path Qwen/Qwen3-0.6B --dataset_name trl-lib/Capybara --push_to_hub
 ```
 
 The script can also be a local file:
@@ -31,8 +33,10 @@ hf jobs uv run --flavor a10g-small sft.py
 Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you can also specify it:
 
 ```bash
-hf jobs uv run --flavor a10g-small --image pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel sft.py
+hf jobs uv run --flavor a10g-small --image qgallouedec/trl hello.py
 ```
+
+bash -c python -c "import urllib.request; import os; from pathlib import Path; o = urllib.request.build_opener(); o.addheaders = [(\"Authorization\", \"Bearer \" + os.environ[\"UV_SCRIPT_HF_TOKEN\"])]; Path(\"/tmp/script.py\").write_bytes(o.open(os.environ[\"UV_SCRIPT_URL\"]).read())" && uv run /tmp/script.py
 
 </hfoption>
 <hfoption id="python">
@@ -78,7 +82,7 @@ You can also run jobs without UV:
 In this case, we give the cli the Docker image and run it as:
 
 ```bash
-hf jobs run --flavor a10g-small pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel python -c "import torch; print(torch.cuda.get_device_name())"
+hf jobs run --flavor a10g-small pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime python -c "import torch; print(torch.cuda.get_device_name())"
 ```
 
 </hfoption>
@@ -149,9 +153,9 @@ run_uv_job(
 
 Jobs allow you to select a specific hardware configuration using the `--flavor` flag. As of 08/25, the available options are:
 
-**CPU:** `cpu-basic`, `cpu-upgrade`  
+**CPU:** `cpu-basic`, `cpu-upgrade`, `"cpu-performance"`, `"cpu-xl"`
 **GPU:** `t4-small`, `t4-medium`, `l4x1`, `l4x4`, `a10g-small`, `a10g-large`, `a10g-largex2`, `a10g-largex4`, `a100-large`  
-**TPU:** `v5e-1x1`, `v5e-2x2`, `v5e-2x4`  
+**TPU:** `v5e-1x1`, `v5e-2x2`, `v5e-2x4`
 
 You can always check the latest list of supported hardware flavors [here](https://huggingface.co/docs/hub/en/spaces-config-reference).
 
@@ -194,7 +198,7 @@ run_uv_job(
 
 ### Environment Variables, Secrets, and Token
 
-You can pass environment variables, secrets, and your auth token to your jobs. 
+You can pass environment variables, secrets, and your auth token to your jobs.
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -319,7 +323,6 @@ hf jobs cancel job_id
 
 </hfoption>
 <hfoption id="python">
-
 
 ```python
 from huggingface_hub import list_jobs, inspect_job, fetch_job_logs, cancel_job
