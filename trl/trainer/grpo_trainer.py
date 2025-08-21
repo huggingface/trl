@@ -17,7 +17,6 @@ import inspect
 import os
 import re
 import textwrap
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Sequence, Sized
 from contextlib import nullcontext
@@ -29,6 +28,7 @@ import datasets
 import torch
 import torch.utils.data
 import transformers
+from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -50,7 +50,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
@@ -82,6 +82,9 @@ if is_vllm_available():
 if is_wandb_available():
     import wandb
 
+
+logger = logging.get_logger(__name__)
+
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
@@ -107,9 +110,7 @@ class RepeatSampler(Sampler):
 
     Example:
     ```python
-    >>> sampler = RepeatSampler(
-    ...     ["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4
-    ... )
+    >>> sampler = RepeatSampler(["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4)
     >>> list(sampler)
     [4, 4, 3, 3, 0, 0,
      4, 4, 3, 3, 0, 0,
@@ -183,48 +184,6 @@ class RepeatSampler(Sampler):
 
     def __len__(self) -> int:
         return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
-
-
-class EntropyController:
-    """
-    This controller dynamically adjusts the entropy‐loss coefficient to keep the policy’s
-    entropy near a desired target. Let e be the current entropy and cₖ the previous coefficient; we compute
-
-        cₖ₊₁ = clip(cₖ + Δ, [entropy_coef_min, entropy_coef_max])   if e < entropy_target
-        cₖ₊₁ = clip(cₖ − Δ, [entropy_coef_min, entropy_coef_max])   otherwise
-
-    and apply αₖ = cₖ₊₁ · 𝟙[e ≤ entropy_target], so entropy regularization only kicks in when
-    the policy’s entropy has fallen below the target.
-
-    Reference:
-        Skywork Open Reasoner 1 Technical Report — https://arxiv.org/abs/2505.22312v2
-    """
-
-    def __init__(
-        self, entropy_coef_min: float, entropy_coef_max: float, entropy_coef_delta: float, entropy_target: float
-    ):
-        self.entropy_coef_min = entropy_coef_min
-        self.entropy_coef_max = entropy_coef_max
-        self.entropy_coef_delta = entropy_coef_delta
-        self.entropy_target = entropy_target
-
-    def step(self, entropy, entropy_coef):
-        """
-        Update the entropy coefficient for the next step.
-
-        Args:
-            entropy (`float`): Current entropy value.
-            entropy_coef (`float`): Current entropy coef.
-
-        Returns:
-            new_coef: Updated coefficient cₖ₊₁
-            apply_coef: Coefficient to apply this step.
-        """
-        new_coef = entropy_coef + (1 if entropy < self.entropy_target else -1) * self.entropy_coef_delta
-        new_coef = float(max(self.entropy_coef_min, min(new_coef, self.entropy_coef_max)))
-        apply_coef = new_coef if entropy <= self.entropy_target else 0.0
-
-        return new_coef, apply_coef
 
 
 # torch.nanstd doesn't exist, so we define it here
@@ -341,19 +300,6 @@ def identity(x):
     return x
 
 
-def aggregate_loss(per_token_loss: torch.Tensor, loss_mask: torch.Tensor, loss_type: str, **kwargs) -> torch.Tensor:
-    if loss_type == "grpo":
-        loss = ((per_token_loss * loss_mask).sum(-1) / loss_mask.sum(-1).clamp(min=1.0)).mean()
-    elif loss_type == "bnpo":
-        loss = (per_token_loss * loss_mask).sum() / loss_mask.sum().clamp(min=1.0)
-    elif loss_type == "dr_grpo":
-        max_completion_length = kwargs.get("max_completion_length", 1)
-        loss = (per_token_loss * loss_mask).sum() / (per_token_loss.size(0) * max_completion_length)
-    else:
-        raise ValueError(f"Unknown loss type: {loss_type}")
-    return loss
-
-
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
     """
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
@@ -374,8 +320,8 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Unio
 
 def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
     """
-    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]`
-    back into a single tensor along the first dimension.
+    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]` back into a single
+    tensor along the first dimension.
     """
     pixel_values = batch.get("pixel_values")
 
@@ -403,10 +349,12 @@ def truncate_with_protected_tokens(
             List of token IDs that should be preserved in the output.
     """
     protected_set = set(protected_tokens)
+    # Create protected_tokens tensor once to avoid recreating it on every call
+    protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
 
     def process_sequence(ids, mask):
         # Create boolean masks
-        is_protected = torch.tensor([x.item() in protected_set for x in ids])
+        is_protected = torch.isin(ids, protected_tokens_tensor)
         is_non_protected = ~is_protected
 
         # Count tokens
@@ -515,7 +463,8 @@ class GRPOTrainer(Trainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
@@ -538,7 +487,8 @@ class GRPOTrainer(Trainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
@@ -589,7 +539,7 @@ class GRPOTrainer(Trainer):
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
-                warnings.warn(
+                logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
@@ -702,17 +652,6 @@ class GRPOTrainer(Trainer):
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
             )
-
-        # Entropy controller to adapt entropy loss coefficient
-        self.entropy_coef = args.entropy_coef
-        self.use_adaptive_entropy = args.use_adaptive_entropy
-        self.entropy_ctrl = EntropyController(
-            entropy_coef_min=args.entropy_coef_min,
-            entropy_coef_max=args.entropy_coef_max,
-            entropy_coef_delta=args.entropy_coef_delta,
-            entropy_target=args.entropy_target,
-        )
-
         if self.use_liger_loss and not self.importance_sampling_level == "token":
             raise NotImplementedError(
                 "Liger Kernels currently only support token-level importance sampling. Please set"
@@ -1100,8 +1039,8 @@ class GRPOTrainer(Trainer):
 
         Returns:
             `torch.Tensor`:
-                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
-                `False` otherwise.
+                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold
+                and `False` otherwise.
         """
         non_pad_entropies = entropies[mask.bool()].float()
         if non_pad_entropies.numel() == 0:
@@ -1380,7 +1319,7 @@ class GRPOTrainer(Trainer):
             row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()}
             row_reward_kwargs["prompt"] = prompts[nan_row_idx]
             row_reward_kwargs["completion"] = completions[nan_row_idx]
-            warnings.warn(
+            logger.warning(
                 f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
                 "Please ensure that at least one reward function returns a valid reward."
             )
@@ -1412,17 +1351,8 @@ class GRPOTrainer(Trainer):
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
-                if isinstance(prompt, list):
-                    for message in prompt:
-                        if not isinstance(message, dict):
-                            continue
-                        content = message.get("content")
-                        role = message.get("role")
-                        if isinstance(content, str):
-                            if role == "user":
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
-                            elif role == "system":
-                                message["content"] = [{"type": "text", "text": content}]
+                if isinstance(prompt, list):  # i.e., when using conversational data
+                    prepare_multimodal_messages(prompt, num_images=1)
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1657,9 +1587,7 @@ class GRPOTrainer(Trainer):
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [
-            [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
-        ]
+        completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
 
         # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
         completion_lengths = completion_mask.sum(1)
@@ -1951,27 +1879,17 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        policy_loss = aggregate_loss(
-            per_token_loss, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
-        )
-
-        entropy_loss = aggregate_loss(
-            entropies, completion_mask, self.loss_type, max_completion_length=self.max_completion_length
-        )
-
-        if self.use_adaptive_entropy:
-            world_entropy_loss = self.accelerator.reduce(entropy_loss.detach(), reduction="mean").item()
-            new_coef, apply_coef = self.entropy_ctrl.step(world_entropy_loss, self.entropy_coef)
-            self.entropy_coef = new_coef
-
-        loss = policy_loss - apply_coef * entropy_loss
+        if self.loss_type == "grpo":
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
-
-        self._metrics[mode]["policy_loss"].append(self.accelerator.reduce(policy_loss).item())
-        self._metrics[mode]["entropy_loss"].append(world_entropy_loss)
-        self._metrics[mode]["entropy_coef"].append(self.entropy_coef)
 
         completion_token_count = completion_mask.sum().clamp(min=1.0)
 
@@ -2111,6 +2029,7 @@ class GRPOTrainer(Trainer):
 
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent(
             """\
             @article{zhihong2024deepseekmath,
