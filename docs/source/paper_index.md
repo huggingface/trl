@@ -26,6 +26,26 @@ training_args = GRPOConfig(
 )
 ```
 
+## DAPO: An Open-Source LLM Reinforcement Learning System at Scale
+
+**📜 Paper**: https://huggingface.co/papers/2503.14476
+
+The DAPO algorithm, which includes decoupled clip and dynamic sampling policy optimization, enables open-source, high-performance reinforcement learning training for large-scale language models, enhancing reproducibility in the field. To reproduce the paper's setting, use this configuration (we don't support dynamic sampling right now):
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    loss_type="dapo",
+    per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
+    num_generations = 16, # number of sample responses in the paper, DAPO paper: section 4.1
+    max_completion_length = 20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
+    epsilon_high = 0.28, # DAPO paper: section 4.1
+    epsilon = 0.2, # DAPO paper: section 4.1,
+    mask_truncated_completions = True
+)
+```
+
 ## AlphaPO -- Reward shape matters for LLM alignment
 
 **📜 Paper**: https://huggingface.co/papers/2501.03884
