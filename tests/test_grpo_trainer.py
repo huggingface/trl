@@ -1267,7 +1267,8 @@ class GRPOTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    def test_training_no_scale_rewards(self):
+    @parameterized.expand([(False,), ("group",), ("batch",), (True,), ("none",)])
+    def test_training_scale_rewards(self, scale_rewards):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -1276,7 +1277,7 @@ class GRPOTrainerTester(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            scale_rewards=False,
+            scale_rewards=scale_rewards,
             report_to="none",
         )
         trainer = GRPOTrainer(
