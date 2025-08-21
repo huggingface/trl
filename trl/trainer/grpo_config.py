@@ -167,8 +167,8 @@ class GRPOConfig(TrainingArguments):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
         scale_rewards (`Union[str, bool]`, *optional*, defaults to `"group"`):
-            The level at which the standard deviation is computed to scale the rewards. Valid values are `"batch", "group", and "none"`
-            
+            The level at which the standard deviation is computed to scale the rewards. Valid values are `True, False, "batch", "group", and "none"`
+
             - If `True or "group"` (default), the standard deviation is computed over the group a response belongs to.
             - If `"batch"`, the standard deviation is computed over the entire batch.
             - If `Fale or "none"`, no scaling is applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
