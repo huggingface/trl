@@ -19,6 +19,8 @@
 - sections:
   - local: clis
     title: Command Line Interface (CLI)
+  - local: jobs_training
+    title: Training using Jobs
   - local: customization
     title: Customizing the Training
   - local: reducing_memory_usage
@@ -29,8 +31,6 @@
     title: Distributing Training
   - local: use_model
     title: Using Trained Models
-  - local: jobs_training
-    title: Training using Jobs
   title: How-to guides
 - sections:
   - local: deepspeed_integration

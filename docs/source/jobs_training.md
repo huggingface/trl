@@ -3,12 +3,14 @@
 [Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) lets you run training scripts on fully managed infrastructure (no need to handle GPUs, dependencies, or environment setup locally). This makes it easy to scale and monitor your experiments directly from the Hub.
 
 In this guide, you’ll learn how to:
+
 - Run TRL training scripts using Jobs.
 - Configure hardware, timeouts, environment variables, and secrets.
 - Monitor and manage jobs from the CLI or Python.
 
-**Requirements**
-- Pro, Team, or Enterprise plan.
+## Requirements
+
+- [Pro, Team, or Enterprise plan](https://huggingface.co/pricing).
 - Logged into the Hugging Face Hub (`hf auth login`).
 
 ## Preparing your Script
@@ -19,7 +21,7 @@ You can launch Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs
 <hfoption id="bash">
 
 ```bash
-hf jobs uv run --flavor a10g-small "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" 
+hf jobs uv run --flavor a10g-small "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" --model_name_or_path Qwen/Qwen3-0.6B --dataset_name trl-lib/Capybara --push_to_hub
 ```
 
 The script can also be a local file:
@@ -151,7 +153,7 @@ Jobs allow you to select a specific hardware configuration using the `--flavor` 
 
 **CPU:** `cpu-basic`, `cpu-upgrade`  
 **GPU:** `t4-small`, `t4-medium`, `l4x1`, `l4x4`, `a10g-small`, `a10g-large`, `a10g-largex2`, `a10g-largex4`, `a100-large`  
-**TPU:** `v5e-1x1`, `v5e-2x2`, `v5e-2x4`  
+**TPU:** `v5e-1x1`, `v5e-2x2`, `v5e-2x4`
 
 You can always check the latest list of supported hardware flavors [here](https://huggingface.co/docs/hub/en/spaces-config-reference).
 
@@ -194,7 +196,7 @@ run_uv_job(
 
 ### Environment Variables, Secrets, and Token
 
-You can pass environment variables, secrets, and your auth token to your jobs. 
+You can pass environment variables, secrets, and your auth token to your jobs.
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -319,7 +321,6 @@ hf jobs cancel job_id
 
 </hfoption>
 <hfoption id="python">
-
 
 ```python
 from huggingface_hub import list_jobs, inspect_job, fetch_job_logs, cancel_job
