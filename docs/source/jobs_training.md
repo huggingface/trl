@@ -33,10 +33,8 @@ hf jobs uv run --flavor a10g-small sft.py
 Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you can also specify it:
 
 ```bash
-hf jobs uv run --flavor a10g-small --image qgallouedec/trl hello.py
+hf jobs uv run --flavor a10g-small --image pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel sft.py
 ```
-
-bash -c python -c "import urllib.request; import os; from pathlib import Path; o = urllib.request.build_opener(); o.addheaders = [(\"Authorization\", \"Bearer \" + os.environ[\"UV_SCRIPT_HF_TOKEN\"])]; Path(\"/tmp/script.py\").write_bytes(o.open(os.environ[\"UV_SCRIPT_URL\"]).read())" && uv run /tmp/script.py
 
 </hfoption>
 <hfoption id="python">
@@ -82,7 +80,7 @@ You can also run jobs without UV:
 In this case, we give the cli the Docker image and run it as:
 
 ```bash
-hf jobs run --flavor a10g-small pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime python -c "import torch; print(torch.cuda.get_device_name())"
+hf jobs run --flavor a10g-small pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel python -c "import torch; print(torch.cuda.get_device_name())"
 ```
 
 </hfoption>
@@ -153,7 +151,7 @@ run_uv_job(
 
 Jobs allow you to select a specific hardware configuration using the `--flavor` flag. As of 08/25, the available options are:
 
-**CPU:** `cpu-basic`, `cpu-upgrade`, `"cpu-performance"`, `"cpu-xl"`
+**CPU:** `cpu-basic`, `cpu-upgrade`  
 **GPU:** `t4-small`, `t4-medium`, `l4x1`, `l4x4`, `a10g-small`, `a10g-large`, `a10g-largex2`, `a10g-largex4`, `a100-large`  
 **TPU:** `v5e-1x1`, `v5e-2x2`, `v5e-2x4`
 
