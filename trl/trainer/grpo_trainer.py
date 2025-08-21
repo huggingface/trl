@@ -644,6 +644,7 @@ class GRPOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
+        self.scale_rewards = {True: "group", False: "none"}.get(args.scale_rewards, args.scale_rewards)
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
@@ -721,11 +722,6 @@ class GRPOTrainer(Trainer):
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
-
-        if isinstance(args.scale_rewards, bool):
-            self.scale_rewards = "group" if args.scale_rewards else "none"
-        else:
-            self.scale_rewards = args.scale_rewards
 
         # Liger loss
         if self.use_liger_loss:
@@ -1684,20 +1680,20 @@ class GRPOTrainer(Trainer):
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
 
-        if self.scale_rewards in  ["batch", "none"]:
+        if self.scale_rewards in ["batch", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
             std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
             std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
         elif self.scale_rewards == "group":
             # Compute global std
-            std_rewards = self.accelerator.gather(rewards).flatten().std()
+            std_rewards = rewards.std().expand_as(rewards)
         else:
             raise ValueError(
                 f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
             )
 
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
-        if self.scale_rewards != "none":
+        if self.scale_rewards in ["batch", "none"]:
             advantages = advantages / (std_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
@@ -1737,9 +1733,7 @@ class GRPOTrainer(Trainer):
             std_func_rewards = nanstd(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        if isinstance(std_rewards, torch.Tensor):
-            std_rewards = std_rewards.mean().item()
-        self._metrics[mode]["reward_std"].append(std_rewards)
+        self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
