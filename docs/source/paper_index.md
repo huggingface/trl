@@ -41,7 +41,7 @@ The DAPO algorithm, includes 5 key components:
 To reproduce the paper's setting, use this configuration:
 
 ```python
-from trl import GRPOConfig
+from trl import GRPOConfig, GRPOTrainer
 
 training_args = GRPOConfig(
     # Overlong Filtering
