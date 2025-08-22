@@ -20,20 +20,20 @@ from datasets import load_dataset
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
-    AutoModelForImageTextToText,
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl.trainer.rloo_final_trainer import RLOOFinalTrainer, RepeatSampler
-from trl.trainer.rloo_finall_config import RLOOConfig_NEW
 from trl.trainer.rloo_final_trainer import (
+    RepeatSampler,
+    RLOOFinalTrainer,
     shuffle_sequence_dict,
     split_tensor_dict,
-    truncate_with_protected_tokens,    
+    truncate_with_protected_tokens,
 )
+from trl.trainer.rloo_finall_config import RLOOConfig_NEW
 
 from .testing_utils import TrlTestCase, require_vllm
 
