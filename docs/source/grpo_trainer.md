@@ -144,7 +144,7 @@ $$
 \mathcal{L}_{\text{DAPO}}(\theta) = - \frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
 $$
 
-To use this formulation, set `loss_type="bnpo"` in [`GRPOConfig`]. Note that we do not reproduce the DAPO formulation exactly: when using gradient accumulation, the loss is computed over the total number of tokens in each batch, not over the accumulated batches. `loss_type="bnpo"` is equivalent to the original DAPO formulation only when `gradient_accumulation_steps=1`.
+To use this formulation, set `loss_type="dapo"` in [`GRPOConfig`].
 
 Furthermore, it was demonstrated in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that the initial GRPO formulation introduces a response length bias. They show that while the DAPO formulation reduces this bias, it does not eliminate it completely. To fully remove this bias, they propose dividing by a constant instead of the sequence length, resulting in the following formulation:
 

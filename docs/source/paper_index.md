@@ -26,6 +26,83 @@ training_args = GRPOConfig(
 )
 ```
 
+## DAPO: An Open-Source LLM Reinforcement Learning System at Scale
+
+**📜 Paper**: https://huggingface.co/papers/2503.14476
+
+The DAPO algorithm, includes 5 key components:
+
+- Overlong Filtering
+- Clip-Higher
+- Soft Overlong Punishment
+- Token-level Loss
+- Dynamic Sampling (⚠️ Not supported in TRL)
+
+To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig, GRPOTrainer
+
+training_args = GRPOConfig(
+    # Overlong Filtering
+    mask_truncated_completions=True,
+    # Token-level Loss
+    loss_type="dapo",
+    # Clip-Higher
+    epsilon_high=0.28, # DAPO paper: section 4.1
+    epsilon=0.2, # DAPO paper: section 4.1
+    # Other parameters used
+    per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
+    num_generations=16, # number of sample responses in the paper, DAPO paper: section 4.1
+    max_completion_length=20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
+    beta=0.0 # section 2.3, DAPO paper
+
+)
+# Soft Overlong Punishment
+sop_reward = get_soft_overlong_punishment(max_completion_len=20480, soft_punish_cache=4096) # DAPO paper: section 4.1
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+    reward_funcs=[..., sop_reward],
+)
+```
+
+## Dr. GRPO: Understanding R1-Zero-Like Training: A Critical Perspective
+
+**📜 Paper**: https://huggingface.co/papers/2503.20783
+
+A study of R1-Zero training identifies pretraining effects on RL performance and proffers Dr. GRPO to enhance token efficiency, achieving superior accuracy on AIME 2024. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    loss_type="dr_grpo",
+    per_device_train_batch_size=1, # train_batch_size_per_device in the Training section of the repository
+    num_generations=8, #  num_samples in the Training section of the repository
+    max_prompt_length=1024, #  prompt_max_length in the Training section of the repository
+    max_completion_length=3000, # generate_max_length in the Training section of the repository
+    beta=0.0, # beta in the Training section of the repository
+)
+```
+
+## Direct Preference Optimization (DPO): Your Language Model is Secretly a Reward Model
+
+**📜 Paper**: https://huggingface.co/papers/2305.18290
+
+Direct Preference Optimization (DPO) fine-tunes language models more efficiently and with better performance compared to reinforcement learning from human feedback (RLHF), by directly optimizing policy training based on human preferences. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid", # losses in Appendix B of the paper
+    per_device_train_batch_size=64, #  batch size in Appendix B of the paper
+    learning_rate=1e-6, # learning rate in Appendix B of the paper
+    beta=0.1, # beta in Appendix B of the paper
+)
+```
+
 ## AlphaPO -- Reward shape matters for LLM alignment
 
 **📜 Paper**: https://huggingface.co/papers/2501.03884
