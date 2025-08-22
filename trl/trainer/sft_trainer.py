@@ -1012,7 +1012,7 @@ class SFTTrainer(Trainer):
 
                 def get_trainable_tokens(dataset, col):
                     if col == "input_ids":
-                        return(sum(len(row[col]) for row in dataset))
+                        return sum(len(row[col]) for row in dataset)
                     return sum(sum(row[col]) for row in dataset)
 
                 # Conversational Dataset
