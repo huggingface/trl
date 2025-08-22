@@ -16,7 +16,6 @@ import inspect
 import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from operator import itemgetter
@@ -28,7 +27,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset, concatenate_datasets
 from torch import autocast
@@ -78,6 +77,9 @@ if is_wandb_available():
 
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, PreTrainedTokenizer
+
+
+logger = logging.get_logger(__name__)
 
 RUNNING_NAME = "running.pt"
 
@@ -480,20 +482,18 @@ class KTOTrainer(Trainer):
                 "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
             )
         if args.max_length is None:
-            warnings.warn(
+            logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_length` in the KTOTrainer's init"
                 " it will be set to `512` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_length = 512
         if args.max_length is not None:
             max_length = args.max_length
 
         if args.max_prompt_length is None:
-            warnings.warn(
+            logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the KTOTrainer's init"
                 " it will be set to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_prompt_length = 128
         if args.max_prompt_length is not None:
@@ -501,10 +501,9 @@ class KTOTrainer(Trainer):
 
         max_completion_length = None
         if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
+            logger.warning(
                 "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the KTOTrainer's init"
                 " it will be set to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_completion_length = 128
         if args.max_completion_length is not None and self.is_encoder_decoder:
@@ -520,10 +519,9 @@ class KTOTrainer(Trainer):
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
-                warnings.warn(
+                logger.warning(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your KTOConfig"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_dpo_data_collator = True
@@ -567,12 +565,11 @@ class KTOTrainer(Trainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
@@ -725,14 +722,13 @@ class KTOTrainer(Trainer):
                 und_weight_in_range = und_weight_lower_bound <= self.undesirable_weight <= und_weight_upper_bound
 
                 if not (des_weight_in_range or und_weight_in_range):
-                    warnings.warn(
+                    logger.warning(
                         "You have different amounts of desirable/positive and undesirable/negative examples but the "
                         "weights on the desirable and undesirable losses don't seem to be in an ideal range. Based "
                         f"on your data, we recommend EITHER "
                         f"desirable_weight in [{des_weight_lower_bound}, {des_weight_upper_bound}] or "
                         f"undesirable_weight in [{und_weight_lower_bound}, {und_weight_upper_bound}] (but NOT BOTH). "
                         "See the documentation on how to optimally set these weights.",
-                        UserWarning,
                     )
 
         super().__init__(

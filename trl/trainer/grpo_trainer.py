@@ -17,7 +17,6 @@ import inspect
 import os
 import re
 import textwrap
-import warnings
 from collections import defaultdict, deque
 from collections.abc import Sequence, Sized
 from contextlib import nullcontext
@@ -29,6 +28,7 @@ import datasets
 import torch
 import torch.utils.data
 import transformers
+from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
 from torch import nn
@@ -50,7 +50,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
@@ -81,6 +81,9 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+
+logger = logging.get_logger(__name__)
 
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
@@ -223,13 +226,18 @@ def split_tensor_dict(
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     chunk_size = first_tensor.shape[0] // num_chunks
-    return [
-        {
-            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
-            for key, tensor in tensor_dict.items()
-        }
-        for i in range(num_chunks)
-    ]
+    chunks = []
+    for i in range(num_chunks):
+        chunk_dict = {}
+        for key, tensor in tensor_dict.items():
+            if tensor is not None and tensor.ndim > 0:
+                chunk_dict[key] = tensor[i * chunk_size : (i + 1) * chunk_size]
+            elif tensor is not None and tensor.ndim == 0:
+                chunk_dict[key] = tensor
+            else:
+                chunk_dict[key] = None
+        chunks.append(chunk_dict)
+    return chunks
 
 
 def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
@@ -255,7 +263,9 @@ def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, 
     def permute(v: Optional[Sequence]) -> Optional[Sequence]:
         if v is None:
             return None
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and v.ndim == 0:
+            return v
+        if isinstance(v, torch.Tensor) and v.ndim >= 1:
             return v[permutation]
         return [v[i] for i in permutation]
 
@@ -536,7 +546,7 @@ class GRPOTrainer(Trainer):
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
-                warnings.warn(
+                logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
@@ -641,7 +651,7 @@ class GRPOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
-        self.scale_rewards = args.scale_rewards
+        self.scale_rewards = {True: "group", False: "none"}.get(args.scale_rewards, args.scale_rewards)
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
@@ -697,6 +707,12 @@ class GRPOTrainer(Trainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
+            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
+            # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
+            # global accumulated batch. To control scaling ourselves, we must disable Trainer’s built-in scaling. The
+            # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
+            # that behavior without rewriting `training_step`.
+            compute_loss_func="non-None value to disable scaling",
         )
 
         # Reference model
@@ -1313,11 +1329,13 @@ class GRPOTrainer(Trainer):
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
             nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
-            row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()}
+            row_reward_kwargs = {
+                key: value[nan_row_idx] for key, value in reward_kwargs.items() if key != "trainer_state"
+            }
             row_reward_kwargs["prompt"] = prompts[nan_row_idx]
             row_reward_kwargs["completion"] = completions[nan_row_idx]
-            warnings.warn(
-                f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
+            logger.warning(
+                f"All reward functions returned None for the following kwargs:\n{row_reward_kwargs}\n"
                 "Please ensure that at least one reward function returns a valid reward."
             )
 
@@ -1348,17 +1366,8 @@ class GRPOTrainer(Trainer):
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
-                if isinstance(prompt, list):
-                    for message in prompt:
-                        if not isinstance(message, dict):
-                            continue
-                        content = message.get("content")
-                        role = message.get("role")
-                        if isinstance(content, str):
-                            if role == "user":
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
-                            elif role == "system":
-                                message["content"] = [{"type": "text", "text": content}]
+                if isinstance(prompt, list):  # i.e., when using conversational data
+                    prepare_multimodal_messages(prompt, num_images=1)
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1597,6 +1606,8 @@ class GRPOTrainer(Trainer):
 
         # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
         completion_lengths = completion_mask.sum(1)
+        agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        num_items_in_batch = agg_completion_lengths.sum()  # this is required for the DAPO loss
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -1681,15 +1692,26 @@ class GRPOTrainer(Trainer):
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-        is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
-        if self.scale_rewards:
-            advantages = advantages / (std_grouped_rewards + 1e-4)
+
+        if self.scale_rewards in ["batch", "none"]:
+            # If self.scale_rewards = "none", we'll still log group level std
+            std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+            std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
+        elif self.scale_rewards == "group":
+            # Compute global std
+            std_rewards = rewards.std().expand_as(rewards)
+        else:
+            raise ValueError(
+                f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
+            )
+
+        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
+        if self.scale_rewards in ["batch", "none"]:
+            advantages = advantages / (std_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1705,7 +1727,6 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
-        agg_completion_lengths = self.accelerator.gather(completion_lengths)
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
@@ -1725,10 +1746,10 @@ class GRPOTrainer(Trainer):
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
-            std_rewards = nanstd(rewards_per_func[:, i]).item()
-            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
+            std_func_rewards = nanstd(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
@@ -1747,6 +1768,7 @@ class GRPOTrainer(Trainer):
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "advantages": advantages,
+            "num_items_in_batch": num_items_in_batch,
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
@@ -1802,7 +1824,7 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        return loss
+        return loss / self.current_gradient_accumulation_steps
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1887,10 +1909,16 @@ class GRPOTrainer(Trainer):
 
         if self.loss_type == "grpo":
             loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            loss = loss / self.current_gradient_accumulation_steps
+        elif self.loss_type == "dapo":
+            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+            loss = (per_token_loss * completion_mask).sum() / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 

@@ -118,6 +118,7 @@ While training and evaluating we record the following reward metrics:
 * `epoch`: The current epoch number, based on dataset iteration.
 * `num_tokens`: The total number of tokens processed so far.
 * `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
+* `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
 * `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the ground truth token.
 * `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 * `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.

@@ -61,9 +61,9 @@ python trl/scripts/dpo.py \
 """
 
 import argparse
-import warnings
 
 import torch
+from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -80,6 +80,9 @@ from trl import (
     get_quantization_config,
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
+
+logger = logging.get_logger(__name__)
 
 
 def main(script_args, training_args, model_args, dataset_args):
@@ -122,7 +125,7 @@ def main(script_args, training_args, model_args, dataset_args):
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
-        warnings.warn(
+        logger.warning(
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
             "dataset and `dataset_name` will be ignored."
         )
