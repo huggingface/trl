@@ -54,7 +54,7 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import flush_left, generate_model_card, get_comet_experiment_url, pad
+from .utils import entropy_from_logits, flush_left, generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
@@ -1040,6 +1040,19 @@ class SFTTrainer(Trainer):
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
+
+        # Compute entropy
+        with torch.no_grad():
+            per_token_entropy = entropy_from_logits(outputs.logits)
+            if "attention_mask" in inputs:
+                entropy = torch.sum(per_token_entropy * inputs["attention_mask"]) / inputs["attention_mask"].sum()
+            elif "position_ids" in inputs:
+                entropy = torch.mean(per_token_entropy)
+            else:
+                raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+            entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+        self._metrics[mode]["entropy"].append(entropy)
+
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
             # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
