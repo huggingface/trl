@@ -71,6 +71,18 @@ class SplitTensorDictTester(TrlTestCase):
             self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
             self.assertIsNone(result[i]["y"])
 
+    def test_with_scalar(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": torch.tensor(1)}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        self.assertEqual(len(result), 2)
+        for i in range(2):
+            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
+            self.assertTrue(torch.equal(result[i]["y"], torch.tensor(1)))
+
 
 class ShuffleSequenceDictTester(TrlTestCase):
     def test_shuffle_preserves_shape(self):
@@ -549,7 +561,7 @@ class GRPOTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @parameterized.expand([("bnpo",), ("dr_grpo",)])
+    @parameterized.expand([("bnpo",), ("dr_grpo",), ("dapo",)])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -559,6 +571,7 @@ class GRPOTrainerTester(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=32,  # reduce the completion length to reduce memory usage
+            gradient_accumulation_steps=2,  # set to 2 to test than DAPO can operate with accumulated batch
             loss_type=loss_type,
             report_to="none",
         )
