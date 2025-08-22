@@ -46,6 +46,25 @@ training_args = GRPOConfig(
 )
 ```
 
+## Dr. GRPO: Understanding R1-Zero-Like Training: A Critical Perspective
+
+**📜 Paper**: https://huggingface.co/papers/2503.20783
+
+A study of R1-Zero training identifies pretraining effects on RL performance and proffers Dr. GRPO to enhance token efficiency, achieving superior accuracy on AIME 2024. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    loss_type="dr_grpo",
+    per_device_train_batch_size=1, # train_batch_size_per_device in the Training section of the repository
+    num_generations = 8, #  num_samples in the Training section of the repository
+    max_prompt_length = 1024, #  prompt_max_length in the Training section of the repository
+    max_completion_length = 3000, # generate_max_length in the Training section of the repository
+    beta = 0, # beta in the Training section of the repository
+)
+```
+
 ## AlphaPO -- Reward shape matters for LLM alignment
 
 **📜 Paper**: https://huggingface.co/papers/2501.03884
