@@ -58,13 +58,13 @@ training_args = GRPOConfig(
     beta=0.0 # section 2.3, DAPO paper
 
 )
-```
-
-To add Soft Overlong Punishment, add the following to the `reward_funcs` on the `GRPOTrainer`:
-
-```python
+# Soft Overlong Punishment
 sop_reward = get_soft_overlong_punishment(max_completion_len=20480, soft_punish_cache=4096) # DAPO paper: section 4.1
-
+trainer = GRPOTrainer(
+    ...,
+    args=training_args,
+    reward_funcs=[..., sop_reward],
+)
 ```
 
 ## Dr. GRPO: Understanding R1-Zero-Like Training: A Critical Perspective
