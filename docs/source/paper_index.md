@@ -53,8 +53,8 @@ training_args = GRPOConfig(
     epsilon=0.2, # DAPO paper: section 4.1
     # Other parameters used
     per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
-    num_generations = 16, # number of sample responses in the paper, DAPO paper: section 4.1
-    max_completion_length = 20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
+    num_generations=16, # number of sample responses in the paper, DAPO paper: section 4.1
+    max_completion_length=20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
 
 )
 ```
