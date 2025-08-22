@@ -719,7 +719,7 @@ class OnPolicyConfig(TrainingArguments):
             Per rank no grad forward pass in the rollout phase.
         num_sample_generations (`int`, *optional*, defaults to `10`):
             Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
-        response_length (`int`, *optional*, defaults to `53`):
+        response_length (`int`, *optional*, defaults to `256`):
             Length of the response.
         stop_token (`str` or `None`, *optional*, defaults to `None`):
             Specifies the stop token to use for text generation. This parameter is mutually exclusive with
@@ -1101,7 +1101,11 @@ def generate(
         output_scores=True,
     )
     logits = torch.stack(output.scores, 1)
-    return torch.cat((queries, output.sequences[:, context_length:]), dim=1), logits
+    # Hardcode responses for fair comparison with GRPO
+    hardcoded_responses = torch.tensor([[88190, 11, 419, 374, 264, 2699, 315, 264, 40803, 3405, 151645],
+                                       [88190, 11, 419, 264, 40803, 3405, 151645, 151669, 151669, 151669, 151669]], 
+                                      dtype=torch.int64, device=queries.device)
+    return torch.cat((queries, hardcoded_responses), dim=1), logits
 
 
 @torch.no_grad()

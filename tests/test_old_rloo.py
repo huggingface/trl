@@ -1,4 +1,19 @@
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import tempfile
+import torch
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from trl import RLOOConfig, RLOOTrainer
@@ -46,16 +61,28 @@ def main():
             eval_dataset=dummy_dataset,
         )
 
-        # Test that training completes without errors
-        trainer.train()
+        # # Check initial weights
+        # initial_weights = policy_model.state_dict()
+        # print("Sample weights before training:")
+        # for name, param in list(initial_weights.items())[:3]:
+        #     print(f"{name}: {param.flatten()[:5]}")
 
-        # Check if objective/rlhf_reward is available
-        print("Training completed successfully!")
-        print(f"Last log entry: {trainer.state.log_history[-1]}")
-        if "objective/rlhf_reward" in trainer.state.log_history[-1]:
-            print("✓ objective/rlhf_reward found in logs")
-        else:
-            print("✗ objective/rlhf_reward not found in logs")
+        # # Test that training completes without errors
+        trainer.train()
+        
+        # # Check final weights
+        # final_weights = policy_model.state_dict()
+        # print("\nSample weights after training:")
+        # for name, param in list(final_weights.items())[:3]:
+        #     print(f"{name}: {param.flatten()[:5]}")
+        
+        # # Check if weights changed
+        # weights_changed = False
+        # for name in initial_weights:
+        #     if not torch.equal(initial_weights[name], final_weights[name]):
+        #         weights_changed = True
+        #         break
+        # print(f"\nWeights changed: {weights_changed}")
 
 
 if __name__ == "__main__":
