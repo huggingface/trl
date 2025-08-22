@@ -108,8 +108,6 @@ if TYPE_CHECKING:
     from .dpo_trainer import DPOTrainer
     from .gkd_config import GKDConfig
     from .gkd_trainer import GKDTrainer
-    from .rloo_final_config import GRPOConfig
-    from .rloo_final import GRPOTrainer
     from .iterative_sft_trainer import IterativeSFTConfig, IterativeSFTTrainer
     from .judges import (
         AllTrueJudge,
@@ -137,6 +135,8 @@ if TYPE_CHECKING:
     from .reward_config import RewardConfig
     from .reward_trainer import RewardTrainer
     from .rloo_config import RLOOConfig
+    from .rloo_final_trainer import RLOOFinalTrainer
+    from .rloo_finall_config import RLOOConfig_NEW
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
