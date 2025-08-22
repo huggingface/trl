@@ -1009,26 +1009,46 @@ class SFTTrainer(Trainer):
                 # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
+
+                def get_trainable_tokens(dataset, col):
+                    return sum(sum(row[col]) for row in dataset)
+
+                # Conversational Dataset
                 if args.assistant_only_loss:
-                    total_assistant_tokens_before_truncation = sum(sum(row["assistant_masks"]) for row in dataset)
+                    total_trainable_tokens_before_truncation = get_trainable_tokens(dataset, "assistant_masks")
+                # Prompt Completions/Instruction Tuning Dataset
+                elif "completion_mask" in dataset.column_names:
+                    total_trainable_tokens_before_truncation = get_trainable_tokens(dataset, "completion_mask")
+                # Language Modeling
+                else:
+                    total_trainable_tokens_before_truncation = get_trainable_tokens(dataset, "input_ids")
+
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+
                 if args.assistant_only_loss:
                     dataset = dataset.filter(lambda row: 1 in row["assistant_masks"])
-                    total_assistant_tokens_after_truncation = sum(sum(row["assistant_masks"]) for row in dataset)
-                    if total_assistant_tokens_after_truncation == 0:
-                        raise RuntimeError(
-                            "After truncation, the dataset has no trainable assistant tokens. This usually means that "
-                            "the max length is too short."
-                        )
-                    percentage_of_retained_assistant_tokens = (
-                        total_assistant_tokens_after_truncation / total_assistant_tokens_before_truncation
-                    ) * 100
-                    logger.info(
-                        f"Total number of trainable assistant tokens after truncation: {total_assistant_tokens_after_truncation}. "
-                        f"Percentage of retained assistant tokens after truncating dataset: {percentage_of_retained_assistant_tokens:.2f}%"
+                    total_trainable_tokens_after_truncation = get_trainable_tokens(dataset, "assistant_masks")
+                elif "completion_mask" in dataset.column_names:
+                    dataset = dataset.filter(lambda row: 1 in row["completion_mask"])
+                    total_trainable_tokens_after_truncation = get_trainable_tokens(dataset, "completion_mask")
+                else:
+                    total_trainable_tokens_after_truncation = get_trainable_tokens(dataset, "input_ids")
+
+                if total_trainable_tokens_after_truncation == 0:
+                    raise RuntimeError(
+                        "After truncation, the dataset has no trainable  tokens. This usually means that "
+                        "the max length is too short."
                     )
+
+                percentage_of_retained_assistant_tokens = (
+                    total_trainable_tokens_after_truncation / total_trainable_tokens_before_truncation
+                ) * 100
+                logger.info(
+                    f"Total number of trainable assistant tokens after truncation: {total_trainable_tokens_after_truncation}. "
+                    f"Percentage of retained assistant tokens after truncating dataset: {percentage_of_retained_assistant_tokens:.2f}%"
+                )
 
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
