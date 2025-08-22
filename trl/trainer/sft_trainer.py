@@ -1015,11 +1015,12 @@ class SFTTrainer(Trainer):
                         return sum(len(row[col]) for row in dataset)
                     return sum(sum(row[col]) for row in dataset)
 
+                first_row = dataset[0] if isinstance(dataset, Dataset) else next(iter(dataset))
                 # Conversational Dataset
                 if args.assistant_only_loss:
                     total_trainable_tokens_before_truncation = get_trainable_tokens(dataset, "assistant_masks")
                 # Prompt Completions/Instruction Tuning Dataset
-                elif "completion_mask" in dataset.column_names:
+                elif "completion_mask" in first_row:
                     total_trainable_tokens_before_truncation = get_trainable_tokens(dataset, "completion_mask")
                 # Language Modeling
                 else:
@@ -1032,7 +1033,7 @@ class SFTTrainer(Trainer):
                 if args.assistant_only_loss:
                     dataset = dataset.filter(lambda row: 1 in row["assistant_masks"])
                     total_trainable_tokens_after_truncation = get_trainable_tokens(dataset, "assistant_masks")
-                elif "completion_mask" in dataset.column_names:
+                elif "completion_mask" in first_row:
                     dataset = dataset.filter(lambda row: 1 in row["completion_mask"])
                     total_trainable_tokens_after_truncation = get_trainable_tokens(dataset, "completion_mask")
                 else:
