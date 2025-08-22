@@ -1487,7 +1487,6 @@ class RLOOFinalTrainer(Trainer):
             # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
             # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
             # old_per_token_logps to None.
-            generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
             # if self.args.gradient_accumulation_steps % generate_every != 0:
             old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                 self.model,
