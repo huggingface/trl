@@ -55,8 +55,16 @@ training_args = GRPOConfig(
     per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
     num_generations=16, # number of sample responses in the paper, DAPO paper: section 4.1
     max_completion_length=20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
+    beta=0.0 # section 2.3, DAPO paper
 
 )
+```
+
+To add Soft Overlong Punishment, add the following to the `reward_funcs` on the `GRPOTrainer`:
+
+```python
+sop_reward = get_soft_overlong_punishment(max_completion_len=20480, soft_punish_cache=4096) # DAPO paper: section 4.1
+
 ```
 
 ## Dr. GRPO: Understanding R1-Zero-Like Training: A Critical Perspective
