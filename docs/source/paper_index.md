@@ -86,6 +86,23 @@ training_args = GRPOConfig(
 )
 ```
 
+## Direct Preference Optimization (DPO): Your Language Model is Secretly a Reward Model
+
+**📜 Paper**: https://huggingface.co/papers/2305.18290
+
+Direct Preference Optimization (DPO) fine-tunes language models more efficiently and with better performance compared to reinforcement learning from human feedback (RLHF), by directly optimizing policy training based on human preferences. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sigmoid", # losses in Appendix B of the paper
+    per_device_train_batch_size=64, #  batch size in Appendix B of the paper
+    learning_rate=1e-6, # learning rate in Appendix B of the paper
+    beta=0.1, # beta in Appendix B of the paper
+)
+```
+
 ## AlphaPO -- Reward shape matters for LLM alignment
 
 **📜 Paper**: https://huggingface.co/papers/2501.03884
