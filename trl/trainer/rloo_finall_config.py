@@ -62,7 +62,7 @@ class RLOOConfig_NEW(TrainingArguments):
             Whether to shuffle the training dataset.
 
         > Parameters that control generation
-         
+
         generation_batch_size: (`int` or `None`, *optional*, defaults to `None`):
             Batch size to use for generation. If `None`, it defaults to the effective training batch size:
             `per_device_train_batch_size * num_processes * steps_per_generation`. In other words, there is one
@@ -597,7 +597,7 @@ class RLOOConfig_NEW(TrainingArguments):
                     f"divisible by num_generations ({self.num_generations})."
                 )
 
-        #The generation batch must contain full prompt groups (no partials), so it must be divisible by
+        # The generation batch must contain full prompt groups (no partials), so it must be divisible by
         # num_generations.
         if self.generation_batch_size % self.num_generations != 0:
             raise ValueError(
@@ -610,4 +610,3 @@ class RLOOConfig_NEW(TrainingArguments):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
-
