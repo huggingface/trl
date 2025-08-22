@@ -203,7 +203,7 @@ class RLOOTrainer(Trainer):
         self.dataloader = DataLoader(
             self.train_dataset,
             batch_size=self.local_dataloader_batch_size,
-            shuffle=False,
+            shuffle=True,
             collate_fn=self.data_collator,
             drop_last=True,  # needed; otherwise the last batch will be of ragged shape
         )
@@ -318,29 +318,13 @@ class RLOOTrainer(Trainer):
                 with unwrap_model_for_generation(
                     self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model:
-                    hardcoded_responses = torch.tensor([[88190,    11,   419,   374,   264,  2699,   315,   264, 40803,  3405, 151645],
-                                                       [88190,    11,   419,  264, 40803,  3405, 151645, 151669, 151669, 151669,151669]], 
-                                                      dtype=torch.int64, device=queries.device)
-
-                    # Create query_responses with hardcoded responses
-                    query_responses = torch.cat((queries, hardcoded_responses), dim=1)
-                    
-                    # Generate logits for the hardcoded responses
-                    logitss = []
-                    for i in range(0, query_responses.shape[0], args.local_rollout_forward_batch_size):
-                        qr_batch = query_responses[i : i + args.local_rollout_forward_batch_size]
-                        output = forward(unwrapped_model, qr_batch, processing_class.pad_token_id)
-                        logits = output.logits[:, context_length - 1 : -1]  # Get logits for response tokens
-                        print(logits)
-                        logitss.append(logits)
-                    
-                    # Pad and reshape logits to match expected format
-                    if len(logitss) > 1:
-                        from ..trainer.utils import pad
-                        padded_logitss = pad(logitss, padding_value=0, padding_side="right")
-                        logitss = padded_logitss.view(-1, *padded_logitss.shape[2:])[:query_responses.shape[0]]
-                    else:
-                        logitss = logitss[0]
+                    query_responses, logitss = batch_generation(
+                        unwrapped_model,
+                        queries,
+                        args.local_rollout_forward_batch_size,
+                        processing_class.pad_token_id,
+                        generation_config,
+                    )
 
                 # Process responses in batches
                 for i in range(0, queries.shape[0], args.local_rollout_forward_batch_size):
@@ -608,17 +592,6 @@ class RLOOTrainer(Trainer):
                         generation_config,
                     )
                     response = query_response[:, context_length:]
-                    
-                    # Hardcode responses for fair comparison with GRPO
-                    response = torch.tensor([[88190,    11,   419,   374,   264,  2699,   315,   264, 40803,  3405, 151645],
-                                           [88190,    11,   419,  264, 40803,  3405, 151645, 151669, 151669, 151669,151669]] , dtype=torch.int64, device=response.device)
-                    # Repeat hardcoded responses to match batch size
-                    if response.shape[0] < query.shape[0]:
-                        response = response.repeat((query.shape[0] + response.shape[0] - 1) // response.shape[0], 1)[:query.shape[0]]
-                    
-                    # Update query_response to include the hardcoded response
-                    query_response = torch.cat((query, response), dim=1)
-                    
                     postprocessed_response = response
                     if args.stop_token_id is not None:  # handle the edge case when stop_token_id exists but is 0
                         postprocessed_response = truncate_response(
