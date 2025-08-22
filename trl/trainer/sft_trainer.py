@@ -1045,7 +1045,13 @@ class SFTTrainer(Trainer):
         with torch.no_grad():
             per_token_entropy = entropy_from_logits(outputs.logits)
             if "attention_mask" in inputs:
-                entropy = torch.sum(per_token_entropy * inputs["attention_mask"]) / inputs["attention_mask"].sum()
+                attention_mask = inputs["attention_mask"]
+                # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
+                virtual_attention_mask = torch.ones(
+                    attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
+                )
+                attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
+                entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
             elif "position_ids" in inputs:
                 entropy = torch.mean(per_token_entropy)
             else:
