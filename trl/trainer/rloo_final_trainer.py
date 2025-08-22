@@ -55,7 +55,6 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
-from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .rloo_finall_config import RLOOConfig_NEW
 from .utils import (
@@ -622,8 +621,8 @@ class RLOOFinalTrainer(Trainer):
 
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
-        self.max_completion_length = args.max_completion_length  
-        self.num_generations = args.num_generations  
+        self.max_completion_length = args.max_completion_length
+        self.num_generations = args.num_generations
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
@@ -655,7 +654,7 @@ class RLOOFinalTrainer(Trainer):
             )
 
         # Multi-step
-        self.num_iterations = args.num_iterations 
+        self.num_iterations = args.num_iterations
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
@@ -1310,7 +1309,7 @@ class RLOOFinalTrainer(Trainer):
             # applies it. Otherwise, it assumes that the chat template uses only vision_start_token_id to indicate images
             # (e.g. Gemma 3) and removes all image_token instances and vision_end_token_id as well, leaving only
             # the vision_start_token_id (e.g. <start_of_image>).
-            
+
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             # First, update the vLLM weights if needed
@@ -1383,7 +1382,7 @@ class RLOOFinalTrainer(Trainer):
 
                 else:
                     all_prompts_text = prompts_text
-                    
+
                 vllm_inputs = all_prompts_text
 
                 with profiling_context(self, "vLLM.generate"):
@@ -1451,12 +1450,12 @@ class RLOOFinalTrainer(Trainer):
                 prompt_completion_ids = unwrapped_model.generate(
                     **prompt_inputs, generation_config=self.generation_config, disable_compile=True
                 )
-                
+
             # Compute prompt length and extract completion ids
             prompt_length = prompt_ids.size(1)
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
-            
+
         # Mask everything after the first EOS token
         is_eos = completion_ids == self.eos_token_id
         eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
@@ -1489,7 +1488,7 @@ class RLOOFinalTrainer(Trainer):
             # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
             # old_per_token_logps to None.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            #if self.args.gradient_accumulation_steps % generate_every != 0:
+            # if self.args.gradient_accumulation_steps % generate_every != 0:
             old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                 self.model,
                 prompt_completion_ids,
@@ -1537,10 +1536,10 @@ class RLOOFinalTrainer(Trainer):
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
-        
+
         # For RLOO, include sequence-level KL penalty in the reward itself (following original RLOO implementation)
         if self.beta != 0.0 and ref_per_token_logps is not None and old_per_token_logps is not None:
-            # Match RLOO's KL calculation: kl = logprobs - ref_logprobs  
+            # Match RLOO's KL calculation: kl = logprobs - ref_logprobs
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
             sequence_kl = (per_token_kl * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
@@ -1551,13 +1550,15 @@ class RLOOFinalTrainer(Trainer):
         mean_grouped_rewards = grouped_rewards.mean(dim=1)
         std_grouped_rewards = grouped_rewards.std(dim=1)
         is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
-        
+
         # RLOO advantages computation
         grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # Shape: (num_prompts, 1)
-        baselines = (grouped_sum - grouped_rewards) / (self.num_generations - 1)  # Shape: (num_prompts, num_generations)
+        baselines = (grouped_sum - grouped_rewards) / (
+            self.num_generations - 1
+        )  # Shape: (num_prompts, num_generations)
         baselines = baselines.view(-1)  # Flatten back to match rewards shape
         advantages = rewards - baselines
-        
+
         # Optional: normalize advantages if scale_rewards is enabled
         if self.scale_rewards:
             grouped_advantages = advantages.view(-1, self.num_generations)
@@ -1658,9 +1659,7 @@ class RLOOFinalTrainer(Trainer):
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = (
-                old_per_token_logps - ref_per_token_logps 
-            )
+            per_token_kl = old_per_token_logps - ref_per_token_logps
 
         # Compute the loss
         advantages = inputs["advantages"]
