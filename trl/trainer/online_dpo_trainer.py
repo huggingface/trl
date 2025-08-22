@@ -15,7 +15,6 @@
 import os
 import re
 import textwrap
-import warnings
 from contextlib import nullcontext
 from functools import wraps
 from pathlib import Path
@@ -26,6 +25,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
+from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather_object, is_peft_model
 from datasets import Dataset
 from packaging import version
@@ -52,7 +52,6 @@ from transformers.utils import (
     is_flash_attn_2_available,
     is_peft_available,
     is_sagemaker_mp_enabled,
-    logging,
 )
 
 from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
@@ -209,7 +208,7 @@ class OnlineDPOTrainer(Trainer):
 
         # Handle deprecated parameters for backward compatibility
         if reward_model is not None:
-            warnings.warn(
+            logger.warning(
                 "The `reward_model` parameter is deprecated and will be removed in a future version. "
                 "Please use `reward_funcs` instead. For example, change `reward_model=model` to `reward_funcs=model`.",
                 DeprecationWarning,
@@ -219,14 +218,14 @@ class OnlineDPOTrainer(Trainer):
             if reward_funcs is None:
                 reward_funcs = reward_model
             else:
-                warnings.warn(
+                logger.warning(
                     "Both `reward_model` and `reward_funcs` are provided. Using `reward_funcs` and ignoring `reward_model`.",
                     UserWarning,
                     stacklevel=2,
                 )
 
         if reward_processing_class is not None:
-            warnings.warn(
+            logger.warning(
                 "The `reward_processing_class` parameter is deprecated and will be removed in a future version. "
                 "Please use `reward_processing_classes` instead. For example, change `reward_processing_class=tokenizer` "
                 "to `reward_processing_classes=tokenizer`.",
@@ -237,7 +236,7 @@ class OnlineDPOTrainer(Trainer):
             if reward_processing_classes is None:
                 reward_processing_classes = reward_processing_class
             else:
-                warnings.warn(
+                logger.warning(
                     "Both `reward_processing_class` and `reward_processing_classes` are provided. "
                     "Using `reward_processing_classes` and ignoring `reward_processing_class`.",
                     UserWarning,
@@ -250,7 +249,7 @@ class OnlineDPOTrainer(Trainer):
             raise ValueError("One of `judge` or `reward_funcs` must be provided.")
         elif reward_configs > 1:
             if judge is not None:
-                warnings.warn(
+                logger.warning(
                     "Both `judge` and `reward_funcs` are provided. Using `judge` and ignoring `reward_funcs`.",
                     UserWarning,
                 )
@@ -320,7 +319,7 @@ class OnlineDPOTrainer(Trainer):
         if args.missing_eos_penalty is not None and reward_funcs is None and judge is None:
             # Check if this is the old reward_model case
             if reward_model is not None:
-                warnings.warn(
+                logger.warning(
                     "The `missing_eos_penalty` parameter is deprecated when used with the deprecated `reward_model` parameter. "
                     "Please use `reward_funcs` instead of `reward_model` to continue using this feature.",
                     DeprecationWarning,

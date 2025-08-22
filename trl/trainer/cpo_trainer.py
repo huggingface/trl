@@ -16,7 +16,6 @@ import inspect
 import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from contextlib import nullcontext
 from pathlib import Path
@@ -27,7 +26,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from datasets import Dataset
 from torch import autocast
 from torch.utils.data import DataLoader
@@ -69,6 +68,9 @@ if is_peft_available():
 
 if is_wandb_available():
     import wandb
+
+
+logger = logging.get_logger(__name__)
 
 
 class CPOTrainer(Trainer):
@@ -226,19 +228,17 @@ class CPOTrainer(Trainer):
         if processing_class is None:
             raise ValueError("processing_class must be specified to tokenize a CPO dataset.")
         if args.max_length is None:
-            warnings.warn(
+            logger.warning(
                 "`max_length` is not set in the CPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_length = 512
         else:
             max_length = args.max_length
         if args.max_prompt_length is None:
-            warnings.warn(
+            logger.warning(
                 "`max_prompt_length` is not set in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_prompt_length = 128
         else:
@@ -250,10 +250,9 @@ class CPOTrainer(Trainer):
             )
 
         if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
+            logger.warning(
                 "When using an encoder decoder architecture, you should set `max_completion_length` in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_completion_length = 128
         else:
@@ -269,10 +268,9 @@ class CPOTrainer(Trainer):
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
-                warnings.warn(
+                logger.warning(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_dpo_data_collator = True
@@ -293,10 +291,9 @@ class CPOTrainer(Trainer):
         self.processing_class = processing_class
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
-            warnings.warn(
+            logger.warning(
                 f"You are using the {args.loss_type} loss type that does not support label smoothing. The "
                 "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
-                UserWarning,
             )
         if args.loss_type == "kto_pair":
             raise ValueError("Support for kto_pair has been removed in CPOTrainer. Please use KTOTrainer.")
@@ -308,12 +305,11 @@ class CPOTrainer(Trainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
 
         if args.loss_type == "simpo":
