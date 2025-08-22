@@ -1011,6 +1011,8 @@ class SFTTrainer(Trainer):
             elif args.max_length is not None:
 
                 def get_trainable_tokens(dataset, col):
+                    if col == "input_ids":
+                        return(sum(len(row[col]) for row in dataset))
                     return sum(sum(row[col]) for row in dataset)
 
                 # Conversational Dataset
