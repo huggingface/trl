@@ -30,19 +30,32 @@ training_args = GRPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476
 
-The DAPO algorithm, which includes decoupled clip and dynamic sampling policy optimization, enables open-source, high-performance reinforcement learning training for large-scale language models, enhancing reproducibility in the field. To reproduce the paper's setting, use this configuration (we don't support dynamic sampling right now):
+The DAPO algorithm, includes 5 key components:
+
+- Overlong Filtering
+- Clip-Higher
+- Soft Overlong Punishment
+- Token-level Loss
+- Dynamic Sampling (⚠️ Not supported in TRL)
+
+To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import GRPOConfig
 
 training_args = GRPOConfig(
+    # Overlong Filtering
+    mask_truncated_completions=True,
+    # Token-level Loss
     loss_type="dapo",
+    # Clip-Higher
+    epsilon_high=0.28, # DAPO paper: section 4.1
+    epsilon=0.2, # DAPO paper: section 4.1
+    # Other parameters used
     per_device_train_batch_size=512, # mini-batch size for training in the paper, DAPO paper: section 4.1
     num_generations = 16, # number of sample responses in the paper, DAPO paper: section 4.1
     max_completion_length = 20480, #  maximum number of tokens for generation in the paper, DAPO paper: section 4.1
-    epsilon_high = 0.28, # DAPO paper: section 4.1
-    epsilon = 0.2, # DAPO paper: section 4.1,
-    mask_truncated_completions = True
+
 )
 ```
 
