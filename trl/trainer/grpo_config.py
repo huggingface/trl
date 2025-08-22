@@ -176,19 +176,22 @@ class GRPOConfig(TrainingArguments):
             - `False` or `"none"`: no scaling is applied. The [Dr. GRPO
               paper](https://huggingface.co/papers/2503.20783) recommends not scaling rewards, as scaling by the
               standard deviation introduces a question-level difficulty bias.
-        loss_type (`str`, *optional*, defaults to `"bnpo"`):
+        loss_type (`str`, *optional*, defaults to `"dapo"`):
             Specifies the loss formulation to use. Supported values are:
 
             - `"grpo"`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to
-                length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
-                with negative advantages.
-            - `"bnpo"`: Aggregates token-level losses by normalizing number of active token in the local batch.
-                Note that normalization is performed over the local batch only, so results may slightly vary depending
-                on the local batch size, despite a constant effective batch size. When using
-                `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
+              length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
+              with negative advantages.
             - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
-                introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
-                The value of the constant corresponds to `max_completion_length`.
+              introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
+              The value of the constant corresponds to `max_completion_length`.
+            - `"dapo"` (default): Aggregates token-level losses by normalizing with the number of active token in the
+              global accumulated batch. This method was introduced in the [DAPO
+              paper](https://huggingface.co/papers/2503.14476) to eliminate length bias.
+            - `"bnpo"`: Aggregates token-level losses by normalizing with the number of active token in the local
+              batch. Note that normalization is performed over the local batch only, so results may slightly vary
+              depending on the local batch size, despite a constant effective batch size. When using
+              `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -514,19 +517,22 @@ class GRPOConfig(TrainingArguments):
         },
     )
     loss_type: str = field(
-        default="bnpo",
+        default="dapo",
         metadata={
-            "help": "Specifies the loss formulation to use. Supported values are `grpo`, `bnpo`, and `dr_grpo`. "
-            "`'grpo'`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to "
-            "length bias—this approach tends to prefer shorter completions with positive advantages and longer ones "
-            "with negative advantages. "
-            "`'bnpo'`: Aggregates token-level losses by normalizing number of active token in the local batch. "
+            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dapo', 'bnpo', and "
+            "'dr_grpo'. "
+            "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
+            "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
+            "negative advantages. "
+            "'dapo' (default): Aggregates token-level losses by normalizing with the number of active token in the "
+            "global accumulated batch. This method was introduced in the DAPO paper to eliminate length bias. "
+            "'dr_grpo': Aggregates token-level losses by normalizing with a global constant. This method was "
+            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
+            "`max_completion_length`. "
+            "'bnpo': Aggregates token-level losses by normalizing with the number of active token in the local batch. "
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
-            "`'dr_grpo'`: Aggregates token-level losses by normalizing with a global constant. This method was "
-            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
-            "`max_completion_length`."
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
         },
     )
     mask_truncated_completions: bool = field(
