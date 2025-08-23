@@ -230,7 +230,9 @@ def split_tensor_dict(
     for i in range(num_chunks):
         chunk_dict = {}
         for key, tensor in tensor_dict.items():
-            if tensor is not None and tensor.ndim > 0:
+            if isinstance(tensor, list):
+                chunk_dict[key] = tensor
+            elif tensor is not None and tensor.ndim > 0:
                 chunk_dict[key] = tensor[i * chunk_size : (i + 1) * chunk_size]
             elif tensor is not None and tensor.ndim == 0:
                 chunk_dict[key] = tensor
