@@ -382,6 +382,12 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if "messages" in examples[0]:  # conversational case
             for example in examples:
                 prepare_multimodal_messages(example["messages"], len(example["images"]))
+                for message in example["messages"]:
+                        if message["role"] == "assistant":
+                            if not message["content"][-1]["text"].endswith(
+                                self.processor.tokenizer.eos_token
+                            ):
+                                message["content"][-1]["text"] += self.processor.tokenizer.eos_token
             messages = [example["messages"] for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
