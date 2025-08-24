@@ -95,7 +95,7 @@ class GKDTrainer(SFTTrainer):
 
         # Liger fused GKD loss (JSD)
         self.use_liger_gkd_loss = False
-        if getattr(args, "use_liger_kernel", False):
+        if args.use_liger_kernel:
             self.liger_jsd_loss = LigerFusedLinearJSDLoss(
                 beta=args.beta,
                 ignore_index=-100,
