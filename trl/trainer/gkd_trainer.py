@@ -300,7 +300,7 @@ class GKDTrainer(SFTTrainer):
             )
         else:
             # compute student output
-            outputs_student = model(
+            student_outputs = model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
@@ -308,15 +308,15 @@ class GKDTrainer(SFTTrainer):
             # compute teacher output in eval mode
             self.teacher_model.eval()
             with torch.no_grad():
-                outputs_teacher = self.teacher_model(
+                teacher_outputs = self.teacher_model(
                     input_ids=inputs["input_ids"],
                     attention_mask=inputs["attention_mask"],
                 )
 
             # slice the logits for the generated tokens using the inputs["prompts"] lengths
             prompt_lengths = inputs["prompts"].shape[1]
-            shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
-            shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
+            shifted_student_logits = student_outputs.logits[:, prompt_lengths - 1 : -1, :]
+            shifted_teacher_logits = teacher_outputs.logits[:, prompt_lengths - 1 : -1, :]
             shifted_labels = inputs["labels"][:, prompt_lengths:]
 
             # compute loss
@@ -331,7 +331,7 @@ class GKDTrainer(SFTTrainer):
         empty_cache()
 
         # Return loss
-        return (loss, outputs_student) if return_outputs else loss
+        return (loss, student_outputs) if return_outputs else loss
 
     @staticmethod
     def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
