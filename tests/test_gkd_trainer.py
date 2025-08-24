@@ -18,6 +18,7 @@ import torch
 import torch.nn.functional as F
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
+from transformers.testing_utils import require_liger_kernel
 
 from trl import GKDConfig, GKDTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
@@ -243,6 +244,36 @@ class GKDTrainerTester(TrlTestCase):
         self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
         self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
         self.assertIn("model.safetensors", os.listdir(self.tmp_dir + "/checkpoint-2"))
+
+    @require_liger_kernel
+    def test_gkd_trainer_with_liger(self):
+        training_args = GKDConfig(
+            output_dir=self.tmp_dir,
+            dataloader_drop_last=True,
+            eval_strategy="no",
+            max_steps=2,
+            per_device_train_batch_size=2,
+            report_to="none",
+            use_liger_kernel=True,
+        )
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
+
+        trainer = GKDTrainer(
+            model=self.model_id,
+            teacher_model=self.model_id,
+            args=training_args,
+            train_dataset=dummy_dataset["train"],
+            processing_class=self.tokenizer,
+        )
+
+        # Ensure liger fused JSD path is enabled; if not, skip (runtime may lack system libs)
+        if not getattr(trainer, "use_liger_gkd_loss", False):
+            self.skipTest("Liger fused JSD not enabled at runtime; skipping fused-loss assertion")
+
+        trainer.train()
+
+        # Check we logged a train loss
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
     def test_generation_config_init(self):
         training_args = GKDConfig(output_dir=self.tmp_dir)
