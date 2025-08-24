@@ -88,7 +88,7 @@ class GKDTrainer(SFTTrainer):
 
         # Ensure SFTTrainer does not pre-process the dataset when using a ChatML collator,
         # so that raw conversational fields (e.g., "messages") remain available to the collator.
-        if getattr(args, "dataset_kwargs", None) is None:
+        if args.dataset_kwargs is None:
             args.dataset_kwargs = {"skip_prepare_dataset": True}
         else:
             args.dataset_kwargs["skip_prepare_dataset"] = True
