@@ -2,6 +2,12 @@
 
 [![](https://img.shields.io/badge/All_models-Iterative_SFT-blue)](https://huggingface.co/models?other=iterative-sft,trl)
 
+<Tip warning={true}>
+
+The IterativeSFTTrainer is deprecated and will be removed in version 0.24.0. Please use the [`SFTTrainer`].
+
+</Tip>
+
 Iterative fine-tuning is a training method that enables to perform custom actions (generation and filtering for example) between optimization steps. In TRL we provide an easy-to-use API to fine-tune your models in an iterative way in just a few lines of code.
 
 ## Quickstart

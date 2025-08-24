@@ -15,7 +15,7 @@
 from dataclasses import dataclass, field
 
 import numpy as np
-from datasets import Dataset, Features, Image, Sequence, Value
+from datasets import Dataset, Features, Image, List, Value
 from transformers import HfArgumentParser
 
 
@@ -32,7 +32,7 @@ class ScriptArguments:
             Fraction of the dataset to include in the test split.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the dataset to the Hugging Face Hub.
-        repo_id (`str`, *optional*, defaults to `"trl-internal-testing/zen"`):
+        repo_id (`str`, *optional*, defaults to `"trl-internal-testing/zen-image"`):
             Hugging Face repository ID to push the dataset to.
     """
 
@@ -52,364 +52,6 @@ class ScriptArguments:
 
 def main(test_size, push_to_hub, repo_id):
     # fmt: off
-    sizes = np.random.randint(32, 64, size=(19, 2))
-    data = {
-        "text": [
-            "Beautiful is better than ugly.",
-            "Explicit is better than implicit.",
-            "Simple is better than complex.",
-            "Complex is better than complicated.",
-            "Flat is better than nested.",
-            "Sparse is better than dense.",
-            "Readability counts.",
-            "Special cases aren't special enough to break the rules.",
-            "Although practicality beats purity.",
-            "Errors should never pass silently.",
-            "Unless explicitly silenced.",
-            "In the face of ambiguity, refuse the temptation to guess.",
-            "There should be one-- and preferably only one --obvious way to do it.",
-            "Although that way may not be obvious at first unless you're Dutch.",
-            "Now is better than never.",
-            "Although never is often better than *right* now.",
-            "If the implementation is hard to explain, it's a bad idea.",
-            "If the implementation is easy to explain, it may be a good idea.",
-            "Namespaces are one honking great idea -- let's do more of those!",
-        ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
-    }
-    standard_language_modeling_dataset = Dataset.from_dict(data, features=Features(text=Value("string"), image=Image()))
-    standard_language_modeling_dataset = standard_language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
-    if push_to_hub:
-        standard_language_modeling_dataset.push_to_hub(repo_id, config_name="standard_language_modeling")
-
-    sizes = np.random.randint(32, 64, size=(19, 2))
-    data =  {
-        "prompt": [
-            "Beautiful is better than",
-            "Explicit is",
-            "Simple is better",
-            "Complex",
-            "Flat is better than",
-            "Sparse is better",
-            "Readability",
-            "Special cases aren't special",
-            "Although practicality beats",
-            "Errors should never",
-            "Unless explicitly",
-            "In the face of ambiguity, refuse",
-            "There should be one-- and preferably",
-            "Although that way may not be obvious at first unless you're",
-            "Now is",
-            "Although never is often",
-            "If the implementation is hard to explain,",
-            "If the implementation is easy",
-            "Namespaces are one honking great",
-        ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
-    }
-    standard_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), image=Image()))
-    standard_prompt_only_dataset = standard_prompt_only_dataset.train_test_split(test_size=test_size, shuffle=False)
-    if push_to_hub:
-        standard_prompt_only_dataset.push_to_hub(repo_id, config_name="standard_prompt_only")
-
-    sizes = np.random.randint(32, 64, size=(19, 2))
-    data = {
-        "prompt": [
-            "Beautiful is better than",
-            "Explicit is",
-            "Simple is better",
-            "Complex",
-            "Flat is better than",
-            "Sparse is better",
-            "Readability",
-            "Special cases aren't special",
-            "Although practicality beats",
-            "Errors should never",
-            "Unless explicitly",
-            "In the face of ambiguity, refuse",
-            "There should be one-- and preferably",
-            "Although that way may not be obvious at first unless you're",
-            "Now is",
-            "Although never is often",
-            "If the implementation is hard to explain,",
-            "If the implementation is easy",
-            "Namespaces are one honking great",
-        ],
-        "completion": [
-            " ugly.",
-            " better than implicit.",
-            " than complex.",
-            " is better than complicated.",
-            " nested.",
-            " than dense.",
-            " counts.",
-            " enough to break the rules.",
-            " purity.",
-            " pass silently.",
-            " silenced.",
-            " the temptation to guess.",
-            " only one --obvious way to do it.",
-            " Dutch.",
-            " better than never.",
-            " better than *right* now.",
-            " it's a bad idea.",
-            " to explain, it may be a good idea.",
-            " idea -- let's do more of those!",
-        ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
-    }
-    standard_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completion=Value("string"), image=Image()))
-    standard_prompt_completion_dataset = standard_prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
-    if push_to_hub:
-        standard_prompt_completion_dataset.push_to_hub(repo_id, config_name="standard_prompt_completion")
-
-    sizes = np.random.randint(32, 64, size=(19, 2))
-    data = {
-        "prompt": [
-            "Beautiful is better than",
-            "Explicit is",
-            "Simple is better",
-            "Complex",
-            "Flat is better than",
-            "Sparse is better",
-            "Readability",
-            "Special cases aren't special",
-            "Although practicality beats",
-            "Errors should never",
-            "Unless explicitly",
-            "In the face of ambiguity, refuse",
-            "There should be one-- and preferably",
-            "Although that way may not be obvious at first unless you're",
-            "Now is",
-            "Although never is often",
-            "If the implementation is hard to explain,",
-            "If the implementation is easy",
-            "Namespaces are one honking great",
-        ],
-        "chosen": [
-            " ugly.",
-            " better than implicit.",
-            " than complex.",
-            " is better than complicated.",
-            " nested.",
-            " than dense.",
-            " counts.",
-            " enough to break the rules.",
-            " purity.",
-            " pass silently.",
-            " silenced.",
-            " the temptation to guess.",
-            " only one --obvious way to do it.",
-            " Dutch.",
-            " better than never.",
-            " better than *right* now.",
-            " it's a bad idea.",
-            " to explain, it may be a good idea.",
-            " idea -- let's do more of those!",
-        ],
-        "rejected": [
-            " the moon.",
-            " worse than nothing.",
-            " than a long vacation.",
-            " is always the answer.",
-            " chocolate.",
-            " without any context.",
-            " is optional.",
-            " enough to become unicorns.",
-            " reality.",
-            " pass their driving test.",
-            " forgotten.",
-            " the opportunity to laugh.",
-            " two or more confusing methods.",
-            " a time traveler.",
-            " never better.",
-            " not even a possibility.",
-            " it's clearly the best choice.",
-            " it's probably magic.",
-            " watermelon -- let's plant some!",
-        ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
-    }
-    standard_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), chosen=Value("string"), rejected=Value("string"), image=Image()))
-    standard_preference_dataset = standard_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
-    if push_to_hub:
-        standard_preference_dataset.push_to_hub(repo_id, config_name="standard_preference")
-
-    sizes = np.random.randint(32, 64, size=(19, 2))
-    data = {
-        "chosen": [
-            "Beautiful is better than ugly.",
-            "Explicit is better than implicit.",
-            "Simple is better than complex.",
-            "Complex is better than complicated.",
-            "Flat is better than nested.",
-            "Sparse is better than dense.",
-            "Readability counts.",
-            "Special cases aren't special enough to break the rules.",
-            "Although practicality beats purity.",
-            "Errors should never pass silently.",
-            "Unless explicitly silenced.",
-            "In the face of ambiguity, refuse the temptation to guess.",
-            "There should be one-- and preferably only one --obvious way to do it.",
-            "Although that way may not be obvious at first unless you're Dutch.",
-            "Now is better than never.",
-            "Although never is often better than *right* now.",
-            "If the implementation is hard to explain, it's a bad idea.",
-            "If the implementation is easy to explain, it may be a good idea.",
-            "Namespaces are one honking great idea -- let's do more of those!",
-        ],
-        "rejected": [
-            "Beautiful is better than the moon.",
-            "Explicit is worse than nothing.",
-            "Simple is better than a long vacation.",
-            "Complex is always the answer.",
-            "Flat is better than chocolate.",
-            "Sparse is better without any context.",
-            "Readability is optional.",
-            "Special cases aren't special enough to become unicorns.",
-            "Although practicality beats reality.",
-            "Errors should never pass their driving test.",
-            "Unless explicitly forgotten.",
-            "In the face of ambiguity, refuse the opportunity to laugh.",
-            "There should be one-- and preferably two or more confusing methods.",
-            "Although that way may not be obvious at first unless you're a time traveler.",
-            "Now is never better.",
-            "Although never is often not even a possibility.",
-            "If the implementation is hard to explain, it's clearly the best choice.",
-            "If the implementation is easy it's probably magic.",
-            "Namespaces are one honking great watermelon -- let's plant some!",
-        ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
-    }
-    standard_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Value("string"), rejected=Value("string"), image=Image()))
-    {'prompt': Value(dtype='string'), 'completions': Sequence(feature=Value(dtype='string'), length=-1), 'labels': Sequence(feature=Value(dtype='bool'), length=-1)}
-    standard_implicit_prompt_preference_dataset = standard_implicit_prompt_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
-    if push_to_hub:
-        standard_implicit_prompt_preference_dataset.push_to_hub(repo_id, config_name="standard_implicit_prompt_preference")
-
-    sizes = np.random.randint(32, 64, size=(19, 2))
-    data = {
-        "prompt": [
-            "Beautiful is better than",
-            "Explicit is",
-            "Simple is better",
-            "Complex",
-            "Flat is better than",
-            "Sparse is better",
-            "Readability",
-            "Special cases aren't special",
-            "Although practicality beats",
-            "Errors should never",
-            "Unless explicitly",
-            "In the face of ambiguity, refuse",
-            "There should be one-- and preferably",
-            "Although that way may not be obvious at first unless you're",
-            "Now is",
-            "Although never is often",
-            "If the implementation is hard to explain,",
-            "If the implementation is easy",
-            "Namespaces are one honking great",
-        ],
-        "completion": [
-            " ugly.",
-            " worse than nothing.",
-            " than a long vacation.",
-            " is better than complicated.",
-            " nested.",
-            " without any context.",
-            " counts.",
-            " enough to become unicorns.",
-            " purity.",
-            " pass silently.",
-            " forgotten.",
-            " the temptation to guess.",
-            " only one --obvious way to do it.",
-            " a time traveler.",
-            " better than never.",
-            " not even a possibility.",
-            " it's a bad idea.",
-            " it's probably magic.",
-            " watermelon -- let's plant some!",
-        ],
-        "label": [True, False, False, True, True, False, True, False, True, True, False, True, True, False, True, False, True, False, False],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
-    }
-    standard_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completion=Value("string"), label=Value("bool"), image=Image()))
-    standard_unpaired_preference_dataset = standard_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
-    if push_to_hub:
-        standard_unpaired_preference_dataset.push_to_hub(repo_id, config_name="standard_unpaired_preference")
-
-    sizes = np.random.randint(32, 64, size=(19, 2))
-    data = {
-        "prompt": [
-            "Beautiful is better than",
-            "Explicit is better than",
-            "Simple is better than",
-            "Complex is better than",
-            "Flat is better than",
-            "Sparse is better than",
-            "Readability counts",
-            "Special cases aren't special enough",
-            "Although practicality beats",
-            "Errors should never pass",
-            "In the face of ambiguity, refuse",
-            "There should be one-- and preferably only one --",
-            "Although that way may not be",
-            "Now is better than",
-            "Never is often better than",
-            "If the implementation is hard to explain, it's",
-            "If the implementation is easy to explain, it",
-            "Namespaces are one",
-            "Although practicality sometimes beats purity,",
-        ],
-        "completions":[
-            [", let me think...", " ugly."],
-            [", of course,", " implicit.", " because clarity matters."],
-            ["... let's keep it basic,", " complex."],
-            [" when needed,", " complicated."],
-            [" in terms of structure,", " nested."],
-            ["... especially for readability."],
-            [" especially when others read it."],
-            [", unless...", " they follow the rules."],
-            [" some theoretical elegance,", " purity."],
-            [" silently,", " unless explicitly silenced."],
-            [" the temptation to guess."],
-            [" way to do it,"," but sometimes it's not obvious.", " especially when there's more than one possibility."],
-            [" clear at first,", " it will eventually emerge."],
-            [" later."],
-            [" problematic fixes."],
-            [" likely because it's too complicated."],
-            [" might be a good design."],
-            [" of those great ideas,", " that solve many problems."],
-            [" the code should still aim for balance."],
-        ],
-        "labels": [
-            [False, True],
-            [False, True, False],
-            [False, True],
-            [True, True],
-            [True, False],
-            [True],
-            [False],
-            [True, False],
-            [False, False],
-            [False, False],
-            [True],
-            [True, True, False],
-            [True, True],
-            [False],
-            [True], [False],
-            [False],
-            [True, True],
-            [False]
-        ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
-    }
-    standard_stepwise_supervision_dataset = Dataset.from_dict(data, features=Features(prompt=Value("string"), completions=Sequence(Value("string")), labels=Sequence(Value("bool")), image=Image()))
-    standard_stepwise_supervision_dataset = standard_stepwise_supervision_dataset.train_test_split(test_size=test_size, shuffle=False)
-    if push_to_hub:
-        standard_stepwise_supervision_dataset.push_to_hub(repo_id, config_name="standard_stepwise_supervision")
-
     sizes = np.random.randint(32, 64, size=(19, 2))
     data = {
         "messages": [
@@ -433,9 +75,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}, {"role": "assistant", "content": "It means it may be a good idea."}],
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "content": "Namespaces are one honking great idea."}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_language_modeling_dataset = Dataset.from_dict(data, features=Features(messages=Message, image=Image()))
+    conversational_language_modeling_dataset = Dataset.from_dict(data, features=Features(messages=Message, images=List(Image())))
     conversational_language_modeling_dataset = conversational_language_modeling_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_language_modeling_dataset.push_to_hub(repo_id, config_name="conversational_language_modeling")
@@ -463,9 +105,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}],
             [{"role": "user", "content": "Any great ideas?"}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Message, image=Image()))
+    conversational_prompt_only_dataset = Dataset.from_dict(data, features=Features(prompt=Message, images=List(Image())))
     conversational_prompt_only_dataset = conversational_prompt_only_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_prompt_only_dataset.push_to_hub(repo_id, config_name="conversational_prompt_only")
@@ -514,9 +156,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "content": "It means it may be a good idea."}],
             [{"role": "assistant", "content": "Namespaces are one honking great idea."}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, image=Image()))
+    conversational_prompt_completion_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, images=List(Image())))
     conversational_prompt_completion_dataset = conversational_prompt_completion_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_prompt_completion_dataset.push_to_hub(repo_id, config_name="conversational_prompt_completion")
@@ -586,9 +228,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "assistant", "content": "It means it's a bad idea."}],
             [{"role": "assistant", "content": "Recursion."}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, chosen=Message, rejected=Message, image=Image()))
+    conversational_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, chosen=Message, rejected=Message, images=List(Image())))
     conversational_preference_dataset = conversational_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_preference_dataset.push_to_hub(repo_id, config_name="conversational_preference")
@@ -637,9 +279,9 @@ def main(test_size, push_to_hub, repo_id):
             [{"role": "user", "content": "What does it mean if the implementation is easy to explain?"}, {"role": "assistant", "content": "It means it's a bad idea."}],
             [{"role": "user", "content": "Any great ideas?"}, {"role": "assistant", "content": "Recursion."}],
         ],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Message, rejected=Message, image=Image()))
+    conversational_implicit_prompt_preference_dataset = Dataset.from_dict(data, features=Features(chosen=Message, rejected=Message, images=List(Image())))
     conversational_implicit_prompt_preference_dataset = conversational_implicit_prompt_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_implicit_prompt_preference_dataset.push_to_hub(repo_id, config_name="conversational_implicit_prompt_preference")
@@ -689,9 +331,9 @@ def main(test_size, push_to_hub, repo_id):
             [{'role': 'assistant', 'content': 'Namespaces are one honking great idea.'}],
         ],
         "label": [True, True, True, False, True, True, True, False, True, False, True, False, True, False, False, True, True, True, True],
-        "image": [np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8) for h, w in sizes],
+        "images": [[np.random.uniform(low=0.0, high=255.0, size=(h, w, 3)).astype(np.uint8)] for h, w in sizes],
     }
-    conversational_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, label=Value("bool"), image=Image()))
+    conversational_unpaired_preference_dataset = Dataset.from_dict(data, features=Features(prompt=Message, completion=Message, label=Value("bool"), images=List(Image())))
     conversational_unpaired_preference_dataset = conversational_unpaired_preference_dataset.train_test_split(test_size=test_size, shuffle=False)
     if push_to_hub:
         conversational_unpaired_preference_dataset.push_to_hub(repo_id, config_name="conversational_unpaired_preference")

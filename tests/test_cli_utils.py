@@ -22,6 +22,8 @@ from datasets import DatasetDict, load_dataset
 from trl import DatasetMixtureConfig, TrlParser, get_dataset
 from trl.scripts.utils import DatasetConfig
 
+from .testing_utils import TrlTestCase
+
 
 @dataclass
 class MyDataclass:
@@ -34,7 +36,7 @@ class InvalidDataclass:
     config: str  # This should raise an error in the TrlParser
 
 
-class TestTrlParser(unittest.TestCase):
+class TestTrlParser(TrlTestCase):
     def test_init_without_config_field(self):
         """Test initialization without 'config' field in the dataclasses."""
         parser = TrlParser(dataclass_types=[MyDataclass])
@@ -369,6 +371,7 @@ class TestGetDataset(unittest.TestCase):
 
     def test_trlparser_parses_yaml_config_correctly(self):
         # Prepare YAML content exactly like your example
+        # docstyle-ignore
         yaml_content = """
         datasets:
         - path: trl-internal-testing/zen
@@ -408,6 +411,7 @@ class TestGetDataset(unittest.TestCase):
 
     def test_trlparser_parses_yaml_and_loads_dataset(self):
         # Prepare YAML content exactly like your example
+        # docstyle-ignore
         yaml_content = """
         datasets:
         - path: trl-internal-testing/zen

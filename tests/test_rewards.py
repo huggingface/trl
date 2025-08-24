@@ -14,10 +14,12 @@
 
 import unittest
 
-from trl.rewards import think_format_reward
+from trl.rewards import get_soft_overlong_punishment, think_format_reward
+
+from .testing_utils import TrlTestCase
 
 
-class ThinkFormatRewardTester(unittest.TestCase):
+class ThinkFormatRewardTester(TrlTestCase):
     def test_valid_format(self):
         completions = [
             "<think>This is my reasoning.</think>This is my answer.",  # Simple, one-line reasoning
@@ -59,6 +61,31 @@ class ThinkFormatRewardTester(unittest.TestCase):
         expected_rewards = [1.0, 1.0, 0.0, 0.0]
         rewards = think_format_reward(completions)
         self.assertEqual(rewards, expected_rewards)
+
+
+class SoftOverlongPunishmentRewardTester(unittest.TestCase):
+    def test_soft_overlong_punishment_short_completion(self):
+        """Test soft overlong punishment reward function with a short completion."""
+        # length 50, with max=100 and soft cache=20, reward should be 0.
+        reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
+        completion_ids = [[1] * 50]  # 50 <= 80
+        rewards = reward_fn(completion_ids=completion_ids)
+        self.assertEqual(rewards, [0])
+
+    def test_soft_overlong_punishment_long_completion(self):
+        """Test soft overlong punishment reward function with a longer than max completion."""
+        # 110 > 100, reward should be -1.
+        reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
+        completion_ids = [[1] * 110]
+        rewards = reward_fn(completion_ids)
+        self.assertEqual(rewards, [-1])
+
+    def test_soft_overlong_punishment_intermediate_completion(self):
+        """Test soft overlong punishment reward function for intermediate length completion."""
+        reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
+        completion_ids = [[1] * 90]  # 90 is between 80 and 100
+        rewards = reward_fn(completion_ids)
+        self.assertAlmostEqual(rewards[0], -0.5, places=4)
 
 
 if __name__ == "__main__":

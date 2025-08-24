@@ -61,14 +61,7 @@ python trl/scripts/kto.py \
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
-from trl import (
-    KTOConfig,
-    KTOTrainer,
-    ModelConfig,
-    ScriptArguments,
-    get_peft_config,
-    setup_chat_format,
-)
+from trl import KTOConfig, KTOTrainer, ModelConfig, ScriptArguments, get_peft_config
 
 
 if __name__ == "__main__":
@@ -88,10 +81,6 @@ if __name__ == "__main__":
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    # If we are aligning a base model, we use ChatML as the default template
-    if tokenizer.chat_template is None:
-        model, tokenizer = setup_chat_format(model, tokenizer)
 
     # Load the dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
