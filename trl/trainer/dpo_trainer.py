@@ -356,7 +356,7 @@ class DPOTrainer(Trainer):
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
-            if args.loss_type not in ["sigmoid", "apo_zero", "apo_down","sppo_hard", "nca_pair"]:
+            if args.loss_type not in ["sigmoid", "apo_zero", "apo_down", "sppo_hard", "nca_pair"]:
                 raise ValueError(
                     "You set `use_liger_loss=True` but the loss type is not from `[sigmoid, apo_zero, apo_down, sppo_hard, nca_pair`. "
                     "Please set `loss_type='[sigmoid | apo_zero | apo_down | sppo_hard | nca_pair]'` to use the liger kernel."
@@ -366,7 +366,7 @@ class DPOTrainer(Trainer):
                 beta=args.beta,
                 use_ref_model=not args.reference_free,
                 average_log_prob=False,
-                loss_type=args.loss_type
+                loss_type=args.loss_type,
             )
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
