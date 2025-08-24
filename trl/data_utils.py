@@ -62,14 +62,14 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int)
         if message["role"] == "system":
             if isinstance(message["content"], str):  # if already prepared, the content will be a list
                 message["content"] = [{"type": "text", "text": message["content"]}]
-        if message["role"] == "user":
+        elif message["role"] == "user":
             if isinstance(message["content"], str) and not image_included:
                 placeholders = [{"type": "image"}] * num_images
                 message["content"] = [*placeholders, {"type": "text", "text": message["content"]}]
                 image_included = True
             elif isinstance(message["content"], str) and image_included:
                 message["content"] = [{"type": "text", "text": message["content"]}]
-        if message["role"] == "assistant":
+        elif message["role"] == "assistant":
             if isinstance(message["content"], str):
                 message["content"] = [{"type": "text", "text": message["content"]}]
         else:
