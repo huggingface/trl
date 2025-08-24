@@ -249,10 +249,6 @@ class GKDTrainerTester(TrlTestCase):
     def test_gkd_trainer_with_liger(self):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
-            dataloader_drop_last=True,
-            eval_strategy="no",
-            max_steps=2,
-            per_device_train_batch_size=2,
             report_to="none",
             use_liger_kernel=True,
         )
