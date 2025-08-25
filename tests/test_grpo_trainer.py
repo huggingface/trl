@@ -28,7 +28,7 @@ from transformers.testing_utils import require_liger_kernel, require_peft, requi
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.rloo_final import (
+from trl.trainer.grpo_trainer import (
     RepeatSampler,
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
