@@ -220,13 +220,19 @@ def split_tensor_dict(
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     chunk_size = first_tensor.shape[0] // num_chunks
-    return [
-        {
-            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
-            for key, tensor in tensor_dict.items()
-        }
-        for i in range(num_chunks)
-    ]
+    chunks = []
+    for i in range(num_chunks):
+        chunk_dict = {}
+        for key, tensor in tensor_dict.items():
+            if tensor is not None and tensor.ndim > 0:
+                chunk_dict[key] = tensor[i * chunk_size : (i + 1) * chunk_size]
+            elif tensor is not None and tensor.ndim == 0:
+                chunk_dict[key] = tensor
+            else:
+                chunk_dict[key] = None
+        chunks.append(chunk_dict)
+    return chunks
+
 
 
 def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
