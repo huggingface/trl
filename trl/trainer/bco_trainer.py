@@ -16,7 +16,6 @@ import inspect
 import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from operator import itemgetter
@@ -28,8 +27,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
-from accelerate.logging import get_logger
+from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset
 from torch import autocast
@@ -52,7 +50,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput, has_length
 from transformers.utils import is_peft_available
 
-from ..data_utils import maybe_apply_chat_template
+from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..import_utils import is_joblib_available
 from ..models import create_reference_model, prepare_deepspeed
 from .bco_config import BCOConfig
@@ -82,9 +80,9 @@ if is_joblib_available():
     import joblib
 
 if TYPE_CHECKING:
-    from transformers import PreTrainedModel, PreTrainedTokenizer
+    from transformers import PreTrainedTokenizer
 
-logger = get_logger(__name__)
+logger = logging.get_logger(__name__)
 
 RUNNING_NAME = "running.json"
 CLF_NAME = "clf.pkl"
@@ -495,20 +493,18 @@ class BCOTrainer(Trainer):
                 "max_length or a processing_class must be specified when using the default DPODataCollatorWithPadding"
             )
         if args.max_length is None:
-            warnings.warn(
+            logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_length` in the `BCOConfig`. "
                 "It will be set to `512` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_length = 512
         if args.max_length is not None:
             max_length = args.max_length
 
         if args.max_prompt_length is None:
-            warnings.warn(
+            logger.warning(
                 "When using DPODataCollatorWithPadding, you should set `max_prompt_length` in the `BCOConfig`. "
                 "It will be set to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_prompt_length = 128
         if args.max_prompt_length is not None:
@@ -516,10 +512,9 @@ class BCOTrainer(Trainer):
 
         max_completion_length = None
         if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
+            logger.warning(
                 "When using DPODataCollatorWithPadding with an encoder decoder architecture, you should set `max_completion_length` in the BCOTrainer's init"
                 " it will be set to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_completion_length = 128
         if args.max_completion_length is not None and self.is_encoder_decoder:
@@ -535,10 +530,9 @@ class BCOTrainer(Trainer):
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
-                warnings.warn(
+                logger.warning(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your BCOConfig"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_dpo_data_collator = True
@@ -573,12 +567,11 @@ class BCOTrainer(Trainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
 
         # Underlying Distribution Matching argument
@@ -595,11 +588,27 @@ class BCOTrainer(Trainer):
         model.warnings_issued["estimate_tokens"] = True
 
         with PartialState().main_process_first():
+            # Extract the prompt if needed
+            train_dataset = train_dataset.map(
+                maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from train dataset"
+            )
+            # Unpair the dataset if needed
+            train_dataset = maybe_unpair_preference_dataset(
+                train_dataset, args.dataset_num_proc, desc="Unpairing train dataset"
+            )
             # Apply the chat template if needed
             train_dataset = train_dataset.map(
                 maybe_apply_chat_template, fn_kwargs={"tokenizer": processing_class}, num_proc=args.dataset_num_proc
             )
             if eval_dataset is not None:
+                # Extract the prompt if needed
+                eval_dataset = eval_dataset.map(
+                    maybe_extract_prompt, num_proc=args.dataset_num_proc, desc="Extracting prompt from eval dataset"
+                )
+                # Unpair the dataset if needed
+                eval_dataset = maybe_unpair_preference_dataset(
+                    eval_dataset, args.dataset_num_proc, desc="Unpairing eval dataset"
+                )
                 eval_dataset = eval_dataset.map(
                     maybe_apply_chat_template,
                     fn_kwargs={"tokenizer": processing_class},
@@ -1407,11 +1416,11 @@ class BCOTrainer(Trainer):
             random_batch = self._prepare_inputs(random_batch)
 
             target_labels = torch.tensor(random_batch["label"], dtype=torch.bool, device=self.accelerator.device)
-            target_indicies = torch.where(~target_labels)[0]
+            target_indices = torch.where(~target_labels)[0]
             target_batch = {
-                "prompt_input_ids": random_batch["prompt_input_ids"][target_indicies],
-                "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indicies],
-                "prompt": itemgetter(*target_indicies)(random_batch["prompt"]),
+                "prompt_input_ids": random_batch["prompt_input_ids"][target_indices],
+                "prompt_attention_mask": random_batch["prompt_attention_mask"][target_indices],
+                "prompt": itemgetter(*target_indices)(random_batch["prompt"]),
             }
             policy_output_decoded, ref_output_decoded = self.generate_from_model_and_ref(self.model, target_batch)
 
