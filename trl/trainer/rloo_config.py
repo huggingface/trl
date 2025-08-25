@@ -94,7 +94,7 @@ class RLOOConfig_NEW(TrainingArguments):
         generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
             using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
-            as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
+            as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
             parameters (like `min_p`, `top_p`, etc.), they will override them.
         > Parameters that control generation acceleration powered by vLLM
 
@@ -147,10 +147,6 @@ class RLOOConfig_NEW(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        delta: (`float` or `None`, *optional*, defaults to `None`):
-            Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
-            GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
-            the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
@@ -450,14 +446,6 @@ class RLOOConfig_NEW(TrainingArguments):
     epsilon: float = field(
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
-    )
-    delta: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` "
-            "(default), standard GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This "
-            "method is introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291)."
-        },
     )
     epsilon_high: Optional[float] = field(
         default=None,

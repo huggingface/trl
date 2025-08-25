@@ -56,7 +56,7 @@ from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
-from .rloo_finall_config import RLOOConfig_NEW
+from .rloo_config import RLOOConfig_NEW
 from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
@@ -1684,10 +1684,6 @@ class RLOOFinalTrainer(Trainer):
 
         coef_1 = torch.exp(log_importance_weights)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-
-        # Two-sided clipping
-        if self.args.delta is not None:
-            coef_1 = torch.clamp(coef_1, max=self.args.delta)
 
         per_token_loss1 = coef_1 * advantages.unsqueeze(1)
         per_token_loss2 = coef_2 * advantages.unsqueeze(1)
