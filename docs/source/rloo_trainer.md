@@ -74,7 +74,7 @@ Once we have the rewards for each completion, we compute a **baseline** as the a
 $$b_i = \frac{1}{N-1} \sum_{j \neq i} R_j$$
 
 
-This approach gives the method its name: **Leave One Out**.
+This approach gives the method its name: **Leave-One-Out**.
 
 To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
 
