@@ -49,8 +49,8 @@ class RLOOConfig_NEW(TrainingArguments):
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `2`):
-            Number of generations per prompt to sample. The effective batch size (num_processes *
-            per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
+            Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
+            * gradient_accumulation_steps) must be evenly divisible by this value.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -96,6 +96,7 @@ class RLOOConfig_NEW(TrainingArguments):
             using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
             as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
             parameters (like `min_p`, `top_p`, etc.), they will override them.
+
         > Parameters that control generation acceleration powered by vLLM
 
         use_vllm (`bool`, *optional*, defaults to `False`):
@@ -113,6 +114,7 @@ class RLOOConfig_NEW(TrainingArguments):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+
         vllm_server_base_url (`str` or `None`, *optional*, defaults to `None`):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `vllm_server_host` and
             `vllm_server_port` are ignored.
@@ -138,16 +140,17 @@ class RLOOConfig_NEW(TrainingArguments):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-            > Parameters that control the training
+
+        > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.05`):
-            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving
-            training speed.
+            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
+            speed.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        delta: (`float` or `None`, *optional*, defaults to `None`):
+        delta (`float` or `None`, *optional*, defaults to `None`):
             Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
             GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
             the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
@@ -156,18 +159,23 @@ class RLOOConfig_NEW(TrainingArguments):
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
-            keeps the raw per-token log-probability ratios (one weight per token).  `"sequence"` averages the
-            log-probability ratios across valid tokens to produce a single ratio per sequence. The
-            [GSPO paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
-            stable training and better alignment with  sequence-level rewards.
+            keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
+            log-probability ratios across valid tokens to produce a single ratio per sequence. The [GSPO
+            paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
+            stable training and better alignment with sequence-level rewards.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
-        scale_rewards (`bool`, *optional*, defaults to `True`):
-            Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), the rewards
-            are normalized by the standard deviation, ensuring they have unit variance. If `False`, no scaling is
-            applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
-            as scaling by the standard deviation introduces a question-level difficulty bias.
+        scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
+            Specifies the scaling strategy for rewards. Supported values are:
+
+            - `True` or `"group"` (default): rewards are scaled by the standard deviation within each group, ensuring
+              unit variance within a group.
+            - `"batch"`: rewards are scaled by the standard deviation across the entire batch, as recommended in the
+              [PPO Lite paper](https://huggingface.co/papers/2508.08221).
+            - `False` or `"none"`: no scaling is applied. The [Dr. GRPO
+              paper](https://huggingface.co/papers/2503.20783) recommends not scaling rewards, as scaling by the
+              standard deviation introduces a question-level difficulty bias.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -189,8 +197,8 @@ class RLOOConfig_NEW(TrainingArguments):
             ρ parameter from [Beyond the 80/20 Rule](https://huggingface.co/papers/2506.01939). Keeps in the policy
             loss term only the top-ρ quantile of tokens by entropy of the probability distribution at each sequence
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
-            `1.0` keeps all tokens. The paper recommends a value of `0.2`.
-            If used with `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
+            `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
+            `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         normalize_rewards (`bool`, *optional*, defaults to `False`):
             Whether to normalize rewards.
         normalize_advantages (`bool`, *optional*, defaults to `False`):
@@ -238,6 +246,7 @@ class RLOOConfig_NEW(TrainingArguments):
             "`fp16` is not set."
         },
     )
+
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[Union[dict, str]] = field(
         default=None,
@@ -439,8 +448,8 @@ class RLOOConfig_NEW(TrainingArguments):
     beta: float = field(
         default=0.05,
         metadata={
-            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and "
-            "improving training speed."
+            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
+            "training speed."
         },
     )
     num_iterations: int = field(
@@ -483,13 +492,16 @@ class RLOOConfig_NEW(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
-    scale_rewards: bool = field(
-        default=True,
+    scale_rewards: str = field(
+        default="group",
         metadata={
-            "help": "Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), "
-            "the rewards are normalized by the standard deviation, ensuring they have unit variance. If `False`, no "
-            "scaling is applied. The Dr. GRPO paper recommends not scaling the rewards, as scaling by the standard "
-            "deviation introduces a question-level difficulty bias."
+            "help": "Specifies the scaling strategy for rewards. Supported values are: "
+            "`True` or `group'` (default): rewards are scaled by the standard deviation within each group, ensuring "
+            "unit variance within a group. "
+            "`'batch'`: rewards are scaled by the standard deviation across the entire batch, as recommended in the "
+            "PPO Lite paper. "
+            "`False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
+            "scaling by the standard deviation introduces a question-level difficulty bias."
         },
     )
     mask_truncated_completions: bool = field(
@@ -527,7 +539,7 @@ class RLOOConfig_NEW(TrainingArguments):
         metadata={
             "help": "ρ parameter from Beyond the 80/20 Rule. Keeps in the policy loss term only the top-ρ quantile of "
             "tokens by entropy of the probability distribution at each sequence position, improving results. Range: "
-            "[0.0-1.0]. A value of `1.0` masks all but the highest entropy token; `0.0` keeps all tokens. The paper "
+            "[0.0-1.0]. A value of `0.0` masks all but the highest entropy token; `1.0` keeps all tokens. The paper "
             "recommends a value of `0.2`. If used with `mask_truncated_completions=True`, only tokens from "
             "non-truncated completions are considered."
         },
@@ -566,6 +578,7 @@ class RLOOConfig_NEW(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
         super().__post_init__()
 
         num_processes = self.world_size
@@ -589,6 +602,7 @@ class RLOOConfig_NEW(TrainingArguments):
             raise ValueError(
                 "'generation_batch_size' and 'steps_per_generation' can not be both configured at the same time"
             )
+
         if self.do_eval and self.eval_strategy != "no":
             # Just ensure the value is divisible by the global batch size
             if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
