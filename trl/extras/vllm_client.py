@@ -275,7 +275,7 @@ class VLLMClient:
             url,
             json={
                 "host": "localhost",
-                "port": self.group_port,
+                "port": self.server_port,
                 "world_size": world_size,
                 "client_device_uuid": client_device_uuid,
             },
