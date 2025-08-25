@@ -1,26 +1,24 @@
-# GRPO Trainer
+# RLOO Trainer
 
-[![](https://img.shields.io/badge/All_models-GRPO-blue)](https://huggingface.co/models?other=grpo,trl)
+[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
 
 ## Overview
 
 TRL supports the RLOO Trainer for training language models, as described in the paper [Back to Basics: Revisiting REINFORCE Style
-Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740) by [Arash Ahmadian](https://huggingface.co/ArashAhmadian) et all.
+Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740) by  [Arash Ahmadian](https://huggingface.co/ArashAhmadian), Chris Cremer, [Matthias Gallé](https://huggingface.co/mgalle), [Marzieh Fadaee](https://huggingface.co/MarziehFadaee), [Julia Kreutzer](https://huggingface.co/JuliaKreutzerCohere), [Ahmet Üstün](https://huggingface.co/ahmetu) and [Sara Hooker](https://huggingface.co/sarahooker).
 
 The abstract from the paper is the following:
 
 > AI alignment in the shape of Reinforcement Learning from Human Feedback (RLHF) is increasingly treated as a crucial ingredient for high performance large language models. Proximal Policy Optimization (PPO) has been positioned by recent literature as the canonical method for the RL part of RLHF However, it involves both high computational cost and sensitive hyperparameter tuning. We posit that most of the motivational principles that led to the development of PPO are less of a practical concern in RLHF and advocate for a less computationally expensive method that preserves and even increases performance. We revisit the formulation of alignment from human preferences in the context of RL. Keeping simplicity as a guiding principle, we show that many components of PPO are unnecessary in an RLHF context and that far simpler REINFORCE-style optimization variants outperform both PPO and newly proposed “RL-free” methods such as DPO and RAFT. Our work suggests that careful adaptation to LLMs alignment characteristics enables benefiting from online RL optimization at low cost.
 
-## Quick start
-
-This post-training method was contributed by [Shirin Yamani](https://huggingface.co/ShirinYamani).
+This post-training method was contributed by [Costa Huang](https://github.com/vwxyzjn) and later refactored by [Shirin Yamani](https://huggingface.co/ShirinYamani).
 
 ## Quick start
 
-This example demonstrates how to train a model using the RLOO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
+This example demonstrates how to train a model using the RLOO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [UltraFeedback prompts dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -31,19 +29,20 @@ Below is the script to train the model.
 ```python
 # train_rloo.py
 from datasets import load_dataset
-from trl import RLOOConfig, RLOOTrainer
+from trl import GRPOConfig, GRPOTrainer
 
-dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
+dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-def reward_func(completions, **kwargs):
+# Dummy reward function for demonstration purposes
+def reward_num_unique_letters(completions, **kwargs):
     """Reward function that rewards completions with more unique letters."""
     completion_contents = [completion[0]["content"] for completion in completions]
     return [float(len(set(content))) for content in completion_contents]
 
-training_args = RLOOConfig_NEW(output_dir="Qwen2-0.5B-RLOO")
-trainer = RLOOFinalTrainer(
+training_args = RLOOConfig(output_dir="Qwen2-0.5B-GRPO")
+trainer = RLOOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_len,
+    reward_funcs=reward_num_unique_letters,
     args=training_args,
     train_dataset=dataset,
 )
@@ -68,10 +67,39 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 
 ### Computing the advantage
 
-For each of the  \\( G \\) sequences, we compute the reward using a reward model or reward function. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. 
+In RLOO, the reward consists of two components: the reward provided by the reward model (or reward function) and a KL penalty term.
+
+1. For each of the  \\( G \\) generated sequences, we compute a scalar reward using a reward model or reward function.
+2. At the same time, we estimate the divergence between the current policy $\pi_\theta$ and a fixed reference policy $\pi_{\text{ref}}$ (usually the initial version of the model). For a sequence of tokens, the KL divergence estimate is:
+
+    $$
+    \mathbb{D}_{\mathrm{KL}}\!\left[\pi_\theta \|\pi_{\mathrm{ref}}\right] 
+    = \sum_{t=1}^T \log \frac{\pi_\theta(o_{i,t} \mid q, o_{i,<t})}
+    {\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})},
+    $$
+
+    where the sum runs over all tokens  \\( t \\) in the sequence.
+
+
+---
+
+
+It acts as a **penalty term** in the reward to discourage excessive manipulation of the output for reward hacking. The formula for KL divergence is:
+
+For a sequence of tokens, the total KL divergence is:
+
+$$\text{KL} = \sum_{t=1}^T \left[ \log \pi_\theta(a_t|s) - \log \pi_{\text{ref}}(a_t|s) \right]$$
+
+This is the **expected difference in log probabilities** between the current policy and the reference model over the generated sequence.
+
+> 🔍 Note: This is the **KL** and is commonly used in practice because it's easy to compute via log-prob ratios and in original RLOO implementation this is computated as the diff between the old policy model and the reference model (**old_policy - ref_policy**).
+
+
+
+To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. 
 Once we have the rewards for each completion, we compute a **baseline** as the average reward of all other samples in the same batch, excluding the current sample. It is used to reduce the variance of the policy gradient estimate in reinforcement learning.  
 
-$$b_i = \frac{1}{N-1} \sum_{j \neq i} R_j$$
+$$b_i = \frac{1}{G-1} \sum_{j \neq i} R_j$$
 
 
 This approach gives the method its name: **Leave-One-Out**.
@@ -101,42 +129,6 @@ trainer = GRPOTrainer(
 and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
 
 Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
-
-## Vision-Language Model (VLM) Training
-
-GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
-
-### Supported Models
-
-Tested with:
-
-- **Gemma3** — e.g., `google/gemma-3-4b-it`
-- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
-- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
-- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
-- **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
-  
-<Tip>
-Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
-</Tip>
-
-### Quick Start
-
-Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
-
-### Estimating the KL divergence
-
-
-The **KL (Kullback-Leibler) divergence** measures how much the output token distribution of the current policy $ \pi_\theta $ differs from that of a fixed **reference model** $ \pi_{\text{ref}} $ (usually the initial fine-tuned model). It acts as a **penalty term** in the reward to discourage excessive manipulation of the output for reward hacking. The formula for KL divergence is:
-
-For a sequence of tokens, the total KL divergence is:
-
-$$\text{KL} = \sum_{t=1}^T \left[ \log \pi_\theta(a_t|s) - \log \pi_{\text{ref}}(a_t|s) \right]$$
-
-
-This is the **expected difference in log probabilities** between the current policy and the reference model over the generated sequence.
-
-> 🔍 Note: This is the **KL** and is commonly used in practice because it's easy to compute via log-prob ratios and in original RLOO implementation this is computated as the diff between the old policy model and the reference model (**old_policy - ref_policy**). 
 
 ### Computing the loss
 
