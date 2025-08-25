@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -26,38 +27,41 @@ In general, the optimal configuration for ORPO will be similar to that of DPO wi
 # regular:
 python examples/scripts/orpo.py \
     --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
+    --model_name_or_path gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
     --learning_rate 8e-6 \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
-    --output_dir="gpt2-aligned-orpo" \
+    --output_dir "gpt2-aligned-orpo" \
     --warmup_steps 150 \
-    --report_to wandb \
     --logging_first_step \
     --no_remove_unused_columns
 
 # peft:
 python examples/scripts/orpo.py \
     --dataset_name trl-internal-testing/hh-rlhf-helpful-base-trl-style \
-    --model_name_or_path=gpt2 \
+    --model_name_or_path gpt2 \
     --per_device_train_batch_size 4 \
     --max_steps 1000 \
     --learning_rate 8e-5 \
     --gradient_accumulation_steps 1 \
     --eval_steps 500 \
-    --output_dir="gpt2-lora-aligned-orpo" \
+    --output_dir "gpt2-lora-aligned-orpo" \
     --optim rmsprop \
     --warmup_steps 150 \
-    --report_to wandb \
     --logging_first_step \
     --no_remove_unused_columns \
     --use_peft \
-    --lora_r=16 \
-    --lora_alpha=16
+    --lora_r 16 \
+    --lora_alpha 16
 """
 
+from transformers.integrations import is_trackio_available
+
+
+if is_trackio_available():
+    import trackio
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
@@ -88,6 +92,12 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
+    # Initialize trackio if specified
+    if is_trackio_available() and "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
     ################
     # Training
     ################
@@ -107,3 +117,8 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+
+    if is_trackio_available() and "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.finish()

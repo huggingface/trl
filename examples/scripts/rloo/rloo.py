@@ -15,11 +15,17 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trackio",
 # ]
 # ///
 
 import shutil
 
+from transformers.integrations import is_trackio_available
+
+
+if is_trackio_available():
+    import trackio
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
@@ -40,7 +46,7 @@ python -i examples/scripts/rloo/rloo.py \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-rloo \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
@@ -51,7 +57,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     examples/scripts/rloo/rloo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
-    --output_dir models/minimal/rloo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-rloo \
     --rloo_k 2 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
@@ -125,6 +131,12 @@ if __name__ == "__main__":
         train_dataset = prepare_dataset(train_dataset, tokenizer)
         eval_dataset = prepare_dataset(eval_dataset, tokenizer)
 
+    # Initialize trackio if specified
+    if is_trackio_available() and "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+
     ################
     # Training
     ################
@@ -145,3 +157,8 @@ if __name__ == "__main__":
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trainer.generate_completions()
+
+    if is_trackio_available() and "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.finish()

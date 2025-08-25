@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -61,6 +62,7 @@ python trl/scripts/sft.py \
 """
 
 import argparse
+import os
 
 from accelerate import logging
 from datasets import load_dataset
@@ -134,6 +136,10 @@ def main(script_args, training_args, model_args, dataset_args):
         )
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
+
+    # Initialize trackio
+    os.environ["TRACKIO_PROJECT"] = training_args.output_dir
+    os.environ["TRACKIO_SPACE_ID"] = training_args.output_dir + "-trackio"
 
     # Initialize the SFT trainer
     trainer = SFTTrainer(

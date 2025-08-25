@@ -19,6 +19,8 @@
 - sections:
   - local: clis
     title: Command Line Interface (CLI)
+  - local: jobs_training
+    title: Training using Jobs
   - local: customization
     title: Customizing the Training
   - local: reducing_memory_usage
