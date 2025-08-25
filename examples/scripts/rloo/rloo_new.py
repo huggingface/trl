@@ -14,12 +14,11 @@
 
 import tempfile
 
-import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl.trainer.rloo_final_trainer import RLOOFinalTrainer
-from trl.trainer.rloo_finall_config import RLOOConfig_NEW
+from trl.trainer.rloo_trainer import RLOOFinalTrainer
+from trl.trainer.rloo_config import RLOOConfig_NEW
 
 
 def reward_func(completions, **kwargs):
@@ -39,16 +38,11 @@ def main():
         training_args = RLOOConfig_NEW(
             output_dir=tmp_dir,
             per_device_train_batch_size=2,
-            learning_rate=1e-6,
             num_generations=2,
             report_to="none",
-            beta=0,
             max_steps=6,
             importance_sampling_level="sequence",
-            log_completions=True,
-            num_completions_to_print=2,
             logging_steps=1,
-            num_iterations=1,
         )
 
         trainer = RLOOFinalTrainer(
@@ -59,29 +53,7 @@ def main():
             processing_class=tokenizer,
         )
 
-        # Check initial weights
-        initial_weights = policy_model.state_dict()
-        print("Sample weights before training:")
-        for name, param in list(initial_weights.items())[:3]:
-            print(f"{name}: {param.flatten()[:5]}")
-
         trainer.train()
-
-        # Check final weights
-        final_weights = policy_model.state_dict()
-        print("\nSample weights after training:")
-        for name, param in list(final_weights.items())[:3]:
-            print(f"{name}: {param.flatten()[:5]}")
-
-        # Check if weights changed
-        weights_changed = False
-        for name in initial_weights:
-            if not torch.equal(initial_weights[name], final_weights[name]):
-                weights_changed = True
-                break
-        print(f"\nWeights changed: {weights_changed}")
-        print("Training completed successfully!")
-
 
 if __name__ == "__main__":
     main()
