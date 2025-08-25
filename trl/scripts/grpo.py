@@ -27,7 +27,6 @@ import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
-import trackio
 from accelerate import logging
 from datasets import load_dataset
 
@@ -119,11 +118,9 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    # Initialize trackio if specified
-    if "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
+    # Initialize trackio
+    os.environ["TRACKIO_PROJECT"] = training_args.output_dir
+    os.environ["TRACKIO_SPACE_ID"] = training_args.output_dir + "-trackio"
 
     # Initialize the GRPO trainer
     trainer = GRPOTrainer(
@@ -142,8 +139,6 @@ def main(script_args, training_args, model_args, dataset_args):
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-    trackio.finish()
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):

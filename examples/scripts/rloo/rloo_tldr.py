@@ -21,7 +21,6 @@
 
 import shutil
 
-import trackio
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
@@ -30,6 +29,11 @@ from transformers import (
     AutoTokenizer,
     HfArgumentParser,
 )
+from transformers.integrations import is_trackio_available
+
+
+if is_trackio_available():
+    import trackio
 
 from trl import ModelConfig, RLOOConfig, RLOOTrainer, ScriptArguments
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
@@ -40,7 +44,7 @@ python examples/scripts/rloo/rloo_tldr.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --dataset_test_split validation \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-rloo \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 64 \
     --total_episodes 30000 \
@@ -55,7 +59,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     examples/scripts/rloo/rloo_tldr.py \
     --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
     --dataset_test_split validation \
-    --output_dir models/minimal/rloo_tldr \
+    --output_dir pythia-1b-deduped-tldr-preference-sft-trl-style-rloo \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 3e-6 \
@@ -131,7 +135,7 @@ if __name__ == "__main__":
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
 
     # Initialize trackio if specified
-    if "trackio" in (
+    if is_trackio_available() and "trackio" in (
         training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
     ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
@@ -156,4 +160,7 @@ if __name__ == "__main__":
 
     trainer.generate_completions()
 
-    trackio.finish()
+    if is_trackio_available() and "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.finish()

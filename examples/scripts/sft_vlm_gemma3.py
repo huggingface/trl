@@ -57,7 +57,11 @@ import os
 import zipfile
 
 import torch
-import trackio
+from transformers.integrations import is_trackio_available
+
+
+if is_trackio_available():
+    import trackio
 from datasets import DatasetDict, load_dataset
 from huggingface_hub import hf_hub_download, list_repo_files
 from PIL import Image
@@ -168,7 +172,7 @@ def main():
         dataset = prepare_dataset(dataset, script_args.dataset_name)
 
     # Initialize trackio if specified
-    if "trackio" in (
+    if is_trackio_available() and "trackio" in (
         training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
     ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
@@ -191,7 +195,10 @@ def main():
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
-    trackio.finish()
+    if is_trackio_available() and "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.finish()
 
 
 if __name__ == "__main__":

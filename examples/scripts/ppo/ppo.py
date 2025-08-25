@@ -23,7 +23,6 @@
 import shutil
 
 import torch
-import trackio
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
@@ -32,6 +31,11 @@ from transformers import (
     AutoTokenizer,
     HfArgumentParser,
 )
+from transformers.integrations import is_trackio_available
+
+
+if is_trackio_available():
+    import trackio
 
 from trl import (
     ModelConfig,
@@ -50,7 +54,7 @@ python -i examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
@@ -61,7 +65,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 3e-6 \
@@ -156,7 +160,7 @@ if __name__ == "__main__":
         eval_dataset = prepare_dataset(eval_dataset, tokenizer)
 
     # Initialize trackio if specified
-    if "trackio" in (
+    if is_trackio_available() and "trackio" in (
         training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
     ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
@@ -184,4 +188,7 @@ if __name__ == "__main__":
 
     trainer.generate_completions()
 
-    trackio.finish()
+    if is_trackio_available() and "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.finish()

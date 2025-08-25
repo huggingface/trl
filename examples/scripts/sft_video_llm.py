@@ -58,7 +58,11 @@ from typing import Any
 
 import requests
 import torch
-import trackio
+from transformers.integrations import is_trackio_available
+
+
+if is_trackio_available():
+    import trackio
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
@@ -230,7 +234,7 @@ if __name__ == "__main__":
     prepared_dataset = [prepare_dataset(example, script_args.video_cache_dir) for example in dataset]
 
     # Initialize trackio if specified
-    if "trackio" in (
+    if is_trackio_available() and "trackio" in (
         training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
     ):
         trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
@@ -259,4 +263,7 @@ if __name__ == "__main__":
     del model
     del trainer
     torch.cuda.empty_cache()
-    trackio.finish()
+    if is_trackio_available() and "trackio" in (
+        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
+    ):
+        trackio.finish()
