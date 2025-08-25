@@ -156,7 +156,7 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     ...
-    scale_rewards="group",
+    scale_rewards="batch",
     loss_type="bnpo",
     # Other parameters used
     beta=0.0,  # = init_kl_coef in the paper
