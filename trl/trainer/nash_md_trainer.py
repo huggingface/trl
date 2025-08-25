@@ -74,7 +74,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        reward_model (`transformers.PreTrainedModel`):
+        reward_funcs (`transformers.PreTrainedModel`):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
@@ -103,6 +103,13 @@ class NashMDTrainer(OnlineDPOTrainer):
             The optimizer and scheduler to use for training.
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
+
+    .. deprecated:: 0.22.0
+        The following parameters are deprecated and will be removed in a future version:
+
+        * `reward_model`: Use `reward_funcs` instead. For example, change `reward_model=model` to `reward_funcs=model`.
+        * `reward_processing_class`: Use `reward_processing_classes` instead. For example, change
+          `reward_processing_class=tokenizer` to `reward_processing_classes=tokenizer`.
     """
 
     _tag_names = ["trl", "nash-md"]
@@ -111,8 +118,11 @@ class NashMDTrainer(OnlineDPOTrainer):
         self,
         model: Union[PreTrainedModel, nn.Module] = None,
         ref_model: Union[PreTrainedModel, nn.Module] = None,
-        reward_model: Union[PreTrainedModel, nn.Module, None] = None,
+        reward_funcs: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
+        # Deprecated parameters for backward compatibility
+        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
+        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         args: Optional[NashMDConfig] = None,
         data_collator: Optional[Callable] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -120,6 +130,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
+        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         peft_config: Optional[dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
@@ -129,14 +140,17 @@ class NashMDTrainer(OnlineDPOTrainer):
         super().__init__(
             model=model,
             ref_model=ref_model,
-            reward_model=reward_model,
+            reward_funcs=reward_funcs,
             judge=judge,
+            # Pass deprecated parameters through so parent can handle deprecation warnings
+            reward_model=reward_model,
+            reward_processing_class=reward_processing_class,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_class=processing_class,  # for now, NashMDTrainer can't use any reward model
+            reward_processing_classes=reward_processing_classes,
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
@@ -163,7 +177,10 @@ class NashMDTrainer(OnlineDPOTrainer):
             "beta": [],
             "mixture_coef": [],
         }
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
+            self.reward_funcs = self.reward_funcs[
+                0
+            ]  # only support one reward function / reward model for NashMDTrainer
             self.stats["rewards/chosen"] = []
             self.stats["rewards/rejected"] = []
 
@@ -253,10 +270,10 @@ class NashMDTrainer(OnlineDPOTrainer):
     def _compute_rewards(self, model_data, mixture_data, context_length):
         with torch.no_grad():
             _, model_scores, _ = get_reward(
-                self.reward_model, model_data["input_ids"], self.processing_class.pad_token_id, context_length
+                self.reward_funcs, model_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
             _, mixture_scores, _ = get_reward(
-                self.reward_model, mixture_data["input_ids"], self.processing_class.pad_token_id, context_length
+                self.reward_funcs, mixture_data["input_ids"], self.processing_class.pad_token_id, context_length
             )
 
         # Apply EOS penalty if needed
@@ -377,7 +394,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         self.stats["logps/rejected"].append(gather_mean(ref_logprobs_model_data_sum))
 
         # Log rewards
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             self.stats["rewards/chosen"].append(gather_mean(model_scores))
             self.stats["rewards/rejected"].append(gather_mean(mixture_scores))
 
@@ -436,7 +453,7 @@ class NashMDTrainer(OnlineDPOTrainer):
         model_data, mixture_data = self._process_completions(model_output, mixture_output, prompts)
 
         # Compute rewards
-        if self.reward_model is not None:
+        if self.reward_funcs is not None:
             model_scores, mixture_scores = self._compute_rewards(model_data, mixture_data, context_length)
             # probability of the model data vs the mixture data
             probability = F.sigmoid(model_scores - mixture_scores)
