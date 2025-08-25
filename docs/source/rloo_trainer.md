@@ -2,292 +2,464 @@
 
 [![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
 
-TRL supports training LLMs with REINFORCE Leave-One-Out (RLOO). The idea is that instead of using a value function, RLOO generates K completions for each prompt. For each completion, RLOO uses the mean scores from the other K-1 completions as a baseline to calculate the advantage. RLOO also models the entire completion as a single action, whereas PPO models each token as an action. Note that REINFORCE / A2C is a special case of PPO, when the number of PPO epochs is 1 and the number of mini-batches is 1, which is how we implement RLOO in TRL.
+## Overview
 
-References:
-- [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740)
-- [A2C is a special case of PPO](https://huggingface.co/papers/2205.09123)
-- [Fine-Tuning Language Models from Human Preferences](https://github.com/openai/lm-human-preferences)
-- [Learning to Summarize from Human Feedback](https://github.com/openai/summarize-from-feedback)
-- [The N Implementation Details of RLHF with PPO](https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo)
-- [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031)
+TRL supports the RLOO Trainer for training language models, as described in the paper [Back to Basics: Revisiting REINFORCE Style
+Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740) by [Arash Ahmadian](https://huggingface.co/ArashAhmadian) et all.
 
-## Get started
+The abstract from the paper is the following:
 
-To just run a RLOO script to make sure the trainer can run, you can run the following command to train a RLOO model with a dummy reward model.
-
-```bash
-python examples/scripts/rloo/rloo.py \
-    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
-    --dataset_train_split descriptiveness \
-    --learning_rate 3e-6 \
-    --output_dir models/minimal/rloo \
-    --per_device_train_batch_size 64 \
-    --gradient_accumulation_steps 1 \
-    --total_episodes 10000 \
-    --model_name_or_path EleutherAI/pythia-14m \
-    --reward_model_path EleutherAI/pythia-14m \
-    --missing_eos_penalty 1.0
-```
+> AI alignment in the shape of Reinforcement Learning from Human Feedback (RLHF) is increasingly treated as a crucial ingredient for high performance large language models. Proximal Policy Optimization (PPO) has been positioned by recent literature as the canonical method for the RL part of RLHF However, it involves both high computational cost and sensitive hyperparameter tuning. We posit that most of the motivational principles that led to the development of PPO are less of a practical concern in RLHF and advocate for a less computationally expensive method that preserves and even increases performance. We revisit the formulation of alignment from human preferences in the context of RL. Keeping simplicity as a guiding principle, we show that many components of PPO are unnecessary in an RLHF context and that far simpler REINFORCE-style optimization variants outperform both PPO and newly proposed “RL-free” methods such as DPO and RAFT. Our work suggests that careful adaptation to LLMs alignment characteristics enables benefiting from online RL optimization at low cost.
 
 
-## Explanation of the logged metrics
+This post-training method was contributed by [Shirin Yamani](https://huggingface.co/ShirinYamani).
 
-The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34)
+## Quick start
 
-<!-- * `rlhf_reward_var_per_prompt`: calculated by `rlhf_reward.var(0).mean()`. This is the variance of the rewards estimated across the `args.rloo_k` samples. Usually we expect it to go down (cause policy entropy goes down). -->
+This example demonstrates how to train a model using the RLOO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
 
-* `eps`: Tracks the number of episodes per second.
-* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
-* `objective/entropy`: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
-* `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
-* `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
-* `objective/scores`: The mean scores returned by the reward model / environment.
-* `policy/approxkl_avg`: The average approximate KL divergence between consecutive PPO policies. Note that this is not the same as `objective/kl`.
-* `policy/clipfrac_avg`: The average fraction of policy updates that are clipped, indicating how often the policy updates are constrained to prevent large changes.
-* `loss/policy_avg`: The average policy loss, indicating how well the policy is performing.
-* `val/clipfrac_avg`: The average fraction of value function updates that are clipped, similar to policy/clipfrac_avg but for the value function.
-* `policy/entropy_avg`: The average entropy of the policy during training, indicating how diverse the policy's actions are.
-* `val/ratio`: The mean ratio of the current policy probability to the old policy probability, providing a measure of how much the policy has changed.
-* `val/ratio_var`: The variance of the `val/ratio`, indicating the variability in policy changes.
-* `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
-* `lr`: lr: The current learning rate used by the optimizer.
-* `episode`: episode: The current global step or episode count in the training process.
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
 
-
-## Cookbook
-
-* Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
-* Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try understand why this is happening and try to fix it.
-* Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
-* Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
-* Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtracts a static scalar penalty from the score of completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.
-
-
-## What is my model doing exactly?
-
-To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
-
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2_completions.gif)
-
-
-In the logs the sampled generations look like 
-
-```
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ query                           ┃ model response                  ┃ score    ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│  SUBREDDIT: r/AskReddit         │  I'm in love with a friend, and │ 3.921875 │
-│                                 │ I don't know how to get rid of  │          │
-│ TITLE: How do you get someone   │ those feelings. I'm             │          │
-│ out of your head?               │ desperate.<|endoftext|>[PAD][P… │          │
-│                                 │                                 │          │
-│ POST: Hi,                       │                                 │          │
-│ I'm 22, and I have been with my │                                 │          │
-│ girlfriend for 5 years now. We  │                                 │          │
-│ recently moved together. We've  │                                 │          │
-│ always loved each other         │                                 │          │
-│ intensely.                      │                                 │          │
-│                                 │                                 │          │
-│ Problem, I recently started to  │                                 │          │
-│ have feelings for an other      │                                 │          │
-│ person (a friend). This person  │                                 │          │
-│ has had a boyfriend for now 3   │                                 │          │
-│ years, and has absolutely no    │                                 │          │
-│ ideas. Those feelings were so   │                                 │          │
-│ strong, it was hard to hide     │                                 │          │
-│ them. After 2 months of me      │                                 │          │
-│ being distant and really sad,   │                                 │          │
-│ my girlfriend forced me to say  │                                 │          │
-│ what was bothering me. I'm not  │                                 │          │
-│ a good liar, and now she knows. │                                 │          │
-│                                 │                                 │          │
-│ We decided to give us a week    │                                 │          │
-│ alone, I went to my parents.    │                                 │          │
-│                                 │                                 │          │
-│ Now, I'm completely lost. I     │                                 │          │
-│ keep on thinking about this     │                                 │          │
-│ person, and I hate that. I      │                                 │          │
-│ would like for those feelings   │                                 │          │
-│ to go away, to leave me alone.  │                                 │          │
-│ But I can't.                    │                                 │          │
-│                                 │                                 │          │
-│ What do I do? It's been 3       │                                 │          │
-│ months now, and I'm just        │                                 │          │
-│ desperate.                      │                                 │          │
-│                                 │                                 │          │
-│ TL;DR:                          │                                 │          │
-├─────────────────────────────────┼─────────────────────────────────┼──────────┤
-│  SUBREDDIT: r/pettyrevenge      │  My mom woke me up with a loud  │ 6.84375  │
-│                                 │ TV. I blasted Gangnam Style on  │          │
-│ TITLE: So, my mom woke me up    │ repeat, with the bass cranked   │          │
-│ with a loud TV.                 │ up as high as it could          │          │
-│                                 │ go.<|endoftext|>[PAD][PAD][PAD… │          │
-│ POST: She was in her living     │                                 │          │
-│ room, watching TV. This was at  │                                 │          │
-│ about 8:30 in the morning, and  │                                 │          │
-│ she was exercising. She turned  │                                 │          │
-│ the TV up extra loud to hear it │                                 │          │
-│ over her excercycle, and woke   │                                 │          │
-│ me up. I went in there asking   │                                 │          │
-│ for her to turn it down. She    │                                 │          │
-│ said she didn't have to; I      │                                 │          │
-│ explained that I always used    │                                 │          │
-│ headphones so she didn't have   │                                 │          │
-│ to deal with my noise and that  │                                 │          │
-│ she should give me a little     │                                 │          │
-│ more respect, given that I paid │                                 │          │
-│ rent at the time.               │                                 │          │
-│                                 │                                 │          │
-│ She disagreed. I went back to   │                                 │          │
-│ my room, rather pissed off at   │                                 │          │
-│ the lack of equality. I had no  │                                 │          │
-│ lock on my door; but I had a    │                                 │          │
-│ dresser right next to it, so I  │                                 │          │
-│ pulled one of the drawers out   │                                 │          │
-│ enough so that it caused the    │                                 │          │
-│ door to not be openable. Then,  │                                 │          │
-│ I turned my speakers up really  │                                 │          │
-│ loud and blasted Gangnam Style  │                                 │          │
-│ on repeat, with the bass        │                                 │          │
-│ cranked up as high as it could  │                                 │          │
-│ go.                             │                                 │          │
-│                                 │                                 │          │
-│ If you hate Gangnam Style for   │                                 │          │
-│ being overplayed, you will see  │                                 │          │
-│ why I chose that particular     │                                 │          │
-│ song. I personally don't mind   │                                 │          │
-│ it. But here's the thing about  │                                 │          │
-│ my bass; it vibrates the walls, │                                 │          │
-│ making one hell of a lot of     │                                 │          │
-│ noise. Needless to say, my mom  │                                 │          │
-│ was not pleased and shut off    │                                 │          │
-│ the internet. But it was oh so  │                                 │          │
-│ worth it.                       │                                 │          │
-│                                 │                                 │          │
-│ TL;DR:                          │                                 │          │
-└─────────────────────────────────┴─────────────────────────────────┴──────────┘
-```
-
-## Implementation details
-
-The bulk of RLOOTrainer is based on the PPO implementation, which is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
-
-
-Below is a vectorized advantage calculation for RLOO:
+Below is the script to train the model.
 
 ```python
-def test_rloo_reward():
-    local_batch_size = 3
-    rloo_k = 4
-    rlhf_reward = torch.tensor([
-        1, 2, 3, # first rlhf reward for three prompts
-        2, 3, 4, # second rlhf reward for three prompts
-        5, 6, 7, # third rlhf reward for three prompts
-        8, 9, 10, # fourth rlhf reward for three prompts
-    ]).float() # here we have 3 prompts which have 4 completions each
+# train_rloo.py
+from datasets import load_dataset
+from trl import RLOOConfig, RLOOTrainer
 
-    baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
-    advantages = torch.zeros_like(rlhf_reward)
-    for i in range(0, len(advantages), local_batch_size):
-        other_response_rlhf_rewards = []
-        for j in range(0, len(advantages), local_batch_size):
-            if i != j:
-                other_response_rlhf_rewards.append(rlhf_reward[j : j + local_batch_size])
-        advantages[i : i + local_batch_size] = rlhf_reward[i : i + local_batch_size] - torch.stack(other_response_rlhf_rewards).mean(0)
-    
-    assert (1 - (2 + 5 + 8) / 3 - advantages[0].item()) < 1e-6  # First rlhf reward for the first prompt
-    assert (6 - (3 + 2 + 9) / 3 - advantages[7].item()) < 1e-6  # Third rlhf reward for the second prompt
+dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
-    # Vectorized implementation
-    rlhf_reward = rlhf_reward.reshape(rloo_k, local_batch_size)
-    baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
-    vec_advantages = rlhf_reward - baseline
-    torch.testing.assert_close(vec_advantages.flatten(), advantages)
+def reward_func(completions, **kwargs):
+    """Reward function that rewards completions with more unique letters."""
+    completion_contents = [completion[0]["content"] for completion in completions]
+    return [float(len(set(content))) for content in completion_contents]
+
+training_args = RLOOConfig_NEW(output_dir="Qwen2-0.5B-RLOO")
+trainer = RLOOFinalTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=reward_len,
+    args=training_args,
+    train_dataset=dataset,
+)
+trainer.train()
 ```
 
-## Benchmark experiments
-
-To validate the RLOO implementation works, we ran experiment on the 1B model. Here are the command we used to run the experiment. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
-
-```
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    --output_dir models/minimal/rloo_tldr \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
-    --dataset_test_split validation \
-    --num_ppo_epochs 2 \
-    --num_mini_batches 2 \
-    --learning_rate 3e-6 \
-    --per_device_train_batch_size 16 \
-    --gradient_accumulation_steps 16 \
-    --total_episodes 1000000 \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
-    --local_rollout_forward_batch_size 16 \
-    --missing_eos_penalty 1.0 \
-    --stop_token eos \
-    --kl_coef 0.03
-```
-
-Checkpoints and experiment tracking are available at:
-
-- [🤗 Model checkpoint](https://huggingface.co/vwxyzjn/rloo_tldr)
-- [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/u2sqci34)
-
-
-To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
-For more information on how to use judges, see [Judges](judges).
+Execute the script using the following command:
 
 ```bash
-$ python examples/scripts/evals/judge_tldr.py --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 33.00%
-$ python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/rloo_tldr --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 51.20%
+accelerate launch train_rloo.py
 ```
 
-The RLOO checkpoint gets a 51.2% preferred rate vs the 33.0% preference rate of the SFT checkpoint. This is a good sign that the RLOO training is working as intended.
+## Looking deeper into the RLOO method
+
+RLOO is an online learning algorithm, meaning it improves iteratively by using the data generated by the trained model itself during training. The intuition behind RLOO objective is to maximize the advantage of the generated completions, while ensuring that the model remains close to the reference policy. To understand how RLOO works, it can be broken down into four main steps: **Generating completions**, **computing the advantage**, **estimating the KL divergence**, and **computing the loss**.
+
+![RLOO](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/rloo.png)
+
+### Generating completions
+
+At each training step, we sample a batch of prompts and generate a set of  \\( G \\) completions for each prompt (denoted as  \\( o_i \\)).
+
+### Computing the advantage
+
+For each of the  \\( G \\) sequences, we compute the reward using a reward model or reward function. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. 
+Once we have the rewards for each completion, we compute a **baseline** as the average reward of all other samples in the same batch, excluding the current sample. It is used to reduce the variance of the policy gradient estimate in reinforcement learning.  
+
+$$b_i = \frac{1}{N-1} \sum_{j \neq i} R_j$$
 
 
-Metrics:
-
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/rloo.png)
+This approach gives the method its name: **Leave One Out**.
 
 
-```bash
-# pip install openrlbenchmark==0.2.1a5
-# see https://github.com/openrlbenchmark/openrlbenchmark#get-started for documentation
-# to use it, change `?we=huggingface&wpn=trl` to your own project and `?tag=pr-1540` to your own tag
-python -m openrlbenchmark.rlops_multi_metrics \
-    --filters '?we=huggingface&wpn=trl&xaxis=train/episode&ceik=output_dir&cen=sft_model_path&metrics=train/objective/rlhf_reward&metrics=train/objective/scores&metrics=train/objective/kl&metrics=train/objective/non_score_reward&metrics=train/objective/entropy&metrics=train/policy/approxkl_avg&metrics=train/policy/clipfrac_avg&metrics=train/loss/policy_avg&metrics=train/policy/entropy_avg&metrics=train/val/ratio&metrics=train/val/ratio_var&metrics=train/val/num_eos_tokens&metrics=train/lr&metrics=train/eps' \
-        "cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr?tag=pr-1540" \
-    --env-ids models/minimal/rloo_tldr \
-    --pc.ncols 4 \
-    --pc.ncols-legend 1 \
-    --pc.xlabel "Episode" \
-    --output-filename benchmark/trl/pr-1540/rloo \
-    --scan-history
+### Estimating the KL divergence
+
+
+The **KL (Kullback-Leibler) divergence** measures how much the output token distribution of the current policy $ \pi_\theta $ differs from that of a fixed **reference model** $ \pi_{\text{ref}} $ (usually the initial fine-tuned model). It acts as a **penalty term** in the reward to discourage excessive manipulation of the output for reward hacking. The formula for KL divergence is:
+
+For a sequence of tokens, the total KL divergence is:
+
+$$\text{KL} = \sum_{t=1}^T \left[ \log \pi_\theta(a_t|s) - \log \pi_{\text{ref}}(a_t|s) \right]$$
+
+
+This is the **expected difference in log probabilities** between the current policy and the reference model over the generated sequence.
+
+> 🔍 Note: This is the **KL** and is commonly used in practice because it's easy to compute via log-prob ratios and in original RLOO implementation this is computated as the diff between the old policy model and the reference model (**old_policy - ref_policy**). 
+
+### Computing the loss
+
+RLOO is a variant of the REINFORCE algorithm that uses a **batch-wise leave-one-out baseline** and often includes a **KL penalty** to prevent the policy from deviating too far from a reference model. The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:
+
+$$
+\mathcal{L} = -\mathbb{E}\left[ \nabla_\theta \log \pi_\theta(a|s) \cdot A \right]
+$$
+
+
+### What does REINFORCE suggests?
+The REINFORCE algorithm is a classic policy gradient method in reinforcement learning. It suggests using a "baseline" to reduce the variance of the policy gradient estimates. The baseline is typically the average reward observed so far (or a running average over a window of recent rewards). By subtracting this baseline from the actual reward, the algorithm focuses updates on actions that perform better or worse than average, rather than being influenced by the absolute scale of the rewards.
+
+
+In practice, for each step or episode, the policy is updated using the difference between the received reward and the baseline:
+
+$$b_{MA} = \frac{1}{S}\sum_{s} R(x_s, y_s)$$
+
+### What RLOO do inspired from REINFORCE?
+
+Inspired by REINFORCE's baseline approach, RLOO (Reinforcement Learning with Leave-One-Out) uses a different but related strategy for variance reduction. Instead of using a moving average, RLOO uses additional generations from the policy/language model as a mean to reduce the varience. Therefore:
+
+For a given prompt RLOO generates k samples, lets say k=2; (note that you examine each sample individually) so one time you take first sample and then you get the reward for current sample then you take the other as baseline. Let's break this down step by step:
+
+1. First, generate two samples $x_1$ and $x_2$ from the policy for prompt $y$
+
+2. For the first sample $x_1$:
+   - Calculate its reward $R(x_1, y)$
+   - Use $x_2$ as the baseline
+   - Compute the gradient:
+   $$\nabla \mathcal{L}_1 = (R(x_1, y) - R(x_2, y)) \nabla \log p_\theta(x_1)$$
+
+3. For the second sample $x_2$:
+   - Calculate its reward $R(x_2, y)$
+   - Use $x_1$ as the baseline
+   - Compute the gradient:
+   $$\nabla \mathcal{L}_2 = (R(x_2, y) - R(x_1, y)) \nabla \log p_\theta(x_2)$$
+
+4. The final policy update combines both gradients:
+   $$\nabla \mathcal{L} = \nabla \mathcal{L}_1 + \nabla \mathcal{L}_2$$
+
+This approach is particularly elegant because:
+- Both samples are generated from the current policy state
+- Each sample serves as a natural baseline for the other
+- The comparison is between samples from the same policy distribution
+- No historical information or previous gradient updates are needed for the baseline
+
+This approach thechnicaly ensures that:
+- Each sample is evaluated independently
+- The baseline for each sample comes from the other sample
+- The policy is updated based on relative performance between the samples
+- The variance reduction is achieved through direct comparison between samples from the same policy
+
+
+### Logged metrics
+
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `completions/mean_length`: The average length of generated completions.
+- `completions/min_length`: The minimum length of generated completions.
+- `completions/max_length`: The maximum length of generated completions.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `completions/clipped_ratio` : The ratio of truncated (clipped) completions.
+- `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
+- `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
+- `reward`: The overall average reward after applying reward weights.
+- `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
+- `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
+- `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
+- `clip_ratio/region_mean`: The ratio of token probabilities where the RLOO objective is clipped to stay within the trust region
+A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
+- `clip_ratio/low_mean`: The average ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/low_min`: The minimum ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/high_mean`: The average ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/high_max`: The maximum ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+
+### Speed up training with vLLM-powered generation
+
+Generation is often the main bottleneck when training with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a high-throughput, low-latency inference engine for LLMs. To enable it, first install the package with
+```shell
+pip install trl[vllm]
 ```
 
-## Reinforce++
+We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
-The [Reinforce++](https://hijkzzz.notion.site/reinforce-plus-plus) report by Jian Hu suggests several optimization tricks to enhance performance and stability of RLHF. They include:
+#### 🔌 Option 1: Server mode
 
-- Clipping rewards: limiting reward values within a specific range to mitigate the impact of extreme rewards on model updates, thus preventing gradient explosion
-- Normalizing rewards: scaling rewards to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
-- Normalizing advantages: scaling advantages to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
-- Using token-level KL penalty that is defined as equation (1) of the report vs. sequence-level KL penalty (default)
+In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
 
-These options are available via the appropriate arguments in the [`RLOOConfig`] class.
+1. **Start the vLLM server**:
+   ```bash
+   trl vllm-serve --model <model_name>
+   ```
+
+2. **Enable server mode in your training script**:
+   ```python
+   from trl import RLOOConfig
+
+   training_args = RLOOConfig(
+       ...,
+       use_vllm=True,
+       vllm_mode="server",  # default value, can be omitted
+   )
+   ```
+
+<Tip warning={true}>
+
+Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
+
+</Tip>
+
+#### 🧩 Option 2: Colocate mode
+
+In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="colocate",
+)
+```
+
+<Tip>
+
+Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`RLOOConfig`] to avoid underutilization or out-of-memory errors.
+
+We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
+
+<iframe
+	src="https://trl-lib-recommend-vllm-memory.hf.space"
+	frameborder="0"
+	width="850"
+	height="450"
+></iframe>
+
+If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
+
+</Tip>
+
+<Tip>
+
+By default, RLOO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, but you can override these values by setting the environment variables accordingly.
+
+</Tip>
+
+For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
+
+
+### Using a custom reward function
+
+The [`RLOOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
+
+1. **Input arguments**:
+   - The function must accept the following as keyword arguments:
+     - `prompts` (contains the prompts),
+     - `completions` (contains the generated completions),
+     - `completions_ids` (contains the tokenized completions),
+     - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
+     - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
+
+     The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
+   - Depending on the dataset format, the input will vary:
+     - For [standard format](dataset_formats#standard), `prompts` and `completions` will be lists of strings.
+     - For [conversational format](dataset_formats#conversational), `prompts` and `completions` will be lists of message dictionaries.
+
+2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
+
+#### Example 1: Reward longer completions
+
+Below is an example of a reward function for a standard format that rewards longer completions:
+
+```python
+def reward_func(completions_ids, **kwargs):
+    """Reward function that assigns higher scores to longer completions (in terms of token count)."""
+    return [float(len(ids)) for ids in completions_ids]
+```
+
+You can test it as follows:
+
+```python
+>>> prompts = ["The sky is", "The sun is"]  # not used in the reward function, but the trainer will pass it
+>>> completions = [" blue.", " in the sky."]  # not used in the reward function, but the trainer will pass it
+>>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]
+>>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+[2.0, 4.0]
+```
+
+#### Example 1.1: Reward longer completions (based in the number of characters)
+
+Same as the previous example, but this time the reward function is based on the number of characters instead of tokens.
+
+```python
+def reward_func(completions, **kwargs):
+    """Reward function that assigns higher scores to longer completions (in terms of character count)."""
+    return [float(len(completion)) for completion in completions]
+```
+
+You can test it as follows:
+
+```python
+>>> prompts = ["The sky is", "The sun is"]
+>>> completions = [" blue.", " in the sky."]
+>>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
+>>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+[6.0, 12.0]
+```
+
+#### Example 2: Reward completions with specific format
+
+Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the _format reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+It is designed for conversational format, where prompts and completions consist of structured messages.
+
+```python
+import re
+
+def format_reward_func(completions, **kwargs):
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
+    completion_contents = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, content) for content in completion_contents]
+    return [1.0 if match else 0.0 for match in matches]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = [
+...     [{"role": "assistant", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "assistant", "content": "What is the result of (3 + 1) * 2?"}],
+... ]
+>>> completions = [
+...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
+...     [{"role": "assistant", "content": "The sum of 3 and 1 is 4, which we multiply by 2 to get 8. So (3 + 1) * 2 = 8."}],
+... ]
+>>> format_reward_func(prompts=prompts, completions=completions)
+[1.0, 0.0]
+```
+
+#### Example 3: Reward completions based on a reference
+
+Below is an example of a reward function that checks if the completion is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+This example is designed for [standard format](dataset_formats#standard), where the dataset contains a column named `ground_truth`.
+
+```python
+import re
+
+def reward_func(completions, ground_truth, **kwargs):
+    # Regular expression to capture content inside \boxed{}
+    matches = [re.search(r"\\boxed\{(.*?)\}", completion) for completion in completions]
+    contents = [match.group(1) if match else "" for match in matches]
+    # Reward 1 if the content is the same as the ground truth, 0 otherwise
+    return [1.0 if c == gt else 0.0 for c, gt in zip(contents, ground_truth)]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = ["Problem: Solve the equation $2x + 3 = 7$. Solution:", "Problem: Solve the equation $3x - 5 = 10$."]
+>>> completions = [r" The solution is \boxed{2}.", r" The solution is \boxed{6}."]
+>>> ground_truth = ["2", "5"]
+>>> reward_func(prompts=prompts, completions=completions, ground_truth=ground_truth)
+[1.0, 0.0]
+```
+#### Example 4: Multi-task reward functions
+
+Below is an example of using multiple reward functions in the [`RLOOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
+
+```python
+from datasets import Dataset
+from trl import RLOOTrainer
+
+# Define a dataset that contains both math and coding problems
+dataset = Dataset.from_list(
+    [
+        {"prompt": "What is 2+2?", "task": "math"},
+        {"prompt": "Write a function that returns the sum of two numbers.", "task": "code"},
+        {"prompt": "What is 3*4?", "task": "math"},
+        {"prompt": "Write a function that returns the product of two numbers.", "task": "code"},
+    ]
+)
+
+# Math-specific reward function
+def math_reward_func(prompts, completions, task, **kwargs):
+    rewards = []
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "math":
+            # Calculate math-specific reward
+            correct = check_math_solution(prompt, completion)
+            reward = 1.0 if correct else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-math tasks
+            rewards.append(None)
+    return rewards
+
+# Coding-specific reward function
+def coding_reward_func(prompts, completions, task, **kwargs):
+    rewards = []
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "coding":
+            # Calculate coding-specific reward
+            works = test_code_solution(prompt, completion)
+            reward = 1.0 if works else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-coding tasks
+            rewards.append(None)
+    return rewards
+
+# Use both task-specific reward functions
+trainer = RLOOTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=[math_reward_func, coding_reward_func],
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None` and the [`RLOOTrainer`] will continue with the valid functions and tasks. This allows the [`RLOOTrainer`] to handle multiple reward functions with different applicability.
+
+Note that the [`RLOOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
+
+
+
+#### Passing the reward function to the trainer
+
+To use your custom reward function, pass it to the [`RLOOTrainer`] as follows:
+
+```python
+from trl import RLOOTrainer
+
+trainer = RLOOTrainer(
+    reward_funcs=reward_func,
+    ...,
+)
+```
+
+If you have multiple reward functions, you can pass them as a list:
+
+```python
+from trl import RLOOTrainer
+
+trainer = RLOOTrainer(
+    reward_funcs=[reward_func1, reward_func2],
+    ...,
+)
+```
+
+and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
+
+Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
 
 ## RLOOTrainer
 
 [[autodoc]] RLOOTrainer
-    - train
-    - save_model
-    - push_to_hub
 
 ## RLOOConfig
 
 [[autodoc]] RLOOConfig
+
+
+## References;
+1. [RLOO Paper](https://openreview.net/pdf?id=r1lgTGL5DE)
+2. [back to basics Paper](https://arxiv.org/pdf/2402.14740)
+3. [REINFORCE++ Paper](https://arxiv.org/html/2501.03262v1)
+4. [RLOO Blog on HF](https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo)
+5. [RLOO OPENRLHF](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05)
+6. [Youtube RLOO](https://www.youtube.com/watch?v=86asXGPK6RU&ab_channel=BuzzRobot)
