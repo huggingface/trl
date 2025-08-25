@@ -654,7 +654,7 @@ class GRPOTrainer(Trainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
-        self.rollout_importance_sampling_cap = 2
+        self.rollout_importance_sampling_cap = -1
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
@@ -1951,9 +1951,9 @@ class GRPOTrainer(Trainer):
         high_clip = masked_batch_mean(is_high_clipped.float())
         clip_ratio = masked_batch_mean(is_region_clipped.float())
 
-        is_clamped_mask = rollout_imp_ratio > self.rollout_importance_sampling_cap
-        mean_clamped = masked_batch_mean(is_clamped_mask.float())
-        self._metrics[mode]["TIS/clamp_ratio"].append(self.accelerator.gather(mean_clamped).nanmean().item())
+        # is_clamped_mask = rollout_imp_ratio > self.rollout_importance_sampling_cap
+        # mean_clamped = masked_batch_mean(is_clamped_mask.float())
+        # self._metrics[mode]["TIS/clamp_ratio"].append(self.accelerator.gather(mean_clamped).nanmean().item())
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())

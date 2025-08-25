@@ -483,7 +483,6 @@ def main(script_args: ScriptArguments):
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: dict = field(default_factory=dict)
         logprobs: Optional[int] = None
-        prompt_logprobs: Optional[int] = None
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
