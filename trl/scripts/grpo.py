@@ -123,23 +123,24 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    SYSTEM_PROMPT = (
-        "A conversation between user and assistant. The user asks a question, and the assistant solves it. The "
-        "assistant first thinks about the reasoning process in the mind and then provides the user with the answer. "
-        "The reasoning process and answer are enclosed within <think></think> tags, i.e., <think>\nThis is my "
-        "reasoning.\n</think>\nThis is my answer."
-    )
+    if script_args.dataset_name and script_args.dataset_name == "AI-MO/NuminaMath-TIR":
+        SYSTEM_PROMPT = (
+            "A conversation between user and assistant. The user asks a question, and the assistant solves it. The "
+            "assistant first thinks about the reasoning process in the mind and then provides the user with the answer. "
+            "The reasoning process and answer are enclosed within <think></think> tags, i.e., <think>\nThis is my "
+            "reasoning.\n</think>\nThis is my answer."
+        )
 
-    def make_conversation(example):
-        return {
-            "prompt": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": example["problem"]},
-            ],
-        }
+        def make_conversation(example):
+            return {
+                "prompt": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": example["problem"]},
+                ],
+            }
 
-    dataset = dataset.map(make_conversation)
-    dataset = dataset.remove_columns(["messages", "problem"])
+        dataset = dataset.map(make_conversation)
+        dataset = dataset.remove_columns(["messages", "problem"])
 
     # Initialize the GRPO trainer
     trainer = GRPOTrainer(
