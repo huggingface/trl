@@ -1852,8 +1852,8 @@ class RLOOFinalTrainer(Trainer):
             comet_url=get_comet_experiment_url(),
             trainer_name="RLOO",
             trainer_citation=citation,
-            paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
-            paper_id="2402.03300",
+            paper_title="Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",
+            paper_id="2402.14740",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
