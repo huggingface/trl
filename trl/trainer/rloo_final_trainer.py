@@ -56,7 +56,7 @@ from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
-from .rloo_finall_config import RLOOConfig_NEW
+from .rloo_finall_config import RLOOConfig
 from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
@@ -78,7 +78,10 @@ if is_vllm_available():
 
 if is_wandb_available():
     import wandb
+
+
 logger = logging.get_logger(__name__)
+
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
@@ -220,13 +223,18 @@ def split_tensor_dict(
     """
     first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
     chunk_size = first_tensor.shape[0] // num_chunks
-    return [
-        {
-            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
-            for key, tensor in tensor_dict.items()
-        }
-        for i in range(num_chunks)
-    ]
+    chunks = []
+    for i in range(num_chunks):
+        chunk_dict = {}
+        for key, tensor in tensor_dict.items():
+            if tensor is not None and (isinstance(tensor, list) or tensor.ndim > 0):
+                chunk_dict[key] = tensor[i * chunk_size : (i + 1) * chunk_size]
+            elif tensor is not None and tensor.ndim == 0:
+                chunk_dict[key] = tensor
+            else:
+                chunk_dict[key] = None
+        chunks.append(chunk_dict)
+    return chunks
 
 
 def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
@@ -252,7 +260,9 @@ def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, 
     def permute(v: Optional[Sequence]) -> Optional[Sequence]:
         if v is None:
             return None
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and v.ndim == 0:
+            return v
+        if isinstance(v, torch.Tensor) and v.ndim >= 1:
             return v[permutation]
         return [v[i] for i in permutation]
 
@@ -294,102 +304,14 @@ def identity(x):
     return x
 
 
-def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
+
+
+class RLOOTrainer(Trainer):
     """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
-    `batch["image_grid_thw"]`, while keeping other entries unchanged.
-    """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch:
-        return batch
+    Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the paper [Back to
+    Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in
+    LLMs](https://huggingface.co/papers/2402.03300).
 
-    lengths = batch["image_grid_thw"].prod(dim=1).tolist()  # [batch_size]
-    pixel_values = batch["pixel_values"]  # [total, feature_dim]
-
-    if sum(lengths) != pixel_values.size(0):
-        raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
-
-    split_values = list(torch.split(batch["pixel_values"], lengths, dim=0))
-    return {**batch, "pixel_values": split_values}
-
-
-def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
-    """
-    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]` back into a single
-    tensor along the first dimension.
-    """
-    pixel_values = batch.get("pixel_values")
-
-    if isinstance(pixel_values, list):
-        merged = torch.cat(pixel_values, dim=0)
-        return {**batch, "pixel_values": merged}
-    else:
-        return batch
-
-
-def truncate_with_protected_tokens(
-    ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Truncate tensors to target length while preserving protected tokens.
-
-    Args:
-        ids (`torch.Tensor`):
-            Input tensor of token IDs, shape (batch_size, sequence_length).
-        mask (`torch.Tensor`):
-            Input tensor of attention masks, shape (batch_size, sequence_length).
-        target_length (`int`):
-            Desired length of the output sequences.
-        protected_tokens (`list[int]`):
-            List of token IDs that should be preserved in the output.
-    """
-    protected_set = set(protected_tokens)
-    # Create protected_tokens tensor once to avoid recreating it on every call
-    protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
-
-    def process_sequence(ids, mask):
-        # Create boolean masks
-        is_protected = torch.isin(ids, protected_tokens_tensor)
-        is_non_protected = ~is_protected
-
-        # Count tokens
-        num_protected = is_protected.sum().item()
-        num_non_protected_needed = target_length - num_protected
-
-        if num_non_protected_needed < 0:
-            raise ValueError(
-                f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-                f"Please increase target length to at least {num_protected} or disable truncation."
-            )
-
-        # Select which non-protected tokens to keep (rightmost ones)
-        non_protected_indices = torch.where(is_non_protected)[0]
-        keep_non_protected = torch.zeros_like(is_non_protected)
-        if num_non_protected_needed > 0:
-            keep_indices = non_protected_indices[-num_non_protected_needed:]
-            keep_non_protected[keep_indices] = True
-
-        # Final mask: protected OR selected non-protected
-        keep_mask = is_protected | keep_non_protected
-
-        return ids[keep_mask], mask[keep_mask]
-
-    # Process each sequence in the batch
-    truncated_seq = []
-    truncated_mask = []
-
-    for i in range(ids.shape[0]):
-        new_ids, new_mask = process_sequence(ids[i], mask[i])
-        truncated_seq.append(new_ids)
-        truncated_mask.append(new_mask)
-
-    return torch.stack(truncated_seq), torch.stack(truncated_mask)
-
-
-class RLOOFinalTrainer(Trainer):
-    """
-    Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the
-    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language
-    Models](https://huggingface.co/papers/2402.03300).
     Example:
 
     ```python
@@ -447,7 +369,7 @@ class RLOOFinalTrainer(Trainer):
                   reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
-        args ([`RLOOConfig_NEW`], *optional*, defaults to `None`):
+        args ([`GRPOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
@@ -488,13 +410,13 @@ class RLOOFinalTrainer(Trainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
-    _tag_names = ["trl", "rloo"]
+    _tag_names = ["trl", "grpo"]
 
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: Optional[RLOOConfig_NEW] = None,
+        args: Optional[RLOOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
@@ -507,7 +429,7 @@ class RLOOFinalTrainer(Trainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = RLOOConfig_NEW(f"{model_name}-RLOO")
+            args = RLOOConfig(f"{model_name}-RLOO")
 
         # Models
         # Trained model
@@ -522,7 +444,7 @@ class RLOOFinalTrainer(Trainer):
                 model_init_kwargs["torch_dtype"] = torch_dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `RLOOConfig_NEW`. Expected either 'auto' or a string representing "
+                    "Invalid `torch_dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
@@ -533,7 +455,7 @@ class RLOOFinalTrainer(Trainer):
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed `model_init_kwargs` to the `RLOOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
 
@@ -566,8 +488,6 @@ class RLOOFinalTrainer(Trainer):
         self.pad_token = tokenizer.pad_token
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
-        self.vision_end_token_id = getattr(model.config, "vision_end_token_id", None)
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -622,7 +542,7 @@ class RLOOFinalTrainer(Trainer):
         # Training arguments
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length
-        self.num_generations = args.num_generations
+        self.num_generations = args.num_generations  # = k in the GRPO paper
         self.temperature = args.temperature
         self.top_p = args.top_p
         self.top_k = args.top_k
@@ -633,7 +553,7 @@ class RLOOFinalTrainer(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
-        self.scale_rewards = args.scale_rewards
+        self.scale_rewards = {True: "group", False: "none"}.get(args.scale_rewards, args.scale_rewards)
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
@@ -674,12 +594,18 @@ class RLOOFinalTrainer(Trainer):
         super().__init__(
             model=model,
             args=args,
-            data_collator=identity,  # No data collation is needed in RLOO
+            data_collator=identity,  # No data collation is needed in GRPO
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
+            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
+            # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
+            # global accumulated batch. To control scaling ourselves, we must disable Trainer’s built-in scaling. The
+            # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
+            # that behavior without rewriting `training_step`.
+            compute_loss_func="non-None value to disable scaling",
         )
 
         # Reference model
@@ -849,10 +775,10 @@ class RLOOFinalTrainer(Trainer):
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
-        # In RLOOTrainer, we preprocess data, so using the model's signature columns doesn't work.
+        # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt"]
+            self._signature_columns = ["prompt", "image"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -862,7 +788,7 @@ class RLOOFinalTrainer(Trainer):
     # `steps_per_generation`. Thus, `_prepare_inputs` is called with this *generation* batch, and it handles the
     # splitting internally.
     # Maintenance note: This method is a copy-paste of the original `Trainer.get_train_dataloader` with only one line
-    # modification. As a result, some parts of the method aren't relevant to RLOO, but we keep them to stay one line
+    # modification. As a result, some parts of the method aren't relevant to GRPO, but we keep them to stay one line
     # apart from the super method, ensuring easier maintenance in the future.
     def get_train_dataloader(self):
         if self.train_dataset is None:
@@ -1191,10 +1117,8 @@ class RLOOFinalTrainer(Trainer):
             if self._step % generate_every == 0 or self._buffered_inputs is None:
                 # self._buffered_inputs=None can occur when resuming from a checkpoint
                 generation_batch = self._generate_and_score_completions(generation_batch)
-                generation_batch = split_pixel_values_by_grid(generation_batch)
                 generation_batch = shuffle_sequence_dict(generation_batch)
                 generation_batches = split_tensor_dict(generation_batch, self.args.steps_per_generation)
-                self._buffered_inputs = [unsplit_pixel_values_by_grid(batch) for batch in generation_batches]
             inputs = self._buffered_inputs[self._step % self.args.steps_per_generation]
             self._step += 1
         else:
@@ -1243,11 +1167,13 @@ class RLOOFinalTrainer(Trainer):
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
             nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
-            row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()}
+            row_reward_kwargs = {
+                key: value[nan_row_idx] for key, value in reward_kwargs.items() if key != "trainer_state"
+            }
             row_reward_kwargs["prompt"] = prompts[nan_row_idx]
             row_reward_kwargs["completion"] = completions[nan_row_idx]
             logger.warning(
-                f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
+                f"All reward functions returned None for the following kwargs:\n{row_reward_kwargs}\n"
                 "Please ensure that at least one reward function returns a valid reward."
             )
 
@@ -1269,11 +1195,6 @@ class RLOOFinalTrainer(Trainer):
         # VLM chat template.
         original_prompts = copy.deepcopy(prompts)
 
-        # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
-        # [{"role": "user", "content": "What color is the sky?"}] to
-        # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
-        kwargs = {}
-
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
         prompt_inputs = self.processing_class(
@@ -1282,33 +1203,16 @@ class RLOOFinalTrainer(Trainer):
             padding=True,
             padding_side="left",
             add_special_tokens=False,
-            **kwargs,
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
         if self.max_prompt_length is not None:
-            # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
-            # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
-            # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
-            protected = []
-            protected = [token for token in protected if token is not None]
-            prompt_ids, prompt_mask = truncate_with_protected_tokens(
-                prompt_ids, prompt_mask, self.max_prompt_length, protected
-            )
 
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
             prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
-
-            # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
-            # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
-            # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
-            # collapse them back into a single token string to match the original chat template in case it originally
-            # applies it. Otherwise, it assumes that the chat template uses only vision_start_token_id to indicate images
-            # (e.g. Gemma 3) and removes all image_token instances and vision_end_token_id as well, leaving only
-            # the vision_start_token_id (e.g. <start_of_image>).
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1404,7 +1308,7 @@ class RLOOFinalTrainer(Trainer):
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
-            paged_prompt_inputs = self.processing_class(text=prompts_text, **kwargs)
+            paged_prompt_inputs = self.processing_class(text=prompts_text)
             previous_attn = self.model_wrapped.config._attn_implementation
 
             if is_flash_attn_2_available():
@@ -1469,6 +1373,8 @@ class RLOOFinalTrainer(Trainer):
 
         # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
         completion_lengths = completion_mask.sum(1)
+        agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        num_items_in_batch = agg_completion_lengths.sum()  # this is required for the DAPO loss
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -1487,14 +1393,17 @@ class RLOOFinalTrainer(Trainer):
             # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
             # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
             # old_per_token_logps to None.
-            # if self.args.gradient_accumulation_steps % generate_every != 0:
-            old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
-                self.model,
-                prompt_completion_ids,
-                attention_mask,
-                logits_to_keep,
-                batch_size,
-            )
+            generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
+            if self.args.gradient_accumulation_steps % generate_every != 0:
+                old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
+                    self.model,
+                    prompt_completion_ids,
+                    attention_mask,
+                    logits_to_keep,
+                    batch_size,
+                )
+            else:
+                old_per_token_logps = None
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1536,34 +1445,28 @@ class RLOOFinalTrainer(Trainer):
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
-        # For RLOO, include sequence-level KL penalty in the reward itself (following original RLOO implementation)
-        if self.beta != 0.0 and ref_per_token_logps is not None and old_per_token_logps is not None:
-            # Match RLOO's KL calculation: kl = logprobs - ref_logprobs
-            per_token_kl = old_per_token_logps - ref_per_token_logps
-            # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
-            sequence_kl = (per_token_kl * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-            kl_penalty = self.beta * sequence_kl
-            rewards = rewards - kl_penalty
+        # Compute grouped-wise rewards
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
 
-        grouped_rewards = rewards.view(-1, self.num_generations)
-        mean_grouped_rewards = grouped_rewards.mean(dim=1)
-        std_grouped_rewards = grouped_rewards.std(dim=1)
-        is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
+        # Normalize the rewards to compute the advantages
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        advantages = rewards - mean_grouped_rewards
 
-        # RLOO advantages computation
-        grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # Shape: (num_prompts, 1)
-        baselines = (grouped_sum - grouped_rewards) / (
-            self.num_generations - 1
-        )  # Shape: (num_prompts, num_generations)
-        baselines = baselines.view(-1)  # Flatten back to match rewards shape
-        advantages = rewards - baselines
+        if self.scale_rewards in ["batch", "none"]:
+            # If self.scale_rewards = "none", we'll still log group level std
+            std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+            std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
+        elif self.scale_rewards == "group":
+            # Compute global std
+            std_rewards = rewards.std().expand_as(rewards)
+        else:
+            raise ValueError(
+                f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
+            )
 
-        # Optional: normalize advantages if scale_rewards is enabled
-        if self.scale_rewards:
-            grouped_advantages = advantages.view(-1, self.num_generations)
-            std_grouped_advantages = grouped_advantages.std(dim=1)
-            std_grouped_advantages = std_grouped_advantages.repeat_interleave(self.num_generations, dim=0)
-            advantages = advantages / (std_grouped_advantages + 1e-4)
+        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
+        if self.scale_rewards in ["batch", "none"]:
+            advantages = advantages / (std_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1579,7 +1482,6 @@ class RLOOFinalTrainer(Trainer):
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
-        agg_completion_lengths = self.accelerator.gather(completion_lengths)
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
@@ -1599,10 +1501,10 @@ class RLOOFinalTrainer(Trainer):
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
-            std_rewards = nanstd(rewards_per_func[:, i]).item()
-            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
+            std_func_rewards = nanstd(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
@@ -1618,6 +1520,7 @@ class RLOOFinalTrainer(Trainer):
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "advantages": advantages,
+            "num_items_in_batch": num_items_in_batch,
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
@@ -1629,8 +1532,7 @@ class RLOOFinalTrainer(Trainer):
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The RLOOTrainer does not support returning outputs")
-        else:
-            return self._compute_loss(model, inputs)
+        return self._compute_loss(model, inputs)
 
     def _compute_loss(self, model, inputs):
         # Compute the per-token log probabilities for the model
@@ -1653,20 +1555,21 @@ class RLOOFinalTrainer(Trainer):
             entropy_mask = self.get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
-        old_per_token_logps = inputs.get("old_per_token_logps")
-        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+
         # Compute the KL divergence between the model and the reference model
         if self.beta != 0.0:
             ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = old_per_token_logps - ref_per_token_logps
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            )
 
         # Compute the loss
         advantages = inputs["advantages"]
         # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
         # old_per_token_logps == per_token_logps, so we can skip it's computation
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
-        # old_per_token_logps = inputs.get("old_per_token_logps")
-        # old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+        old_per_token_logps = inputs.get("old_per_token_logps")
+        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
@@ -1694,9 +1597,23 @@ class RLOOFinalTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
+        if self.beta != 0.0:
+            per_token_loss = per_token_loss + self.beta * per_token_kl
 
-        # KL penalty is already included in rewards for RLOO, so no additional KL penalty in loss
-        loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        if self.loss_type == "grpo":
+            loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            loss = loss / self.current_gradient_accumulation_steps
+        elif self.loss_type == "bnpo":
+            loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            loss = loss / self.current_gradient_accumulation_steps
+        elif self.loss_type == "dr_grpo":
+            loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            loss = loss / self.current_gradient_accumulation_steps
+        elif self.loss_type == "dapo":
+            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+            loss = (per_token_loss * completion_mask).sum() / normalizer
+        else:
+            raise ValueError(f"Unknown loss type: {self.loss_type}")
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
@@ -1833,11 +1750,14 @@ class RLOOFinalTrainer(Trainer):
         # docstyle-ignore
         citation = textwrap.dedent(
             """\
-            @article{zhihong2024deepseekmath,
-                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
-                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
-                year         = 2024,
-                eprint       = {arXiv:2402.03300},
+            @inproceedings{ahmadian2024back,
+                title        = {Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs},
+                author       = {Arash Ahmadian and Chris Cremer and Matthias Gall{\'{e}} and Marzieh Fadaee and Julia Kreutzer and Olivier Pietquin and Ahmet {\"{U}}st{\"{u}}n and Sara Hooker},
+                year         = {2024},
+                booktitle    = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), {ACL} 2024, Bangkok, Thailand, August 11-16, 2024},
+                pages        = {12248--12267},
+                editor       = {Lun{-}Wei Ku and Andre Martins and Vivek Srikumar},
+                publisher    = {Association for Computational Linguistics},
             }
             """
         )
@@ -1852,8 +1772,8 @@ class RLOOFinalTrainer(Trainer):
             comet_url=get_comet_experiment_url(),
             trainer_name="RLOO",
             trainer_citation=citation,
-            paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
-            paper_id="2402.03300",
+            paper_title="Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs",
+            paper_id="2402.14740",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
