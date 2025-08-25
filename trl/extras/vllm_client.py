@@ -268,7 +268,7 @@ class VLLMClient:
         # Initialize weight update group
         url = f"{self.base_url}/init_communicator/"
         # Need to fix after xpu support get_device_properties
-        client_device_uuid = 42 if hasattr(torch, "xpu") and torch.xpu.is_available() else str(torch.cuda.get_device_properties(device).uuid)
+        client_device_uuid = "42" if hasattr(torch, "xpu") and torch.xpu.is_available() else str(torch.cuda.get_device_properties(device).uuid)
 
         # In the server side, the host is set to 0.0.0.0
         response = self.session.post(
