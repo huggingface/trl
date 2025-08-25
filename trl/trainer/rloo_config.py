@@ -190,8 +190,8 @@ class RLOOConfig_NEW(TrainingArguments):
             ρ parameter from [Beyond the 80/20 Rule](https://huggingface.co/papers/2506.01939). Keeps in the policy
             loss term only the top-ρ quantile of tokens by entropy of the probability distribution at each sequence
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
-            `1.0` keeps all tokens. The paper recommends a value of `0.2`.
-            If used with `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
+            `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
+            `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         normalize_rewards (`bool`, *optional*, defaults to `False`):
             Whether to normalize rewards.
         normalize_advantages (`bool`, *optional*, defaults to `False`):
@@ -523,7 +523,7 @@ class RLOOConfig_NEW(TrainingArguments):
         metadata={
             "help": "ρ parameter from Beyond the 80/20 Rule. Keeps in the policy loss term only the top-ρ quantile of "
             "tokens by entropy of the probability distribution at each sequence position, improving results. Range: "
-            "[0.0-1.0]. A value of `1.0` masks all but the highest entropy token; `0.0` keeps all tokens. The paper "
+            "[0.0-1.0]. A value of `0.0` masks all but the highest entropy token; `1.0` keeps all tokens. The paper "
             "recommends a value of `0.2`. If used with `mask_truncated_completions=True`, only tokens from "
             "non-truncated completions are considered."
         },
