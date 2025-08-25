@@ -1415,6 +1415,8 @@ class GRPOTrainer(Trainer):
                     re.sub(rf"({re.escape(self.image_token)})+", self.image_token, text) for text in prompts_text
                 ]
 
+        rollout_old_per_token_logps = None
+
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             # First, update the vLLM weights if needed
@@ -1754,7 +1756,7 @@ class GRPOTrainer(Trainer):
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
-        if self.use_vllm and old_per_token_logps is not None:
+        if rollout_old_per_token_logps is not None and old_per_token_logps is not None:
             probs_diff = torch.exp(old_per_token_logps - rollout_old_per_token_logps)
             per_token_kl = probs_diff - (old_per_token_logps - rollout_old_per_token_logps) - 1
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
@@ -1771,7 +1773,7 @@ class GRPOTrainer(Trainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
-        if self.use_vllm:
+        if rollout_old_per_token_logps is not None:
             output["rollout_old_per_token_logps"] = rollout_old_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
@@ -1950,10 +1952,6 @@ class GRPOTrainer(Trainer):
         low_clip = masked_batch_mean(is_low_clipped.float())
         high_clip = masked_batch_mean(is_high_clipped.float())
         clip_ratio = masked_batch_mean(is_region_clipped.float())
-
-        # is_clamped_mask = rollout_imp_ratio > self.rollout_importance_sampling_cap
-        # mean_clamped = masked_batch_mean(is_clamped_mask.float())
-        # self._metrics[mode]["TIS/clamp_ratio"].append(self.accelerator.gather(mean_clamped).nanmean().item())
 
         gathered_low_clip = self.accelerator.gather(low_clip)
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
