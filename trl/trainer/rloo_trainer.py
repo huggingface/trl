@@ -304,9 +304,7 @@ class RLOOTrainer(Trainer):
             self.state.episode += 1 * args.batch_size
             data = next(iter_dataloader)
             with torch.no_grad():
-                queries = data["input_ids"].to(device)
-                queries = queries.repeat(args.rloo_k, 1)
-                context_length = queries.shape[1]
+                original_queries = data["input_ids"].to(device)
                 responses = []
                 postprocessed_responses = []
                 logprobs = []
@@ -314,10 +312,34 @@ class RLOOTrainer(Trainer):
                 scores = []
                 sequence_lengths = []
 
-                # Generate responses and compute logprobs
+                # Generate responses using string-level processing (OnlineDPO style)
+                # This reduces memory usage by processing at text level before tokenization
                 with unwrap_model_for_generation(
                     self.model, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model:
+                    # 1. Decode queries to text (string-level processing)
+                    batch_prompts_text = processing_class.batch_decode(
+                        original_queries, skip_special_tokens=True
+                    )
+                    
+                    # 2. Repeat prompts at string level (more memory efficient than token level)
+                    repeated_prompts = []
+                    for prompt in batch_prompts_text:
+                        repeated_prompts.extend([prompt] * args.rloo_k)
+                    
+                    # 3. Tokenize all repeated prompts at once (batch efficiency)
+                    tokenized = processing_class(
+                        repeated_prompts,
+                        padding=True,
+                        truncation=True,
+                        max_length=getattr(args, 'max_length', 1024),
+                        return_tensors="pt"
+                    )
+                    
+                    # 4. Move to device and generate
+                    queries = tokenized["input_ids"].to(device)
+                    context_length = queries.shape[1]
+                    
                     query_responses, logitss = batch_generation(
                         unwrapped_model,
                         queries,
