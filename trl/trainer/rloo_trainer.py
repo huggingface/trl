@@ -258,10 +258,11 @@ def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, 
     def permute(v: Optional[Sequence]) -> Optional[Sequence]:
         if v is None:
             return None
-        if isinstance(v, torch.Tensor):
+        if isinstance(v, torch.Tensor) and v.ndim == 0:
+            return v
+        if isinstance(v, torch.Tensor) and v.ndim >= 1:
             return v[permutation]
         return [v[i] for i in permutation]
-
     return {key: permute(val) for key, val in seq_dict.items()}
 
 
