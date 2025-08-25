@@ -19,7 +19,7 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_flash_attn, require_peft, require_vision
+from transformers.testing_utils import require_flash_attn, require_liger_kernel, require_peft, require_vision
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -601,6 +601,31 @@ class SFTTrainerTester(TrlTestCase):
                 self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @require_liger_kernel
+    def test_train_with_liger(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, use_liger_kernel=True, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_non_chatml_conversational_data(self):
         # Get the dataset

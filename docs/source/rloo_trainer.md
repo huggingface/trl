@@ -1,6 +1,6 @@
-# RLOO Trainer
+# GRPO Trainer
 
-[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
+[![](https://img.shields.io/badge/All_models-GRPO-blue)](https://huggingface.co/models?other=grpo,trl)
 
 ## Overview
 
@@ -11,6 +11,7 @@ The abstract from the paper is the following:
 
 > AI alignment in the shape of Reinforcement Learning from Human Feedback (RLHF) is increasingly treated as a crucial ingredient for high performance large language models. Proximal Policy Optimization (PPO) has been positioned by recent literature as the canonical method for the RL part of RLHF However, it involves both high computational cost and sensitive hyperparameter tuning. We posit that most of the motivational principles that led to the development of PPO are less of a practical concern in RLHF and advocate for a less computationally expensive method that preserves and even increases performance. We revisit the formulation of alignment from human preferences in the context of RL. Keeping simplicity as a guiding principle, we show that many components of PPO are unnecessary in an RLHF context and that far simpler REINFORCE-style optimization variants outperform both PPO and newly proposed “RL-free” methods such as DPO and RAFT. Our work suggests that careful adaptation to LLMs alignment characteristics enables benefiting from online RL optimization at low cost.
 
+## Quick start
 
 This post-training method was contributed by [Shirin Yamani](https://huggingface.co/ShirinYamani).
 
@@ -75,6 +76,53 @@ $$b_i = \frac{1}{N-1} \sum_{j \neq i} R_j$$
 
 This approach gives the method its name: **Leave One Out**.
 
+To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=reward_func,
+    ...,
+)
+```
+
+If you have multiple reward functions, you can pass them as a list:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=[reward_func1, reward_func2],
+    ...,
+)
+```
+
+and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
+
+Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+
+## Vision-Language Model (VLM) Training
+
+GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
+
+### Supported Models
+
+Tested with:
+
+- **Gemma3** — e.g., `google/gemma-3-4b-it`
+- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
+- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
+- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
+- **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
+  
+<Tip>
+Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+</Tip>
+
+### Quick Start
+
+Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ### Estimating the KL divergence
 
@@ -446,12 +494,14 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+Each training sample should include:
 
-## RLOOTrainer
+- `prompt`: Text formatted via the processor's chat template
+- `image`: A single image (PIL or NumPy array)
 
 [[autodoc]] RLOOTrainer
 
-## RLOOConfig
+## GRPOConfig
 
 [[autodoc]] RLOOConfig
 
