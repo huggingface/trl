@@ -528,6 +528,7 @@ class RLOOConfig(TrainingArguments):
         default=10.0,
         metadata={"help": "Clip range for rewards."},
     )
+
     # Parameters that control the logging
     log_completions: bool = field(
         default=False,
