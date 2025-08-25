@@ -122,6 +122,14 @@ $$
 A_i = r_i - b_i
 $$
 
+### Computing the loss
+
+The loss is simply defined as follows:
+
+$$
+\mathcal{L}_{\text{RLOO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G A_i \, \log \pi_\theta(o_i \mid q)
+$$
+
 ---
 
 If you have multiple reward functions, you can pass them as a list:
@@ -158,7 +166,7 @@ $$b_{MA} = \frac{1}{S}\sum_{s} R(x_s, y_s)$$
 
 ### What RLOO do inspired from REINFORCE?
 
-Inspired by REINFORCE's baseline approach, RLOO (Reinforcement Learning with Leave-One-Out) uses a different but related strategy for variance reduction. Instead of using a moving average, RLOO uses additional generations from the policy/language model as a mean to reduce the varience. Therefore:
+Inspired by REINFORCE's baseline approach, RLOO uses a different but related strategy for variance reduction. Instead of using a moving average, RLOO uses additional generations from the policy/language model as a mean to reduce the varience. Therefore:
 
 For a given prompt RLOO generates k samples, lets say k=2; (note that you examine each sample individually) so one time you take first sample and then you get the reward for current sample then you take the other as baseline. Let's break this down step by step:
 
@@ -191,8 +199,9 @@ This approach thechnicaly ensures that:
 - The policy is updated based on relative performance between the samples
 - The variance reduction is achieved through direct comparison between samples from the same policy
 
+## Logged metrics
 
-### Logged metrics
+While training and evaluating, we record the following reward metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
 - `completions/mean_length`: The average length of generated completions.
@@ -214,6 +223,8 @@ A higher value means more tokens are clipped, which constrains how much the poli
 - `clip_ratio/low_min`: The minimum ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
 - `clip_ratio/high_mean`: The average ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
 - `clip_ratio/high_max`: The maximum ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+
+## Customization
 
 ### Speed up training with vLLM-powered generation
 
@@ -289,6 +300,78 @@ By default, RLOO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, 
 
 For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
 
+### RLOO at scale: train a 70B+ Model on multiple nodes
+
+When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
+
+- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
+- **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
+- **vLLM**: See the previous section on how to use vLLM to speed up generation.
+
+Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
+
+```sh
+#!/bin/bash
+#SBATCH --nodes=5
+#SBATCH --gres=gpu:8
+
+# Get the list of allocated nodes
+NODELIST=($(scontrol show hostnames $SLURM_JOB_NODELIST))
+
+# Assign the first 4 nodes for training and the 5th node for vLLM
+TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
+VLLM_NODE="${NODELIST[4]}"  # Node 4 for vLLM
+
+# Run training on the first 4 nodes (Group 1)
+srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
+     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+     --num_processes 32 \
+     --num_machines 4 \
+     --main_process_ip ${NODELIST[0]} \
+     --machine_rank $SLURM_PROCID \
+     --rdzv_backend c10d \
+     train_grpo.py \
+     --server_ip $VLLM_NODE &
+
+# Run vLLM server on the 5th node (Group 2)
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+
+wait
+```
+
+```python
+import argparse
+
+from datasets import load_dataset
+from trl import RLOOTrainer, RLOOConfig
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
+    args = parser.parse_args()
+
+    # Example dataset from TLDR
+    dataset = load_dataset("trl-lib/tldr", split="train")
+
+    # Dummy reward function: count the number of unique characters in the completions
+    def reward_num_unique_chars(completions, **kwargs):
+        return [len(set(c)) for c in completions]
+
+    training_args = RLOOConfig(
+        output_dir="Qwen2.5-72B-RLOO",
+        per_device_train_batch_size=4,
+        bf16=True,
+        gradient_checkpointing=True,
+        use_vllm=True,
+        vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
+    )
+
+    trainer = RLOOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer.train()
+
+if __name__=="__main__":
+    main()
+```
 
 ### Using a custom reward function
 
@@ -495,19 +578,19 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
-Each training sample should include:
-
-- `prompt`: Text formatted via the processor's chat template
-- `image`: A single image (PIL or NumPy array)
+## RLOOTrainer
 
 [[autodoc]] RLOOTrainer
+    - train
+    - save_model
+    - push_to_hub
 
 ## GRPOConfig
 
 [[autodoc]] RLOOConfig
 
+## References
 
-## References;
 1. [RLOO Paper](https://openreview.net/pdf?id=r1lgTGL5DE)
 2. [back to basics Paper](https://arxiv.org/pdf/2402.14740)
 3. [REINFORCE++ Paper](https://arxiv.org/html/2501.03262v1)
