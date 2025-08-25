@@ -18,22 +18,17 @@ from unittest.mock import patch
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import (
-    AutoModelForCausalLM,
-    AutoModelForSequenceClassification,
-    AutoTokenizer,
-)
+from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
-from trl.trainer.rloo_final_trainer import (
+from trl import RLOOConfig, RLOOTrainer
+from trl.trainer.rloo_trainer import (
     RepeatSampler,
-    RLOOFinalTrainer,
     shuffle_sequence_dict,
     split_tensor_dict,
     truncate_with_protected_tokens,
 )
-from trl.trainer.rloo_finall_config import RLOOConfig_NEW
 
 from .testing_utils import TrlTestCase, require_vllm
 
@@ -68,6 +63,18 @@ class SplitTensorDictTester(TrlTestCase):
         for i in range(2):
             self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
             self.assertIsNone(result[i]["y"])
+
+    def test_with_scalar(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": torch.tensor(1)}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        self.assertEqual(len(result), 2)
+        for i in range(2):
+            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
+            self.assertTrue(torch.equal(result[i]["y"], torch.tensor(1)))
 
 
 class ShuffleSequenceDictTester(TrlTestCase):
@@ -393,12 +400,12 @@ class GetHighEntropyMaskTester(TrlTestCase):
         mock_accelerator.num_processes = 1  # Single process for testing
 
         # Create a minimal trainer instance just to access the method
-        trainer = Mock(spec=RLOOFinalTrainer)
+        trainer = Mock(spec=RLOOTrainer)
         trainer.accelerator = mock_accelerator
         trainer.accelerator.gather = lambda x: x  # Mock gather to return the input directly
 
-        # Call the actual method from RLOOFinalTrainer
-        return RLOOFinalTrainer.get_high_entropy_mask(trainer, entropies, mask, threshold)
+        # Call the actual method from RLOOTrainer
+        return RLOOTrainer.get_high_entropy_mask(trainer, entropies, mask, threshold)
 
     def test_compute_entropy_mask_0(self):
         # We have a total of 12 tokens out of which 10 are non-pad.
@@ -453,11 +460,11 @@ class GetHighEntropyMaskTester(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
-class RLOOFinalTrainerTester(TrlTestCase):
+class RLOOTrainerTester(TrlTestCase):
     def test_init_minimal(self):
-        # Test that RLOOFinalTrainer can be instantiated with only model, reward_funcs and train_dataset
+        # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        RLOOFinalTrainer(
+        RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             train_dataset=dataset,
@@ -467,7 +474,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
     def test_training(self, config_name):
         dataset = load_dataset("trl-internal-testing/zen", config_name, split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -475,7 +482,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -496,7 +503,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
     def test_training_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             per_device_eval_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -506,7 +513,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             eval_steps=2,
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -519,7 +526,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
     def test_training_multiple_iterations(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -528,7 +535,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             num_iterations=2,
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -552,7 +559,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -560,7 +567,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model=model,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -596,7 +603,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             r=8, lora_alpha=32, target_modules=["q_proj", "v_proj"], lora_dropout=0.05, bias="none"
         )
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
             per_device_train_batch_size=3,
@@ -605,7 +612,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             gradient_checkpointing=True,  # Enable gradient checkpointing
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model=model,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -643,7 +650,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
         # we use a separate pad token instead.
         reward_tokenizer.pad_token = "<|finetune_right_pad_id|>"
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -651,7 +658,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_model,
             args=training_args,
@@ -678,7 +685,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -686,7 +693,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_func,
             args=training_args,
@@ -713,7 +720,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             completion_contents = [completion[0]["content"] for completion in completions]
             return [float(len(content)) for content in completion_contents]
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -721,7 +728,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_func,
             args=training_args,
@@ -740,7 +747,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_multiple_reward_funcs(self):
-        # Test that RLOOFinalTrainer can be instantiated with multiple reward functions
+        # Test that RLOOTrainer can be instantiated with multiple reward functions
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func1(completions, **kwargs):
@@ -751,7 +758,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             """Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -759,7 +766,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=[reward_func1, reward_func2],
             args=training_args,
@@ -789,7 +796,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             """A reward function that returns None for all inputs, as it is not applicable to this sample."""
             return [None] * len(completions)
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
             per_device_train_batch_size=3,
@@ -798,7 +805,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             report_to="none",
         )
 
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=[
                 applicable_reward_func,
@@ -822,7 +829,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_training_multiple_reward_funcs_with_weights(self):
-        """Test that RLOOFinalTrainer can handle multiple reward functions with weights."""
+        """Test that RLOOTrainer can handle multiple reward functions with weights."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         def reward_func1(completions, **kwargs):
@@ -833,7 +840,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             """Reward function that rewards completions with more unique letters."""
             return [float(len(set(completion))) for completion in completions]
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -842,7 +849,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             report_to="none",
             reward_weights=[0.7, 0.3],  # weight of reward_func1 and reward_func2 respectively
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=[reward_func1, reward_func2],
             args=training_args,
@@ -873,7 +880,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             """Reward function that rewards longer completions."""
             return [float(len(completion)) for completion in completions]
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -881,7 +888,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=[reward_func, "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"],
             args=training_args,
@@ -911,7 +918,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             """Reward function that rewards completions with lengths closer to the values in some_values."""
             return [float(abs(len(completion) - value)) for completion, value in zip(completions, some_values)]
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -919,7 +926,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_func,
             args=training_args,
@@ -940,7 +947,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
     def test_training_with_sync_ref_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -950,7 +957,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             ref_model_sync_steps=2,  # reduce sync steps to ensure a sync happens
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -968,18 +975,18 @@ class RLOOFinalTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    def test_training_beta_non_zero(self):
+    def test_training_beta_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
+            beta=0.0,  # set beta to zero value to test the case where the reference model is not used
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -999,9 +1006,8 @@ class RLOOFinalTrainerTester(TrlTestCase):
 
     def test_training_with_entropy_filter(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
-            beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1009,7 +1015,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             report_to="none",
             top_entropy_quantile=0.2,
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1036,7 +1042,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1050,7 +1056,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             # test with non-default modules as it adds extra keys in state_dict that we need to handle
             modules_to_save=["embed_tokens", "lm_head"],
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model=model,
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1079,7 +1085,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
         """Test that training works with vLLM for generation with guided decoding."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1089,7 +1095,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             use_vllm=True,
             vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1111,7 +1117,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
         """Test that training works with additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1124,7 +1130,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             repetition_penalty=1.1,
         )
 
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1148,7 +1154,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1162,7 +1168,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             repetition_penalty=1.1,
         )
 
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1183,7 +1189,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
     def test_training_no_scale_rewards(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1192,7 +1198,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             scale_rewards=False,
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1233,7 +1239,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
 
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1242,7 +1248,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             mask_truncated_completions=True,  # Enable masking of truncated completions
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1271,7 +1277,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
         """
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1280,7 +1286,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             mask_truncated_completions=True,  # Enable masking of truncated completions
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1298,10 +1304,39 @@ class RLOOFinalTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
 
+    def test_warning_raised_all_rewards_none(self):
+        """Test that a proper warning is raised when all rewards are None."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def always_none_reward_func(completions, **kwargs):
+            """Reward function that always returns None."""
+            return [None] * len(completions)
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = RLOOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=always_none_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with self.assertLogs("trl.trainer.grpo_trainer", level="WARNING") as cm:
+            trainer.train()
+
+        expected_warning = "All reward functions returned None for the following kwargs:"
+        self.assertIn(expected_warning, cm.output[0])
+
     def test_training_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1310,37 +1345,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             gradient_accumulation_steps=2,  # gradient accumulation should allow that
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
-    def test_training_delta_clipping(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = RLOOConfig_NEW(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            delta=2.0,  # set delta to a non-None value
-            report_to="none",
-        )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1361,7 +1366,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
     def test_training_multiple_dataloader_workers(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1370,7 +1375,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             dataloader_num_workers=2,  # use multiple dataloader workers
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1391,7 +1396,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
     def test_training_with_generation_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
@@ -1400,7 +1405,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             generation_kwargs={"do_sample": True, "top_k": 50, "length_penalty": -0.1},  # Add some gen kwargs
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1428,14 +1433,14 @@ class RLOOFinalTrainerTester(TrlTestCase):
             assert hasattr(trainer_state, "global_step")
             return [float(len(set(completion))) for completion in completions]
 
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             num_generations=2,
             max_completion_length=8,
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_func,
             args=training_args,
@@ -1445,7 +1450,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
 
     def test_prepare_input_called_with_correct_data(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
             max_completion_length=8,  # reduce the completion length to reduce memory usage
@@ -1458,7 +1463,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             shuffle_dataset=False,
             report_to="none",
         )
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
             args=training_args,
@@ -1485,7 +1490,7 @@ class RLOOFinalTrainerTester(TrlTestCase):
             + [{"prompt": "In the face of ambiguity, refuse"}] * 4
         )
 
-        with patch.object(RLOOFinalTrainer, "training_step", wraps=trainer.training_step) as mock_prepare:
+        with patch.object(RLOOTrainer, "training_step", wraps=trainer.training_step) as mock_prepare:
             trainer.train()
             # 3 epochs * 2 iterations * 2 generation batches to cover the dataset * 4 steps_per_generation
             self.assertEqual(mock_prepare.call_count, 48)
@@ -1493,37 +1498,6 @@ class RLOOFinalTrainerTester(TrlTestCase):
                 assert mock_prepare.call_args_list[i].args[1] == expected_first_generation_batch
             for i in range(8, 16):
                 assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
-
-    def test_training_sequence_importance_sampling(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
-
-        training_args = RLOOConfig_NEW(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
-            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
-            num_generations=3,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            num_iterations=2,  # the importance sampling weights won't be 0 in this case
-            importance_sampling_level="sequence",
-            report_to="none",
-        )
-        trainer = RLOOFinalTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
     def test_mismatched_reward_processing_classes_length(self):
         """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""
@@ -1540,10 +1514,10 @@ class RLOOFinalTrainerTester(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
         )
 
-        training_args = RLOOConfig_NEW(output_dir=self.tmp_dir, report_to="none")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
 
         with self.assertRaises(ValueError) as context:
-            RLOOFinalTrainer(
+            RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs=reward_models,
                 reward_processing_classes=single_processing_class,  # only one, but need two
@@ -1569,12 +1543,12 @@ class RLOOFinalTrainerTester(TrlTestCase):
         )
         processing_class2 = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForSequenceClassification")
 
-        training_args = RLOOConfig_NEW(output_dir=self.tmp_dir, report_to="none")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
 
         # Correct list length should work
         correct_processing_classes = [processing_class1, processing_class2]
 
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_models,
             reward_processing_classes=correct_processing_classes,
@@ -1596,9 +1570,9 @@ class RLOOFinalTrainerTester(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5"
         )
 
-        training_args = RLOOConfig_NEW(output_dir=self.tmp_dir, report_to="none")
+        training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
 
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=reward_model,
             reward_processing_classes=single_processing_class,  # single object for single reward model
