@@ -252,7 +252,6 @@ hf jobs uv run \
     --packing \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 8 \
-    --gradient_checkpointing \
     --eos_token '<|im_end|>' \
     --eval_strategy steps \
     --eval_steps 100 \
@@ -279,7 +278,6 @@ run_uv_job(
         "--packing",
         "--per_device_train_batch_size", "2",
         "--gradient_accumulation_steps", "8",
-        "--gradient_checkpointing",
         "--eos_token", "<|im_end|>",
         "--eval_strategy", "steps",
         "--eval_steps", "100",
