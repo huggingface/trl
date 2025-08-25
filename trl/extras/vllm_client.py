@@ -34,6 +34,7 @@ if is_requests_available():
 
 if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
+    from vllm.distributed.device_communicators.xpu_communicator import XpuCommunicator
     from vllm.distributed.utils import StatelessProcessGroup
 
     if is_vllm_ascend_available():
@@ -266,7 +267,8 @@ class VLLMClient:
 
         # Initialize weight update group
         url = f"{self.base_url}/init_communicator/"
-        client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
+        # Need to fix after xpu support get_device_properties
+        client_device_uuid = 42 if hasattr(torch, "xpu") and torch.xpu.is_available() else str(torch.cuda.get_device_properties(device).uuid)
 
         # In the server side, the host is set to 0.0.0.0
         response = self.session.post(
@@ -288,7 +290,8 @@ class VLLMClient:
 
         # Set up the communication group for weight broadcasting
         pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device=device)
+        comm_class = XpuCommunicator if (hasattr(torch, "xpu") and torch.xpu.is_available()) else PyNcclCommunicator
+        self.communicator = comm_class(pg, device=device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -310,8 +313,8 @@ class VLLMClient:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
         # Broadcast the weights to the other processes
-        self.pynccl_comm.broadcast(weights, src=self.rank)
-        self.pynccl_comm.group.barrier()
+        self.communicator.broadcast(weights, src=self.rank)
+        self.communicator.group.barrier()
 
     def update_model_params(self, model: nn.Module):
         """
@@ -354,8 +357,9 @@ class VLLMClient:
 if __name__ == "__main__":
     from vllm import SamplingParams
 
+    device = "xpu" if hasattr(torch, "xpu") and torch.xpu.is_available() else "cuda"
     client = VLLMClient()
-    client.init_communicator(device="cuda")
+    client.init_communicator(device=device)
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
@@ -364,5 +368,5 @@ if __name__ == "__main__":
     # Update model weights
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to(device)
     client.update_model_params(model)

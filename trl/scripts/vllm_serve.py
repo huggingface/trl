@@ -57,6 +57,7 @@ if is_vision_available():
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
+    from vllm.distributed.device_communicators.xpu_communicator import XpuCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
@@ -78,13 +79,13 @@ class WeightSyncWorkerExtension:
     """
     A vLLM worker extension that enables weight synchronization between a client and multiple server workers.
 
-    This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` to handle
+    This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` or `XpuCommunicator` to handle
     efficient GPU-based communication using NCCL. The primary purpose of this class is to receive updated model weights
     from a client process and distribute them to all worker processes participating in model inference.
     """
 
     # The following attributes are initialized when `init_communicator` method is called.
-    pynccl_comm = None  # Communicator for weight updates
+    communicator = None  # Communicator for weight updates
     client_rank = None  # Source rank for broadcasting updated weights
 
     def init_communicator(self, host: str, port: int, world_size: int, client_device_uuid: str) -> None:
@@ -105,15 +106,17 @@ class WeightSyncWorkerExtension:
                 UUID of the device of client main process. Used to assert that devices are different from vllm workers
                 devices.
         """
-        if self.pynccl_comm is not None:
+        if self.communicator is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
-        if client_device_uuid == str(torch.cuda.get_device_properties(self.device).uuid):
-            raise RuntimeError(
-                f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) for multiple distinct "
-                "roles/ranks within the same communicator. This setup is unsupported and will likely lead to program "
-                "hangs or incorrect behavior. Ensure that trainer is using different devices than vLLM server."
-            )
+        # TODO: will remove after xpu add uuid in get_device_properties
+        if torch.cuda.is_available():
+            if client_device_uuid == str(torch.cuda.get_device_properties(self.device).uuid):
+                raise RuntimeError(
+                    f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) for multiple distinct "
+                    "roles/ranks within the same communicator. This setup is unsupported and will likely lead to program "
+                    "hangs or incorrect behavior. Ensure that trainer is using different devices than vLLM server."
+                )
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
@@ -121,7 +124,8 @@ class WeightSyncWorkerExtension:
         pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
 
         # Initialize the NCCL-based communicator for weight synchronization.
-        self.pynccl_comm = PyNcclCommunicator(pg, device=self.device)
+        comm_class = XpuCommunicator if (hasattr(torch, "xpu") and torch.xpu.is_available()) else PyNcclCommunicator
+        self.communicator = comm_class(pg, device=self.device)
 
         # The client process that sends updated weights has the highest rank (world_size - 1).
         self.client_rank = world_size - 1
@@ -138,7 +142,7 @@ class WeightSyncWorkerExtension:
             shape (`Sequence[int]`):
                 Shape of the weight tensor.
         """
-        if self.pynccl_comm is None:
+        if self.communicator is None:
             raise RuntimeError("Communicator not initialized. Call `init_communicator` first.")
 
         dtype = getattr(torch, dtype.split(".")[-1])
@@ -146,8 +150,8 @@ class WeightSyncWorkerExtension:
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
         # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-        self.pynccl_comm.broadcast(weight, src=self.client_rank)
-        self.pynccl_comm.group.barrier()
+        self.communicator.broadcast(weight, src=self.client_rank)
+        self.communicator.group.barrier()
 
         # Load the received weights into the model.
         self.model_runner.model.load_weights(weights=[(name, weight)])
@@ -159,9 +163,9 @@ class WeightSyncWorkerExtension:
         This method deletes the NCCL communicator to release associated resources.
         """
 
-        if self.pynccl_comm is not None:
-            del self.pynccl_comm
-            self.pynccl_comm = None  # Ensure attribute is reset to None
+        if self.communicator is not None:
+            del self.communicator
+            self.communicator = None  # Ensure attribute is reset to None
             self.client_rank = None  # Ensure attribute is reset to None
 
 

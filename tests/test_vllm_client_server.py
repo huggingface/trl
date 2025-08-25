@@ -71,7 +71,7 @@ class TestVLLMClientServer(TrlTestCase):
         )
 
         # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240)
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
         cls.client.init_communicator()
 
     def test_generate(self):
@@ -371,7 +371,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
     def test_init_communicator_with_device_string(self):
         """Test init_communicator with string device parameter."""
         client = VLLMClient(connection_timeout=240)
-        client.init_communicator(device="cuda:0")  # Explicitly specify device as string
+        client.init_communicator(device=0)  # Explicitly specify device as string
 
         # Test basic functionality
         prompts = ["Hello, AI!"]
@@ -386,7 +386,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         import torch
 
         client = VLLMClient(connection_timeout=240)
-        device = torch.device("cuda:0")
+        device = torch.device(0)
         client.init_communicator(device=device)  # Explicitly specify torch.device object
 
         # Test basic functionality
