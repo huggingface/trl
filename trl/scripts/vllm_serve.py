@@ -465,9 +465,11 @@ def main(script_args: ScriptArguments):
         max_tokens: int = 16
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: dict = field(default_factory=dict)
+        logprobs: Optional[int] = None
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
+        logprobs: list[list[float]]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -535,6 +537,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
+            "logprobs": request.logprobs,
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
@@ -561,7 +564,19 @@ def main(script_args: ScriptArguments):
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids}
+
+        response = {"completion_ids": completion_ids}
+
+        if request.logprobs is not None:
+            logprobs: list[list[float]] = [
+                [next(iter(lp.values())) for lp in output.logprobs]
+                for outputs in all_outputs
+                for output in outputs.outputs
+            ]
+
+            response["logprobs"] = logprobs
+
+        return response
 
     class InitCommunicatorRequest(BaseModel):
         host: str
