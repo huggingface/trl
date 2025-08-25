@@ -573,8 +573,6 @@ class RLOOFinalTrainer(Trainer):
         self.pad_token = tokenizer.pad_token
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
-        self.vision_end_token_id = getattr(model.config, "vision_end_token_id", None)
 
         # Reward functions
         if not isinstance(reward_funcs, list):
