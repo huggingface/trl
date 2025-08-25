@@ -1,293 +1,611 @@
-# RLOO Trainer
+# GRPO Trainer
 
-[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
+[![](https://img.shields.io/badge/All_models-GRPO-blue)](https://huggingface.co/models?other=grpo,trl)
 
-TRL supports training LLMs with REINFORCE Leave-One-Out (RLOO). The idea is that instead of using a value function, RLOO generates K completions for each prompt. For each completion, RLOO uses the mean scores from the other K-1 completions as a baseline to calculate the advantage. RLOO also models the entire completion as a single action, whereas PPO models each token as an action. Note that REINFORCE / A2C is a special case of PPO, when the number of PPO epochs is 1 and the number of mini-batches is 1, which is how we implement RLOO in TRL.
+## Overview
 
-References:
-- [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs](https://huggingface.co/papers/2402.14740)
-- [A2C is a special case of PPO](https://huggingface.co/papers/2205.09123)
-- [Fine-Tuning Language Models from Human Preferences](https://github.com/openai/lm-human-preferences)
-- [Learning to Summarize from Human Feedback](https://github.com/openai/summarize-from-feedback)
-- [The N Implementation Details of RLHF with PPO](https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo)
-- [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031)
+TRL supports the GRPO Trainer for training language models, as described in the paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300) by [Zhihong Shao](https://huggingface.co/syhia), [Peiyi Wang](https://huggingface.co/peiyiwang89), [Qihao Zhu](https://huggingface.co/zqh11), Runxin Xu, [Junxiao Song](https://huggingface.co/haha-point), Mingchuan Zhang, Y. K. Li, Y. Wu, [Daya Guo](https://huggingface.co/guoday).
 
-## Get started
+The abstract from the paper is the following:
 
-To just run a RLOO script to make sure the trainer can run, you can run the following command to train a RLOO model with a dummy reward model.
+> Mathematical reasoning poses a significant challenge for language models due to its complex and structured nature. In this paper, we introduce DeepSeekMath 7B, which continues pre-training DeepSeek-Coder-Base-v1.5 7B with 120B math-related tokens sourced from Common Crawl, together with natural language and code data. DeepSeekMath 7B has achieved an impressive score of 51.7% on the competition-level MATH benchmark without relying on external toolkits and voting techniques, approaching the performance level of Gemini-Ultra and GPT-4. Self-consistency over 64 samples from DeepSeekMath 7B achieves 60.9% on MATH. The mathematical reasoning capability of DeepSeekMath is attributed to two key factors: First, we harness the significant potential of publicly available web data through a meticulously engineered data selection pipeline. Second, we introduce Group Relative Policy Optimization (GRPO), a variant of Proximal Policy Optimization (PPO), that enhances mathematical reasoning abilities while concurrently optimizing the memory usage of PPO.
 
-```bash
-python examples/scripts/rloo/rloo.py \
-    --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
-    --dataset_train_split descriptiveness \
-    --learning_rate 3e-6 \
-    --output_dir models/minimal/rloo \
-    --per_device_train_batch_size 64 \
-    --gradient_accumulation_steps 1 \
-    --total_episodes 10000 \
-    --model_name_or_path EleutherAI/pythia-14m \
-    --reward_model_path EleutherAI/pythia-14m \
-    --missing_eos_penalty 1.0
-```
+This post-training method was contributed by [Quentin Gallouédec](https://huggingface.co/qgallouedec).
 
+## Quick start
 
-## Explanation of the logged metrics
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
 
-The logged metrics are as follows. Here is an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34)
+<iframe
+  src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
+  frameborder="0"
+  width="100%"
+  height="560px"
+></iframe>
 
-<!-- * `rlhf_reward_var_per_prompt`: calculated by `rlhf_reward.var(0).mean()`. This is the variance of the rewards estimated across the `args.rloo_k` samples. Usually we expect it to go down (cause policy entropy goes down). -->
-
-* `eps`: Tracks the number of episodes per second.
-* `objective/kl`: The mean Kullback-Leibler (KL) divergence between the current policy and reference policy.
-* `objective/entropy`: The mean entropy of the policy, indicating the randomness of the actions chosen by the policy.
-* `objective/non_score_reward`: The mean reward from non-score-related sources, basically `beta * kl.sum(1)`, where `beta` is the KL penalty coefficient and `kl` is the per-token KL divergence.
-* `objective/rlhf_reward`: The mean RLHF reward, which is `score - non_score_reward`.
-* `objective/scores`: The mean scores returned by the reward model / environment.
-* `policy/approxkl_avg`: The average approximate KL divergence between consecutive PPO policies. Note that this is not the same as `objective/kl`.
-* `policy/clipfrac_avg`: The average fraction of policy updates that are clipped, indicating how often the policy updates are constrained to prevent large changes.
-* `loss/policy_avg`: The average policy loss, indicating how well the policy is performing.
-* `val/clipfrac_avg`: The average fraction of value function updates that are clipped, similar to policy/clipfrac_avg but for the value function.
-* `policy/entropy_avg`: The average entropy of the policy during training, indicating how diverse the policy's actions are.
-* `val/ratio`: The mean ratio of the current policy probability to the old policy probability, providing a measure of how much the policy has changed.
-* `val/ratio_var`: The variance of the `val/ratio`, indicating the variability in policy changes.
-* `val/num_eos_tokens`: The number of end-of-sequence (EOS) tokens generated, which can indicate the number of complete responses.
-* `lr`: lr: The current learning rate used by the optimizer.
-* `episode`: episode: The current global step or episode count in the training process.
-
-
-## Cookbook
-
-* Debugging TIP: `objective/rlhf_reward`: this is the ultimate objective of the RLHF training. If training works as intended, this metric should keep going up.
-* Debugging TIP: `val/ratio`: this number should float around 1.0, and it gets clipped by `--cliprange 0.2` with PPO's surrogate loss. So if this `ratio` is too high like 2.0 or 1000.0 or too small like 0.1, it means the updates between consecutive policies are too drastic. You should try understand why this is happening and try to fix it.
-* Memory TIP: If you are running out of memory, you can try to reduce the `--per_device_train_batch_size` or increase the `--gradient_accumulation_steps` to reduce the memory footprint.
-* Memory TIP: If you have multiple GPUs, you can also run training with DeepSpeed stage 3 to reduce the memory footprint `accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml`.
-* Usage TIP: We recommend to use the "EOS trick" via `--missing_eos_penalty`, which subtracts a static scalar penalty from the score of completions that do not end with an EOS token. This can help the model learn to generate more coherent completions.
-
-
-## What is my model doing exactly?
-
-To help you understand what your model is doing, we periodically log some sample completions from the model. Here is an example of a completion. In an example [tracked run at Weights and Biases](https://wandb.ai/huggingface/trl/runs/u2sqci34), it looks like the following, allowing you to see the model's response at different stages of training. By default we generate `--num_sample_generations 10` during training, but you can customize the number of generations.
-
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/ppov2_completions.gif)
-
-
-In the logs the sampled generations look like 
-
-```
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
-┃ query                           ┃ model response                  ┃ score    ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
-│  SUBREDDIT: r/AskReddit         │  I'm in love with a friend, and │ 3.921875 │
-│                                 │ I don't know how to get rid of  │          │
-│ TITLE: How do you get someone   │ those feelings. I'm             │          │
-│ out of your head?               │ desperate.<|endoftext|>[PAD][P… │          │
-│                                 │                                 │          │
-│ POST: Hi,                       │                                 │          │
-│ I'm 22, and I have been with my │                                 │          │
-│ girlfriend for 5 years now. We  │                                 │          │
-│ recently moved together. We've  │                                 │          │
-│ always loved each other         │                                 │          │
-│ intensely.                      │                                 │          │
-│                                 │                                 │          │
-│ Problem, I recently started to  │                                 │          │
-│ have feelings for an other      │                                 │          │
-│ person (a friend). This person  │                                 │          │
-│ has had a boyfriend for now 3   │                                 │          │
-│ years, and has absolutely no    │                                 │          │
-│ ideas. Those feelings were so   │                                 │          │
-│ strong, it was hard to hide     │                                 │          │
-│ them. After 2 months of me      │                                 │          │
-│ being distant and really sad,   │                                 │          │
-│ my girlfriend forced me to say  │                                 │          │
-│ what was bothering me. I'm not  │                                 │          │
-│ a good liar, and now she knows. │                                 │          │
-│                                 │                                 │          │
-│ We decided to give us a week    │                                 │          │
-│ alone, I went to my parents.    │                                 │          │
-│                                 │                                 │          │
-│ Now, I'm completely lost. I     │                                 │          │
-│ keep on thinking about this     │                                 │          │
-│ person, and I hate that. I      │                                 │          │
-│ would like for those feelings   │                                 │          │
-│ to go away, to leave me alone.  │                                 │          │
-│ But I can't.                    │                                 │          │
-│                                 │                                 │          │
-│ What do I do? It's been 3       │                                 │          │
-│ months now, and I'm just        │                                 │          │
-│ desperate.                      │                                 │          │
-│                                 │                                 │          │
-│ TL;DR:                          │                                 │          │
-├─────────────────────────────────┼─────────────────────────────────┼──────────┤
-│  SUBREDDIT: r/pettyrevenge      │  My mom woke me up with a loud  │ 6.84375  │
-│                                 │ TV. I blasted Gangnam Style on  │          │
-│ TITLE: So, my mom woke me up    │ repeat, with the bass cranked   │          │
-│ with a loud TV.                 │ up as high as it could          │          │
-│                                 │ go.<|endoftext|>[PAD][PAD][PAD… │          │
-│ POST: She was in her living     │                                 │          │
-│ room, watching TV. This was at  │                                 │          │
-│ about 8:30 in the morning, and  │                                 │          │
-│ she was exercising. She turned  │                                 │          │
-│ the TV up extra loud to hear it │                                 │          │
-│ over her excercycle, and woke   │                                 │          │
-│ me up. I went in there asking   │                                 │          │
-│ for her to turn it down. She    │                                 │          │
-│ said she didn't have to; I      │                                 │          │
-│ explained that I always used    │                                 │          │
-│ headphones so she didn't have   │                                 │          │
-│ to deal with my noise and that  │                                 │          │
-│ she should give me a little     │                                 │          │
-│ more respect, given that I paid │                                 │          │
-│ rent at the time.               │                                 │          │
-│                                 │                                 │          │
-│ She disagreed. I went back to   │                                 │          │
-│ my room, rather pissed off at   │                                 │          │
-│ the lack of equality. I had no  │                                 │          │
-│ lock on my door; but I had a    │                                 │          │
-│ dresser right next to it, so I  │                                 │          │
-│ pulled one of the drawers out   │                                 │          │
-│ enough so that it caused the    │                                 │          │
-│ door to not be openable. Then,  │                                 │          │
-│ I turned my speakers up really  │                                 │          │
-│ loud and blasted Gangnam Style  │                                 │          │
-│ on repeat, with the bass        │                                 │          │
-│ cranked up as high as it could  │                                 │          │
-│ go.                             │                                 │          │
-│                                 │                                 │          │
-│ If you hate Gangnam Style for   │                                 │          │
-│ being overplayed, you will see  │                                 │          │
-│ why I chose that particular     │                                 │          │
-│ song. I personally don't mind   │                                 │          │
-│ it. But here's the thing about  │                                 │          │
-│ my bass; it vibrates the walls, │                                 │          │
-│ making one hell of a lot of     │                                 │          │
-│ noise. Needless to say, my mom  │                                 │          │
-│ was not pleased and shut off    │                                 │          │
-│ the internet. But it was oh so  │                                 │          │
-│ worth it.                       │                                 │          │
-│                                 │                                 │          │
-│ TL;DR:                          │                                 │          │
-└─────────────────────────────────┴─────────────────────────────────┴──────────┘
-```
-
-## Implementation details
-
-The bulk of RLOOTrainer is based on the PPO implementation, which is based on the [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
-
-
-Below is a vectorized advantage calculation for RLOO:
+Below is the script to train the model.
 
 ```python
-def test_rloo_reward():
-    local_batch_size = 3
-    rloo_k = 4
-    rlhf_reward = torch.tensor([
-        1, 2, 3, # first rlhf reward for three prompts
-        2, 3, 4, # second rlhf reward for three prompts
-        5, 6, 7, # third rlhf reward for three prompts
-        8, 9, 10, # fourth rlhf reward for three prompts
-    ]).float() # here we have 3 prompts which have 4 completions each
+# train_grpo.py
+from datasets import load_dataset
+from trl import GRPOConfig, GRPOTrainer
 
-    baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
-    advantages = torch.zeros_like(rlhf_reward)
-    for i in range(0, len(advantages), local_batch_size):
-        other_response_rlhf_rewards = []
-        for j in range(0, len(advantages), local_batch_size):
-            if i != j:
-                other_response_rlhf_rewards.append(rlhf_reward[j : j + local_batch_size])
-        advantages[i : i + local_batch_size] = rlhf_reward[i : i + local_batch_size] - torch.stack(other_response_rlhf_rewards).mean(0)
-    
-    assert (1 - (2 + 5 + 8) / 3 - advantages[0].item()) < 1e-6  # First rlhf reward for the first prompt
-    assert (6 - (3 + 2 + 9) / 3 - advantages[7].item()) < 1e-6  # Third rlhf reward for the second prompt
+dataset = load_dataset("trl-lib/tldr", split="train")
 
-    # Vectorized implementation
-    rlhf_reward = rlhf_reward.reshape(rloo_k, local_batch_size)
-    baseline = (rlhf_reward.sum(0) - rlhf_reward) / (rloo_k - 1)
-    vec_advantages = rlhf_reward - baseline
-    torch.testing.assert_close(vec_advantages.flatten(), advantages)
+# Define the reward function, which rewards completions that are close to 20 characters
+def reward_len(completions, **kwargs):
+    return [-abs(20 - len(completion)) for completion in completions]
+
+training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=reward_len,
+    args=training_args,
+    train_dataset=dataset,
+)
+trainer.train()
 ```
 
-## Benchmark experiments
-
-To validate the RLOO implementation works, we ran experiment on the 1B model. Here are the command we used to run the experiment. We take the SFT / RM models directly from [The N+ Implementation Details of RLHF with PPO: A Case Study on TL;DR Summarization](https://huggingface.co/papers/2403.17031).
-
-```
-accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
-    --output_dir models/minimal/rloo_tldr \
-    --dataset_name trl-internal-testing/tldr-preference-sft-trl-style \
-    --dataset_test_split validation \
-    --num_ppo_epochs 2 \
-    --num_mini_batches 2 \
-    --learning_rate 3e-6 \
-    --per_device_train_batch_size 16 \
-    --gradient_accumulation_steps 16 \
-    --total_episodes 1000000 \
-    --model_name_or_path EleutherAI/pythia-1b-deduped \
-    --sft_model_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr \
-    --reward_model_path cleanrl/EleutherAI_pythia-1b-deduped__reward__tldr \
-    --local_rollout_forward_batch_size 16 \
-    --missing_eos_penalty 1.0 \
-    --stop_token eos \
-    --kl_coef 0.03
-```
-
-Checkpoints and experiment tracking are available at:
-
-- [🤗 Model checkpoint](https://huggingface.co/vwxyzjn/rloo_tldr)
-- [🐝 Tracked experiment](https://wandb.ai/huggingface/trl/runs/u2sqci34)
-
-
-To evaluate, we use [vLLM](https://github.com/vllm-project/vllm) to load the checkpoints and GPT-4o mini as a judge model to evaluate the generated TL;DR against the reference TL;DR.
-For more information on how to use judges, see [Judges](judges).
+Execute the script using the following command:
 
 ```bash
-$ python examples/scripts/evals/judge_tldr.py --model_name_or_path cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 33.00%
-$ python examples/scripts/evals/judge_tldr.py --model_name_or_path vwxyzjn/rloo_tldr --judge_model gpt-4o-mini --num_examples 1000
-Model win rate: 51.20%
+accelerate launch train_grpo.py
 ```
 
-The RLOO checkpoint gets a 51.2% preferred rate vs the 33.0% preference rate of the SFT checkpoint. This is a good sign that the RLOO training is working as intended.
+Distributed across 8 GPUs, the training takes approximately 1 day.
+
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/grpo_curves.png)
+
+## Looking deeper into the GRPO method
+
+GRPO is an online learning algorithm, meaning it improves iteratively by using the data generated by the trained model itself during training. The intuition behind GRPO objective is to maximize the advantage of the generated completions, while ensuring that the model remains close to the reference policy. To understand how GRPO works, it can be broken down into four main steps: **Generating completions**, **computing the advantage**, **estimating the KL divergence**, and **computing the loss**.
+
+![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/grpo_visual.png)
+
+### Generating completions
+
+At each training step, we sample a batch of prompts and generate a set of  \\( G \\) completions for each prompt (denoted as  \\( o_i \\)).
+
+### Computing the advantage
+
+For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
+
+$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
+
+This approach gives the method its name: **Group Relative Policy Optimization (GRPO)**.
+
+<Tip>
+
+It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
+
+</Tip>
+
+<Tip>
+
+[Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221) showed that calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
+
+</Tip>
+
+### Estimating the KL divergence
+
+KL divergence is estimated using the approximator introduced by [Schulman et al. (2020)](http://joschu.net/blog/kl-approx.html). The approximator is defined as follows:
+
+$$\mathbb{D}_{\text{KL}}\left[\pi_\theta \|\pi_{\text{ref}}\right] = \frac{\pi_{\text{ref}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} - \log \frac{\pi_{\text{ref}}(o_{i,t} \mid q, o_{i,<t})}{\pi_\theta(o_{i,t} \mid q, o_{i,<t})} - 1,
+$$
+
+### Computing the loss
+
+The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:
+
+$$
+\mathcal{L}_{\text{GRPO}}(\theta) = -\frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} \left[ \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
+$$
+
+where the first term represents the scaled advantage and the second term penalizes deviations from the reference policy through KL divergence.
+
+<Tip>
+
+Note that compared to the original formulation in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300), we don't scale by  \\( \frac{1}{|o_i|} \\) because it was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that this introduces a response-level length bias. More details in [loss types](#loss-types).
+
+</Tip>
+
+<Tip>
+
+Note that compared to the original formulation in [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models](https://huggingface.co/papers/2402.03300), we use  \\( \beta = 0.0 \\) by default, meaning that the KL divergence term is not used. This choice is motivated by several recent studies (e.g., [Open-Reasoner-Zero: An Open Source Approach to Scaling Up Reinforcement Learning on the Base Model](https://huggingface.co/papers/2503.24290)) which have shown that the KL divergence term is not essential for training with GRPO. As a result, it has become common practice to exclude it (e.g. [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783), [DAPO: An Open-Source LLM Reinforcement Learning System at Scale](https://huggingface.co/papers/2503.14476)). If you wish to include the KL divergence term, you can set `beta` in [`GRPOConfig`] to a non-zero value.
+
+</Tip>
+
+In the original paper, this formulation is generalized to account for multiple updates after each generation (denoted  \\( \mu \\), can be set with `num_iterations` in [`GRPOConfig`]) by leveraging the **clipped surrogate objective**:
+
+$$
+\mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})} \hat{A}_{i,t}, \, \text{clip}\left( \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}, 1 - \epsilon, 1 + \epsilon \right) \hat{A}_{i,t} \right) - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right] \right],
+$$
+
+where  \\(\text{clip}(\cdot, 1 - \epsilon, 1 + \epsilon) \\) ensures that updates do not deviate excessively from the reference policy by bounding the policy ratio between  \\( 1 - \epsilon \\) and  \\( 1 + \epsilon \\).
+When  \\( \mu = 1 \\) (default in TRL), the clipped surrogate objective simplifies to the original objective.
+
+#### Loss Types
+
+Several formulations of the objective have been proposed in the literature. Initially, the objective of GRPO was defined as follows:
+
+$$
+\mathcal{L}_{\text{GRPO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} l_{i,t},
+$$
+
+where
+
+$$
+l_{i,t} = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\left[\pi_\theta(o_{i,t} \mid q, o_{i,< t})\right]_{\text{no grad}}} \hat{A}_{i,t} - \beta \mathbb{D}_{\text{KL}}\left[\pi_\theta \| \pi_{\text{ref}}\right].
+$$
+
+The [DAPO paper](https://huggingface.co/papers/2503.14476) highlights the limitations of the GRPO algorithm’s sample-level loss in long-CoT scenarios, where longer responses are under-penalized, leading to poorer quality outputs. The proposed solution is a token-level normalization, which better handles longer sequences by assigning more balanced rewards to individual tokens, regardless of response length:
+
+$$
+\mathcal{L}_{\text{DAPO}}(\theta) = - \frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
+$$
+
+To use this formulation, set `loss_type="dapo"` in [`GRPOConfig`].
+
+Furthermore, it was demonstrated in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that the initial GRPO formulation introduces a response length bias. They show that while the DAPO formulation reduces this bias, it does not eliminate it completely. To fully remove this bias, they propose dividing by a constant instead of the sequence length, resulting in the following formulation:
+
+$$
+\mathcal{L}_{\text{Dr. GRPO}}(\theta) = - \frac{1}{LG} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
+$$
+
+This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
+
+## Logged metrics
+
+While training and evaluating, we record the following reward metrics:
+
+- `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
+- `completions/mean_length`: The average length of generated completions.
+- `completions/min_length`: The minimum length of generated completions.
+- `completions/max_length`: The maximum length of generated completions.
+- `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
+- `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
+- `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
+- `completions/clipped_ratio` : The ratio of truncated (clipped) completions.
+- `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
+- `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
+- `reward`: The overall average reward after applying reward weights.
+- `reward_std`: The standard deviation of rewards after applying reward weights.  
+  - If `scale_rewards` is `"group"` or `"none"`, this is the average of the per-group standard deviations.
+  - If `scale_rewards` is `"batch"`, this is the standard deviation computed over all rewards in the batch (ignoring groups).
+- `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
+- `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
+- `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
+- `clip_ratio/region_mean`: The ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities where the GRPO objective is clipped to stay within the trust region:
+$$
+\text{clip}\left( r_{i,t}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i,t}(\theta) = \frac{\pi_\theta(o_{i,t} \mid q, o_{i,< t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,< t})}\,.
+$$
+A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
+- `clip_ratio/low_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+
+## Customization
+
+### Speed up training with vLLM-powered generation
+
+Generation is often the main bottleneck when training with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a high-throughput, low-latency inference engine for LLMs. To enable it, first install the package with
+```shell
+pip install trl[vllm]
+```
+
+We support two ways of using vLLM during training: **server mode** and **colocate mode**.
+
+#### 🔌 Option 1: Server mode
+
+In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
+
+1. **Start the vLLM server**:
+   ```bash
+   trl vllm-serve --model <model_name>
+   ```
+
+2. **Enable server mode in your training script**:
+   ```python
+   from trl import GRPOConfig
+
+   training_args = GRPOConfig(
+       ...,
+       use_vllm=True,
+       vllm_mode="server",  # default value, can be omitted
+   )
+   ```
+
+<Tip warning={true}>
+
+Make sure that the server is using different GPUs than the trainer, otherwise you may run into NCCL errors. You can specify the GPUs to use with the `CUDA_VISIBLE_DEVICES` environment variable.
+
+</Tip>
+
+#### 🧩 Option 2: Colocate mode
+
+In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="colocate",
+)
+```
+
+<Tip>
+
+Depending on the model size and the overall GPU memory requirements for training, you may need to adjust the `vllm_gpu_memory_utilization` parameter in [`GRPOConfig`] to avoid underutilization or out-of-memory errors.
+
+We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
+
+<iframe
+    src="https://trl-lib-recommend-vllm-memory.hf.space"
+    frameborder="0"
+    width="850"
+    height="450"
+></iframe>
+
+If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
+
+</Tip>
+
+<Tip>
+
+By default, GRPO uses `MASTER_ADDR=localhost` and `MASTER_PORT=12345` for vLLM, but you can override these values by setting the environment variables accordingly.
+
+</Tip>
+
+For more information, see [Speeding up training with vLLM](speeding_up_training#vllm-for-fast-generation-in-online-methods).
+
+### GRPO at scale: train a 70B+ Model on multiple nodes
+
+When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
+
+- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
+- **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
+- **vLLM**: See the previous section on how to use vLLM to speed up generation.
+
+Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
+
+```sh
+#!/bin/bash
+#SBATCH --nodes=5
+#SBATCH --gres=gpu:8
+
+# Get the list of allocated nodes
+NODELIST=($(scontrol show hostnames $SLURM_JOB_NODELIST))
+
+# Assign the first 4 nodes for training and the 5th node for vLLM
+TRAIN_NODES="${NODELIST[@]:0:4}"  # Nodes 0, 1, 2, 3 for training
+VLLM_NODE="${NODELIST[4]}"  # Node 4 for vLLM
+
+# Run training on the first 4 nodes (Group 1)
+srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
+     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+     --num_processes 32 \
+     --num_machines 4 \
+     --main_process_ip ${NODELIST[0]} \
+     --machine_rank $SLURM_PROCID \
+     --rdzv_backend c10d \
+     train_grpo.py \
+     --server_ip $VLLM_NODE &
+
+# Run vLLM server on the 5th node (Group 2)
+srun --nodes=1 --ntasks=1 --nodelist="${NODELIST[4]}" trl vllm-serve --model Qwen/Qwen2.5-72B --tensor_parallel_size 8 &
+
+wait
+```
+
+```python
+import argparse
+
+from datasets import load_dataset
+from trl import GRPOTrainer, GRPOConfig
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--vllm_server_host", type=str, default="", help="The server IP")
+    args = parser.parse_args()
+
+    # Example dataset from TLDR
+    dataset = load_dataset("trl-lib/tldr", split="train")
+
+    # Dummy reward function: count the number of unique characters in the completions
+    def reward_num_unique_chars(completions, **kwargs):
+        return [len(set(c)) for c in completions]
+
+    training_args = GRPOConfig(
+        output_dir="Qwen2.5-72B-GRPO",
+        per_device_train_batch_size=4,
+        bf16=True,
+        gradient_checkpointing=True,
+        use_vllm=True,
+        vllm_server_host=args.vllm_server_host.replace("ip-", "").replace("-", "."),  # from ip-X-X-X-X to X.X.X.X
+    )
+
+    trainer = GRPOTrainer(model="Qwen/Qwen2.5-72B", args=training_args, reward_funcs=reward_num_unique_chars, train_dataset=dataset)
+    trainer.train()
+
+if __name__=="__main__":
+    main()
+```
+
+### Using a custom reward function
+
+The [`GRPOTrainer`] supports using custom reward functions instead of dense reward models. To ensure compatibility, your reward function must satisfy the following requirements:
+
+1. **Input arguments**:
+   - The function must accept the following as keyword arguments:
+     - `prompts` (contains the prompts),
+     - `completions` (contains the generated completions),
+     - `completions_ids` (contains the tokenized completions),
+     - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
+     - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
+
+     The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
+   - Depending on the dataset format, the input will vary:
+     - For [standard format](dataset_formats#standard), `prompts` and `completions` will be lists of strings.
+     - For [conversational format](dataset_formats#conversational), `prompts` and `completions` will be lists of message dictionaries.
+
+2. **Return value**: The function must return a list of floats. Each float represents the reward corresponding to a single completion.
+
+#### Example 1: Reward longer completions
+
+Below is an example of a reward function for a standard format that rewards longer completions:
+
+```python
+def reward_func(completions_ids, **kwargs):
+    """Reward function that assigns higher scores to longer completions (in terms of token count)."""
+    return [float(len(ids)) for ids in completions_ids]
+```
+
+You can test it as follows:
+
+```python
+>>> prompts = ["The sky is", "The sun is"]  # not used in the reward function, but the trainer will pass it
+>>> completions = [" blue.", " in the sky."]  # not used in the reward function, but the trainer will pass it
+>>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]
+>>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+[2.0, 4.0]
+```
+
+#### Example 1.1: Reward longer completions (based in the number of characters)
+
+Same as the previous example, but this time the reward function is based on the number of characters instead of tokens.
+
+```python
+def reward_func(completions, **kwargs):
+    """Reward function that assigns higher scores to longer completions (in terms of character count)."""
+    return [float(len(completion)) for completion in completions]
+```
+
+You can test it as follows:
+
+```python
+>>> prompts = ["The sky is", "The sun is"]
+>>> completions = [" blue.", " in the sky."]
+>>> completions_ids = [[6303, 13], [304, 279, 12884, 13]]  # not used in the reward function, but the trainer will pass it
+>>> reward_func(prompts=prompts, completions=completions, completions_ids=completions_ids)
+[6.0, 12.0]
+```
+
+#### Example 2: Reward completions with specific format
+
+Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the _format reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+It is designed for conversational format, where prompts and completions consist of structured messages.
+
+```python
+import re
+
+def format_reward_func(completions, **kwargs):
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"^<think>.*?</think><answer>.*?</answer>$"
+    completion_contents = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, content) for content in completion_contents]
+    return [1.0 if match else 0.0 for match in matches]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = [
+...     [{"role": "assistant", "content": "What is the result of (1 + 2) * 4?"}],
+...     [{"role": "assistant", "content": "What is the result of (3 + 1) * 2?"}],
+... ]
+>>> completions = [
+...     [{"role": "assistant", "content": "<think>The sum of 1 and 2 is 3, which we multiply by 4 to get 12.</think><answer>(1 + 2) * 4 = 12</answer>"}],
+...     [{"role": "assistant", "content": "The sum of 3 and 1 is 4, which we multiply by 2 to get 8. So (3 + 1) * 2 = 8."}],
+... ]
+>>> format_reward_func(prompts=prompts, completions=completions)
+[1.0, 0.0]
+```
+
+#### Example 3: Reward completions based on a reference
+
+Below is an example of a reward function that checks if the completion is correct. This example is inspired by the _accuracy reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
+This example is designed for [standard format](dataset_formats#standard), where the dataset contains a column named `ground_truth`.
+
+```python
+import re
+
+def reward_func(completions, ground_truth, **kwargs):
+    # Regular expression to capture content inside \boxed{}
+    matches = [re.search(r"\\boxed\{(.*?)\}", completion) for completion in completions]
+    contents = [match.group(1) if match else "" for match in matches]
+    # Reward 1 if the content is the same as the ground truth, 0 otherwise
+    return [1.0 if c == gt else 0.0 for c, gt in zip(contents, ground_truth)]
+```
+
+You can test this function as follows:
+
+```python
+>>> prompts = ["Problem: Solve the equation $2x + 3 = 7$. Solution:", "Problem: Solve the equation $3x - 5 = 10$."]
+>>> completions = [r" The solution is \boxed{2}.", r" The solution is \boxed{6}."]
+>>> ground_truth = ["2", "5"]
+>>> reward_func(prompts=prompts, completions=completions, ground_truth=ground_truth)
+[1.0, 0.0]
+```
+#### Example 4: Multi-task reward functions
+
+Below is an example of using multiple reward functions in the [`GRPOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
+
+```python
+from datasets import Dataset
+from trl import GRPOTrainer
+
+# Define a dataset that contains both math and coding problems
+dataset = Dataset.from_list(
+    [
+        {"prompt": "What is 2+2?", "task": "math"},
+        {"prompt": "Write a function that returns the sum of two numbers.", "task": "code"},
+        {"prompt": "What is 3*4?", "task": "math"},
+        {"prompt": "Write a function that returns the product of two numbers.", "task": "code"},
+    ]
+)
+
+# Math-specific reward function
+def math_reward_func(prompts, completions, task, **kwargs):
+    rewards = []
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "math":
+            # Calculate math-specific reward
+            correct = check_math_solution(prompt, completion)
+            reward = 1.0 if correct else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-math tasks
+            rewards.append(None)
+    return rewards
+
+# Coding-specific reward function
+def coding_reward_func(prompts, completions, task, **kwargs):
+    rewards = []
+    for prompt, completion, t in zip(prompts, completions, task):
+        if t == "coding":
+            # Calculate coding-specific reward
+            works = test_code_solution(prompt, completion)
+            reward = 1.0 if works else -1.0
+            rewards.append(reward)
+        else:
+            # Return None for non-coding tasks
+            rewards.append(None)
+    return rewards
+
+# Use both task-specific reward functions
+trainer = GRPOTrainer(
+    model="Qwen/Qwen2-0.5B-Instruct",
+    reward_funcs=[math_reward_func, coding_reward_func],
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None` and the [`GRPOTrainer`] will continue with the valid functions and tasks. This allows the [`GRPOTrainer`] to handle multiple reward functions with different applicability.
+
+Note that the [`GRPOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
 
 
-Metrics:
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/rloo.png)
+#### Passing the reward function to the trainer
 
+To use your custom reward function, pass it to the [`GRPOTrainer`] as follows:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=reward_func,
+    ...,
+)
+```
+
+If you have multiple reward functions, you can pass them as a list:
+
+```python
+from trl import GRPOTrainer
+
+trainer = GRPOTrainer(
+    reward_funcs=[reward_func1, reward_func2],
+    ...,
+)
+```
+
+and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
+
+Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
+
+## Vision-Language Model (VLM) Training
+
+GRPO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
+
+### Supported Models
+
+Tested with:
+
+- **Gemma3** — e.g., `google/gemma-3-4b-it`
+- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
+- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
+- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
+- **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
+  
+<Tip>
+Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+</Tip>
+
+### Quick Start
+
+Use [grpo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/grpo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
 
 ```bash
-# pip install openrlbenchmark==0.2.1a5
-# see https://github.com/openrlbenchmark/openrlbenchmark#get-started for documentation
-# to use it, change `?we=huggingface&wpn=trl` to your own project and `?tag=pr-1540` to your own tag
-python -m openrlbenchmark.rlops_multi_metrics \
-    --filters '?we=huggingface&wpn=trl&xaxis=train/episode&ceik=output_dir&cen=sft_model_path&metrics=train/objective/rlhf_reward&metrics=train/objective/scores&metrics=train/objective/kl&metrics=train/objective/non_score_reward&metrics=train/objective/entropy&metrics=train/policy/approxkl_avg&metrics=train/policy/clipfrac_avg&metrics=train/loss/policy_avg&metrics=train/policy/entropy_avg&metrics=train/val/ratio&metrics=train/val/ratio_var&metrics=train/val/num_eos_tokens&metrics=train/lr&metrics=train/eps' \
-        "cleanrl/EleutherAI_pythia-1b-deduped__sft__tldr?tag=pr-1540" \
-    --env-ids models/minimal/rloo_tldr \
-    --pc.ncols 4 \
-    --pc.ncols-legend 1 \
-    --pc.xlabel "Episode" \
-    --output-filename benchmark/trl/pr-1540/rloo \
-    --scan-history
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/grpo_vlm.py \
+  --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
+  --output_dir grpo-Qwen2.5-VL-3B-Instruct \
+  --learning_rate 1e-5 \
+  --gradient_checkpointing \
+  --torch_dtype bfloat16 \
+  --max_prompt_length 2048 \
+  --max_completion_length 1024 \
+  --use_vllm \
+  --vllm_mode colocate \
+  --use_peft \
+  --lora_target_modules "q_proj", "v_proj" \
+  --log_completions
 ```
 
-## Reinforce++
+### Configuration Tips
 
-The [Reinforce++](https://hijkzzz.notion.site/reinforce-plus-plus) report by Jian Hu suggests several optimization tricks to enhance performance and stability of RLHF. They include:
+<Tip warning={true}>
+VLM training may fail if image tokens are truncated. We highly recommend to disable truncation by setting `max_prompt_length` to `None`.
+</Tip>
 
-- Clipping rewards: limiting reward values within a specific range to mitigate the impact of extreme rewards on model updates, thus preventing gradient explosion
-- Normalizing rewards: scaling rewards to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
-- Normalizing advantages: scaling advantages to have a mean of 0 and a standard deviation of 1, which helps in stabilizing the training process
-- Using token-level KL penalty that is defined as equation (1) of the report vs. sequence-level KL penalty (default)
+- Use LoRA on vision-language projection layers
+- Enable 4-bit quantization to reduce memory usage
+- VLMs are memory-intensive — start with smaller batch sizes
+- Most models are compatible with vLLM (`server` and `colocate` modes)
 
-These options are available via the appropriate arguments in the [`RLOOConfig`] class.
+### Dataset Format
 
+Each training sample should include:
 
-## RLOOTrainer
+- `prompt`: Text formatted via the processor's chat template
+- `image`: A single image (PIL or NumPy array)
 
-[[autodoc]] RLOOTrainer
+The trainer automatically handles image-to-tensor conversion via the model’s image processor.
+
+## GRPOTrainer
+
+[[autodoc]] GRPOTrainer
     - train
     - save_model
     - push_to_hub
 
-## RLOOConfig
+## GRPOConfig
 
-[[autodoc]] RLOOConfig
+[[autodoc]] GRPOConfig
