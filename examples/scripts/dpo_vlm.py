@@ -78,6 +78,12 @@ if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
 
+    if script_args.dataset_streaming:
+        import os
+
+        # Set environment variable to enable split_batches for streaming datasets
+        os.environ["ACCELERATE_SPLIT_BATCHES"] = "true"
+
     ################
     # Model & Tokenizer
     ################
