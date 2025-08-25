@@ -56,6 +56,8 @@ class GRPOScriptArguments(ScriptArguments):
     Script arguments for the GRPO training script.
 
     Args:
+        dataset_name (`str` or `None`, *optional*, defaults to `"AI-MO/NuminaMath-TIR"`):
+            Path or name of the dataset to load. If `datasets` is provided, this will be ignored.
         reward_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
             Reward model id of a pretrained model hosted inside a model repo on huggingface.co or local path to a
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
@@ -64,6 +66,10 @@ class GRPOScriptArguments(ScriptArguments):
             `'my_lib.rewards.custom_reward'`).
     """
 
+    dataset_name: Optional[str] = field(
+        default="AI-MO/NuminaMath-TIR",
+        metadata={"help": "Path or name of the dataset to load. If `datasets` is provided, this will be ignored."},
+    )
     reward_model_name_or_path: Optional[str] = field(
         default=None,
         metadata={
@@ -116,6 +122,24 @@ def main(script_args, training_args, model_args, dataset_args):
         )
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
+
+    SYSTEM_PROMPT = (
+        "A conversation between user and assistant. The user asks a question, and the assistant solves it. The "
+        "assistant first thinks about the reasoning process in the mind and then provides the user with the answer. "
+        "The reasoning process and answer are enclosed within <think></think> tags, i.e., <think>\nThis is my "
+        "reasoning.\n</think>\nThis is my answer."
+    )
+
+    def make_conversation(example):
+        return {
+            "prompt": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": example["problem"]},
+            ],
+        }
+
+    dataset = dataset.map(make_conversation)
+    dataset = dataset.remove_columns(["messages", "problem"])
 
     # Initialize the GRPO trainer
     trainer = GRPOTrainer(
