@@ -1415,9 +1415,8 @@ class GRPOTrainer(Trainer):
                     re.sub(rf"({re.escape(self.image_token)})+", self.image_token, text) for text in prompts_text
                 ]
 
-        rollout_old_per_token_logps = None
-
         # Generate completions using either vLLM or regular generation
+        rollout_old_per_token_logps = None
         if self.use_vllm:
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -1491,6 +1490,7 @@ class GRPOTrainer(Trainer):
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
                     "guided_decoding": guided_decoding,
+                    "logprobs": 0,
                 }
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
@@ -1528,6 +1528,11 @@ class GRPOTrainer(Trainer):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+                logprobs = [
+                    [next(iter(lp.values())) for lp in output.logprobs]
+                    for outputs in all_outputs
+                    for output in outputs.outputs
+                ]
 
                 if self.vllm_tensor_parallel_size > 1:
                     # Slice completions for this rank within its TP group.
@@ -1535,6 +1540,7 @@ class GRPOTrainer(Trainer):
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
+                    logprobs = logprobs[tp_slice]
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
@@ -1757,12 +1763,17 @@ class GRPOTrainer(Trainer):
             self._logs["image"].extend(gather_object(images))
 
         if rollout_old_per_token_logps is not None and old_per_token_logps is not None:
-            probs_diff = torch.exp(old_per_token_logps - rollout_old_per_token_logps)
-            per_token_kl = probs_diff - (old_per_token_logps - rollout_old_per_token_logps) - 1
+            delta = old_per_token_logps - rollout_old_per_token_logps
+            probs_diff = torch.exp(delta)
+            per_token_kl = probs_diff - delta - 1
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
-            self._metrics[mode]["Rollout KL"].append(self.accelerator.gather(mean_kl).nanmean().item())
-            self._metrics[mode]["Token Probability Difference/max"].append(probs_diff.max().exp().item())
-            self._metrics[mode]["Token Probability Difference/mean"].append(probs_diff.mean().exp().item())
+            self._metrics[mode]["completions/kl_vllm"].append(self.accelerator.gather(mean_kl).nanmean().item())
+            self._metrics[mode]["completions/vllm_token_probability_difference/max"].append(
+                probs_diff.max().exp().item()
+            )
+            self._metrics[mode]["completions/vllm_token_probability_difference/mean"].append(
+                probs_diff.mean().exp().item()
+            )
 
         output = {
             "prompt_ids": prompt_ids,

@@ -534,6 +534,7 @@ def main(script_args: ScriptArguments):
 
         # Evenly distribute prompts across DP ranks
         chunked_prompts = chunk_list(prompts, script_args.data_parallel_size)
+
         # Send the prompts to each worker
         for connection, prompts in zip(connections, chunked_prompts):
             # When the number of prompts is less than data_parallel_size, some workers will receive empty prompts.
@@ -552,7 +553,6 @@ def main(script_args: ScriptArguments):
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
-
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
 
         response = {"completion_ids": completion_ids}
