@@ -19,7 +19,7 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class RLOOConfig_NEW(TrainingArguments):
+class RLOOConfig(TrainingArguments):
     r"""
     Configuration class for the [`RLOOTrainer`].
 
@@ -49,8 +49,8 @@ class RLOOConfig_NEW(TrainingArguments):
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
         num_generations (`int` or `None`, *optional*, defaults to `2`):
-            Number of generations per prompt to sample. The effective batch size (num_processes *
-            per_device_batch_size * gradient_accumulation_steps) must be evenly divisible by this value.
+            Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
+            * gradient_accumulation_steps) must be evenly divisible by this value.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
             Maximum length of the generated completion.
         ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
@@ -96,6 +96,7 @@ class RLOOConfig_NEW(TrainingArguments):
             using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
             as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
             parameters (like `min_p`, `top_p`, etc.), they will override them.
+
         > Parameters that control generation acceleration powered by vLLM
 
         use_vllm (`bool`, *optional*, defaults to `False`):
@@ -113,6 +114,7 @@ class RLOOConfig_NEW(TrainingArguments):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+
         vllm_server_base_url (`str` or `None`, *optional*, defaults to `None`):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `vllm_server_host` and
             `vllm_server_port` are ignored.
@@ -138,11 +140,12 @@ class RLOOConfig_NEW(TrainingArguments):
             Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
-            > Parameters that control the training
+
+        > Parameters that control the training
 
         beta (`float`, *optional*, defaults to `0.05`):
-            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving
-            training speed.
+            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
+            speed.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
@@ -150,12 +153,6 @@ class RLOOConfig_NEW(TrainingArguments):
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
-        importance_sampling_level (`str`, *optional*, defaults to `"token"`):
-            Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
-            keeps the raw per-token log-probability ratios (one weight per token).  `"sequence"` averages the
-            log-probability ratios across valid tokens to produce a single ratio per sequence. The
-            [GSPO paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
-            stable training and better alignment with  sequence-level rewards.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -239,6 +236,7 @@ class RLOOConfig_NEW(TrainingArguments):
             "`fp16` is not set."
         },
     )
+
     # Parameters that control the model and reference model
     model_init_kwargs: Optional[Union[dict, str]] = field(
         default=None,
@@ -440,8 +438,8 @@ class RLOOConfig_NEW(TrainingArguments):
     beta: float = field(
         default=0.05,
         metadata={
-            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and "
-            "improving training speed."
+            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
+            "training speed."
         },
     )
     num_iterations: int = field(
@@ -457,16 +455,6 @@ class RLOOConfig_NEW(TrainingArguments):
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
-        },
-    )
-    importance_sampling_level: str = field(
-        default="sequence",
-        metadata={
-            "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
-            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
-            "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
-            "shows that sequence-level sampling often yields more stable training and better alignment with "
-            "sequence-level rewards."
         },
     )
     reward_weights: Optional[list[float]] = field(
@@ -562,6 +550,7 @@ class RLOOConfig_NEW(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
         super().__post_init__()
 
         num_processes = self.world_size
@@ -585,6 +574,7 @@ class RLOOConfig_NEW(TrainingArguments):
             raise ValueError(
                 "'generation_batch_size' and 'steps_per_generation' can not be both configured at the same time"
             )
+
         if self.do_eval and self.eval_strategy != "no":
             # Just ensure the value is divisible by the global batch size
             if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
