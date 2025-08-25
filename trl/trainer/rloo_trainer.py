@@ -395,8 +395,8 @@ def truncate_with_protected_tokens(
 class RLOOFinalTrainer(Trainer):
     """
     Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the
-    paper [DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language
-    Models](https://huggingface.co/papers/2402.03300).
+    paper [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs]
+    (https://huggingface.co/papers/2402.14740).
     Example:
 
     ```python
