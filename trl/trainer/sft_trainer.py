@@ -702,6 +702,7 @@ class SFTTrainer(Trainer):
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
         use_flash_attention = model.config._attn_implementation in [
             "flash_attention_2",
+            "flash_attention_3",
             "kernels-community/vllm-flash-attn3",
         ]
         if self.padding_free:
