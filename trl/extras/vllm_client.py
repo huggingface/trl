@@ -274,7 +274,7 @@ class VLLMClient:
         response = self.session.post(
             url,
             json={
-                "host": "0.0.0.0",
+                "host": "localhost",
                 "port": self.group_port,
                 "world_size": world_size,
                 "client_device_uuid": client_device_uuid,
