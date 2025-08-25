@@ -1327,7 +1327,7 @@ class RLOOTrainerTester(TrlTestCase):
             train_dataset=dataset,
         )
 
-        with self.assertLogs("trl.trainer.grpo_trainer", level="WARNING") as cm:
+        with self.assertLogs("trl.trainer.rloo_trainer", level="WARNING") as cm:
             trainer.train()
 
         expected_warning = "All reward functions returned None for the following kwargs:"
