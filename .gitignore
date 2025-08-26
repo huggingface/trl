@@ -149,4 +149,4 @@ wandb/
 *.csv
 *.out
 *.err
-*.jsonl
+*.jsonlvllm_eval/
