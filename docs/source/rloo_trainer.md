@@ -124,11 +124,19 @@ $$
 
 ### Computing the loss
 
-The loss is simply defined as follows:
+The REINFORCE loss is simply defined as:
 
 $$
-\mathcal{L}_{\text{RLOO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G A_i \, \log \pi_\theta(o_i \mid q)
+\mathcal{L}_{\text{RLOO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \hat{A}_i \, \log \pi_\theta(o_i \mid q)
 $$
+
+In practice, performing multiple gradient steps on the same batch makes the actions effectively off-policy relative to the current parameters. To correct for this, we introduce the importance sampling ratio. To prevent excessively large updates when the policy changes between sampling and gradient steps, we clip this ratio:
+
+$$
+\mathcal{L}_{\text{RLOO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \min \left( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \hat{A}_i, \, \text{clip}\left(\frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)}, 1-\epsilon, 1+\epsilon\right) \hat{A}_i \right)
+$$
+
+In a fully online, single-step setting (default), $\frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} = 1$ and this reduces to standard REINFORCE.
 
 ---
 
