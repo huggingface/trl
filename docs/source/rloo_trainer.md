@@ -589,35 +589,24 @@ This approach thechnicaly ensures that:
 ## Migration Guide from the old implementation (0.21 and below)
 
 With the release of version 0.22.0, we have revamped the [`RLOOTrainer`] to be more alinged with other online trainers in the library like [`GRPOTrainer]. This new implementation introduces several changes to the configuration parameters and overall structure of the trainer.
-
-Please see below for a list of changes in this migration;
+Below is a summary of the key changes:
 
 | TRL ≤ 0.21.x | TRL ≥ 0.22.0 |
-|--------------|----------------|
-| `rloo_k` | renamed `num_generations` |
-| `cliprange` | renamed `epsilon` |
-| `kl_coef` | renamed `beta` |
-| `exp_name` | Removed  |
-| `reward_model_path` | Removed (use reward_funcs parameter in trainer initialization) |
-| `reward_model` | `reward_funcs` which supports both reward_model and reward_func |
-| `normalize_reward` | `normalize_advantages` |
-| `num_ppo_epochs` | `num_iterations` (default: 1) |
-| `whiten_rewards` | `scale_rewards` (default: "group", options: "group"/"batch"/"none") |
-| `token_level_kl` | Removed (KL is sequence-level to align the paper) |
-| `dataset_num_proc` | Removed  |
-| `num_mini_batches` | `steps_per_generation` |
-| `total_episodes` | `max_steps` |
-| `local_rollout_forward_batch_size` | `generation_batch_size` (auto-computed from `per_device_train_batch_size`*`num_processes` *`steps_per_generation`) |
-| `num_sample_generations` | `logging_steps` |
-| `response_length` | `max_completion_length` (default is 256) |
-| `stop_token` | `eos_token_id` |
-| `stop_token_id` | `eos_token_id` |
-| `missing_eos_penalty` | Removed bc of negative impact of negative penalty |
-| `sft_model_path` | Use `model` parameter in trainer initialization |
-| `world_size` | Auto-computed from `accelerator.num_processes` |
-| `num_total_batches` | `max_steps` \ `batch_size` |
-| `local_batch_size` | `per_device_train_batch_size`* `gradient_accumulation_steps` |
-| `local_mini_batch_size` | `per_device_train_batch_size` |
-| `batch_size` | `per_device_train_batch_size` * `num_processes` |
-| `micro_batch_size` | `per_device_train_batch_size` * `world_size` |
-| `mini_batch_size` | ? |
+| --- | --- |
+| `rloo_k` | renamed to `num_generations` |
+| `cliprange` | renamed to `epsilon` |
+| `kl_coef` | renamed to `beta` |
+| `exp_name` | renamed to `run_name`. Use `run_name = f"{exp_name}__{seed}__{int(time.time())}"` to replicate old behavior |
+| `reward_model` | renamed to `reward_funcs`, which now supports both reward models and custom reward functions |
+| `normalize_reward` | renamed to `normalize_advantages`. Note: this always normalized advantages (despite the old name) |
+| `num_ppo_epochs` | renamed to `num_iterations` (default: `1`) |
+| `token_level_kl` | **removed** – KL is now computed only at the sequence level |
+| `dataset_num_proc` | **removed** – it was unused |
+| `num_mini_batches` | renamed to `steps_per_generation` |
+| `total_episodes` | renamed to `max_steps` |
+| `local_rollout_forward_batch_size` | **removed** – now automatically set to `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation) |
+| `num_sample_generations` | **removed** – use `logging_steps` to control generation logging frequency |
+| `response_length` | renamed to `max_completion_length` (default: `256`) |
+| `stop_token` | **removed** |
+| `stop_token_id` | **removed** – use `processing_class.eos_token_id` instead |
+| `missing_eos_penalty` | **removed** – replicate with a custom reward function checking if `eos_token_id` is in `completion_ids` |
