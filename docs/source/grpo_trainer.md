@@ -14,10 +14,10 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [UltraFeedback prompts dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -30,16 +30,18 @@ Below is the script to train the model.
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
 
-dataset = load_dataset("trl-lib/tldr", split="train")
+dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-# Define the reward function, which rewards completions that are close to 20 characters
-def reward_len(completions, **kwargs):
-    return [-abs(20 - len(completion)) for completion in completions]
+# Dummy reward function for demonstration purposes
+def reward_num_unique_letters(completions, **kwargs):
+    """Reward function that rewards completions with more unique letters."""
+    completion_contents = [completion[0]["content"] for completion in completions]
+    return [float(len(set(content))) for content in completion_contents]
 
 training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_len,
+    reward_funcs=reward_num_unique_letters,
     args=training_args,
     train_dataset=dataset,
 )
@@ -68,7 +70,7 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 
 ### Computing the advantage
 
-For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
+For each of the  \\( G \\) sequences, we compute the reward using a reward model or reward function. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
 
 $$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
 

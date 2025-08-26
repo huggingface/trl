@@ -19,11 +19,11 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class GRPOConfig(TrainingArguments):
+class RLOOConfig(TrainingArguments):
     r"""
-    Configuration class for the [`GRPOTrainer`].
+    Configuration class for the [`RLOOTrainer`].
 
-    This class includes only the parameters that are specific to GRPO training. For a full list of training arguments,
+    This class includes only the parameters that are specific to RLOO training. For a full list of training arguments,
     please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
     differ from those in [`~transformers.TrainingArguments`].
 
@@ -48,7 +48,7 @@ class GRPOConfig(TrainingArguments):
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt. If the prompt is longer than this value, it will be truncated left.
-        num_generations (`int` or `None`, *optional*, defaults to `8`):
+        num_generations (`int` or `None`, *optional*, defaults to `2`):
             Number of generations per prompt to sample. The effective batch size (num_processes * per_device_batch_size
             * gradient_accumulation_steps) must be evenly divisible by this value.
         max_completion_length (`int` or `None`, *optional*, defaults to `256`):
@@ -143,26 +143,16 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        beta (`float`, *optional*, defaults to `0.0`):
-            KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and improving
-            training speed.
+        beta (`float`, *optional*, defaults to `0.05`):
+            KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving training
+            speed.
         num_iterations (`int`, *optional*, defaults to `1`):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        delta (`float` or `None`, *optional*, defaults to `None`):
-            Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
-            GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
-            the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
         epsilon_high (`float` or `None`, *optional*, defaults to `None`):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
-        importance_sampling_level (`str`, *optional*, defaults to `"token"`):
-            Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
-            keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
-            log-probability ratios across valid tokens to produce a single ratio per sequence. The [GSPO
-            paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
-            stable training and better alignment with sequence-level rewards.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
@@ -176,22 +166,6 @@ class GRPOConfig(TrainingArguments):
             - `False` or `"none"`: no scaling is applied. The [Dr. GRPO
               paper](https://huggingface.co/papers/2503.20783) recommends not scaling rewards, as scaling by the
               standard deviation introduces a question-level difficulty bias.
-        loss_type (`str`, *optional*, defaults to `"dapo"`):
-            Specifies the loss formulation to use. Supported values are:
-
-            - `"grpo"`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to
-              length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
-              with negative advantages.
-            - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
-              introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
-              The value of the constant corresponds to `max_completion_length`.
-            - `"dapo"` (default): Aggregates token-level losses by normalizing with the number of active token in the
-              global accumulated batch. This method was introduced in the [DAPO
-              paper](https://huggingface.co/papers/2503.14476) to eliminate length bias.
-            - `"bnpo"`: Aggregates token-level losses by normalizing with the number of active token in the local
-              batch. Note that normalization is performed over the local batch only, so results may slightly vary
-              depending on the local batch size, despite a constant effective batch size. When using
-              `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -215,8 +189,12 @@ class GRPOConfig(TrainingArguments):
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
             `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
-        use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use the Liger GRPO loss.
+        normalize_rewards (`bool`, *optional*, defaults to `False`):
+            Whether to normalize rewards.
+        normalize_advantages (`bool`, *optional*, defaults to `False`):
+            Whether to normalize advantages.
+        reward_clip_range (`float`, *optional*, defaults to `10.0`):
+            Clip range for rewards.
 
         > Parameters that control the logging
 
@@ -292,7 +270,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     num_generations: Optional[int] = field(
-        default=8,
+        default=2,
         metadata={
             "help": "Number of generations to sample. The effective batch size (num_processes * per_device_batch_size "
             "* gradient_accumulation_steps) must be evenly divisible by this value."
@@ -458,10 +436,10 @@ class GRPOConfig(TrainingArguments):
 
     # Parameters that control the training
     beta: float = field(
-        default=0.0,
+        default=0.05,
         metadata={
-            "help": "KL coefficient. If `0.0` (default), the reference model is not loaded, reducing memory usage and "
-            "improving training speed."
+            "help": "KL coefficient. If `0.0`, the reference model is not loaded, reducing memory usage and improving "
+            "training speed."
         },
     )
     num_iterations: int = field(
@@ -472,29 +450,11 @@ class GRPOConfig(TrainingArguments):
         default=0.2,
         metadata={"help": "Epsilon value for clipping."},
     )
-    delta: Optional[float] = field(
-        default=None,
-        metadata={
-            "help": "Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` "
-            "(default), standard GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This "
-            "method is introduced in the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291)."
-        },
-    )
     epsilon_high: Optional[float] = field(
         default=None,
         metadata={
             "help": "Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the "
             "lower-bound specified in argument `epsilon`. Paper DAPO recommends `0.28`."
-        },
-    )
-    importance_sampling_level: str = field(
-        default="token",
-        metadata={
-            "help": "Controls whether importance sampling ratios are computed at the `'token'` or `'sequence'` level. "
-            "`'token'` keeps the raw per-token log-probability ratios (one weight per token).  `'sequence'` averages "
-            "the log-probability ratios across valid tokens to produce a single ratio per sequence. The GSPO paper "
-            "shows that sequence-level sampling often yields more stable training and better alignment with "
-            "sequence-level rewards."
         },
     )
     reward_weights: Optional[list[float]] = field(
@@ -514,25 +474,6 @@ class GRPOConfig(TrainingArguments):
             "PPO Lite paper. "
             "`False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
             "scaling by the standard deviation introduces a question-level difficulty bias."
-        },
-    )
-    loss_type: str = field(
-        default="dapo",
-        metadata={
-            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dapo', 'bnpo', and "
-            "'dr_grpo'. "
-            "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
-            "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
-            "negative advantages. "
-            "'dapo' (default): Aggregates token-level losses by normalizing with the number of active token in the "
-            "global accumulated batch. This method was introduced in the DAPO paper to eliminate length bias. "
-            "'dr_grpo': Aggregates token-level losses by normalizing with a global constant. This method was "
-            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
-            "`max_completion_length`. "
-            "'bnpo': Aggregates token-level losses by normalizing with the number of active token in the local batch. "
-            "Note that normalization is performed over the local batch only, so results may slightly vary depending "
-            "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
         },
     )
     mask_truncated_completions: bool = field(
@@ -575,9 +516,17 @@ class GRPOConfig(TrainingArguments):
             "non-truncated completions are considered."
         },
     )
-    use_liger_loss: bool = field(
+    normalize_rewards: bool = field(
         default=False,
-        metadata={"help": "Whether to use the Liger GRPO loss."},
+        metadata={"help": "Whether to normalize rewards."},
+    )
+    normalize_advantages: bool = field(
+        default=False,
+        metadata={"help": "Whether to normalize advantages."},
+    )
+    reward_clip_range: float = field(
+        default=10.0,
+        metadata={"help": "Clip range for rewards."},
     )
 
     # Parameters that control the logging
@@ -648,6 +597,3 @@ class GRPOConfig(TrainingArguments):
                 "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )
-
-        if self.delta is not None and self.use_liger_loss:
-            raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
