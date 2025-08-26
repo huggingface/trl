@@ -113,9 +113,8 @@ RLOO is a variant of REINFORCE that reduces variance by using leave-one-out base
 from trl import RLOOConfig
 
 training_args = RLOOConfig(
-    epsilon=3e-4,   
-    gradient_accumulation_steps=1,
-    steps_per_generation=4, 
+    num_generations=2, #experiments of paper different num_generations={2,4}
+    learning_rate=1e-6 #section C Training Detail of the paper
 )
 ```
 
