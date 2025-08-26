@@ -1494,7 +1494,8 @@ class RLOOFinalTrainer(Trainer):
             # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
             # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
             # old_per_token_logps to None.
-            # if self.args.gradient_accumulation_steps % generate_every != 0:
+            # in RLOO the kl is between old_policy and ref_policy therefore we need to generate
+            # frequently for the old_per_token_logps not to be None
             old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                 self.model,
                 prompt_completion_ids,
