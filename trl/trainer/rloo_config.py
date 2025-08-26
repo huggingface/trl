@@ -180,8 +180,6 @@ class RLOOConfig(TrainingArguments):
             set `sync_ref_model=True`.
         normalize_advantages (`bool`, *optional*, defaults to `False`):
             Whether to normalize advantages.
-        reward_clip_range (`float`, *optional*, defaults to `10.0`):
-            Clip range for rewards.
 
         > Parameters that control the logging
 
@@ -460,7 +458,7 @@ class RLOOConfig(TrainingArguments):
     )
     reward_clip_range: float = field(
         default=10.0,
-        metadata={"help": "Clip range for rewards"},
+        metadata={"help": "Clip range for rewards."},
     )
     mask_truncated_completions: bool = field(
         default=False,
@@ -495,10 +493,6 @@ class RLOOConfig(TrainingArguments):
     normalize_advantages: bool = field(
         default=False,
         metadata={"help": "Whether to normalize advantages."},
-    )
-    reward_clip_range: float = field(
-        default=10.0,
-        metadata={"help": "Clip range for rewards."},
     )
 
     # Parameters that control the logging
