@@ -55,17 +55,43 @@ def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenize
     if _MAIN_TEXT_TOKENIZER is None:
         print(f"📝 Loading main-process tokenizer for template formatting …")
         tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        
-        # Use the same chat template pattern as ProteinLLMModel - call get_chat_template(model_name)
+
+        # Prefer checkpoint-local chat template; else try external mapping; else default
+        applied_template = False
         try:
-            if 'get_chat_template' in globals():
-                chat_template = get_chat_template(model_name)
-                print(f"✅ Applied dynamic chat template for {model_name}")
-                tok.chat_template = chat_template
-            else:
-                print("⚠️ get_chat_template function not available, using default chat template")
+            import os
+            local_ct_path = os.path.join(model_name, "chat_template.jinja")
+            if os.path.isfile(local_ct_path):
+                with open(local_ct_path, "r", encoding="utf-8") as f:
+                    tok.chat_template = f.read()
+                print(f"✅ Applied chat template from checkpoint: {local_ct_path}")
+                applied_template = True
         except Exception as e:
-            print(f"⚠️ Failed to apply dynamic chat template: {e}, using default")
+            print(f"⚠️ Could not read local chat_template.jinja: {e}")
+
+        if not applied_template:
+            # Hardcode mapping for Qwen3-4B-Thinking-2507 from checkpoint/model name
+            short_name = str(model_name).split("/")[-1]
+            if "Qwen3-4B-Thinking-2507" in short_name:
+                try:
+                    # Prefer local templates directory if present
+                    from pathlib import Path
+                    here = Path(__file__).parent
+                    candidate = here / "templates" / "qwen3_4b_chat_template.jinja2"
+                    if candidate.is_file():
+                        tok.chat_template = candidate.read_text(encoding="utf-8")
+                        print("✅ Applied hardcoded Qwen3-4B-Thinking-2507 chat template (local file)")
+                        applied_template = True
+                except Exception:
+                    pass
+            if not applied_template and 'get_chat_template' in globals():
+                try:
+                    chat_template = get_chat_template(model_name)
+                    tok.chat_template = chat_template
+                    print(f"✅ Applied dynamic chat template for {model_name}")
+                    applied_template = True
+                except Exception as e:
+                    print(f"⚠️ Failed to apply dynamic chat template: {e}")
         
         tok.pad_token = tok.eos_token
         _MAIN_TEXT_TOKENIZER = tok
@@ -935,26 +961,46 @@ class ProteinEmbeddingProcessor:
         self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name, trust_remote_code=True, use_fast=True)
         self.text_config = AutoConfig.from_pretrained(text_model_name, trust_remote_code=True)
 
-        # Use the same chat template as ProteinLLMModel (EXACT match) - prefer function, else local file fallback
+        # Use the same chat template as ProteinLLMModel – prefer checkpoint-local, else function mapping
+        applied_template = False
+        # 1) Prefer a chat_template.jinja in the checkpoint directory (text_model_name may be a path)
         try:
-            applied_template = False
-            if 'get_chat_template' in globals():
+            import os
+            local_ct_path = os.path.join(text_model_name, "chat_template.jinja")
+            if os.path.isfile(local_ct_path):
+                with open(local_ct_path, "r", encoding="utf-8") as f:
+                    self.text_tokenizer.chat_template = f.read()
+                print(f"✅ Applied chat template from checkpoint: {local_ct_path}")
+                applied_template = True
+        except Exception as e:
+            print(f"⚠️ Could not read local chat_template.jinja: {e}")
+
+        # 2) If not found, try external get_chat_template mapping (e.g., for Qwen3-4B-Thinking-2507)
+        if not applied_template:
+            # Hardcode mapping for Qwen3-4B-Thinking-2507 from checkpoint/model name
+            short_name = str(text_model_name).split("/")[-1]
+            if "Qwen3-4B-Thinking-2507" in short_name:
+                try:
+                    from pathlib import Path
+                    here = Path(__file__).parent
+                    candidate = here / "templates" / "qwen3_4b_chat_template.jinja2"
+                    if candidate.is_file():
+                        self.text_tokenizer.chat_template = candidate.read_text(encoding="utf-8")
+                        print("✅ Applied hardcoded Qwen3-4B-Thinking-2507 chat template (local file)")
+                        applied_template = True
+                except Exception:
+                    pass
+        if not applied_template and 'get_chat_template' in globals():
+            try:
                 chat_template = get_chat_template(text_model_name)
                 self.text_tokenizer.chat_template = chat_template
                 print(f"✅ Applied dynamic chat template for {text_model_name}")
                 applied_template = True
-            if not applied_template:
-                import os
-                local_ct_path = os.path.join(text_model_name, "chat_template.jinja")
-                if os.path.isfile(local_ct_path):
-                    with open(local_ct_path, "r", encoding="utf-8") as f:
-                        self.text_tokenizer.chat_template = f.read()
-                    print(f"✅ Applied chat template from checkpoint: {local_ct_path}")
-                    applied_template = True
-            if not applied_template:
-                print("⚠️ get_chat_template not available and no local chat_template.jinja; using default")
-        except Exception as e:
-            print(f"⚠️ Failed to apply chat template: {e}; using default")
+            except Exception as e:
+                print(f"⚠️ Failed to apply dynamic chat template: {e}")
+
+        if not applied_template:
+            print("⚠️ No chat template found; using default")
         
         self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
 
@@ -1139,7 +1185,6 @@ class ProteinEmbeddingProcessor:
                     num_reduced_embeddings=go_num_reduced_embeddings,
                     embedding_dim=go_embedding_dim,
                 )
-                import torch
                 go_state = torch.load(auto_go_ckpt, map_location="cpu")
                 try:
                     self.go_encoder.load_state_dict(go_state, strict=False)

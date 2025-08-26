@@ -45,6 +45,7 @@ mkdir -p "$TMPDIR" "$TRANSFORMERS_CACHE" \
 
 # Make repo importable (vLLM worker extension path resolution)
 export PYTHONPATH="$ROOT_DIR/trl:$PYTHONPATH"
+export PYTHONPATH="$ROOT_DIR/BioReason2:$PYTHONPATH"
 
 # ==============================================================================
 # Config (aligned with your training config)
