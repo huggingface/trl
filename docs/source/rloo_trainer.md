@@ -140,73 +140,6 @@ In a fully online, single-step setting (default), $\frac{\pi_\theta(o_i \mid q)}
 
 ---
 
-If you have multiple reward functions, you can pass them as a list:
-
-```python
-from trl import GRPOTrainer
-
-trainer = GRPOTrainer(
-    reward_funcs=[reward_func1, reward_func2],
-    ...,
-)
-```
-
-and the reward will be computed as the sum of the rewards from each function, or the weighted sum if `reward_weights` is provided in the config.
-
-Note that [`GRPOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
-
-### Computing the loss
-
-RLOO is a variant of the REINFORCE algorithm that uses a **batch-wise leave-one-out baseline** and often includes a **KL penalty** to prevent the policy from deviating too far from a reference model. The objective is to maximize the advantage while ensuring that the model remains close to the reference policy. Consequently, the loss is defined as follows:
-
-$$
-\mathcal{L} = -\mathbb{E}\left[ \nabla_\theta \log \pi_\theta(a|s) \cdot A \right]
-$$
-
-
-### What does REINFORCE suggests?
-The REINFORCE algorithm is a classic policy gradient method in reinforcement learning. It suggests using a "baseline" to reduce the variance of the policy gradient estimates. The baseline is typically the average reward observed so far (or a running average over a window of recent rewards). By subtracting this baseline from the actual reward, the algorithm focuses updates on actions that perform better or worse than average, rather than being influenced by the absolute scale of the rewards.
-
-
-In practice, for each step or episode, the policy is updated using the difference between the received reward and the baseline:
-
-$$b_{MA} = \frac{1}{S}\sum_{s} R(x_s, y_s)$$
-
-### What RLOO do inspired from REINFORCE?
-
-Inspired by REINFORCE's baseline approach, RLOO uses a different but related strategy for variance reduction. Instead of using a moving average, RLOO uses additional generations from the policy/language model as a mean to reduce the varience. Therefore:
-
-For a given prompt RLOO generates k samples, lets say k=2; (note that you examine each sample individually) so one time you take first sample and then you get the reward for current sample then you take the other as baseline. Let's break this down step by step:
-
-1. First, generate two samples $x_1$ and $x_2$ from the policy for prompt $y$
-
-2. For the first sample $x_1$:
-   - Calculate its reward $R(x_1, y)$
-   - Use $x_2$ as the baseline
-   - Compute the gradient:
-   $$\nabla \mathcal{L}_1 = (R(x_1, y) - R(x_2, y)) \nabla \log p_\theta(x_1)$$
-
-3. For the second sample $x_2$:
-   - Calculate its reward $R(x_2, y)$
-   - Use $x_1$ as the baseline
-   - Compute the gradient:
-   $$\nabla \mathcal{L}_2 = (R(x_2, y) - R(x_1, y)) \nabla \log p_\theta(x_2)$$
-
-4. The final policy update combines both gradients:
-   $$\nabla \mathcal{L} = \nabla \mathcal{L}_1 + \nabla \mathcal{L}_2$$
-
-This approach is particularly elegant because:
-- Both samples are generated from the current policy state
-- Each sample serves as a natural baseline for the other
-- The comparison is between samples from the same policy distribution
-- No historical information or previous gradient updates are needed for the baseline
-
-This approach thechnicaly ensures that:
-- Each sample is evaluated independently
-- The baseline for each sample comes from the other sample
-- The policy is updated based on relative performance between the samples
-- The variance reduction is achieved through direct comparison between samples from the same policy
-
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
@@ -222,15 +155,20 @@ While training and evaluating, we record the following reward metrics:
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after applying reward weights.
-- `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
+- `reward_std`: The standard deviation of rewards after applying reward weights. This is the average of the per-group standard deviations.
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
+- `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
-- `clip_ratio/region_mean`: The ratio of token probabilities where the RLOO objective is clipped to stay within the trust region
-A higher value means more tokens are clipped, which constrains how much the policy $\pi_\theta$ can change.
-- `clip_ratio/low_mean`: The average ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/low_min`: The minimum ratio of token probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
-- `clip_ratio/high_mean`: The average ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
-- `clip_ratio/high_max`: The maximum ratio of token probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `clip_ratio/region_mean`: The ratio of sequence probabilities where the RLOO objective is clipped to stay within the trust region:
+    $$
+    \text{clip}\left( r_{i}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i}(\theta) = \frac{\pi_\theta(o_{i} \mid q)}{\pi_{\theta_{\text{old}}}(o_{i} \mid q)}\,.
+    $$
+
+    A higher value means more samples are clipped, which constrains how much the policy $\pi_\theta$ can change.
+- `clip_ratio/low_mean`: The average ratio of sequence probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/low_min`: The minimum ratio of sequence probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
+- `clip_ratio/high_mean`: The average ratio of sequence probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
+- `clip_ratio/high_max`: The maximum ratio of sequence probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
 
 ## Customization
 
@@ -605,3 +543,47 @@ Note that [`RLOOTrainer`] supports multiple reward functions of different types.
 4. [RLOO Blog on HF](https://huggingface.co/blog/putting_rl_back_in_rlhf_with_rloo)
 5. [RLOO OPENRLHF](https://hijkzzz.notion.site/unraveling-rlhf-and-its-variants-engineering-insights#147d9a33ecc9806090f3d5c749d31f05)
 6. [Youtube RLOO](https://www.youtube.com/watch?v=86asXGPK6RU&ab_channel=BuzzRobot)
+
+
+
+### What does REINFORCE suggests?
+The REINFORCE algorithm is a classic policy gradient method in reinforcement learning. It suggests using a "baseline" to reduce the variance of the policy gradient estimates. The baseline is typically the average reward observed so far (or a running average over a window of recent rewards). By subtracting this baseline from the actual reward, the algorithm focuses updates on actions that perform better or worse than average, rather than being influenced by the absolute scale of the rewards.
+
+In practice, for each step or episode, the policy is updated using the difference between the received reward and the baseline:
+
+$$b_{MA} = \frac{1}{S}\sum_{s} R(x_s, y_s)$$
+
+### What RLOO do inspired from REINFORCE?
+
+Inspired by REINFORCE's baseline approach, RLOO uses a different but related strategy for variance reduction. Instead of using a moving average, RLOO uses additional generations from the policy/language model as a mean to reduce the varience. Therefore:
+
+For a given prompt RLOO generates k samples, lets say k=2; (note that you examine each sample individually) so one time you take first sample and then you get the reward for current sample then you take the other as baseline. Let's break this down step by step:
+
+1. First, generate two samples $x_1$ and $x_2$ from the policy for prompt $y$
+
+2. For the first sample $x_1$:
+   - Calculate its reward $R(x_1, y)$
+   - Use $x_2$ as the baseline
+   - Compute the gradient:
+   $$\nabla \mathcal{L}_1 = (R(x_1, y) - R(x_2, y)) \nabla \log p_\theta(x_1)$$
+
+3. For the second sample $x_2$:
+   - Calculate its reward $R(x_2, y)$
+   - Use $x_1$ as the baseline
+   - Compute the gradient:
+   $$\nabla \mathcal{L}_2 = (R(x_2, y) - R(x_1, y)) \nabla \log p_\theta(x_2)$$
+
+4. The final policy update combines both gradients:
+   $$\nabla \mathcal{L} = \nabla \mathcal{L}_1 + \nabla \mathcal{L}_2$$
+
+This approach is particularly elegant because:
+- Both samples are generated from the current policy state
+- Each sample serves as a natural baseline for the other
+- The comparison is between samples from the same policy distribution
+- No historical information or previous gradient updates are needed for the baseline
+
+This approach thechnicaly ensures that:
+- Each sample is evaluated independently
+- The baseline for each sample comes from the other sample
+- The policy is updated based on relative performance between the samples
+- The variance reduction is achieved through direct comparison between samples from the same policy
