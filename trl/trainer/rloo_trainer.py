@@ -1672,8 +1672,6 @@ class RLOOFinalTrainer(Trainer):
         # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
         # old_per_token_logps == per_token_logps, so we can skip it's computation
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
-        # old_per_token_logps = inputs.get("old_per_token_logps")
-        # old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
         log_ratio = per_token_logps - old_per_token_logps
         if self.importance_sampling_level == "token":
