@@ -289,6 +289,7 @@ class ScriptArguments:
     # enable the much faster Rust tokenizer for models that ship without it.
     tokenizer: Optional[str] = field(default=None, metadata={"help": "Tokenizer name or path to use (defaults to model's tokenizer)."})
     log_level: str = field(default="info", metadata={"help": "Log level for uvicorn."})
+
     
     # DNA-specific parameters
     dna_model_name: Optional[str] = field(default=None, metadata={"help": "DNA model name or path for multimodal DNA+text generation."})
@@ -304,6 +305,14 @@ class ScriptArguments:
     
     # Environment validation
     skip_env_check: bool = field(default=False, metadata={"help": "Skip the fuckvllm environment validation check."})
+    go_obo_path: Optional[str] = field(default=None, metadata={"help": "Path to GO ontology .obo (enables GO encoder)."})
+    precomputed_go_embeddings_path: Optional[str] = field(default=None, metadata={"help": "Path to precomputed GO embeddings dir."})
+    go_embedding_dim: int = field(default=2560, metadata={"help": "Dim of GO embeddings before projection."})
+    go_hidden_dim: int = field(default=512, metadata={"help": "Hidden dim for GO GAT."})
+    go_num_gat_layers: int = field(default=3, metadata={"help": "GAT layers for GO encoder."})
+    go_num_heads: int = field(default=8, metadata={"help": "Heads for GO encoder."})
+    go_num_reduced_embeddings: int = field(default=200, metadata={"help": "Reduced embeddings per GO namespace."})
+
 
 
 def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_port: int, connection: Connection) -> None:
@@ -346,7 +355,7 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
                 return str(model_path)
         return str(fast_dir)
 
-    tokenizer_path = ensure_fast_tok(script_args.model)
+    tokenizer_path = script_args.tokenizer
 
     # Always use standard vLLM for hosting
     llm = LLM(
@@ -408,6 +417,13 @@ def llm_worker(script_args: ScriptArguments, data_parallel_rank: int, master_por
                 text_model_name=script_args.model,
                 max_length_protein=script_args.max_length_protein,
                 device=device,
+                go_obo_path=script_args.go_obo_path,
+                precomputed_embeddings_path=script_args.precomputed_go_embeddings_path,
+                go_embedding_dim=script_args.go_embedding_dim,
+                go_hidden_dim=script_args.go_hidden_dim,
+                go_num_gat_layers=script_args.go_num_gat_layers,
+                go_num_heads=script_args.go_num_heads,
+                go_num_reduced_embeddings=script_args.go_num_reduced_embeddings,
             )
             print("✅ Protein processor initialized successfully")
             protein_processor.batch_inference = script_args.batch_inference
@@ -842,6 +858,13 @@ class ProteinEmbeddingProcessor:
         text_model_name: str,
         max_length_protein: int = 2048,
         device: str = "cpu",
+        go_obo_path: Optional[str] = None,
+        precomputed_embeddings_path: Optional[str] = None,
+        go_embedding_dim: int = 2560,
+        go_hidden_dim: int = 512,
+        go_num_gat_layers: int = 3,
+        go_num_heads: int = 8,
+        go_num_reduced_embeddings: int = 200,
     ):
         
         self.device = device
@@ -856,10 +879,13 @@ class ProteinEmbeddingProcessor:
         from esm.models.esm3 import ESM3
         from esm.sdk.api import ESMProtein, SamplingConfig
         from esm.utils.constants.models import ESM3_OPEN_SMALL
-        
-        self.protein_model = ESM3.from_pretrained(protein_model_name)
-        self.protein_model = self.protein_model.to(self.device)
-        print("✅ Protein model loaded successfully")
+        from bioreason2.models.protein_encoder import create_protein_encoder
+
+        self.protein_encoder = create_protein_encoder(protein_model_name)
+        self.protein_model = self.protein_encoder.model.to(self.device)
+        self.protein_hidden_size = self.protein_encoder.embedding_dim
+        print("✅ Protein encoder loaded via create_protein_encoder")
+    
 
         # STEP 2: Load text model config and tokenizer (exactly like ProteinLLMModel)
         print("📝 Loading text tokenizer...")
@@ -916,20 +942,37 @@ class ProteinEmbeddingProcessor:
         self.text_hidden_size = self.text_config.hidden_size
         # ESM3 embedding dimension - typically 2560 for ESM3_OPEN_SMALL (same as protein_llm.py)
         self.protein_hidden_size = self.protein_model.encoder.sequence_embed.embedding_dim
-        self.protein_projection = nn.Linear(self.protein_hidden_size, self.text_hidden_size)
+        self.protein_projection = nn.Sequential(
+            nn.Linear(self.protein_hidden_size, self.text_hidden_size),
+            nn.GELU(),
+            nn.Linear(self.text_hidden_size, self.text_hidden_size),
+        )
+
         self.protein_projection = self.protein_projection.to(self.device)
         print(f"✅ Projection layer created: {self.protein_hidden_size} -> {self.text_hidden_size}")
 
+        self.go_encoder = None
+        self.go_projection = None
+        self._go_cfg = dict(
+            go_obo_path=go_obo_path,
+            precomputed_embeddings_path=precomputed_embeddings_path,
+            go_embedding_dim=go_embedding_dim,
+            go_hidden_dim=go_hidden_dim,
+            go_num_gat_layers=go_num_gat_layers,
+            go_num_heads=go_num_heads,
+            go_num_reduced_embeddings=go_num_reduced_embeddings,
+        )
+
         # STEP 4: Load custom components (exactly like ProteinLLMModel)
         print("🔧 Loading custom projection weights...")
-        self.load_custom_components(text_model_name)
+        self.load_custom_components(
+            llm_dir=text_model_name,
+            **self._go_cfg
+        )
 
         # STEP 5: Create processor (exactly like ProteinLLMModel)
         self.processor = PLProcessor(tokenizer=self.text_tokenizer)
 
-        # STEP 6: Initialize GO graph encoder if available 
-        self.go_encoder = None
-        self.go_projection = None
         # Check if GO encoder components are available
         if 'create_go_graph_encoder_pipeline' in globals():
             print("🧬 GO graph encoder components available, but not initialized by default")
@@ -956,46 +999,103 @@ class ProteinEmbeddingProcessor:
 
         print("✅ ProteinEmbeddingProcessor initialized successfully")
     
-    def load_custom_components(self, llm_dir: str) -> None:
-        """Load trained protein projection weights (exactly like ProteinLLMModel)."""
+    def load_custom_components(
+        self,
+        llm_dir: str,
+        # NEW: GO args (may all be None and we’ll auto-discover)
+        go_obo_path: Optional[str] = None,
+        precomputed_embeddings_path: Optional[str] = None,
+        go_embedding_dim: int = 2560,
+        go_hidden_dim: int = 512,
+        go_num_gat_layers: int = 3,
+        go_num_heads: int = 8,
+        go_num_reduced_embeddings: int = 200,
+    ) -> None:
         import os
-        
-        # Try to load protein projection layer weights
+
+        # ===== Protein projection (existing) =====
         projection_path = os.path.join(llm_dir, 'protein_projection.pt')
         if os.path.exists(projection_path):
             print(f"🔧 Loading trained protein projection weights from {projection_path}")
             try:
-                projection_state = torch.load(projection_path, map_location='cpu')
-                
-                # Check if we can load the weights
-                if self.protein_projection.weight.shape == projection_state['weight'].shape:
-                    self.protein_projection.load_state_dict(projection_state)
+                state = torch.load(projection_path, map_location='cpu')
+                if self.protein_projection.weight.shape == state['weight'].shape:
+                    self.protein_projection.load_state_dict(state)
                     print("✅ Trained protein projection weights loaded successfully")
                 else:
-                    print(f"⚠️ Projection layer shape mismatch!")
-                    print(f"  Expected: {self.protein_projection.weight.shape}")
-                    print(f"  Found: {projection_state['weight'].shape}")
-                    print("  Using randomly initialized projection layer")
+                    print("⚠️ Protein projection shape mismatch; using random init")
             except Exception as e:
-                print(f"⚠️ Error loading projection weights: {e}")
-                print("  Using randomly initialized projection layer")
+                print(f"⚠️ Error loading protein projection: {e} (using random init)")
         else:
-            print(f"⚠️ No trained protein projection weights found at {projection_path}")
-            print("  Using randomly initialized projection layer (may affect quality)")
-        
-        # Check if there's a local protein model (optional)
+            print("⚠️ No trained protein projection found (random init)")
+
+        # ===== Optional local protein model (existing) =====
         protein_model_path = os.path.join(llm_dir, 'protein_model')
         if os.path.exists(protein_model_path):
             print(f"📁 Found local protein model at {protein_model_path}")
             try:
-                # Replace the protein model with the local one
                 from esm.models.esm3 import ESM3
-                self.protein_model = ESM3.from_pretrained(protein_model_path)
-                self.protein_model = self.protein_model.to(self.device)
+                self.protein_model = ESM3.from_pretrained(protein_model_path).to(self.device)
                 print("✅ Local protein model loaded successfully")
             except Exception as e:
-                print(f"⚠️ Error loading local protein model: {e}")
-                print("  Using original protein model")
+                print(f"⚠️ Error loading local protein model: {e} (keeping original)")
+
+        # ===== NEW: GO encoder + projection =====
+        # Only attempt if the symbols exist (imported up top in load_protein_components)
+        if 'create_go_graph_encoder_pipeline' not in globals():
+            print("ℹ️ GO encoder code not available; skipping GO initialization")
+            return
+
+        # 1) Allow explicit paths from args, else try auto-discovery under model dir
+        auto_go_dir = os.path.join(llm_dir, "go_encoder")
+        if go_obo_path is None and os.path.isfile(os.path.join(auto_go_dir, "go.obo")):
+            go_obo_path = os.path.join(auto_go_dir, "go.obo")
+        if precomputed_embeddings_path is None:
+            # Try <model>/go_encoder/embeddings or <model>/go_encoder
+            emb_dir = os.path.join(auto_go_dir, "embeddings")
+            precomputed_embeddings_path = emb_dir if os.path.isdir(emb_dir) else (auto_go_dir if os.path.isdir(auto_go_dir) else None)
+
+        try_init_go = (go_obo_path is not None and precomputed_embeddings_path is not None)
+        if not try_init_go:
+            print("ℹ️ GO paths not provided/not found; skipping GO encoder init")
+            return
+
+        try:
+            print("🧬 Initializing GO encoder…")
+            self.go_encoder = create_go_graph_encoder_pipeline(
+                go_obo_path=go_obo_path,
+                precomputed_embeddings_path=precomputed_embeddings_path,
+                hidden_dim=go_hidden_dim,
+                num_gat_layers=go_num_gat_layers,
+                num_heads=go_num_heads,
+                num_reduced_embeddings=go_num_reduced_embeddings,
+                embedding_dim=go_embedding_dim,
+            )
+            print("✅ GO encoder initialized")
+        except Exception as e:
+            print(f"⚠️ Failed to initialize GO encoder: {e}")
+            self.go_encoder = None
+
+        # 2) Create/restore GO projection
+        if self.go_encoder is not None:
+            print("🧬 Setting up GO projection…")
+            self.go_projection = nn.Sequential(
+                nn.Linear(go_embedding_dim, self.text_hidden_size),
+                nn.GELU(),
+                nn.Linear(self.text_hidden_size, self.text_hidden_size),
+            ).to(self.device)
+
+            go_proj_path = os.path.join(llm_dir, "go_projection.pt")
+            if os.path.exists(go_proj_path):
+                try:
+                    state = torch.load(go_proj_path, map_location='cpu')
+                    self.go_projection.load_state_dict(state)
+                    print("✅ Loaded GO projection weights")
+                except Exception as e:
+                    print(f"⚠️ Could not load GO projection: {e} (using random init)")
+            else:
+                print("ℹ️ No go_projection.pt found; using fresh init")
+
     
     def get_text_embeddings(self, input_ids: torch.Tensor) -> torch.Tensor:
         """Get text embeddings using a minimal embedding layer (vLLM mode only)."""
@@ -1135,76 +1235,28 @@ class ProteinEmbeddingProcessor:
             List of tensor embeddings for each batch item
         """
         # Initialize result list
-        result = [[] for _ in range(batch_size)]
-
-        # Process each protein sequence individually (ESM3 doesn't support batching)
-        for seq_idx, sequence in enumerate(protein_sequences):
-            # Truncate sequence if too long
-            if len(sequence) > self.max_length_protein:
-                sequence = sequence[: self.max_length_protein]
-            
-            if structure_coords is not None and structure_coords.shape[1] != 0:
-                coords = structure_coords[batch_idx_map[seq_idx]].cpu.float()
-
-                if coords.shape[0] == len(sequence):
-                    protein = ESMProtein(sequence=sequence, coords=coords)
-                else:
-                    if seq_idx == 0:  # Only log once to avoid spam
-                        print(
-                            f"⚠️  Length mismatch: structure ({coords.shape[0]}) vs sequence ({len(sequence)}) - using sequence only"
-                        )
-                    protein = ESMProtein(sequence=sequence)
-            else:
-                protein = ESMProtein(sequence=sequence)
-
-
-            # Encode protein
-            protein_tensor = self.protein_model.encode(protein)
-            protein_tensor = protein_tensor.to(self.device)
-
-            # Get embeddings - respect finetune parameter
-            with torch.set_grad_enabled(False):
-                output = self.protein_model.forward_and_sample(
-                    protein_tensor,
-                    SamplingConfig(return_per_residue_embeddings=True),
-                )
-                seq_embeddings = output.per_residue_embedding
-
-            # Get the batch index for this sequence
-            batch_idx = batch_idx_map[seq_idx]
-
-            # Add to appropriate batch result
-            result[batch_idx].append(seq_embeddings)
-
-
-        
-
-        # Concatenate embeddings for each batch item
+        result = self.protein_encoder.encode_sequences(
+            protein_sequences=protein_sequences,
+            batch_idx_map=batch_idx_map,
+            batch_size=batch_size,
+            structure_coords=structure_coords,
+            protein_model_finetune=False,  # server path: inference-time
+        )
+        # project to text space (kept as-is)
         for i in range(batch_size):
-            if result[i]:
-                result[i] = torch.cat(result[i], dim=0)
-            else:
-                # Empty tensor for batch items with no proteins - ensure on device
-                result[i] = torch.zeros((0, self.protein_hidden_size), device=self.device)
-
-        # Project all embeddings to text embedding space
-        for i in range(batch_size):
-            if result[i].numel() > 0:  # Check if tensor is not empty
-                result[i] = result[i].to(
-                    device=self.protein_projection.weight.device,
-                    dtype=self.protein_projection.weight.dtype,
-                )
+            if result[i].numel() > 0:
+                result[i] = result[i].to(self.protein_projection.weight.device,
+                                        self.protein_projection.weight.dtype)
                 result[i] = self.protein_projection(result[i])
             else:
-                # Ensure empty tensors have correct dimensions
                 result[i] = torch.zeros(
                     (0, self.text_hidden_size),
                     device=self.protein_projection.weight.device,
                     dtype=self.protein_projection.weight.dtype,
                 )
-
-
         return result
+    
+
     def process_go_aspects(
         self,
         go_aspects: Optional[List[str]] = None,

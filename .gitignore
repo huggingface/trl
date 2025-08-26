@@ -147,3 +147,6 @@ wandb/
 # Data files
 *.json
 *.csv
+*.out
+*.err
+*.jsonl
