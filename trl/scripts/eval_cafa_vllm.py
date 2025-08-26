@@ -65,8 +65,8 @@ except Exception:
     _dumps = lambda o: json.dumps(o)
 
 
-async def _post(session: aiohttp.ClientSession, url: str, payload: Dict[str, Any]):
-    async with session.post(url, json=payload, timeout=600) as resp:
+async def _post(session: aiohttp.ClientSession, url: str, payload: Dict[str, Any], timeout_s: int):
+    async with session.post(url, json=payload, timeout=timeout_s) as resp:
         resp.raise_for_status()
         return await resp.json()
 
@@ -173,7 +173,7 @@ async def main(args):
 
         async def worker(payload):
             async with sem:
-                return await _post(sess, f"{server}/generate/", payload)
+                return await _post(sess, f"{server}/generate/", payload, args.client_timeout_sec)
 
         tasks = [asyncio.create_task(worker(p)) for p in batches]
         done, _ = await asyncio.wait(tasks)
@@ -234,6 +234,7 @@ if __name__ == "__main__":
     p.add_argument("--save_results", action="store_true")
     p.add_argument("--first_batch_out", type=str, default="batches_0.json")
     p.add_argument("--results_out", type=str, default="cafa_vllm_results.json")
+    p.add_argument("--client_timeout_sec", type=int, default=1800)
 
     args = p.parse_args()
 

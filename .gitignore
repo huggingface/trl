@@ -151,3 +151,4 @@ wandb/
 *.err
 *.jsonl
 vllm_eval/
+vllm_eval_dp/
