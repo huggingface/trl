@@ -7,6 +7,13 @@ In this guide, you’ll learn how to:
 - Configure hardware, timeouts, environment variables, and secrets.
 - Monitor and manage jobs from the CLI or Python.
 
+<Tip>
+
+When a model is trained using **TRL + Jobs**, a tag is automatically added to the model card.  
+You can explore models trained with this method [here](https://huggingface.co/models?other=generated_with_hf_jobs).
+
+</Tip>
+
 **Requirements**
 - [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan.
 - Logged into the Hugging Face Hub (`hf auth login`).
