@@ -9,7 +9,7 @@ Currently supported commands are:
 - `trl dpo`: fine-tune a LLM with DPO
 - `trl grpo`: fine-tune a LLM with GRPO
 - `trl kto`: fine-tune a LLM with KTO
-   `trl rloo`: fine-tune a LLM with RLOO
+- `trl rloo`: fine-tune a LLM with RLOO
 - `trl sft`: fine-tune a LLM with SFT
 
 #### Other Commands
