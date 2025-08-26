@@ -236,39 +236,6 @@ def split_tensor_dict(
         chunks.append(chunk_dict)
     return chunks
 
-
-def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
-    """
-    Shuffles all sequence-like values in a dictionary along the first dimension in unison.
-
-    Example:
-    ```python
-    >>> x = torch.arange(6).reshape(3, 2)
-    >>> y = ["a", "b", "c"]
-    >>> seq_dict = {"x": x, "y": y}
-    >>> shuffle_sequence_dict(seq_dict)
-    {'x': tensor([[2, 3],
-                  [0, 1],
-                  [4, 5]]),
-     'y': ['b', 'a', 'c']}
-    ```
-    """
-    # Determine batch size from the first non-None sequence
-    batch_size = len(next(v for v in seq_dict.values() if v is not None))
-    permutation = torch.randperm(batch_size)
-
-    def permute(v: Optional[Sequence]) -> Optional[Sequence]:
-        if v is None:
-            return None
-        if isinstance(v, torch.Tensor) and v.ndim == 0:
-            return v
-        if isinstance(v, torch.Tensor) and v.ndim >= 1:
-            return v[permutation]
-        return [v[i] for i in permutation]
-
-    return {key: permute(val) for key, val in seq_dict.items()}
-
-
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     """
     Compute the minimum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
