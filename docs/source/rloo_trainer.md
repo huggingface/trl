@@ -589,9 +589,9 @@ This approach thechnicaly ensures that:
 
 Please see below for a list of changes in this migration;
 
-- `rloo_k` is changed to `num_generations` in `RLOOTrainer`. Default value is set to 2.
-- `cliprange` is changed to `epsilon` in `RLOOTrainer`. Default value is set to 0.2.
-- `kl_coef` is changed to `beta` in `RLOOTrainer`. Default is set to 0.05. 
+- `rloo_k` → `num_generations`
+- `cliprange`→ `epsilon`
+- `kl_coef` → `beta`
 - `exp_name` → Removed 
 - `reward_model_path` → Removed (use reward_funcs parameter in trainer initialization)
 - `reward_model` → `reward_funcs` which supports both reward_model and reward_func
@@ -600,19 +600,19 @@ Please see below for a list of changes in this migration;
 - `token_level_kl` → Removed (KL is sequence-level to align the paper)
 - `dataset_num_proc` → Removed 
 - `num_mini_batches` → `steps_per_generation`
-- `total_episodes` → Available in new version
-- `local_rollout_forward_batch_size` → `generation_batch_size` (auto-computed from per_device_train_batch_size * num_processes * steps_per_generation)
-- `num_sample_generations` → `num_completions_to_print`
-- `response_length` → `max_completion_length` (default: 256)
+- `total_episodes` → `max_steps`
+- `local_rollout_forward_batch_size` → `generation_batch_size` (auto-computed from `per_device_train_batch_size`*`num_processes` *`steps_per_generation`)
+- `num_sample_generations` → `logging_steps`
+- `response_length` → `max_completion_length` (default is 256)
 - `stop_token` → `eos_token_id` 
 - `stop_token_id` → `eos_token_id`
-- `missing_eos_penalty` → Removed 
+- `missing_eos_penalty` → Removed bc of negative impact of negative penalty
 - `sft_model_path` → Use `model` parameter in trainer initialization
 - `world_size` → Auto-computed from `accelerator.num_processes`
-- `num_total_batches` → `max_steps`
-- `micro_batch_size` → TODO
-- `local_batch_size` → TODO
-- `batch_size` → `per_device_train_batch_size`
-- `local_mini_batch_size` → TODO
-- `mini_batch_size` → TODO
+- `num_total_batches` → `max_steps` \ `batch_size`
+- `local_batch_size` → `per_device_train_batch_size`* `gradient_accumulation_steps`
+- `local_mini_batch_size` → `per_device_train_batch_size`
+- `batch_size` → `per_device_train_batch_size` * `num_processes`
+- `micro_batch_size` → `per_device_train_batch_size` * `world_size`
+- `mini_batch_size` → ?
 
