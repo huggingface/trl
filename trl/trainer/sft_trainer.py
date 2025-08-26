@@ -1168,7 +1168,7 @@ class SFTTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
-        if 'JOB_ID' in os.environ:
+        if "JOB_ID" in os.environ:
             tags.add("generated_with_hf_jobs")
 
         tags.update(self._tag_names)
