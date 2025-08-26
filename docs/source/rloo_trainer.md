@@ -73,9 +73,7 @@ In RLOO, the reward consists of two components: the reward provided by the rewar
 2. Concurenlty, we estimate the KL divergence between the current policy  \\( \pi_\theta \\) and the fixed reference policy  \\( \pi_{\text{ref}} \\) over the sequence. The KL estimate for sequence  \\( o_i \\) is:
 
 $$
-\mathbb{D}_{\mathrm{KL}}\!\left[\pi_\theta \|\pi_{\mathrm{ref}}\right]
-= \sum_{t=1}^T \log \frac{\pi_\theta(o_{i,t} \mid q, o_{i,<t})}
-{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}.
+\mathbb{D}_{\mathrm{KL}}\!\left[\pi_\theta\|\pi_{\mathrm{ref}}\right] = \sum_{t=1}^T \log \frac{\pi_\theta(o_{i,t} \mid q, o_{i,<t})}{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}.
 $$
 
 The final reward assigned to sequence  \\( o_i \\) is then:
@@ -99,9 +97,7 @@ $$
 Equivalently, for a sampled sequence $o$, the Monte Carlo estimate is
 
 $$
-\mathbb{D}_{\mathrm{KL}}\!\left[\pi_{\text{old}} \|\pi_{\mathrm{ref}}\right]
-= \sum_{t=1}^T \log \frac{\pi_{\text{old}}(o_{i,t} \mid q, o_{i,<t})}
-{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}.
+\mathbb{D}_{\mathrm{KL}}\!\left[\pi_{\text{old}} \|\pi_{\mathrm{ref}}\right] = \sum_{t=1}^T \log \frac{\pi_{\text{old}}(o_{i,t} \mid q, o_{i,<t})}{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}.
 $$
 
 </Tip>
@@ -137,9 +133,7 @@ $$
 \mathcal{L}_{\text{RLOO}}(\theta) = - \frac{1}{G} \sum_{i=1}^G \min \left( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} \hat{A}_i, \, \text{clip}\left(\frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)}, 1-\epsilon, 1+\epsilon\right) \hat{A}_i \right)
 $$
 
-In a fully online, single-step setting (default), $\frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} = 1$ and this reduces to standard REINFORCE.
-
----
+In a fully online, single-step setting (default),  \\( \frac{\pi_\theta(o_i \mid q)}{\pi_{\theta_\text{old}}(o_i \mid q)} = 1 \\) and this reduces to standard REINFORCE.
 
 ## Logged metrics
 
