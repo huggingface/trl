@@ -654,7 +654,6 @@ class GRPOTrainer(Trainer):
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
-        self.rollout_importance_sampling_cap = -1
         self.max_prompt_length = args.max_prompt_length
         self.max_completion_length = args.max_completion_length  # = |o_i| in the GRPO paper
         self.num_generations = args.num_generations  # = G in the GRPO paper
@@ -674,6 +673,8 @@ class GRPOTrainer(Trainer):
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
+        self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
+        self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         if self.use_liger_loss and self.top_entropy_quantile < 1.0:
             raise NotImplementedError(
                 "Liger Kernels don't currently support masking token positions based on entropy."
@@ -1453,7 +1454,7 @@ class GRPOTrainer(Trainer):
                             max_tokens=self.max_completion_length,
                             guided_decoding_regex=self.guided_decoding_regex,
                             generation_kwargs=self.args.generation_kwargs,
-                            logprobs=0,
+                            logprobs=0 if self.vllm_importance_sampling_correction else None,
                         )
                         payload = (
                             output["completion_ids"],
@@ -1490,7 +1491,7 @@ class GRPOTrainer(Trainer):
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
                     "guided_decoding": guided_decoding,
-                    "logprobs": 0,
+                    "logprobs": 0 if self.vllm_importance_sampling_correction else None,
                 }
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
@@ -1762,7 +1763,7 @@ class GRPOTrainer(Trainer):
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
-        if rollout_old_per_token_logps is not None and old_per_token_logps is not None:
+        if self.vllm_importance_sampling_correction and old_per_token_logps is not None:
             delta = old_per_token_logps - rollout_old_per_token_logps
             probs_diff = torch.exp(delta)
             per_token_kl = probs_diff - delta - 1
@@ -1784,7 +1785,7 @@ class GRPOTrainer(Trainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
-        if rollout_old_per_token_logps is not None:
+        if self.vllm_importance_sampling_correction:
             output["rollout_old_per_token_logps"] = rollout_old_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
@@ -1919,7 +1920,7 @@ class GRPOTrainer(Trainer):
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
-        if self.use_vllm and self.rollout_importance_sampling_cap > 0 and old_per_token_logps is not None:
+        if self.vllm_importance_sampling_correction and old_per_token_logps is not None:
             rollout_old_per_token_logps = inputs.get("rollout_old_per_token_logps")
             rollout_imp_ratio = torch.exp(old_per_token_logps - rollout_old_per_token_logps)
             clammped_rollout_imp_ratio = torch.clamp(rollout_imp_ratio, max=self.rollout_importance_sampling_cap)
