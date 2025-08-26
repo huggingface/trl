@@ -242,8 +242,9 @@ class VLLMClient:
         prompts: list[str],
         dna_sequences: list[list[str]] | None = None,
         protein_sequences: list[list[str]] | None = None,
-        # batch_idx_map: list[int] = None,
-        
+        batch_idx_map: list[list[int]] | None = None,
+        structure_coords: list[Optional[Any]] | None = None,
+        go_aspects: list[Optional[str]] | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -266,6 +267,12 @@ class VLLMClient:
             protein_sequences (`List[List[str]]` or `None`, *optional*, defaults to `None`):
                 List of protein sequences for each prompt. Each inner list contains protein sequences for that prompt.
                 Length must match prompts length if provided. Cannot be used with dna_sequences.
+            batch_idx_map (`List[int]` or `None`, *optional*, defaults to `None`):
+                Mapping of batch indices for protein sequences. Used for ProteinLLM integration.
+            structure_coords (`List` or `None`, *optional*, defaults to `None`):
+                Structure coordinates for protein sequences. Used for ProteinLLM integration.
+            go_aspects (`List` or `None`, *optional*, defaults to `None`):
+                Gene Ontology aspects for protein sequences. Used for ProteinLLM integration.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -300,6 +307,9 @@ class VLLMClient:
             "prompts": prompts,
             "dna_sequences": dna_sequences,
             "protein_sequences": protein_sequences,
+            "batch_idx_map": batch_idx_map,
+            "structure_coords": structure_coords,
+            "go_aspects": go_aspects,
             "n": n,
             "repetition_penalty": repetition_penalty,
             "temperature": temperature,
@@ -600,21 +610,6 @@ if __name__ == "__main__":
         print(f"Speed: {response.tokens_per_second:.2f} tokens/sec")
     except Exception as e:
         print(f"Embedding generation failed (expected for dummy data): {e}")
-# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-import atexit
 import logging
 import socket
 import time
@@ -844,8 +839,9 @@ class VLLMClient:
         prompts: list[str],
         dna_sequences: list[list[str]] | None = None,
         protein_sequences: list[list[str]] | None = None,
-        # batch_idx_map: list[int] = None,
-        
+        batch_idx_map: list[int] | None = None,
+        structure_coords: list | None = None,
+        go_aspects: list | None = None,
         n: int = 1,
         repetition_penalty: float = 1.0,
         temperature: float = 1.0,
@@ -868,6 +864,12 @@ class VLLMClient:
             protein_sequences (`List[List[str]]` or `None`, *optional*, defaults to `None`):
                 List of protein sequences for each prompt. Each inner list contains protein sequences for that prompt.
                 Length must match prompts length if provided. Cannot be used with dna_sequences.
+            batch_idx_map (`List[int]` or `None`, *optional*, defaults to `None`):
+                Mapping of batch indices for protein sequences. Used for ProteinLLM integration.
+            structure_coords (`List` or `None`, *optional*, defaults to `None`):
+                Structure coordinates for protein sequences. Used for ProteinLLM integration.
+            go_aspects (`List` or `None`, *optional*, defaults to `None`):
+                Gene Ontology aspects for protein sequences. Used for ProteinLLM integration.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
             repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -902,6 +904,9 @@ class VLLMClient:
             "prompts": prompts,
             "dna_sequences": dna_sequences,
             "protein_sequences": protein_sequences,
+            "batch_idx_map": batch_idx_map,
+            "structure_coords": structure_coords,
+            "go_aspects": go_aspects,
             "n": n,
             "repetition_penalty": repetition_penalty,
             "temperature": temperature,

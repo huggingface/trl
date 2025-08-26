@@ -48,17 +48,26 @@ _MAIN_TEXT_TOKENIZER = None
 def get_main_text_tokenizer(model_name: str) -> "transformers.PreTrainedTokenizer":
     """
     Lazily load the text tokenizer once in the FastAPI (parent) process.
-    Uses the same chat template constant as the workers so formatting matches.
+    Uses the same chat template as ProteinLLMModel - dynamically generated.
     """
     global _MAIN_TEXT_TOKENIZER
 
     if _MAIN_TEXT_TOKENIZER is None:
         print(f"📝 Loading main-process tokenizer for template formatting …")
         tok = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-        if PROTEIN_CHAT_TEMPLATE:
-            print("chat template found, applying to tokenizer:", PROTEIN_CHAT_TEMPLATE)
-            tok.chat_template = PROTEIN_CHAT_TEMPLATE
-        tok.pad_token = tok.bos_token
+        
+        # Use the same chat template pattern as ProteinLLMModel - call get_chat_template(model_name)
+        try:
+            if 'get_chat_template' in globals():
+                chat_template = get_chat_template(model_name)
+                print(f"✅ Applied dynamic chat template for {model_name}")
+                tok.chat_template = chat_template
+            else:
+                print("⚠️ get_chat_template function not available, using default chat template")
+        except Exception as e:
+            print(f"⚠️ Failed to apply dynamic chat template: {e}, using default")
+        
+        tok.pad_token = tok.eos_token
         _MAIN_TEXT_TOKENIZER = tok
     return _MAIN_TEXT_TOKENIZER
 
@@ -107,14 +116,17 @@ def load_dna_components():
 
 def load_protein_components():
     """Load protein components only when needed."""
-    global ProteinInput, PLProcessor, PROTEIN_CHAT_TEMPLATE
+    global ProteinInput, PLProcessor, PROTEIN_CHAT_TEMPLATE, get_chat_template, get_all_special_tokens, get_token
+    global create_protein_encoder, create_go_graph_encoder_pipeline
         
     try:
-        from bioreason2.models.protein_llm import ProteinLLMModel
+        # Import protein utilities - following ProteinLLMModel pattern exactly
         from bioreason2.utils.protein_utils import ProteinInput as RealProteinInput
-        from bioreason2.models.pl.processing_pl import PLProcessor as RealPLProcessor  
-        from bioreason2.models.pl.chat_template_pl import CHAT_TEMPLATE as RealProteinCHAT_TEMPLATE
-        
+        from bioreason2.models.pl.processing_pl import PLProcessor as RealPLProcessor
+        from bioreason2.models.pl.chat_template_pl import get_chat_template
+        from bioreason2.models.protein_encoder import create_protein_encoder
+        from bioreason2.models.go_graph_encoder import create_go_graph_encoder_pipeline
+        from bioreason2.models.special_tokens import get_all_special_tokens, get_token
         
         # ESM3 imports for protein processing
         from esm.models.esm3 import ESM3
@@ -124,7 +136,8 @@ def load_protein_components():
         # Only override if real components are available
         ProteinInput = RealProteinInput
         PLProcessor = RealPLProcessor
-        PROTEIN_CHAT_TEMPLATE = RealProteinCHAT_TEMPLATE
+        # Set PROTEIN_CHAT_TEMPLATE to None - it will be set dynamically using get_chat_template()
+        PROTEIN_CHAT_TEMPLATE = None
         
         print("✅ Protein-LLM components loaded successfully")
         
@@ -167,7 +180,7 @@ else:
     FastAPI = None
 
 if is_pydantic_available():
-    from pydantic import BaseModel
+    from pydantic import BaseModel, Field
 else:
     BaseModel = None
 
@@ -854,15 +867,47 @@ class ProteinEmbeddingProcessor:
         self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name, trust_remote_code=True, use_fast=True)
         self.text_config = AutoConfig.from_pretrained(text_model_name, trust_remote_code=True)
 
-        # Use the same chat template as ProteinLLMModel (EXACT match)
-        if PROTEIN_CHAT_TEMPLATE:
-            self.text_tokenizer.chat_template = PROTEIN_CHAT_TEMPLATE
-        # self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
+        # Use the same chat template as ProteinLLMModel (EXACT match) - call get_chat_template(model_name)
+        try:
+            if 'get_chat_template' in globals():
+                chat_template = get_chat_template(text_model_name)
+                print(f"✅ Applied dynamic chat template for {text_model_name}")
+                self.text_tokenizer.chat_template = chat_template
+            else:
+                print("⚠️ get_chat_template function not available, using default chat template")
+        except Exception as e:
+            print(f"⚠️ Failed to apply dynamic chat template: {e}, using default")
+        
+        self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
 
-        # Add protein tokens exactly like ProteinLLMModel
-        new_tokens = ["<|protein_start|>", "<|protein_pad|>", "<|protein_end|>"]
-        self.text_tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
-        self.protein_token_id = self.text_tokenizer.convert_tokens_to_ids("<|protein_pad|>")
+        # Add special tokens from centralized module - exactly like ProteinLLMModel
+        try:
+            if 'get_all_special_tokens' in globals() and 'get_token' in globals():
+                all_special_tokens = get_all_special_tokens()
+                self.text_tokenizer.add_special_tokens(
+                    {"additional_special_tokens": all_special_tokens}
+                )
+                self.protein_token_id = self.text_tokenizer.convert_tokens_to_ids(
+                    get_token("protein_pad")
+                )
+                self.go_token_id = self.text_tokenizer.convert_tokens_to_ids(
+                    get_token("go_graph_pad")
+                )
+                print("✅ Added special tokens from centralized module")
+            else:
+                # Fallback to manual token addition
+                new_tokens = ["<|protein_start|>", "<|protein_pad|>", "<|protein_end|>", "<|go_graph_start|>", "<|go_graph_pad|>", "<|go_graph_end|>"]
+                self.text_tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
+                self.protein_token_id = self.text_tokenizer.convert_tokens_to_ids("<|protein_pad|>")
+                self.go_token_id = self.text_tokenizer.convert_tokens_to_ids("<|go_graph_pad|>")
+                print("⚠️ Used fallback token addition")
+        except Exception as e:
+            print(f"⚠️ Error adding special tokens: {e}, using fallback")
+            # Final fallback
+            new_tokens = ["<|protein_start|>", "<|protein_pad|>", "<|protein_end|>"]
+            self.text_tokenizer.add_special_tokens({"additional_special_tokens": new_tokens})
+            self.protein_token_id = self.text_tokenizer.convert_tokens_to_ids("<|protein_pad|>")
+            self.go_token_id = None
 
         print("✅ Text tokenizer loaded successfully")
 
@@ -882,7 +927,17 @@ class ProteinEmbeddingProcessor:
         # STEP 5: Create processor (exactly like ProteinLLMModel)
         self.processor = PLProcessor(tokenizer=self.text_tokenizer)
 
-        # STEP 6: Create minimal embedding layer for text embeddings
+        # STEP 6: Initialize GO graph encoder if available 
+        self.go_encoder = None
+        self.go_projection = None
+        # Check if GO encoder components are available
+        if 'create_go_graph_encoder_pipeline' in globals():
+            print("🧬 GO graph encoder components available, but not initialized by default")
+            print("   (GO encoder will be initialized when needed)")
+        else:
+            print("⚠️ GO graph encoder components not available")
+            
+        # STEP 7: Create minimal embedding layer for text embeddings
         self._embedding_layer = None
         self._text_model_name = text_model_name
         
@@ -1150,6 +1205,58 @@ class ProteinEmbeddingProcessor:
 
 
         return result
+    def process_go_aspects(
+        self,
+        go_aspects: Optional[List[str]] = None,
+        batch_size: int = 1,
+    ) -> Optional[List[torch.Tensor]]:
+        """
+        Process GO aspects to obtain embeddings using the GO graph encoder.
+        Each example gets its own aspect-specific embeddings.
+
+        Args:
+            go_aspects: List of GO aspect strings for each batch item
+            batch_size: Number of items in the batch
+
+        Returns:
+            Optional list of tensors with GO embeddings, one per batch item.
+            Each tensor has shape (200, text_hidden_size) for the specific aspect.
+            Returns None if no GO encoder is available or no aspects provided
+        """
+        if self.go_encoder is None or go_aspects is None:
+            return None
+        
+        batch_go_embeddings = []
+        
+        # Process each example's aspect separately  
+        for i in range(batch_size):
+            if i < len(go_aspects) and go_aspects[i] is not None:
+                aspect = go_aspects[i]
+                
+                # Get reduced embeddings for this specific aspect (200, 2560)
+                # Use forward() directly to allow gradients during training
+                reduced_embeddings = self.go_encoder.forward(aspect)
+                
+                # Project to text embedding space
+                if self.go_projection is not None:
+                    reduced_embeddings = reduced_embeddings.to(
+                        device=self.go_projection[0].weight.device,
+                        dtype=self.go_projection[0].weight.dtype,
+                    )
+                    reduced_embeddings = self.go_projection(reduced_embeddings)  # (200, text_hidden_size)
+                
+                batch_go_embeddings.append(reduced_embeddings)
+            else:
+                # Empty tensor for missing aspects
+                device = self.protein_projection.weight.device
+                empty_tensor = torch.empty(
+                    (0, self.text_hidden_size),
+                    device=device,
+                    dtype=torch.float
+                )
+                batch_go_embeddings.append(empty_tensor)
+        
+        return batch_go_embeddings
 
 
 def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
@@ -1164,13 +1271,22 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         # STEP 1: Extract text and protein sequences from inputs (EXACTLY like DNA)
         batch_text = []
         batch_protein_sequences = []
+        batch_batch_idx_map = []
+        batch_structure_coords = []
+        batch_go_aspects = []
         
         for inp in inputs:
             text = inp["text"]
             protein_sequences = inp.get("protein_sequences", [])
+            batch_idx_map = inp.get("batch_idx_map", [])
+            structure_coords = inp.get("structure_coords", None)
+            go_aspects = inp.get("go_aspects", None)
             
             batch_text.append(text)
             batch_protein_sequences.append(protein_sequences)
+            batch_batch_idx_map.append(batch_idx_map)
+            batch_structure_coords.append(structure_coords)
+            batch_go_aspects.append(go_aspects)
         
         print(f"🧬 Prepared batch with {len(batch_text)} text items and {len(batch_protein_sequences)} protein sequence lists")
         for i, protein_seqs in enumerate(batch_protein_sequences):
@@ -1183,6 +1299,9 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         processed = protein_processor.processor(
             text=batch_text,
             batch_protein_sequences=batch_protein_sequences,
+            batch_batch_idx_map=batch_batch_idx_map,
+            batch_structure_coords=batch_structure_coords,
+            batch_go_aspects=batch_go_aspects,
             max_length_text=2048,
             max_length_protein=2048,
             return_tensors="pt"
@@ -1253,6 +1372,38 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
             text_embeddings[mask] = protein_embeds_flat
             print(f"🧬 After protein replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
             print(f"🧬 Protein successfully integrated into text embeddings!")
+            
+            # STEP 5.5: Process GO aspects if available
+            go_aspects_data = processed.get("go_aspects")
+            if go_aspects_data is not None and any(aspect is not None for aspect in go_aspects_data):
+                print(f"🧬 ✅ GO aspects data provided - processing GO embeddings...")
+                
+                batch_size = input_ids.shape[0]
+                go_embeddings = protein_processor.process_go_aspects(
+                    go_aspects_data, 
+                    batch_size
+                )
+                
+                if go_embeddings is not None:
+                    # Find positions where GO tokens should be replaced
+                    go_mask = input_ids == protein_processor.go_token_id
+                    n_go_tokens = go_mask.sum().item()
+                    go_embeds_flat = torch.cat([emb for emb in go_embeddings if emb.numel() > 0], dim=0)
+                    n_go_features = go_embeds_flat.shape[0] if go_embeds_flat.numel() > 0 else 0
+                    
+                    print(f"🧬 Found {n_go_tokens} GO tokens in text")
+                    print(f"🧬 Generated {n_go_features} GO features")
+                    
+                    if n_go_features != n_go_tokens:
+                        print(f"⚠️ Warning: GO features and GO tokens do not match: features {n_go_features}, tokens: {n_go_tokens}")
+                    elif n_go_tokens > 0:
+                        # Ensure GO embeddings have the same dtype as text embeddings
+                        go_embeds_flat = go_embeds_flat.to(dtype=text_embeddings.dtype, device=text_embeddings.device)
+                        
+                        print(f"🧬 Before GO replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
+                        text_embeddings[go_mask] = go_embeds_flat
+                        print(f"🧬 After GO replacement - text embeds mean: {text_embeddings.mean().item():.4f}")
+                        print(f"🧬 GO aspects successfully integrated into text embeddings!")
            
             
             # STEP 6: Generate using prompt embeddings with vLLM (EXACT same as ProteinLLMModel.generate)
@@ -1679,6 +1830,9 @@ def main(script_args: ScriptArguments):
         prompts: List[str]  # Text prompts (will be formatted as chat messages if needed)
         dna_sequences: Optional[List[List[str]]] = None  # List of DNA sequences per prompt (outer list length must match prompts)
         protein_sequences: Optional[List[List[str]]] = None  # List of protein sequences per prompt (outer list length must match prompts)
+        batch_idx_map: Optional[List[List[int]]] = None  # Mapping of batch indices for protein sequences
+        structure_coords: Optional[List[Optional[Any]]] = None   # Structure coordinates for protein sequences
+        go_aspects: Optional[List[Optional[str]]] = None  # Gene Ontology aspects for protein sequences
         n: int = 1
         repetition_penalty: float = 1.0
         temperature: float = 1.0
@@ -1687,9 +1841,19 @@ def main(script_args: ScriptArguments):
         min_p: float = 0.0
         max_tokens: int = 5120
         guided_decoding_regex: Optional[str] = None
-        generation_kwargs: Dict = field(default_factory=dict)
+        generation_kwargs: Dict[str, Any] = Field(default_factory=dict)
         
         def model_post_init(self, __context) -> None:
+            def _check_len(name, val):
+                if val is not None and len(val) != len(self.prompts):
+                    raise ValueError(f"Length of {name} ({len(val)}) must equal length of prompts ({len(self.prompts)})")
+
+            _check_len("dna_sequences", self.dna_sequences)
+            _check_len("protein_sequences", self.protein_sequences)
+            _check_len("batch_idx_map", self.batch_idx_map)
+            _check_len("structure_coords", self.structure_coords)
+            _check_len("go_aspects", self.go_aspects)
+
             """Validate that dna_sequences and protein_sequences length matches prompts length if provided."""
             if self.dna_sequences is not None:
                 if len(self.dna_sequences) != len(self.prompts):
@@ -1720,6 +1884,21 @@ def main(script_args: ScriptArguments):
             # Ensure only one type of biological sequence is provided
             if self.dna_sequences is not None and self.protein_sequences is not None:
                 raise ValueError("Cannot provide both dna_sequences and protein_sequences in the same request")
+            
+            if self.dna_sequences is not None:
+                for i, seqs in enumerate(self.dna_sequences):
+                    if not isinstance(seqs, list) or any(not isinstance(s, str) for s in seqs):
+                        raise ValueError(f"dna_sequences[{i}] must be List[str]")
+
+            if self.protein_sequences is not None:
+                for i, seqs in enumerate(self.protein_sequences):
+                    if not isinstance(seqs, list) or any(not isinstance(s, str) for s in seqs):
+                        raise ValueError(f"protein_sequences[{i}] must be List[str]")
+
+            if self.batch_idx_map is not None:
+                for i, idxs in enumerate(self.batch_idx_map):
+                    if not isinstance(idxs, list) or any(not isinstance(x, int) for x in idxs):
+                        raise ValueError(f"batch_idx_map[{i}] must be List[int]")
 
     class GenerateResponse(BaseModel):
         completion_ids: List[List[int]]
@@ -1745,6 +1924,9 @@ def main(script_args: ScriptArguments):
         if request.protein_sequences:
             total_seqs = sum(len(seqs) for seqs in request.protein_sequences)
             print(f"🧬   - Total protein sequences: {total_seqs}")
+        print(f"🧬   - Batch idx map: {'Yes' if request.batch_idx_map else 'No'}")
+        print(f"🧬   - Structure coords: {'Yes' if request.structure_coords else 'No'}")
+        print(f"🧬   - GO aspects: {'Yes' if request.go_aspects else 'No'}")
         print(f"🧬   - Temperature: {request.temperature}")
         print(f"🧬   - Max tokens: {request.max_tokens}")
         
@@ -1952,20 +2134,32 @@ def main(script_args: ScriptArguments):
         chunked_prompts     = chunk_list(request.prompts,       script_args.data_parallel_size)
         chunked_protein_seqs    = chunk_list(request.protein_sequences, script_args.data_parallel_size) \
                                 if request.protein_sequences else [[] for _ in range(script_args.data_parallel_size)]
+        chunked_batch_idx_map = chunk_list(request.batch_idx_map, script_args.data_parallel_size) \
+                                if request.batch_idx_map else [[] for _ in range(script_args.data_parallel_size)]
+        chunked_structure_coords = chunk_list(request.structure_coords, script_args.data_parallel_size) \
+                                if request.structure_coords else [[] for _ in range(script_args.data_parallel_size)]
+        chunked_go_aspects = chunk_list(request.go_aspects, script_args.data_parallel_size) \
+                                if request.go_aspects else [[] for _ in range(script_args.data_parallel_size)]
 
         # ------------------------------------------------------------------
         # Dispatch to workers
         # ------------------------------------------------------------------
-        for conn, prompts_this_rank, protein_this_rank in zip(connections, chunked_prompts, chunked_protein_seqs):
+        for conn, prompts_this_rank, protein_this_rank, batch_idx_this_rank, struct_coords_this_rank, go_aspects_this_rank in zip(
+            connections, chunked_prompts, chunked_protein_seqs, chunked_batch_idx_map, chunked_structure_coords, chunked_go_aspects
+        ):
 
             # If no real work for this rank, send a placeholder so vLLM won't error.
             if not prompts_this_rank:
                 prompts_this_rank, protein_this_rank = ["<placeholder>"], [[]]
+                batch_idx_this_rank, struct_coords_this_rank, go_aspects_this_rank = [], [], []
 
             # ---- build the per-example payload -------------------------------------------------------
             #   PLProcessor expects:
             #       inputs[i]["text"]          : str (formatted chat message, not None!)
             #       inputs[i]["protein_sequences"] : List[str] (may be [])
+            #       inputs[i]["batch_idx_map"] : List[int] (may be [])
+            #       inputs[i]["structure_coords"] : Any (may be None)
+            #       inputs[i]["go_aspects"] : str (may be None)
             # ------------------------------------------------------------------------------------------
             inputs = []
             for i, prompt in enumerate(prompts_this_rank):
@@ -1979,6 +2173,11 @@ def main(script_args: ScriptArguments):
                 if not isinstance(protein_seqs, list):
                     print(f"⚠️ Warning: protein_seqs at index {i} is not a list: {type(protein_seqs)}, converting to []")
                     protein_seqs = []
+                
+                # Get additional parameters for this prompt
+                batch_idx = batch_idx_this_rank[i] if i < len(batch_idx_this_rank) else []
+                struct_coords = struct_coords_this_rank[i] if i < len(struct_coords_this_rank) else None
+                go_aspect = go_aspects_this_rank[i] if i < len(go_aspects_this_rank) else None
                 
                 # Format the prompt properly for the PLProcessor using the chat template
                 # Use the text tokenizer's chat template to format the conversation
@@ -2009,7 +2208,10 @@ def main(script_args: ScriptArguments):
                 
                 inputs.append({
                     "text": formatted_text,
-                    "protein_sequences": protein_seqs
+                    "protein_sequences": protein_seqs,
+                    "batch_idx_map": batch_idx,
+                    "structure_coords": struct_coords,
+                    "go_aspects": go_aspect
                 })
 
             
