@@ -156,9 +156,9 @@ class RLOOConfig(TrainingArguments):
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
-        normalize_rewards (`bool`, *optional*, defaults to `False`):
-            Whether to normalize rewards. Normalization is done per generation batch to have mean `0` and standard
-            deviation of `1`.
+        normalize_advantages (`bool`, *optional*, defaults to `False`):
+            Whether to normalize advantages. Normalization is done per generation batch to have mean `0.0` and standard
+            deviation of `1.0`.
         reward_clip_range (`tuple[float, float]` or `None`, *optional*, defaults to `None`):
             Clip range for rewards as (min, max). If `None`, no clipping is applied.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
@@ -178,8 +178,6 @@ class RLOOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-        normalize_advantages (`bool`, *optional*, defaults to `False`):
-            Whether to normalize advantages.
 
         > Parameters that control the logging
 
@@ -449,11 +447,11 @@ class RLOOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
-    normalize_rewards: bool = field(
+    normalize_advantages: bool = field(
         default=False,
         metadata={
-            "help": "Whether to normalize rewards. Normalization is done per generation batch to have mean `0` and "
-            "standard deviation of `1`."
+            "help": "Whether to normalize advantages. Normalization is done per generation batch to have mean `0.0` "
+            "and standard deviation of `1.0`."
         },
     )
     reward_clip_range: Optional[tuple[float, float]] = field(
@@ -489,10 +487,6 @@ class RLOOConfig(TrainingArguments):
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
-    )
-    normalize_advantages: bool = field(
-        default=False,
-        metadata={"help": "Whether to normalize advantages."},
     )
 
     # Parameters that control the logging
