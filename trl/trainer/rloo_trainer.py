@@ -914,62 +914,6 @@ class RLOOTrainer(Trainer):
             seed=self.args.seed,
         )
 
-    @profiling_decorator
-    def _get_last_hidden_state(
-        self,
-        unwrapped_model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-    ):
-        if is_peft_model(unwrapped_model):
-            unwrapped_model = unwrapped_model.base_model.model
-
-        # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
-
-        # Only add logits_to_keep if the model supports it
-        if "logits_to_keep" in self.model_kwarg_keys:
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-        model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
-
-        last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
-        # Exclude the last value: it corresponds to the next token pred
-        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
-        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-        last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-        return last_hidden_state
-
-    def get_high_entropy_mask(
-        self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float, accelerator=None
-    ) -> torch.Tensor:
-        """
-        Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
-
-        Args:
-            entropies (`torch.Tensor`):
-                Tensor of shape (batch_size, seq_len) with per-token entropy values.
-            mask (`torch.Tensor`):
-                Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
-            threshold (`float`):
-                Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
-
-        Returns:
-            `torch.Tensor`:
-                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold
-                and `False` otherwise.
-        """
-        non_pad_entropies = entropies[mask.bool()].float()
-        if non_pad_entropies.numel() == 0:
-            return torch.zeros_like(entropies, dtype=torch.bool)
-        all_non_pad_entropies = self.accelerator.gather(non_pad_entropies)
-        # Filter out any empty tensors that might result from processes with no valid tokens
-        entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
-        masked_entropies = entropies * mask.float()
-        entropy_mask = masked_entropies >= entropy_threshold
-        return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
@@ -1506,10 +1450,8 @@ class RLOOTrainer(Trainer):
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
 
         # RLOO advantages computation
-        grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # Shape: (num_prompts, 1)
-        baselines = (grouped_sum - grouped_rewards) / (
-            self.num_generations - 1
-        )  # Shape: (num_prompts, num_generations)
+        grouped_sum = grouped_rewards.sum(dim=1, keepdim=True)  # (num_prompts, 1)
+        baselines = (grouped_sum - grouped_rewards) / (self.num_generations - 1)  # (num_prompts, num_generations)
         baselines = baselines.view(-1)  # Flatten back to match rewards shape
         advantages = rewards - baselines
 
@@ -1733,11 +1675,14 @@ class RLOOTrainer(Trainer):
         # docstyle-ignore
         citation = textwrap.dedent(
             """\
-            @article{zhihong2024deepseekmath,
-                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
-                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
+            @inproceedings{ahmadian2024back,
+                title        = {{Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs}},
+                author       = {Arash Ahmadian and Chris Cremer and Matthias Gall{\'{e}} and Marzieh Fadaee and Julia Kreutzer and Olivier Pietquin and Ahmet {\"{U}}st{\"{u}}n and Sara Hooker},
                 year         = 2024,
-                eprint       = {arXiv:2402.03300},
+                booktitle    = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), {ACL} 2024, Bangkok, Thailand, August 11-16, 2024},
+                pages        = {12248--12267},
+                publisher    = {Association for Computational Linguistics},
+                editor       = {Lun{-}Wei Ku and Andre Martins and Vivek Srikumar},
             }
             """
         )
