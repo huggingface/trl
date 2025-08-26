@@ -56,7 +56,7 @@ from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from .callbacks import SyncRefModelCallback
-from .rloo_config import RLOOConfig_NEW
+from .rloo_config import RLOOConfig
 from .utils import (
     disable_dropout_in_model,
     entropy_from_logits,
@@ -234,7 +234,6 @@ def split_tensor_dict(
     return chunks
 
 
-
 def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
     """
     Shuffles all sequence-like values in a dictionary along the first dimension in unison.
@@ -263,6 +262,7 @@ def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, 
         if isinstance(v, torch.Tensor) and v.ndim >= 1:
             return v[permutation]
         return [v[i] for i in permutation]
+
     return {key: permute(val) for key, val in seq_dict.items()}
 
 
@@ -392,11 +392,12 @@ def truncate_with_protected_tokens(
     return torch.stack(truncated_seq), torch.stack(truncated_mask)
 
 
-class RLOOFinalTrainer(Trainer):
+class RLOOTrainer(Trainer):
     """
-    Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the
-    paper [Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs]
+    Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the paper [Back to
+    Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs]
     (https://huggingface.co/papers/2402.14740).
+
     Example:
 
     ```python
@@ -454,7 +455,7 @@ class RLOOFinalTrainer(Trainer):
                   reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
-        args ([`RLOOConfig_NEW`], *optional*, defaults to `None`):
+        args ([`RLOOConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
@@ -501,7 +502,7 @@ class RLOOFinalTrainer(Trainer):
         self,
         model: Union[str, PreTrainedModel],
         reward_funcs: Union[RewardFunc, list[RewardFunc]],
-        args: Optional[RLOOConfig_NEW] = None,
+        args: Optional[RLOOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
@@ -514,7 +515,7 @@ class RLOOFinalTrainer(Trainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = RLOOConfig_NEW(f"{model_name}-RLOO")
+            args = RLOOConfig(f"{model_name}-RLOO")
 
         # Models
         # Trained model
@@ -529,7 +530,7 @@ class RLOOFinalTrainer(Trainer):
                 model_init_kwargs["torch_dtype"] = torch_dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `RLOOConfig_NEW`. Expected either 'auto' or a string representing "
+                    "Invalid `torch_dtype` passed to `RLOOConfig`. Expected either 'auto' or a string representing "
                     f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
@@ -1549,7 +1550,7 @@ class RLOOFinalTrainer(Trainer):
             # Match RLOO's KL calculation: kl = logprobs - ref_logprobs
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
-            sequence_kl = (per_token_kl * completion_mask).sum(-1) 
+            sequence_kl = (per_token_kl * completion_mask).sum(-1)
             kl_penalty = self.beta * sequence_kl
             rewards = rewards - kl_penalty
 

@@ -17,8 +17,7 @@ import tempfile
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from trl.trainer.rloo_trainer import RLOOFinalTrainer
-from trl.trainer.rloo_config import RLOOConfig_NEW
+from trl import RLOOConfig, RLOOTrainer
 
 
 def reward_func(completions, **kwargs):
@@ -35,7 +34,7 @@ def main():
     dataset = load_dataset("trl-internal-testing/zen", "conversational_prompt_only", split="train")
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        training_args = RLOOConfig_NEW(
+        training_args = RLOOConfig(
             output_dir=tmp_dir,
             per_device_train_batch_size=2,
             num_generations=2,
@@ -45,7 +44,7 @@ def main():
             logging_steps=1,
         )
 
-        trainer = RLOOFinalTrainer(
+        trainer = RLOOTrainer(
             model=policy_model,
             reward_funcs=reward_func,
             args=training_args,
@@ -54,6 +53,7 @@ def main():
         )
 
         trainer.train()
+
 
 if __name__ == "__main__":
     main()
