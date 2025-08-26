@@ -156,16 +156,9 @@ class RLOOConfig(TrainingArguments):
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
-        scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
-            Specifies the scaling strategy for rewards. Supported values are:
-
-            - `True` or `"group"` (default): rewards are scaled by the standard deviation within each group, ensuring
-              unit variance within a group.
-            - `"batch"`: rewards are scaled by the standard deviation across the entire batch, as recommended in the
-              [PPO Lite paper](https://huggingface.co/papers/2508.08221).
-            - `False` or `"none"`: no scaling is applied. The [Dr. GRPO
-              paper](https://huggingface.co/papers/2503.20783) recommends not scaling rewards, as scaling by the
-              standard deviation introduces a question-level difficulty bias.
+        normalize_rewards (`bool`, *optional*, defaults to `False`):
+            Whether to normalize rewards. Normalization is done per generation batch to have mean `0` and standard
+            deviation of `1`.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -183,8 +176,6 @@ class RLOOConfig(TrainingArguments):
             τ parameter from the [TR-DPO](https://huggingface.co/papers/2404.09656) paper, which determines how
             frequently the current policy is synchronized with the reference policy. To use this parameter, you must
             set `sync_ref_model=True`.
-        normalize_rewards (`bool`, *optional*, defaults to `False`):
-            Whether to normalize rewards.
         normalize_advantages (`bool`, *optional*, defaults to `False`):
             Whether to normalize advantages.
         reward_clip_range (`float`, *optional*, defaults to `10.0`):
@@ -458,16 +449,11 @@ class RLOOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
-    scale_rewards: str = field(
-        default="group",
+    normalize_rewards: bool = field(
+        default=False,
         metadata={
-            "help": "Specifies the scaling strategy for rewards. Supported values are: "
-            "`True` or `group'` (default): rewards are scaled by the standard deviation within each group, ensuring "
-            "unit variance within a group. "
-            "`'batch'`: rewards are scaled by the standard deviation across the entire batch, as recommended in the "
-            "PPO Lite paper. "
-            "`False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
-            "scaling by the standard deviation introduces a question-level difficulty bias."
+            "help": "Whether to normalize rewards. Normalization is done per generation batch to have mean `0` and "
+            "standard deviation of `1`."
         },
     )
     mask_truncated_completions: bool = field(
@@ -499,10 +485,6 @@ class RLOOConfig(TrainingArguments):
             "help": "τ parameter from the TR-DPO paper, which determines how frequently the current policy is "
             "synchronized with the reference policy. To use this parameter, you must set `sync_ref_model=True`."
         },
-    )
-    normalize_rewards: bool = field(
-        default=False,
-        metadata={"help": "Whether to normalize rewards."},
     )
     normalize_advantages: bool = field(
         default=False,

@@ -18,7 +18,7 @@ import os
 import re
 import textwrap
 from collections import defaultdict, deque
-from collections.abc import Sequence, Sized
+from collections.abc import Sized
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
@@ -65,6 +65,7 @@ from .utils import (
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
+    shuffle_sequence_dict,
 )
 
 
@@ -235,6 +236,7 @@ def split_tensor_dict(
                 chunk_dict[key] = None
         chunks.append(chunk_dict)
     return chunks
+
 
 def nanmin(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -609,7 +611,7 @@ class RLOOTrainer(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
-        self.scale_rewards = args.scale_rewards
+        self.normalize_advantages = args.normalize_advantages
         self.mask_truncated_completions = args.mask_truncated_completions
 
         # Datasets
@@ -1364,7 +1366,7 @@ class RLOOTrainer(Trainer):
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
-            paged_prompt_inputs = self.processing_class(text=prompts_text, **kwargs)
+            paged_prompt_inputs = self.processing_class(text=prompts_text)
             previous_attn = self.model_wrapped.config._attn_implementation
 
             if is_flash_attn_2_available():
@@ -1441,13 +1443,7 @@ class RLOOTrainer(Trainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         with torch.no_grad():
-            # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
-            # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
-            # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
-            # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
-            # old_per_token_logps to None.
-            # in RLOO the kl is between old_policy and ref_policy therefore we need to generate
-            # frequently for the old_per_token_logps not to be None
+            # Compute the per-token log probabilities for the current model
             old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                 self.model,
                 prompt_completion_ids,
@@ -1455,6 +1451,7 @@ class RLOOTrainer(Trainer):
                 logits_to_keep,
                 batch_size,
             )
+            old_logps = (old_per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1496,14 +1493,12 @@ class RLOOTrainer(Trainer):
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
-        # For RLOO, include sequence-level KL penalty in the reward itself (following original RLOO implementation)
-        if self.beta != 0.0 and ref_per_token_logps is not None and old_per_token_logps is not None:
-            # Match RLOO's KL calculation: kl = logprobs - ref_logprobs
+        # Include the KL penalty in the reward
+        if self.beta != 0.0:
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
-            sequence_kl = (per_token_kl * completion_mask).sum(-1)
-            kl_penalty = self.beta * sequence_kl
-            rewards = rewards - kl_penalty
+            kl = (per_token_kl * completion_mask).sum(-1)
+            rewards = rewards - self.beta * kl
 
         grouped_rewards = rewards.view(-1, self.num_generations)
         mean_grouped_rewards = grouped_rewards.mean(dim=1)
@@ -1518,12 +1513,9 @@ class RLOOTrainer(Trainer):
         baselines = baselines.view(-1)  # Flatten back to match rewards shape
         advantages = rewards - baselines
 
-        # Optional: normalize advantages if scale_rewards is enabled
-        if self.scale_rewards:
-            grouped_advantages = advantages.view(-1, self.num_generations)
-            std_grouped_advantages = grouped_advantages.std(dim=1)
-            std_grouped_advantages = std_grouped_advantages.repeat_interleave(self.num_generations, dim=0)
-            advantages = advantages / (std_grouped_advantages + 1e-4)
+        # Normalize advantages
+        if self.normalize_advantages:
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-4)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1582,12 +1574,9 @@ class RLOOTrainer(Trainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "old_logps": old_logps,
             "advantages": advantages,
         }
-        if old_per_token_logps is not None:
-            output["old_per_token_logps"] = old_per_token_logps
-        if ref_per_token_logps is not None:
-            output["ref_per_token_logps"] = ref_per_token_logps
         return output
 
     @profiling_decorator
@@ -1612,60 +1601,37 @@ class RLOOTrainer(Trainer):
             logits_to_keep,
             compute_entropy=True,
         )
-
-        old_per_token_logps = inputs.get("old_per_token_logps")
-        old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
+        logps = (per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS
+        old_logps = inputs["old_logps"]
+        log_ratio = logps - old_logps
 
         # Compute the loss
         advantages = inputs["advantages"]
-        # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
-        # old_per_token_logps == per_token_logps, so we can skip it's computation
-        # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
-
-        log_ratio = per_token_logps - old_per_token_logps
-        log_importance_weights = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-        log_importance_weights = log_importance_weights
-
-        coef_1 = torch.exp(log_importance_weights)
+        coef_1 = torch.exp(log_ratio)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
-
         per_sequence_loss1 = coef_1 * advantages
         per_sequence_loss2 = coef_2 * advantages
         per_sequence_loss = -torch.min(per_sequence_loss1, per_sequence_loss2)
-
-        # Average the loss across the batch
         loss = per_sequence_loss.mean()
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
 
-        completion_token_count = completion_mask.sum().clamp(min=1.0)
-
-        def masked_batch_mean(x):
-            if x.shape[1] == 1:  # when importance_sampling_level == "sequence"
-                return x.mean()
-            else:
-                return (x * completion_mask).sum() / completion_token_count
-
-        mean_entropy = masked_batch_mean(entropies)
+        # Entropy
+        mean_entropy = (entropies * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
 
         # Compute the clipped probability ratios
-        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)
-        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages.unsqueeze(1) > 0)
+        is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages < 0)
+        is_high_clipped = (coef_1 > 1 + self.epsilon_high) & (advantages > 0)
         is_region_clipped = is_low_clipped | is_high_clipped
-
-        low_clip = masked_batch_mean(is_low_clipped.float())
-        high_clip = masked_batch_mean(is_high_clipped.float())
-        clip_ratio = masked_batch_mean(is_region_clipped.float())
-
-        gathered_low_clip = self.accelerator.gather(low_clip)
+        gathered_low_clip = self.accelerator.gather(is_low_clipped.float().mean())
         self._metrics[mode]["clip_ratio/low_mean"].append(gathered_low_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/low_min"].append(nanmin(gathered_low_clip).item())
-        gathered_high_clip = self.accelerator.gather(high_clip)
+        gathered_high_clip = self.accelerator.gather(is_high_clipped.float().mean())
         self._metrics[mode]["clip_ratio/high_mean"].append(gathered_high_clip.nanmean().item())
         self._metrics[mode]["clip_ratio/high_max"].append(nanmax(gathered_high_clip).item())
-        gathered_clip_ratio = self.accelerator.gather(clip_ratio)
+        gathered_clip_ratio = self.accelerator.gather(is_region_clipped.float().mean())
         self._metrics[mode]["clip_ratio/region_mean"].append(gathered_clip_ratio.nanmean().item())
         return loss
 
