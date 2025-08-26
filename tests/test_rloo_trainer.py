@@ -22,10 +22,10 @@ from transformers import AutoModelForCausalLM, AutoModelForSequenceClassificatio
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
+from trl.trainer.utils import shuffle_sequence_dict
 from trl import RLOOConfig, RLOOTrainer
 from trl.trainer.rloo_trainer import (
     RepeatSampler,
-    shuffle_sequence_dict,
     split_tensor_dict,
     truncate_with_protected_tokens,
 )
