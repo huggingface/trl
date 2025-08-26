@@ -596,6 +596,7 @@ Please see below for a list of changes in this migration;
 - `exp_name` → Removed 
 - `reward_model_path` → Removed (use reward_funcs parameter in trainer initialization)
 - `reward_model` → `reward_funcs` which supports both reward_model and reward_func
+- `normalize_reward` → `normalize_advantages`
 - `num_ppo_epochs` → `num_iterations` (default: 1)
 - `whiten_rewards` → `scale_rewards` (default: "group", options: "group"/"batch"/"none")
 - `token_level_kl` → Removed (KL is sequence-level to align the paper)
