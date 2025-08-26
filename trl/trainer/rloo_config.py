@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional, Union, Tuple
+from typing import Optional, Union
 
 from transformers import TrainingArguments
 
@@ -456,7 +456,7 @@ class RLOOConfig(TrainingArguments):
             "standard deviation of `1`."
         },
     )
-    reward_clip_range: Optional[Tuple[float, float]] = field(
+    reward_clip_range: Optional[tuple[float, float]] = field(
         default=None,
         metadata={"help": "Clip range for rewards as (min, max). If None, no clipping is applied."},
     )
