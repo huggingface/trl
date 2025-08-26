@@ -19,7 +19,7 @@ You can launch Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs
 <hfoption id="bash">
 
 ```bash
-hf jobs uv run --flavor a100-large "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
+hf jobs uv run --flavor a100-large --secrets HF_TOKEN "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
 ```
 
 The script can also be a local file:
