@@ -104,6 +104,7 @@ training_args = DPOConfig(
 ```
 
 ## Reinforce Leave One Out (RLOO)
+
 **📜 Paper**: https://huggingface.co/papers/2402.14740
 
 RLOO is a variant of REINFORCE that reduces variance by using leave-one-out baselines. It computes rewards by comparing each sample against the average of all other samples in the batch, providing more stable gradients than standard REINFORCE. To reproduce the paper's setting, use this configuration:
