@@ -613,6 +613,7 @@ class RLOOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.normalize_advantages = args.normalize_advantages
         self.mask_truncated_completions = args.mask_truncated_completions
+        self.reward_clip_range = args.reward_clip_range
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1436,6 +1437,10 @@ class RLOOTrainer(Trainer):
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
+
+        # Apply reward clipping if specified
+        if self.reward_clip_range:
+            rewards = rewards.clamp(min=self.reward_clip_range[0], max=self.reward_clip_range[1])
 
         # Include the KL penalty in the reward
         if self.beta != 0.0:

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional, Union
+from typing import Optional, Union, Tuple
 
 from transformers import TrainingArguments
 
@@ -159,8 +159,8 @@ class RLOOConfig(TrainingArguments):
         normalize_rewards (`bool`, *optional*, defaults to `False`):
             Whether to normalize rewards. Normalization is done per generation batch to have mean `0` and standard
             deviation of `1`.
-        reward_clip_range (`float`, *optional*, defaults to `10.0`):
-            Clip range for rewards.
+        reward_clip_range (`tuple[float, float]` or `None`, *optional*, defaults to `None`):
+            Clip range for rewards as (min, max). If `None`, no clipping is applied.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -456,9 +456,9 @@ class RLOOConfig(TrainingArguments):
             "standard deviation of `1`."
         },
     )
-    reward_clip_range: float = field(
-        default=10.0,
-        metadata={"help": "Clip range for rewards."},
+    reward_clip_range: Optional[Tuple[float, float]] = field(
+        default=None,
+        metadata={"help": "Clip range for rewards as (min, max). If None, no clipping is applied."},
     )
     mask_truncated_completions: bool = field(
         default=False,
