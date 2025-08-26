@@ -542,6 +542,7 @@ Note that [`RLOOTrainer`] supports multiple reward functions of different types.
 6. [Youtube RLOO](https://www.youtube.com/watch?v=86asXGPK6RU&ab_channel=BuzzRobot)
 
 
+### More on RLOO
 
 ### What does REINFORCE suggests?
 The REINFORCE algorithm is a classic policy gradient method in reinforcement learning. It suggests using a "baseline" to reduce the variance of the policy gradient estimates. The baseline is typically the average reward observed so far (or a running average over a window of recent rewards). By subtracting this baseline from the actual reward, the algorithm focuses updates on actions that perform better or worse than average, rather than being influenced by the absolute scale of the rewards.
