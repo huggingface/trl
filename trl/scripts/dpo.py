@@ -24,7 +24,6 @@
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-7 \
     --num_train_epochs 1 \
@@ -34,7 +33,7 @@ python trl/scripts/dpo.py \
     --eval_strategy steps \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
-    --no_remove_unused_columns
+    --no_remove_unused_columns \
     --report_to wandb
 ```
 
@@ -42,7 +41,6 @@ python trl/scripts/dpo.py \
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-6 \
     --num_train_epochs 1 \
@@ -55,7 +53,7 @@ python trl/scripts/dpo.py \
     --no_remove_unused_columns \
     --use_peft \
     --lora_r 32 \
-    --lora_alpha 16
+    --lora_alpha 16 \
     --report_to wandb
 ```
 """
