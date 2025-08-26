@@ -33,12 +33,10 @@ export TEMP="$SCRATCH_JOB/tmp"
 export TMP="$SCRATCH_JOB/tmp"
 export TRANSFORMERS_CACHE="$SCRATCH_JOB/transformers"
 export WANDB_DIR="$SCRATCH_JOB/wandb"
-export TRITON_CACHE_DIR="$SCRATCH_JOB/triton_cache"
-export TORCH_EXTENSIONS_DIR="$SCRATCH_JOB/torch_extensions"
+
 
 mkdir -p "$TMPDIR" "$TRANSFORMERS_CACHE" \
-        "$WANDB_DIR" "$TRITON_CACHE_DIR" \
-         "$TORCH_EXTENSIONS_DIR"
+        "$WANDB_DIR" 
 
 # If you use a venv instead of conda PATH, uncomment:
 # source .venv/bin/activate
@@ -105,6 +103,7 @@ export NCCL_DEBUG=warn
 # ==============================================================================
 PORT=8000
 HOST="0.0.0.0"
+RUN_EVAL=${RUN_EVAL:-false}
 
 set -x
 srun --ntasks=1 \
@@ -137,3 +136,24 @@ python "$SERVE_SCRIPT" \
   --go_num_reduced_embeddings 200 \
   ${TOKENIZER_PATH:+--tokenizer "$TOKENIZER_PATH"} \
   ${REVISION:+--revision "$REVISION"}
+
+# Optionally run evaluation in the same job after server is up
+if [ "$RUN_EVAL" = true ]; then
+  echo "Waiting for server to become healthy on $HOST:$PORT …"
+  for i in $(seq 1 60); do
+    if curl -s "http://$HOST:$PORT/health/" | cat | grep -q '"status"'; then
+      echo "Server is healthy. Starting evaluation…"
+      break
+    fi
+    sleep 2
+  done
+
+  echo "Running eval client (trl/scripts/eval_cafa_vllm.py)…"
+  python "$ROOT_DIR/trl/trl/scripts/eval_cafa_vllm.py" \
+    --host "$HOST" \
+    --port "$PORT" \
+    --max_samples 128 \
+    --request_batch_size 16 \
+    --concurrent_requests 8 \
+    --save_results
+fi

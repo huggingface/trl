@@ -54,6 +54,11 @@ PROTEIN_MODEL_NAME="esm3-sm-open-v1"
 GO_OBO_PATH="${ROOT_DIR}/BioReason2/data/go-basic.obo"
 GO_EMBEDDINGS_PATH="/large_storage/goodarzilab/bioreason/go_embeddings"
 
+# Dataset/eval config to match training
+DATASET_CACHE_DIR="/large_storage/goodarzilab/parsaidp/data/"
+STRUCTURE_DIR="/large_storage/goodarzilab/bioreason/data/structures/"
+MAX_LENGTH_PROTEIN=2000
+
 # Path to the vLLM serve script (the long script you shared)
 SERVE_SCRIPT="$ROOT_DIR/trl/trl/scripts/vllm_serve.py"
 
@@ -107,6 +112,9 @@ PORT=8000
 HOST="0.0.0.0"
 HEALTH_HOST="127.0.0.1"
 RUN_EVAL=${RUN_EVAL:-true}
+
+# Eval size control: 0 means use entire validation set
+MAX_SAMPLES="${MAX_SAMPLES:-0}"
 
 # Optional: short warmup before polling (seconds)
 WARMUP_SECS="${WARMUP_SECS:-75}"            # <- set 60–120 as you like
@@ -208,10 +216,26 @@ if [ "$RUN_EVAL" = true ]; then
   python "$ROOT_DIR/trl/trl/scripts/eval_cafa_vllm.py" \
     --host "$HEALTH_HOST" \
     --port "$PORT" \
+    --cafa5_dataset "wanglab/cafa5" \
+    --cafa5_dataset_name "cafa5_reasoning" \
+    --dataset_cache_dir "$DATASET_CACHE_DIR" \
+    --structure_dir "$STRUCTURE_DIR" \
+    --include_go_defs False \
+    --interpro_dataset_name interpro_metadata \
+    --split_go_aspects True \
+    --interpro_in_prompt True \
+    --ppi_in_prompt True \
+    --include_protein_function_summary True \
+    --val_split_ratio 0.1 \
+    --seed 23 \
+    --max_length_protein "$MAX_LENGTH_PROTEIN" \
     --max_samples 128 \
     --request_batch_size 64 \
     --concurrent_requests 2 \
-    --save_results
+    --debug True \
+    --save_results \
+    --first_batch_out "$SCRATCH_JOB/batches_0.json" \
+    --results_out "$SCRATCH_JOB/cafa_vllm_results.json"
 fi
 
 # Keep the job alive while server runs (until killed or timed out)
