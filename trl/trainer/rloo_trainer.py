@@ -1549,7 +1549,7 @@ class RLOOFinalTrainer(Trainer):
             # Match RLOO's KL calculation: kl = logprobs - ref_logprobs
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
-            sequence_kl = (per_token_kl * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+            sequence_kl = (per_token_kl * completion_mask).sum(-1) 
             kl_penalty = self.beta * sequence_kl
             rewards = rewards - kl_penalty
 
