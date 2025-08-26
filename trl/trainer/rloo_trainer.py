@@ -1270,14 +1270,6 @@ class RLOOTrainer(Trainer):
             )
             prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
 
-            # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
-            # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
-            # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
-            # collapse them back into a single token string to match the original chat template in case it originally
-            # applies it. Otherwise, it assumes that the chat template uses only vision_start_token_id to indicate images
-            # (e.g. Gemma 3) and removes all image_token instances and vision_end_token_id as well, leaving only
-            # the vision_start_token_id (e.g. <start_of_image>).
-
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             # First, update the vLLM weights if needed
@@ -1546,6 +1538,11 @@ class RLOOTrainer(Trainer):
             self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
+        # Calculate and log the mean KL divergence between current and reference model
+        if self.beta != 0.0:
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
+
         # Log completion lengths, mean, min, max
         agg_completion_lengths = self.accelerator.gather(completion_lengths)
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
@@ -1618,10 +1615,6 @@ class RLOOTrainer(Trainer):
 
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
-        # Compute the KL divergence between the model and the reference model
-        if self.beta != 0.0:
-            ref_per_token_logps = inputs["ref_per_token_logps"]
-            per_token_kl = old_per_token_logps - ref_per_token_logps
 
         # Compute the loss
         advantages = inputs["advantages"]
@@ -1630,28 +1623,18 @@ class RLOOTrainer(Trainer):
         # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
 
         log_ratio = per_token_logps - old_per_token_logps
-        if self.importance_sampling_level == "token":
-            log_importance_weights = log_ratio
-        elif self.importance_sampling_level == "sequence":
-            log_importance_weights = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
-            log_importance_weights = log_importance_weights.unsqueeze(-1)
-        else:
-            raise ValueError(
-                f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token' "
-                "and 'sequence'."
-            )
-        # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
-        # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
+        log_importance_weights = (log_ratio * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)
+        log_importance_weights = log_importance_weights
 
         coef_1 = torch.exp(log_importance_weights)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
-        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        per_sequence_loss1 = coef_1 * advantages
+        per_sequence_loss2 = coef_2 * advantages
+        per_sequence_loss = -torch.min(per_sequence_loss1, per_sequence_loss2)
 
-        # KL penalty is already included in rewards for RLOO, so no additional KL penalty in loss
-        loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+        # Average the loss across the batch
+        loss = per_sequence_loss.mean()
 
         # Log the metrics
         mode = "train" if self.model.training else "eval"
@@ -1663,10 +1646,6 @@ class RLOOTrainer(Trainer):
                 return x.mean()
             else:
                 return (x * completion_mask).sum() / completion_token_count
-
-        if self.beta != 0.0:
-            mean_kl = masked_batch_mean(per_token_kl)
-            self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).nanmean().item())
 
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
