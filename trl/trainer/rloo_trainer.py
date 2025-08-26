@@ -1178,6 +1178,7 @@ class RLOOTrainer(Trainer):
             per_token_kl = old_per_token_logps - ref_per_token_logps
             # Apply sequence-level KL penalty to rewards (sum KL across tokens first, then apply to each sequence)
             kl = (per_token_kl * completion_mask).sum(-1)
+            kl = gather(kl)  # rewards are gathered, so kl must be too
             rewards = rewards - self.beta * kl
 
         grouped_rewards = rewards.view(-1, self.num_generations)
