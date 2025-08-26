@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Union
 
@@ -192,6 +193,17 @@ class RLOOConfig(TrainingArguments):
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _DEPRECATED_PARAMS = {
+        "rloo_k": "num_generations",
+        "cliprange": "epsilon", 
+        "kl_coef": "beta",
+        "exp_name": "run_name",
+        "normalize_reward": "normalize_advantages",
+        "num_ppo_epochs": "num_iterations",
+        "num_mini_batches": "steps_per_generation",
+        "total_episodes": "max_steps",
+        "response_length": "max_completion_length",
+    }
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
