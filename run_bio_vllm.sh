@@ -14,6 +14,8 @@
 # Environment Setup (matches your cluster)
 # ==============================================================================
 export PATH=/home/parsaidp/miniconda/envs/esmenv/bin:$PATH
+source /home/parsaidp/miniconda/etc/profile.d/conda.sh
+conda activate esmenv
 ROOT_DIR=/home/parsaidp
 cd "$ROOT_DIR/trl/trl"
 
@@ -29,16 +31,13 @@ SCRATCH_JOB="$SCRATCH_BASE/vllm_${SLURM_JOB_ID:-manual}"
 export TMPDIR="$SCRATCH_JOB/tmp"
 export TEMP="$SCRATCH_JOB/tmp"
 export TMP="$SCRATCH_JOB/tmp"
-export HF_HOME="$SCRATCH_JOB/hf_home"
-export HF_DATASETS_CACHE="$SCRATCH_JOB/hf_datasets"
 export TRANSFORMERS_CACHE="$SCRATCH_JOB/transformers"
-export HUGGINGFACE_HUB_CACHE="$SCRATCH_JOB/hf_hub"
 export WANDB_DIR="$SCRATCH_JOB/wandb"
 export TRITON_CACHE_DIR="$SCRATCH_JOB/triton_cache"
 export TORCH_EXTENSIONS_DIR="$SCRATCH_JOB/torch_extensions"
 
-mkdir -p "$TMPDIR" "$HF_HOME" "$HF_DATASETS_CACHE" "$TRANSFORMERS_CACHE" \
-         "$HUGGINGFACE_HUB_CACHE" "$WANDB_DIR" "$TRITON_CACHE_DIR" \
+mkdir -p "$TMPDIR" "$TRANSFORMERS_CACHE" \
+        "$WANDB_DIR" "$TRITON_CACHE_DIR" \
          "$TORCH_EXTENSIONS_DIR"
 
 # If you use a venv instead of conda PATH, uncomment:
@@ -51,7 +50,7 @@ export PYTHONPATH="$ROOT_DIR/trl:$PYTHONPATH"
 # Config (aligned with your training config)
 # ==============================================================================
 TEXT_MODEL_NAME="Qwen/Qwen3-4B-Thinking-2507"
-PROTEIN_MODEL_NAME="esm3_sm_open_v1"
+PROTEIN_MODEL_NAME="esm3-sm-open-v1"
 
 GO_OBO_PATH="${ROOT_DIR}/BioReason2/bioreason2/dataset/go-basic.obo"
 GO_EMBEDDINGS_PATH="/large_storage/goodarzilab/bioreason/go_embeddings"

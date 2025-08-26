@@ -174,6 +174,48 @@ PLProcessor = FallbackPLProcessor
 PROTEIN_CHAT_TEMPLATE = None
 
 
+# Local get_chat_template fallback matching Protein LLM mapping if external symbol is missing
+try:
+    get_chat_template  # type: ignore[name-defined]
+except Exception:
+    def get_chat_template(model_name: str) -> str:  # noqa: N802
+        import os
+        from pathlib import Path
+
+        # If a local checkpoint directory is passed, prefer its chat_template.jinja
+        if isinstance(model_name, str) and os.path.isdir(model_name):
+            local_path = os.path.join(model_name, "chat_template.jinja")
+            if os.path.isfile(local_path):
+                try:
+                    with open(local_path, "r", encoding="utf-8") as f:
+                        return f.read()
+                except Exception:
+                    pass
+
+        short_name = model_name.split("/")[-1] if isinstance(model_name, str) else str(model_name)
+
+        # Map Qwen variants to a common template asset if present
+        name_to_template = {
+            "Qwen3-0.6B": "qwen3_4b_chat_template.jinja2",
+            "Qwen3-1.7B": "qwen3_4b_chat_template.jinja2",
+            "Qwen3-4B": "qwen3_4b_chat_template.jinja2",
+            "Qwen3-4B-Thinking-2507": "qwen3_4b_chat_template.jinja2",
+            "Qwen3-8B": "qwen3_4b_chat_template.jinja2",
+        }
+        template_name = name_to_template.get(short_name)
+        if template_name is not None:
+            here = Path(__file__).parent
+            candidate = here / "templates" / template_name
+            if candidate.is_file():
+                try:
+                    return candidate.read_text(encoding="utf-8")
+                except Exception:
+                    pass
+
+        # Final fallback: return the built-in CHAT_TEMPLATE constant
+        return CHAT_TEMPLATE
+
+
 if is_fastapi_available():
     from fastapi import FastAPI
 else:
@@ -893,16 +935,26 @@ class ProteinEmbeddingProcessor:
         self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name, trust_remote_code=True, use_fast=True)
         self.text_config = AutoConfig.from_pretrained(text_model_name, trust_remote_code=True)
 
-        # Use the same chat template as ProteinLLMModel (EXACT match) - call get_chat_template(model_name)
+        # Use the same chat template as ProteinLLMModel (EXACT match) - prefer function, else local file fallback
         try:
+            applied_template = False
             if 'get_chat_template' in globals():
                 chat_template = get_chat_template(text_model_name)
-                print(f"✅ Applied dynamic chat template for {text_model_name}")
                 self.text_tokenizer.chat_template = chat_template
-            else:
-                print("⚠️ get_chat_template function not available, using default chat template")
+                print(f"✅ Applied dynamic chat template for {text_model_name}")
+                applied_template = True
+            if not applied_template:
+                import os
+                local_ct_path = os.path.join(text_model_name, "chat_template.jinja")
+                if os.path.isfile(local_ct_path):
+                    with open(local_ct_path, "r", encoding="utf-8") as f:
+                        self.text_tokenizer.chat_template = f.read()
+                    print(f"✅ Applied chat template from checkpoint: {local_ct_path}")
+                    applied_template = True
+            if not applied_template:
+                print("⚠️ get_chat_template not available and no local chat_template.jinja; using default")
         except Exception as e:
-            print(f"⚠️ Failed to apply dynamic chat template: {e}, using default")
+            print(f"⚠️ Failed to apply chat template: {e}; using default")
         
         self.text_tokenizer.pad_token = self.text_tokenizer.eos_token
 
@@ -1019,11 +1071,15 @@ class ProteinEmbeddingProcessor:
             print(f"🔧 Loading trained protein projection weights from {projection_path}")
             try:
                 state = torch.load(projection_path, map_location='cpu')
-                if self.protein_projection.weight.shape == state['weight'].shape:
-                    self.protein_projection.load_state_dict(state)
-                    print("✅ Trained protein projection weights loaded successfully")
+                # Allow loading either a full Sequential state_dict or a single Linear's weights
+                if isinstance(state, dict):
+                    try:
+                        self.protein_projection.load_state_dict(state, strict=False)
+                        print("✅ Trained protein projection weights loaded successfully")
+                    except Exception as load_err:
+                        print(f"⚠️ Could not load projection state_dict: {load_err} (using random init)")
                 else:
-                    print("⚠️ Protein projection shape mismatch; using random init")
+                    print("⚠️ Unexpected projection checkpoint format; using random init")
             except Exception as e:
                 print(f"⚠️ Error loading protein projection: {e} (using random init)")
         else:
@@ -1041,13 +1097,20 @@ class ProteinEmbeddingProcessor:
                 print(f"⚠️ Error loading local protein model: {e} (keeping original)")
 
         # ===== NEW: GO encoder + projection =====
-        # Only attempt if the symbols exist (imported up top in load_protein_components)
+        # Try to import the pipeline on-demand if not already loaded
         if 'create_go_graph_encoder_pipeline' not in globals():
-            print("ℹ️ GO encoder code not available; skipping GO initialization")
-            return
+            try:
+                from bioreason2.models.go_graph_encoder import create_go_graph_encoder_pipeline as _create_go_graph_encoder_pipeline
+                globals()['create_go_graph_encoder_pipeline'] = _create_go_graph_encoder_pipeline
+                print("✅ Loaded GO encoder pipeline symbol on-demand")
+            except Exception as e:
+                print(f"ℹ️ GO encoder code not available; skipping GO initialization ({e})")
+                return
 
-        # 1) Allow explicit paths from args, else try auto-discovery under model dir
+        # 1) Allow explicit paths from args, else try auto-discovery under model dir.
+        #    Also support direct checkpoint files present in the model dir.
         auto_go_dir = os.path.join(llm_dir, "go_encoder")
+        auto_go_ckpt = os.path.join(llm_dir, "go_encoder.pt")
         if go_obo_path is None and os.path.isfile(os.path.join(auto_go_dir, "go.obo")):
             go_obo_path = os.path.join(auto_go_dir, "go.obo")
         if precomputed_embeddings_path is None:
@@ -1055,22 +1118,44 @@ class ProteinEmbeddingProcessor:
             emb_dir = os.path.join(auto_go_dir, "embeddings")
             precomputed_embeddings_path = emb_dir if os.path.isdir(emb_dir) else (auto_go_dir if os.path.isdir(auto_go_dir) else None)
 
-        try_init_go = (go_obo_path is not None and precomputed_embeddings_path is not None)
+        # If we don't have OBO/embeddings pipeline inputs, but a direct encoder checkpoint exists,
+        # we will instantiate an encoder shell and load the state dict.
+        try_init_go = (go_obo_path is not None and precomputed_embeddings_path is not None) or os.path.isfile(auto_go_ckpt)
         if not try_init_go:
-            print("ℹ️ GO paths not provided/not found; skipping GO encoder init")
+            print("ℹ️ GO inputs not provided and no go_encoder.pt found; skipping GO encoder init")
             return
 
         try:
             print("🧬 Initializing GO encoder…")
-            self.go_encoder = create_go_graph_encoder_pipeline(
-                go_obo_path=go_obo_path,
-                precomputed_embeddings_path=precomputed_embeddings_path,
-                hidden_dim=go_hidden_dim,
-                num_gat_layers=go_num_gat_layers,
-                num_heads=go_num_heads,
-                num_reduced_embeddings=go_num_reduced_embeddings,
-                embedding_dim=go_embedding_dim,
-            )
+            if os.path.isfile(auto_go_ckpt) and (go_obo_path is None or precomputed_embeddings_path is None):
+                # Fallback: construct pipeline with minimal args and load weights
+                print(f"🧬 Loading GO encoder from checkpoint: {auto_go_ckpt}")
+                self.go_encoder = create_go_graph_encoder_pipeline(
+                    go_obo_path=go_obo_path or "",
+                    precomputed_embeddings_path=precomputed_embeddings_path or "",
+                    hidden_dim=go_hidden_dim,
+                    num_gat_layers=go_num_gat_layers,
+                    num_heads=go_num_heads,
+                    num_reduced_embeddings=go_num_reduced_embeddings,
+                    embedding_dim=go_embedding_dim,
+                )
+                import torch
+                go_state = torch.load(auto_go_ckpt, map_location="cpu")
+                try:
+                    self.go_encoder.load_state_dict(go_state, strict=False)
+                    print("✅ GO encoder weights loaded from checkpoint")
+                except Exception as e:
+                    print(f"⚠️ Failed to load GO encoder weights: {e}")
+            else:
+                self.go_encoder = create_go_graph_encoder_pipeline(
+                    go_obo_path=go_obo_path,
+                    precomputed_embeddings_path=precomputed_embeddings_path,
+                    hidden_dim=go_hidden_dim,
+                    num_gat_layers=go_num_gat_layers,
+                    num_heads=go_num_heads,
+                    num_reduced_embeddings=go_num_reduced_embeddings,
+                    embedding_dim=go_embedding_dim,
+                )
             print("✅ GO encoder initialized")
         except Exception as e:
             print(f"⚠️ Failed to initialize GO encoder: {e}")
@@ -1089,7 +1174,7 @@ class ProteinEmbeddingProcessor:
             if os.path.exists(go_proj_path):
                 try:
                     state = torch.load(go_proj_path, map_location='cpu')
-                    self.go_projection.load_state_dict(state)
+                    self.go_projection.load_state_dict(state, strict=False)
                     print("✅ Loaded GO projection weights")
                 except Exception as e:
                     print(f"⚠️ Could not load GO projection: {e} (using random init)")
@@ -1243,16 +1328,17 @@ class ProteinEmbeddingProcessor:
             protein_model_finetune=False,  # server path: inference-time
         )
         # project to text space (kept as-is)
+        # Use a stable reference parameter to get device/dtype for Sequential
+        proj_param = next(self.protein_projection.parameters())
         for i in range(batch_size):
             if result[i].numel() > 0:
-                result[i] = result[i].to(self.protein_projection.weight.device,
-                                        self.protein_projection.weight.dtype)
+                result[i] = result[i].to(proj_param.device, proj_param.dtype)
                 result[i] = self.protein_projection(result[i])
             else:
                 result[i] = torch.zeros(
                     (0, self.text_hidden_size),
-                    device=self.protein_projection.weight.device,
-                    dtype=self.protein_projection.weight.dtype,
+                    device=proj_param.device,
+                    dtype=proj_param.dtype,
                 )
         return result
     
@@ -1300,7 +1386,7 @@ class ProteinEmbeddingProcessor:
                 batch_go_embeddings.append(reduced_embeddings)
             else:
                 # Empty tensor for missing aspects
-                device = self.protein_projection.weight.device
+                device = next(self.protein_projection.parameters()).device
                 empty_tensor = torch.empty(
                     (0, self.text_hidden_size),
                     device=device,
