@@ -22,7 +22,7 @@ from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.testing_utils import require_peft
-from transformers.utils import is_peft_available, require_rich
+from transformers.utils import is_peft_available
 
 from trl import ModelConfig
 from trl.trainer import compute_accuracy
@@ -46,7 +46,7 @@ from trl.trainer.utils import (
     unsplit_pixel_values_by_grid,
 )
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_rich
 
 
 if is_peft_available():
