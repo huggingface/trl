@@ -254,8 +254,8 @@ class VLLMClient:
 
         Args:
             device (`torch.device`, `str`, or `int`, *optional*, defaults to `0`):
-                Device of trainer main process. It's the device that will be used for the weights synchronization.
-                Can be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
+                Device of trainer main process. It's the device that will be used for the weights synchronization. Can
+                be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
         # Get the world size from the server
         url = f"{self.base_url}/get_world_size/"

@@ -23,6 +23,12 @@ class IterativeSFTConfig(TrainingArguments):
     r"""
     Configuration class for the [`IterativeSFTTrainer`].
 
+    <Tip warning={true}>
+
+    The [`IterativeSFTTrainer`] is deprecated and will be removed in version 0.24.0. Please use the [`SFTTrainer`].
+
+    </Tip>
+
     This class includes only the parameters that are specific to Iterative SFT training. For a full list of training
     arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
     class may differ from those in [`~transformers.TrainingArguments`].
@@ -56,6 +62,12 @@ class IterativeSFTConfig(TrainingArguments):
         metadata={
             "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
             "will be interpreted as ratio of total training steps."
+        },
+    )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
     bf16: Optional[bool] = field(

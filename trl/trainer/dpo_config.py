@@ -164,9 +164,9 @@ class DPOConfig(TrainingArguments):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
         loss_weights (`list[float]` or `None`, *optional*, defaults to `None`):
-            List of loss weights for multi-loss combinations. Used when combining multiple loss types.
-            Example: `[0.8, 0.2, 1.0]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults
-            to equal weights (`1.0`) for all loss types.
+            List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
+            0.2, 1.0]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults to equal weights
+            (`1.0`) for all loss types.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originates from the
@@ -200,6 +200,12 @@ class DPOConfig(TrainingArguments):
         metadata={
             "help": "Log every X updates steps. Should be an integer or a float in range `[0,1)`. If smaller than 1, "
             "will be interpreted as ratio of total training steps."
+        },
+    )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
     bf16: Optional[bool] = field(
