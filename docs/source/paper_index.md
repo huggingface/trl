@@ -103,7 +103,7 @@ training_args = DPOConfig(
 )
 ```
 
-## Reinforce Leave One Out (RLOO)
+## Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs
 
 **📜 Paper**: https://huggingface.co/papers/2402.14740
 
