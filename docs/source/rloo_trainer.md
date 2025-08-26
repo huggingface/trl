@@ -29,7 +29,7 @@ Below is the script to train the model.
 ```python
 # train_rloo.py
 from datasets import load_dataset
-from trl import GRPOConfig, GRPOTrainer
+from trl import RLOOConfig, RLOOTrainer
 
 dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
@@ -39,7 +39,7 @@ def reward_num_unique_letters(completions, **kwargs):
     completion_contents = [completion[0]["content"] for completion in completions]
     return [float(len(set(content))) for content in completion_contents]
 
-training_args = RLOOConfig(output_dir="Qwen2-0.5B-GRPO")
+training_args = RLOOConfig(output_dir="Qwen2-0.5B-RLOO")
 trainer = RLOOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
     reward_funcs=reward_num_unique_letters,
@@ -155,9 +155,9 @@ While training and evaluating, we record the following reward metrics:
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of sequence probabilities where the RLOO objective is clipped to stay within the trust region:
-    $$
-    \text{clip}\left( r_{i}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i}(\theta) = \frac{\pi_\theta(o_{i} \mid q)}{\pi_{\theta_{\text{old}}}(o_{i} \mid q)}\,.
-    $$
+$$
+\text{clip}\left( r_{i}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i}(\theta) = \frac{\pi_\theta(o_{i} \mid q)}{\pi_{\theta_{\text{old}}}(o_{i} \mid q)}\,.
+$$
 
     A higher value means more samples are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of sequence probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
@@ -249,7 +249,7 @@ When training large models like **Qwen2.5-72B**, you need several key optimizati
 - **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
 - **vLLM**: See the previous section on how to use vLLM to speed up generation.
 
-Below is an example SLURM script to train a 70B model with GRPO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
+Below is an example SLURM script to train a 70B model with RLOO on multiple nodes. This script trains a model on 4 nodes and uses the 5th node for vLLM-powered generation.
 
 ```sh
 #!/bin/bash
@@ -271,7 +271,7 @@ srun --nodes=4 --ntasks=4 --nodelist="${NODELIST[@]:0:4}" accelerate launch \
      --main_process_ip ${NODELIST[0]} \
      --machine_rank $SLURM_PROCID \
      --rdzv_backend c10d \
-     train_grpo.py \
+     train_rloo.py \
      --server_ip $VLLM_NODE &
 
 # Run vLLM server on the 5th node (Group 2)
@@ -526,7 +526,7 @@ Note that [`RLOOTrainer`] supports multiple reward functions of different types.
     - save_model
     - push_to_hub
 
-## GRPOConfig
+## RLOOConfig
 
 [[autodoc]] RLOOConfig
 
