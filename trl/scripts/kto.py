@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -36,7 +37,6 @@ python trl/scripts/kto.py \
     --eval_steps 500 \
     --output_dir=kto-aligned-model \
     --warmup_ratio 0.1 \
-    --report_to wandb \
     --logging_first_step
 ```
 
@@ -54,7 +54,6 @@ python trl/scripts/kto.py \
     --eval_steps 500 \
     --output_dir=kto-aligned-model-lora \
     --warmup_ratio 0.1 \
-    --report_to wandb \
     --logging_first_step \
     --use_peft \
     --load_in_4bit \
@@ -65,6 +64,7 @@ python trl/scripts/kto.py \
 """
 
 import argparse
+import os
 
 from accelerate import logging
 from datasets import load_dataset
@@ -83,6 +83,9 @@ from trl import (
 
 
 logger = logging.get_logger(__name__)
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
