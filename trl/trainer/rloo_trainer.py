@@ -17,6 +17,7 @@ import inspect
 import os
 import re
 import textwrap
+import warnings
 from collections import defaultdict, deque
 from contextlib import nullcontext
 from functools import partial
@@ -219,13 +220,18 @@ class RLOOTrainer(Trainer):
     ):
         # Handle deprecated reward_model parameter
         if reward_model is not None:
-            print("Warning: Parameter 'reward_model' is deprecated and will be removed in a future version. "
-                  "Please use 'reward_funcs' instead. Now, we are setting reward_funcs=reward_model")
+            warnings.warn(
+                "Parameter 'reward_model' is deprecated and will be removed in version 0.25.0. Please use "
+                "'reward_funcs' instead. We are setting reward_funcs=reward_model"
+            )
             if reward_funcs is None:
                 reward_funcs = reward_model
             else:
-                raise ValueError("Cannot specify both 'reward_model' (deprecated) and 'reward_funcs'. Please use 'reward_funcs' only.")
-        
+                raise ValueError(
+                    "Cannot specify both 'reward_model' (deprecated) and 'reward_funcs'. Please use 'reward_funcs' "
+                    "only."
+                )
+
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
