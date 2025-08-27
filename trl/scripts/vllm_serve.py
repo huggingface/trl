@@ -382,7 +382,7 @@ def sanitize_logprob(logprob):
 
     value = logprob.logprob
     if math.isnan(value):
-        logger.warning("Generated NaN logprob, token logprob will be ignored")
+        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
         return float("-inf")
 
 
