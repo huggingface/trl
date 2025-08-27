@@ -74,6 +74,18 @@ class SplitTensorDictTester(TrlTestCase):
             self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
             self.assertIsNone(result[i]["y"])
 
+    def test_with_scalar(self):
+        x = torch.arange(12).reshape(6, 2)
+        tensor_dict = {"x": x, "y": torch.tensor(1)}
+
+        result = split_tensor_dict(tensor_dict, 2)
+
+        expected_x_chunks = torch.chunk(x, 2, dim=0)
+        self.assertEqual(len(result), 2)
+        for i in range(2):
+            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
+            self.assertTrue(torch.equal(result[i]["y"], torch.tensor(1)))
+
 
 class ShuffleSequenceDictTester(TrlTestCase):
     def test_shuffle_preserves_shape(self):
@@ -593,7 +605,7 @@ class GRPOTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @parameterized.expand([("bnpo",), ("dr_grpo",)])
+    @parameterized.expand([("bnpo",), ("dr_grpo",), ("dapo",)])
     def test_training_loss_types(self, loss_type):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -603,6 +615,7 @@ class GRPOTrainerTester(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=32,  # reduce the completion length to reduce memory usage
+            gradient_accumulation_steps=2,  # set to 2 to test than DAPO can operate with accumulated batch
             loss_type=loss_type,
             report_to="none",
         )
@@ -1381,7 +1394,8 @@ class GRPOTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    def test_training_no_scale_rewards(self):
+    @parameterized.expand([(False,), ("group",), ("batch",), (True,), ("none",)])
+    def test_training_scale_rewards(self, scale_rewards):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -1390,7 +1404,7 @@ class GRPOTrainerTester(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            scale_rewards=False,
+            scale_rewards=scale_rewards,
             report_to="none",
         )
         trainer = GRPOTrainer(
@@ -1498,6 +1512,35 @@ class GRPOTrainerTester(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
+
+    def test_warning_raised_all_rewards_none(self):
+        """Test that a proper warning is raised when all rewards are None."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        def always_none_reward_func(completions, **kwargs):
+            """Reward function that always returns None."""
+            return [None] * len(completions)
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=always_none_reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        with self.assertLogs("trl.trainer.grpo_trainer", level="WARNING") as cm:
+            trainer.train()
+
+        expected_warning = "All reward functions returned None for the following kwargs:"
+        self.assertIn(expected_warning, cm.output[0])
 
     def test_training_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1869,7 +1912,8 @@ class GRPOTrainerTester(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            use_liger_loss=True,  # Enable Liger loss
+            use_liger_loss=True,  # enable Liger loss
+            loss_type="bnpo",  # default dapo is not supported yet
             report_to="none",
         )
         trainer = GRPOTrainer(

@@ -16,6 +16,8 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "Pillow>=9.4.0",
+#     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -51,6 +53,8 @@ accelerate launch \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
 """
 
+import os
+
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
@@ -66,6 +70,9 @@ from trl import (
     get_quantization_config,
 )
 
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, SFTConfig, ModelConfig))

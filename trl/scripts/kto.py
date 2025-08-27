@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -36,7 +37,6 @@ python trl/scripts/kto.py \
     --eval_steps 500 \
     --output_dir=kto-aligned-model \
     --warmup_ratio 0.1 \
-    --report_to wandb \
     --logging_first_step
 ```
 
@@ -54,7 +54,6 @@ python trl/scripts/kto.py \
     --eval_steps 500 \
     --output_dir=kto-aligned-model-lora \
     --warmup_ratio 0.1 \
-    --report_to wandb \
     --logging_first_step \
     --use_peft \
     --load_in_4bit \
@@ -65,6 +64,7 @@ python trl/scripts/kto.py \
 """
 
 import argparse
+import os
 
 from accelerate import logging
 from datasets import load_dataset
@@ -79,11 +79,13 @@ from trl import (
     TrlParser,
     get_dataset,
     get_peft_config,
-    setup_chat_format,
 )
 
 
 logger = logging.get_logger(__name__)
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
@@ -100,10 +102,6 @@ def main(script_args, training_args, model_args, dataset_args):
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-
-    # If we are aligning a base model, we use ChatML as the default template
-    if tokenizer.chat_template is None:
-        model, tokenizer = setup_chat_format(model, tokenizer)
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
