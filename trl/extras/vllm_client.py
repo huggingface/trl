@@ -178,7 +178,6 @@ class VLLMClient:
         max_tokens: int = 16,
         guided_decoding_regex: Optional[str] = None,
         generation_kwargs: Optional[dict] = None,
-        logprobs: Optional[int] = None,
     ) -> list[list[int]]:
         """
         Generates model completions for the provided prompts.
@@ -210,8 +209,11 @@ class VLLMClient:
                 will override them.
 
         Returns:
-            `list[list[int]]`:
-                List of lists of token IDs representing the model-generated completions for each prompt.
+            `dict` with keys:
+                - `completion_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the model-generated completions for each prompt.
+                - `logprobs` (`list[list[float]]`):
+                    List of lists of log probabilities for each generated token.
         """
         url = f"{self.base_url}/generate/"
 
@@ -238,13 +240,11 @@ class VLLMClient:
                 "max_tokens": max_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
                 "generation_kwargs": generation_kwargs or {},
-                "logprobs": logprobs,
             },
         )
         if response.status_code == 200:
             json_response = response.json()
-            result = {k: v for k, v in json_response.items() if k in ("completion_ids", "logprobs")}
-            return result
+            return {"completion_ids": json_response["completion_ids"], "logprobs": json_response["logprobs"]}
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 

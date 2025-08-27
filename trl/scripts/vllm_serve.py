@@ -474,7 +474,6 @@ def main(script_args: ScriptArguments):
         max_tokens: int = 16
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: dict = field(default_factory=dict)
-        logprobs: Optional[int] = None
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
@@ -511,6 +510,8 @@ def main(script_args: ScriptArguments):
         Returns:
             `GenerateResponse`:
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
+                - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
+                  generated completions.
 
         Example request:
         ```json
@@ -519,7 +520,7 @@ def main(script_args: ScriptArguments):
 
         Example response:
         ```json
-        {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
+        {"completion_ids": [[101, 102, 103], [201, 202, 203]], "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]}
         ```
         """
         request.images = request.images or [None] * len(request.prompts)
@@ -546,7 +547,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
-            "logprobs": request.logprobs,
+            "logprobs": 0,
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
@@ -573,19 +574,12 @@ def main(script_args: ScriptArguments):
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-
-        response = {"completion_ids": completion_ids}
-
-        if request.logprobs is not None:
-            logprobs: list[list[float]] = [
-                [sanitize_logprob(next(iter(lp.values()))) for lp in output.logprobs]
-                for outputs in all_outputs
-                for output in outputs.outputs
-            ]
-
-            response["logprobs"] = logprobs
-
-        return response
+        logprobs: list[list[float]] = [
+            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
+            for outputs in all_outputs
+            for output in outputs.outputs
+        ]
+        return {"completion_ids": completion_ids, "logprobs": logprobs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str
