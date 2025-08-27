@@ -470,16 +470,6 @@ class DPOTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        # Replace with a new one that calls the events with the reference model
-        self.callback_handler = CallbackHandlerWithRefModel(
-            self.callback_handler.callbacks,
-            self.model,
-            self.ref_model,
-            self.processing_class,
-            self.optimizer,
-            self.lr_scheduler,
-        )
-
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
         # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
         # self.model_accepts_loss_kwargs to False to enable scaling.
