@@ -11,7 +11,7 @@ In this guide, you’ll learn how to:
 <Tip>
 
 When a model is trained using **TRL + Jobs**, a tag is automatically added to the model card.  
-You can explore models trained with this method [Hugging Face model hub](https://huggingface.co/models?other=generated_with_hf_jobs).
+You can explore models trained with this method [Hugging Face model hub](https://huggingface.co/models?other=hf_jobs).
 
 </Tip>
 
