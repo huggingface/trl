@@ -48,15 +48,16 @@ accelerate launch \
     --seed 42
 """
 
+import os
+
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
-from transformers.integrations import is_trackio_available
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
 
 
-if is_trackio_available():
-    import trackio
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args):
@@ -78,12 +79,6 @@ def main(script_args, training_args, model_args):
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
-    # Initialize trackio if specified
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
     # Train model
     trainer = SFTTrainer(
         model=model,
@@ -98,11 +93,6 @@ def main(script_args, training_args, model_args):
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.finish()
 
 
 if __name__ == "__main__":

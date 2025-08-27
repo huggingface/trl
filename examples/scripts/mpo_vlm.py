@@ -40,11 +40,12 @@ python examples/scripts/mpo_vlm.py \
     --loss_weights 0.8 0.2 1.0
 """
 
+import os
+
 import torch
 from datasets import load_dataset
 from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor
-from transformers.integrations import is_trackio_available
 
 from trl import (
     DPOConfig,
@@ -58,8 +59,8 @@ from trl import (
 )
 
 
-if is_trackio_available():
-    import trackio
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":
@@ -123,12 +124,6 @@ if __name__ == "__main__":
     if test_dataset is not None:
         test_dataset = test_dataset.map(ensure_rgb, num_proc=training_args.dataset_num_proc)
 
-    # Initialize trackio if specified
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
     ################
     # Training
     ################
@@ -148,8 +143,3 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.finish()

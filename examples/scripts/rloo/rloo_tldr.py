@@ -19,6 +19,7 @@
 # ]
 # ///
 
+import os
 import shutil
 
 from accelerate import PartialState
@@ -29,14 +30,13 @@ from transformers import (
     AutoTokenizer,
     HfArgumentParser,
 )
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 
 from trl import ModelConfig, RLOOConfig, RLOOTrainer, ScriptArguments
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 """
@@ -134,11 +134,6 @@ if __name__ == "__main__":
 
     assert train_dataset[0]["input_ids"][-1] != tokenizer.eos_token_id, "The last token should not be an EOS token"
 
-    # Initialize trackio if specified
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
     ################
     # Training
     ################
@@ -159,8 +154,3 @@ if __name__ == "__main__":
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trainer.generate_completions()
-
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.finish()

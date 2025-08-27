@@ -57,17 +57,17 @@ python examples/scripts/cpo.py \
     --lora_alpha 16
 """
 
+import os
+
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
-from transformers.integrations import is_trackio_available
 
 from trl import CPOConfig, CPOTrainer, ModelConfig, ScriptArguments, get_peft_config
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
-if is_trackio_available():
-    import trackio
-
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, CPOConfig, ModelConfig))
@@ -92,12 +92,6 @@ if __name__ == "__main__":
     if tokenizer.chat_template is None:
         tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
 
-    # Initialize trackio if specified
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
     ################
     # Training
     ################
@@ -117,8 +111,3 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.finish()

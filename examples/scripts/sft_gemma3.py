@@ -26,15 +26,16 @@ Train Gemma-3 on the Codeforces COTS dataset.
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/sft_gemma3.py
 """
 
+import os
+
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
-from transformers.integrations import is_trackio_available
 
 from trl import SFTConfig, SFTTrainer
 
 
-if is_trackio_available():
-    import trackio
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main():
@@ -60,12 +61,6 @@ def main():
         num_train_epochs=1,
     )
 
-    # Initialize trackio if specified
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
     trainer = SFTTrainer(
         args=training_args,
         model=model,
@@ -75,10 +70,6 @@ def main():
 
     # Push to hub
     trainer.push_to_hub(dataset_name="open-r1/codeforces-cots")
-    if is_trackio_available() and "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.finish()
 
 
 if __name__ == "__main__":
