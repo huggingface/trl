@@ -171,9 +171,9 @@ class DPOConfig(TrainingArguments):
             A high value of this parameter penalizes more on the reward reduction of chosen example.
             If `0.0`, no penalty is applied.
         loss_weights (`list[float]` or `None`, *optional*, defaults to `None`):
-            List of loss weights for multi-loss combinations. Used when combining multiple loss types.
-            Example: `[0.8, 0.2, 1.0]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults
-            to equal weights (`1.0`) for all loss types.
+            List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
+            0.2, 1.0]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults to equal weights
+            (`1.0`) for all loss types.
         sync_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to synchronize the reference model with the active model every `ref_model_sync_steps` steps, using
             the `ref_model_mixup_alpha` parameter. This synchronization originates from the

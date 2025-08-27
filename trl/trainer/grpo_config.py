@@ -94,7 +94,7 @@ class GRPOConfig(TrainingArguments):
         generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
             using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
-            as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
+            as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
             parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
@@ -150,7 +150,7 @@ class GRPOConfig(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        delta: (`float` or `None`, *optional*, defaults to `None`):
+        delta (`float` or `None`, *optional*, defaults to `None`):
             Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
             GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
             the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
@@ -159,31 +159,39 @@ class GRPOConfig(TrainingArguments):
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
             Controls whether importance sampling ratios are computed at the `"token"` or `"sequence"` level. `"token"`
-            keeps the raw per-token log-probability ratios (one weight per token).  `"sequence"` averages the
-            log-probability ratios across valid tokens to produce a single ratio per sequence. The
-            [GSPO paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
-            stable training and better alignment with  sequence-level rewards.
+            keeps the raw per-token log-probability ratios (one weight per token). `"sequence"` averages the
+            log-probability ratios across valid tokens to produce a single ratio per sequence. The [GSPO
+            paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
+            stable training and better alignment with sequence-level rewards.
         reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
-        scale_rewards (`bool`, *optional*, defaults to `True`):
-            Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), the rewards
-            are normalized by the standard deviation, ensuring they have unit variance. If `False`, no scaling is
-            applied. The [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) recommends not scaling the rewards,
-            as scaling by the standard deviation introduces a question-level difficulty bias.
-        loss_type (`str`, *optional*, defaults to `"bnpo"`):
+        scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
+            Specifies the scaling strategy for rewards. Supported values are:
+
+            - `True` or `"group"` (default): rewards are scaled by the standard deviation within each group, ensuring
+              unit variance within a group.
+            - `"batch"`: rewards are scaled by the standard deviation across the entire batch, as recommended in the
+              [PPO Lite paper](https://huggingface.co/papers/2508.08221).
+            - `False` or `"none"`: no scaling is applied. The [Dr. GRPO
+              paper](https://huggingface.co/papers/2503.20783) recommends not scaling rewards, as scaling by the
+              standard deviation introduces a question-level difficulty bias.
+        loss_type (`str`, *optional*, defaults to `"dapo"`):
             Specifies the loss formulation to use. Supported values are:
 
             - `"grpo"`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to
-                length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
-                with negative advantages.
-            - `"bnpo"`: Aggregates token-level losses by normalizing number of active token in the local batch.
-                Note that normalization is performed over the local batch only, so results may slightly vary depending
-                on the local batch size, despite a constant effective batch size. When using
-                `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
+              length bias—this approach tends to prefer shorter completions with positive advantages and longer ones
+              with negative advantages.
             - `"dr_grpo"`: Aggregates token-level losses by normalizing with a global constant. This method was
-                introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
-                The value of the constant corresponds to `max_completion_length`.
+              introduced in the [Dr. GRPO paper](https://huggingface.co/papers/2503.20783) to eliminate length bias.
+              The value of the constant corresponds to `max_completion_length`.
+            - `"dapo"` (default): Aggregates token-level losses by normalizing with the number of active token in the
+              global accumulated batch. This method was introduced in the [DAPO
+              paper](https://huggingface.co/papers/2503.14476) to eliminate length bias.
+            - `"bnpo"`: Aggregates token-level losses by normalizing with the number of active token in the local
+              batch. Note that normalization is performed over the local batch only, so results may slightly vary
+              depending on the local batch size, despite a constant effective batch size. When using
+              `per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss.
         mask_truncated_completions (`bool`, *optional*, defaults to `False`):
             When enabled, truncated completions are excluded from the loss calculation, preventing them from being
             incorrectly penalized and introducing noise during training. According to the
@@ -205,8 +213,8 @@ class GRPOConfig(TrainingArguments):
             ρ parameter from [Beyond the 80/20 Rule](https://huggingface.co/papers/2506.01939). Keeps in the policy
             loss term only the top-ρ quantile of tokens by entropy of the probability distribution at each sequence
             position, improving results. Range: `[0.0-1.0]`. A value of `0.0` masks all but the highest entropy token;
-            `1.0` keeps all tokens. The paper recommends a value of `0.2`.
-            If used with `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
+            `1.0` keeps all tokens. The paper recommends a value of `0.2`. If used with
+            `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
 
@@ -350,7 +358,7 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
-            "generation behavior, such as setting `supress_tokens`, `num_beams`, etc. If it contains keys that "
+            "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
@@ -496,29 +504,35 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
-    scale_rewards: bool = field(
-        default=True,
+    scale_rewards: str = field(
+        default="group",
         metadata={
-            "help": "Whether to scale the rewards by dividing them by their standard deviation. If `True` (default), "
-            "the rewards are normalized by the standard deviation, ensuring they have unit variance. If `False`, no "
-            "scaling is applied. The Dr. GRPO paper recommends not scaling the rewards, as scaling by the standard "
-            "deviation introduces a question-level difficulty bias."
+            "help": "Specifies the scaling strategy for rewards. Supported values are: "
+            "`True` or `group'` (default): rewards are scaled by the standard deviation within each group, ensuring "
+            "unit variance within a group. "
+            "`'batch'`: rewards are scaled by the standard deviation across the entire batch, as recommended in the "
+            "PPO Lite paper. "
+            "`False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
+            "scaling by the standard deviation introduces a question-level difficulty bias."
         },
     )
     loss_type: str = field(
-        default="bnpo",
+        default="dapo",
         metadata={
-            "help": "Specifies the loss formulation to use. Supported values are `grpo`, `bnpo`, and `dr_grpo`. "
-            "`'grpo'`: Aggregates token-level losses by normalizing over sequence length. Not recommended due to "
-            "length bias—this approach tends to prefer shorter completions with positive advantages and longer ones "
-            "with negative advantages. "
-            "`'bnpo'`: Aggregates token-level losses by normalizing number of active token in the local batch. "
+            "help": "Specifies the loss formulation to use. Supported values are 'grpo', 'dapo', 'bnpo', and "
+            "'dr_grpo'. "
+            "'grpo': Aggregates token-level losses by normalizing over sequence length. Not recommended due to length "
+            "bias—this approach tends to prefer shorter completions with positive advantages and longer ones with "
+            "negative advantages. "
+            "'dapo' (default): Aggregates token-level losses by normalizing with the number of active token in the "
+            "global accumulated batch. This method was introduced in the DAPO paper to eliminate length bias. "
+            "'dr_grpo': Aggregates token-level losses by normalizing with a global constant. This method was "
+            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
+            "`max_completion_length`. "
+            "'bnpo': Aggregates token-level losses by normalizing with the number of active token in the local batch. "
             "Note that normalization is performed over the local batch only, so results may slightly vary depending "
             "on the local batch size, despite a constant effective batch size. When using "
-            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss. "
-            "`'dr_grpo'`: Aggregates token-level losses by normalizing with a global constant. This method was "
-            "introduced in the Dr. GRPO paper to eliminate length bias. The value of the constant corresponds to "
-            "`max_completion_length`."
+            "`per_device_train_batch_size==1`, the loss is equivalent to the GRPO loss."
         },
     )
     mask_truncated_completions: bool = field(
@@ -612,6 +626,14 @@ class GRPOConfig(TrainingArguments):
             raise ValueError(
                 "'generation_batch_size' and 'steps_per_generation' can not be both configured at the same time"
             )
+
+        if self.do_eval and self.eval_strategy != "no":
+            # Just ensure the value is divisible by the global batch size
+            if (self.per_device_eval_batch_size * num_processes) % self.num_generations != 0:
+                raise ValueError(
+                    f"The global eval batch size ({self.per_device_eval_batch_size} * {num_processes}) must be "
+                    f"divisible by num_generations ({self.num_generations})."
+                )
 
         # The generation batch must contain full prompt groups (no partials), so it must be divisible by
         # num_generations.
