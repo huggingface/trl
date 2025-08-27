@@ -523,7 +523,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             tags.add("unsloth")
 
         if "JOB_ID" in os.environ:
-            tags.add("generated_with_hf_jobs")
+            tags.add("hf_jobs")
 
         tags.update(self._tag_names)
 
