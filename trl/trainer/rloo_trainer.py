@@ -205,7 +205,7 @@ class RLOOTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, PreTrainedModel],
-        reward_funcs: Union[RewardFunc, list[RewardFunc]],
+        reward_funcs: Union[RewardFunc, list[RewardFunc]] = None,
         args: Optional[RLOOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
@@ -214,7 +214,18 @@ class RLOOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        reward_model=None,  # Deprecated parameter
+        **kwargs,
     ):
+        # Handle deprecated reward_model parameter
+        if reward_model is not None:
+            print("Warning: Parameter 'reward_model' is deprecated and will be removed in a future version. "
+                  "Please use 'reward_funcs' instead. Now, we are setting reward_funcs=reward_model")
+            if reward_funcs is None:
+                reward_funcs = reward_model
+            else:
+                raise ValueError("Cannot specify both 'reward_model' (deprecated) and 'reward_funcs'. Please use 'reward_funcs' only.")
+        
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path

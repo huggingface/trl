@@ -193,17 +193,6 @@ class RLOOConfig(TrainingArguments):
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
-    _DEPRECATED_PARAMS = {
-        "rloo_k": "num_generations",
-        "cliprange": "epsilon", 
-        "kl_coef": "beta",
-        "exp_name": "run_name",
-        "normalize_reward": "normalize_advantages",
-        "num_ppo_epochs": "num_iterations",
-        "num_mini_batches": "steps_per_generation",
-        "total_episodes": "max_steps",
-        "response_length": "max_completion_length",
-    }
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -521,9 +510,69 @@ class RLOOConfig(TrainingArguments):
         },
     )
 
+    #Deprecated params 
+    rloo_k: Optional[int] = field(default=None, metadata={"help": "Deprecated: use `num_generations` instead."})
+    cliprange: Optional[float] = field(default=None, metadata={"help": "Deprecated: use `epsilon` instead."})
+    kl_coef: Optional[float] = field(default=None, metadata={"help": "Deprecated: use `beta` instead."})
+    exp_name: Optional[str] = field(default=None, metadata={"help": "Deprecated: use `run_name` instead."})
+    normalize_reward: Optional[bool] = field(default=None, metadata={"help": "Deprecated: use `normalize_advantages` instead."})
+    num_ppo_epochs: Optional[int] = field(default=None, metadata={"help": "Deprecated: use `num_iterations` instead."})
+    num_mini_batches: Optional[int] = field(default=None, metadata={"help": "Deprecated: use `steps_per_generation` instead."})
+    total_episodes: Optional[int] = field(default=None, metadata={"help": "Deprecated: use `max_steps` instead."})
+    response_length: Optional[int] = field(default=None, metadata={"help": "Deprecated: use `max_completion_length` instead."})
+
+    # Removed params
+    token_level_kl: Optional[bool] = field(default=None, metadata={"help": "Removed: KL is now computed only at the sequence level."})
+    dataset_num_proc: Optional[int] = field(default=None, metadata={"help": "Removed: it was unused."})
+    local_rollout_forward_batch_size: Optional[int] = field(default=None, metadata={"help": "Removed: now automatically set to `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation)."})
+    num_sample_generations: Optional[int] = field(default=None, metadata={"help": "Removed: use `logging_steps` to control generation logging frequency."})
+    stop_token: Optional[str] = field(default=None, metadata={"help": "Removed."})
+    stop_token_id: Optional[int] = field(default=None, metadata={"help": "Removed: use `processing_class.eos_token_id` instead."})
+    missing_eos_penalty: Optional[float] = field(default=None, metadata={"help": "Removed: replicate with a custom reward function checking if `eos_token_id` is in `completion_ids`."})
+
+    
+    
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+        _DEPRECATED_PARAMS = {
+        "rloo_k": "num_generations",
+        "cliprange": "epsilon", 
+        "kl_coef": "beta",
+        "exp_name": "run_name",
+        "normalize_reward": "normalize_advantages",
+        "num_ppo_epochs": "num_iterations",
+        "num_mini_batches": "steps_per_generation",
+        "total_episodes": "max_steps",
+        "response_length": "max_completion_length",
+    }
 
+        _REMOVED_PARAMS = {
+            "token_level_kl",
+            "dataset_num_proc", 
+            "local_rollout_forward_batch_size",
+            "num_sample_generations",
+            "stop_token",
+            "stop_token_id",
+            "missing_eos_penalty",
+        }
+        
+        # Check for deprecated parameters and issue warnings
+        for old_param, new_param in _DEPRECATED_PARAMS.items():
+            if hasattr(self, old_param) and getattr(self, old_param) is not None:
+                old_value = getattr(self, old_param)
+                print(f"Warning: Parameter '{old_param}' is deprecated and will be removed in a future version. "
+                      f"Please use '{new_param}' instead. Now, we are setting {new_param}={old_value}")
+                # Set the new parameter with the old value 
+                setattr(self, new_param, old_value)
+                # Clear the deprecated parameter
+                setattr(self, old_param, None)
+
+        # Check for removed parameters and issue warnings
+        for removed_param in _REMOVED_PARAMS:
+            if hasattr(self, removed_param) and getattr(self, removed_param) is not None:
+                print(f"Warning: Parameter '{removed_param}' has been removed and is no longer supported. "
+                      f"Please refer to the migration guide for alternatives.")
+          
         super().__post_init__()
 
         num_processes = self.world_size
