@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
 # ]
 # ///
 
@@ -29,13 +30,13 @@ python trl/scripts/dpo.py \
     --learning_rate 5.0e-7 \
     --num_train_epochs 1 \
     --per_device_train_batch_size 2 \
+    --max_steps 1000 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eval_strategy steps \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns
-    --report_to wandb
 ```
 
 # LoRA:
@@ -47,6 +48,7 @@ python trl/scripts/dpo.py \
     --learning_rate 5.0e-6 \
     --num_train_epochs 1 \
     --per_device_train_batch_size 2 \
+    --max_steps 1000 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eval_strategy steps \
@@ -56,14 +58,14 @@ python trl/scripts/dpo.py \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16
-    --report_to wandb
 ```
 """
 
 import argparse
-import warnings
+import os
 
 import torch
+from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -82,6 +84,12 @@ from trl import (
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
+logger = logging.get_logger(__name__)
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 def main(script_args, training_args, model_args, dataset_args):
     ################
     # Model & Tokenizer
@@ -94,7 +102,6 @@ def main(script_args, training_args, model_args, dataset_args):
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         torch_dtype=torch_dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
@@ -123,7 +130,7 @@ def main(script_args, training_args, model_args, dataset_args):
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
-        warnings.warn(
+        logger.warning(
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
             "dataset and `dataset_name` will be ignored."
         )

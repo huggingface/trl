@@ -287,8 +287,8 @@ class DPOTrainerTester(TrlTestCase):
 
     def test_train_with_multiple_loss_types(self):
         """
-        Tests multi-loss combinations, loss type inference, and weight configuration.
-        MPO combines DPO (sigmoid), BCO (bco_pair), and SFT (sft) losses.
+        Tests multi-loss combinations, loss type inference, and weight configuration. MPO combines DPO (sigmoid), BCO
+        (bco_pair), and SFT (sft) losses.
         """
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -1311,10 +1311,23 @@ class DPOTrainerTester(TrlTestCase):
                 self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
-    @parameterized.expand([(0.1,), (0.5,)])
+    @parameterized.expand(
+        [
+            (0.1, "sigmoid"),
+            (0.1, "apo_zero"),
+            (0.1, "apo_down"),
+            (0.1, "sppo_hard"),
+            (0.1, "nca_pair"),
+            (0.5, "sigmoid"),
+            (0.5, "apo_zero"),
+            (0.5, "apo_down"),
+            (0.5, "sppo_hard"),
+            (0.5, "nca_pair"),
+        ]
+    )
     @require_liger_kernel
-    def test_dpo_trainer_with_liger(self, beta):
-        """Test DPO trainer with Liger loss enabled.
+    def test_dpo_trainer_with_liger(self, beta, loss_type):
+        """Test DPO trainer with Liger loss enabled across supported loss types.
 
         This test verifies that:
         1. Training runs successfully with Liger loss
@@ -1331,6 +1344,7 @@ class DPOTrainerTester(TrlTestCase):
             eval_strategy="steps",
             beta=beta,
             use_liger_loss=True,  # Enable Liger loss
+            loss_type=loss_type,
             report_to="none",
         )
 

@@ -15,9 +15,12 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
+#     "torchvision",
+#     "trackio",
 # ]
 # ///
 
@@ -49,6 +52,8 @@ accelerate launch \
 
 """
 
+import os
+
 import torch
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
@@ -65,6 +70,10 @@ from trl import (
     get_quantization_config,
 )
 from trl.rewards import think_format_reward
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

@@ -16,7 +16,6 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
-import warnings
 from collections import deque
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -27,7 +26,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import torch.utils.data
-from accelerate import Accelerator, PartialState
+from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.nn.utils.rnn import pad_sequence
@@ -63,6 +62,9 @@ if is_comet_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+
+logger = logging.get_logger(__name__)
 
 
 @dataclass
@@ -492,10 +494,13 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
         equal_predictions_count = int(equal_mask.sum())
 
         if equal_predictions_count > 0:
-            warnings.warn(
+            # Before using the logger, the accelerate state must be initialized. It'susually the case when using this
+            # function inside a Trainer, but it may not be the case otherwise, in particular when unit testing.
+            PartialState()
+
+            logger.warning(
                 f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
                 "for both options are equal. These instances are ignored in the accuracy computation.",
-                UserWarning,
             )
 
         # Filter out equal predictions
@@ -643,8 +648,7 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
 def get_exp_cap(value, decimal=4):
     """
     Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow. The formula is :
-    log(value.dtype.max) E.g.
-      For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
+    log(value.dtype.max) E.g. for float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
 
     Args:
         value (`torch.Tensor`):
@@ -1469,15 +1473,14 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
 
 def entropy_from_logits(logits, chunk_size: int = 1) -> torch.Tensor:
     """
-    Compute the Shannon entropy (in nats) for each row of *logits* without
-    materialising the full soft-max in memory.
-    The batch dimension is processed in chunks of size `chunk_size` so that
-    only a subset of rows is expanded to probabilities at any one time.
+    Compute the Shannon entropy (in nats) for each row of *logits* without materialising the full soft-max in memory.
+    The batch dimension is processed in chunks of size `chunk_size` so that only a subset of rows is expanded to
+    probabilities at any one time.
 
     Args:
         logits (`torch.Tensor`):
-            Logits tensor of shape `(..., num_classes)`. Entropy is taken along the last axis; all
-            leading dimensions are preserved.
+            Logits tensor of shape `(..., num_classes)`. Entropy is taken along the last axis; all leading dimensions
+            are preserved.
         chunk_size (`int`, *optional*, defaults to `1`):
             Number of rows to process per iteration.
 

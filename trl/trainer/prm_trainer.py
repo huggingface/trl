@@ -325,8 +325,12 @@ class PRMTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{uesato2022solving,
             title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
