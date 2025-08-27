@@ -17,6 +17,8 @@
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
 #     "Pillow>=9.4.0",
+#     "torchvision",
+#     "trackio",
 # ]
 # ///
 
@@ -34,8 +36,7 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --lora_target_modules=all-linear \
-    --report_to wandb
+    --lora_target_modules all-linear
 ```
 
 With dataset streaming:
@@ -53,10 +54,11 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --lora_target_modules=all-linear \
-    --report_to wandb
+    --lora_target_modules all-linear
 ```
 """
+
+import os
 
 import torch
 from datasets import load_dataset
@@ -73,6 +75,9 @@ from trl import (
     get_quantization_config,
 )
 
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
