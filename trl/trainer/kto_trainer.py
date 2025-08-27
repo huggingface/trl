@@ -1284,7 +1284,7 @@ class KTOTrainer(Trainer):
             )
 
             # reference model
-            if hasattr(self.ref_model, "get_decoder"):
+            if hasattr(self.ref_model, "get_decoder") and self.ref_model.get_decoder() is not None:
                 ref_base_model = self.ref_model.get_decoder()
             else:
                 ref_attr = getattr(self.ref_model, "base_model_prefix", self.args.base_model_attribute_name)
