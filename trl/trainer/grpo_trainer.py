@@ -1463,9 +1463,7 @@ class GRPOTrainer(Trainer):
                             max_tokens=self.max_completion_length,
                             guided_decoding_regex=self.guided_decoding_regex,
                             generation_kwargs=self.args.generation_kwargs,
-                            logprobs=0
-                            if self.vllm_importance_sampling_correction
-                            else None,  # 0 represents only returning the selected token logprob
+                            logprobs=0,  # only return the logprob of the generated token
                         )
                         payload = (
                             output["completion_ids"],
@@ -1502,9 +1500,7 @@ class GRPOTrainer(Trainer):
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
                     "guided_decoding": guided_decoding,
-                    "logprobs": 0
-                    if self.vllm_importance_sampling_correction
-                    else None,  # 0 represents only returning the selected token logprob
+                    "logprobs": 0,  # only return the logprob of the generated token
                 }
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
