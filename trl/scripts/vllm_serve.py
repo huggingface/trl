@@ -1500,15 +1500,15 @@ def generate_with_protein_embeddings(llm, protein_processor, kwargs, device):
         
         print(f"🧬 Input IDs shape: {input_ids.shape}")
         print(f"🧬 Attention mask shape: {attention_mask.shape}")
-        for b in range(input_ids.shape[0]):
-            decoded = protein_processor.text_tokenizer.decode(
-                input_ids[b][attention_mask[b].bool()],
-                skip_special_tokens=False
-            )
-            print(f"[{b}] endswith assistant? ",
-                decoded.strip().endswith("<|im_start|>assistant"))
-            print(decoded[-200:])
-            print("length of decoded: ", len(decoded))
+        # for b in range(input_ids.shape[0]):
+        #     decoded = protein_processor.text_tokenizer.decode(
+        #         input_ids[b][attention_mask[b].bool()],
+        #         skip_special_tokens=False
+        #     )
+        #     print(f"[{b}] endswith assistant? ",
+        #         decoded.strip().endswith("<|im_start|>assistant"))
+        #     print(decoded[-200:])
+        #     print("length of decoded: ", len(decoded))
             
         # Check if we have protein data
         protein_sequences_batch = processed.get("protein_sequences")

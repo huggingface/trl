@@ -66,10 +66,10 @@ SERVE_SCRIPT="$ROOT_DIR/trl/trl/scripts/vllm_serve.py"
 DTYPE="auto"
 KV_CACHE_DTYPE="auto"
 MAX_MODEL_LEN=4096
-GPU_MEM_UTIL=0.88
+GPU_MEM_UTIL=0.8
 TRUST_REMOTE_CODE=true
 ENABLE_PREFIX_CACHE=false
-ENFORCE_EAGER=true
+ENFORCE_EAGER=false
 BATCH_INFER=true        # enables batched-embeddings path in ProteinEmbeddingProcessor
 SKIP_ENV_CHECK=true     # avoid interactive prompt
 
