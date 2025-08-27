@@ -1073,8 +1073,18 @@ class GRPOTrainer(Trainer):
                     ),
                 ]
             )
+            padded_entropies_mask = torch.cat(
+                [
+                    torch.ones_like(non_pad_entropies),
+                    torch.zeros(
+                        max_non_pad_entropies_seq_length - non_pad_entropies_seq_length.item(),
+                        device=non_pad_entropies.device,
+                    ),
+                ]
+            )
             all_padded_entropies = self.accelerator.gather(padded_entropies)
-            all_non_padded_entropies = all_padded_entropies[all_padded_entropies != 0].flatten()
+            all_padded_entropies_mask = self.accelerator.gather(padded_entropies_mask)
+            all_non_padded_entropies = all_padded_entropies[all_padded_entropies_mask.bool()].flatten()
         else:
             all_non_padded_entropies = non_pad_entropies
         # Filter out any empty tensors that might result from processes with no valid tokens
