@@ -329,7 +329,8 @@ class TestBatchGeneration(TrlTestCase):
         super().setUp()
         # Initialize the tokenizer
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = AutoModelForCausalLM.from_pretrained(self.model_id).to(self.device)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
         self.generation_config = GenerationConfig(
@@ -350,7 +351,7 @@ class TestBatchGeneration(TrlTestCase):
             self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
             for example in self.examples
         ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"]
+        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
         bs, context_length = queries.shape
 
         query_responses, logits = batch_generation(
@@ -369,7 +370,7 @@ class TestBatchGeneration(TrlTestCase):
             self.tokenizer.apply_chat_template(example[:-1], add_generation_prompt=True, tokenize=False)
             for example in self.examples
         ]
-        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"]
+        queries = self.tokenizer(batch, padding=True, return_tensors="pt")["input_ids"].to(self.device)
         bs, context_length = queries.shape
 
         query_responses, logits = batch_generation(
