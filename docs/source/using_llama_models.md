@@ -36,7 +36,7 @@ The easiest way to achieve this is by continuing to train the language model wit
 The [StackExchange dataset](https://huggingface.co/datasets/HuggingFaceH4/stack-exchange-preferences) is enormous (over 10 million instructions), so we can easily train the language model on a subset of it.
 
 There is nothing special about fine-tuning the model before doing RLHF - it’s just the causal language modeling objective from pretraining that we apply here.
-To use the data efficiently, we use a technique called packing: instead of having one text per sample in the batch and then padding to either the longest text or the maximal context of the model, we concatenate a lot of texts with a EOS token in between and cut chunks of the context size to fill the batch without any padding.
+To use the data efficiently, we use a technique called packing: instead of having one text per sample in the batch and then padding to either the longest text or the maximal context of the model, we concatenate a lot of texts with an EOS token in between and cut chunks of the context size to fill the batch without any padding.
 
 ![chapter10_preprocessing-clm.png](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/chapter10_preprocessing-clm.png)
 
