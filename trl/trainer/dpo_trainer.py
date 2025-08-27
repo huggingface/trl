@@ -56,7 +56,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
 from ..models.utils import prepare_fsdp
-from .callbacks import SyncRefModelCallback
+from .callbacks import CallbackHandlerWithRefModel, SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     RunningMoments,
@@ -468,6 +468,16 @@ class DPOTrainer(Trainer):
             optimizers=optimizers,
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+        )
+
+        # Replace with a new one that calls the events with the reference model
+        self.callback_handler = CallbackHandlerWithRefModel(
+            self.callback_handler.callbacks,
+            self.model,
+            self.ref_model,
+            self.processing_class,
+            self.optimizer,
+            self.lr_scheduler,
         )
 
         # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
@@ -1336,7 +1346,8 @@ class DPOTrainer(Trainer):
             if hasattr(unwrapped_model, "get_decoder"):
                 base_model = unwrapped_model.get_decoder()
             else:
-                base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
+                base_attr = getattr(unwrapped_model, "base_model_prefix", self.args.base_model_attribute_name)
+                base_model = getattr(unwrapped_model, base_attr, unwrapped_model)
 
             outputs = base_model(
                 input_ids,
@@ -1352,9 +1363,8 @@ class DPOTrainer(Trainer):
                 if hasattr(unwrapped_ref_model, "get_decoder"):
                     ref_base_model = unwrapped_ref_model.get_decoder()
                 else:
-                    ref_base_model = getattr(
-                        unwrapped_ref_model, self.args.base_model_attribute_name, unwrapped_ref_model
-                    )
+                    ref_attr = getattr(unwrapped_ref_model, "base_model_prefix", self.args.base_model_attribute_name)
+                    ref_base_model = getattr(unwrapped_ref_model, ref_attr, unwrapped_ref_model)
 
                 ref_outputs = ref_base_model(
                     input_ids,
@@ -1366,7 +1376,8 @@ class DPOTrainer(Trainer):
                 if hasattr(unwrapped_model, "get_decoder"):
                     ref_base_model = unwrapped_model.get_decoder()
                 else:
-                    ref_base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
+                    ref_attr = getattr(unwrapped_model, "base_model_prefix", self.args.base_model_attribute_name)
+                    ref_base_model = getattr(unwrapped_model, ref_attr, unwrapped_model)
                 with self.null_ref_context():
                     ref_outputs = ref_base_model(
                         input_ids,
