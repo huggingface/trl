@@ -103,7 +103,8 @@ def compute_loss_fn(outputs, labels, num_items_in_batch: Optional[int] = None, i
     loss = nn.functional.cross_entropy(shift_logits, shift_labels, ignore_index=ignore_index, reduction='none')
 
     probs = torch.softmax(shift_logits, dim=-1)
-    prob_coefs = probs.gather(1, shift_labels.unsqueeze(-1)).squeeze(-1).detach()
+    prob_labels = torch.clamp(shift_labels, min=0)
+    prob_coefs = probs.gather(1, prob_labels.unsqueeze(-1)).squeeze(-1).detach()
 
     loss = loss * prob_coefs
 
