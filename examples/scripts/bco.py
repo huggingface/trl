@@ -76,10 +76,10 @@ python examples/scripts/bco.py \
 """
 
 import os
-import os.nn.functional as F
 from functools import partial
 
 import torch
+import torch.nn.functional as F
 from accelerate import Accelerator
 from datasets import load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
