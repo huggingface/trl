@@ -1011,34 +1011,51 @@ class SFTTrainer(Trainer):
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
 
-                def get_trainable_tokens(dataset, col):
-                    if col == "input_ids":
-                        return sum(len(row[col]) for row in dataset)
-                    return sum(sum(row[col]) for row in dataset)
+                def get_trainable_tokens_for_language_modeling(dataset):
+                    return sum(len(row["input_ids"]) for row in dataset)
+
+                def get_trainable_tokens_for_conv_language_modeling(dataset):
+                    return sum(sum(row["assistant_masks"]) for row in dataset)
+
+                def get_trainable_tokens_for_non_conv_completions(dataset):
+                    return sum(sum(row["completion_mask"]) for row in dataset)
+
+                def get_trainable_tokens_for_conv_completions(dataset):
+                    total_trainable_tokens = 0
+                    for row in dataset:
+                        final_mask = [c_m and a_m for c_m, a_m in zip(row["completion_mask"], row["assistant_masks"])]
+                        total_trainable_tokens += sum(final_mask)
+                    return total_trainable_tokens
 
                 first_row = dataset[0] if isinstance(dataset, Dataset) else next(iter(dataset))
-                # Conversational Dataset
-                if args.assistant_only_loss:
-                    total_trainable_tokens_before_truncation = get_trainable_tokens(dataset, "assistant_masks")
+                # Conversational Prompt Completions Dataset
+                if args.assistant_only_loss and "completion_mask" in first_row:
+                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_conv_completions(dataset)
                 # Prompt Completions/Instruction Tuning Dataset
                 elif "completion_mask" in first_row:
-                    total_trainable_tokens_before_truncation = get_trainable_tokens(dataset, "completion_mask")
+                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_non_conv_completions(dataset)
+                # Conversational Language Modeling
+                elif args.assistant_only_loss:
+                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_conv_language_modeling(dataset)
                 # Language Modeling
                 else:
-                    total_trainable_tokens_before_truncation = get_trainable_tokens(dataset, "input_ids")
+                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_language_modeling(dataset)
 
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
 
-                if args.assistant_only_loss:
-                    dataset = dataset.filter(lambda row: 1 in row["assistant_masks"])
-                    total_trainable_tokens_after_truncation = get_trainable_tokens(dataset, "assistant_masks")
+                if args.assistant_only_loss and "completion_mask" in first_row:
+                    dataset = dataset.filter(lambda row: 1 in row["assistant_masks"] and 1 in row["completion_mask"])
+                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_conv_completions(dataset)
                 elif "completion_mask" in first_row:
                     dataset = dataset.filter(lambda row: 1 in row["completion_mask"])
-                    total_trainable_tokens_after_truncation = get_trainable_tokens(dataset, "completion_mask")
+                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_non_conv_completions(dataset)
+                elif "assistant_masks" in first_row:
+                    dataset = dataset.filter(lambda row: 1 in row["assistant_masks"])
+                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_conv_language_modeling(dataset)
                 else:
-                    total_trainable_tokens_after_truncation = get_trainable_tokens(dataset, "input_ids")
+                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_language_modeling(dataset)
 
                 if total_trainable_tokens_after_truncation == 0:
                     raise RuntimeError(

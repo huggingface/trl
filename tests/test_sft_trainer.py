@@ -1365,3 +1365,40 @@ class SFTTrainerTester(TrlTestCase):
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+    @parameterized.expand(
+        [
+            ("conversational_prompt_completion", False),
+            ("conversational_language_modeling", False),
+            ("conversational_prompt_completion", True),
+            ("conversational_language_modeling", True),
+            ("standard_language_modeling", False),
+            ("standard_prompt_completion", False),
+        ]
+    )
+    def test_train_with_max_length(self, dataset_type, assistant_only_loss):
+        dataset = load_dataset("trl-internal-testing/zen", dataset_type, split="train")
+        config = SFTConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            per_device_train_batch_size=1,
+            max_length=128,
+            assistant_only_loss=assistant_only_loss,
+            gradient_checkpointing=True,
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3ForCausalLM",
+            args=config,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
