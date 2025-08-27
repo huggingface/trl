@@ -440,7 +440,7 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
 
-        with self.assertWarns(UserWarning) as cm:
+        with self.assertLogs("trl.trainer.utils", level="WARNING") as cm:
             result = compute_accuracy(eval_pred)
 
         self.assertAlmostEqual(result["accuracy"], expected_accuracy)
@@ -448,7 +448,7 @@ class TestComputeAccuracy(TrlTestCase):
             "There are 1 out of 3 instances where the predictions for both options are equal. "
             "These instances are ignored in the accuracy computation."
         )
-        self.assertEqual(str(cm.warning), expected_warning)
+        self.assertIn(expected_warning, cm.output[0])
 
 
 class TestFlushLeft(TrlTestCase):
@@ -574,6 +574,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
 
         output = mock_stdout.getvalue()
 
+        # docstyle-ignore
         expected_output = textwrap.dedent("""\
         ╭──────────────────────────── Step 42 ─────────────────────────────╮
         │ ┏━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
@@ -585,6 +586,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         │ └────────────┴──────────────┴─────────────┴────────┴───────────┘ │
         ╰──────────────────────────────────────────────────────────────────╯
         """)
+
         self.assertEqual(output, expected_output)
 
     @patch("sys.stdout", new_callable=StringIO)
@@ -598,6 +600,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         print_prompt_completions_sample(prompts, completions, rewards, advantages, step, num_samples=1)
         output = mock_stdout.getvalue()
 
+        # docstyle-ignore
         possible_outputs = [
             textwrap.dedent("""\
             ╭────────────────── Step 10 ──────────────────╮
@@ -608,6 +611,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
             │ └────────┴────────────┴───────┴───────────┘ │
             ╰─────────────────────────────────────────────╯
                 """),
+            # docstyle-ignore
             textwrap.dedent("""\
             ╭────────────────── Step 10 ──────────────────╮
             │ ┏━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━┓ │

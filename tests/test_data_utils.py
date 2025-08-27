@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import itertools
 import textwrap
 import unittest
@@ -31,11 +32,119 @@ from trl.data_utils import (
     maybe_extract_prompt,
     maybe_unpair_preference_dataset,
     pack_dataset,
+    prepare_multimodal_messages,
     truncate_dataset,
     unpair_preference_dataset,
 )
 
 from .testing_utils import TrlTestCase
+
+
+class PrepareMultimodalMessagesTester(unittest.TestCase):
+    def test_basic_user_assistant_conversation(self):
+        """Test basic conversation with user and assistant messages."""
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+        ]
+
+        prepare_multimodal_messages(messages, num_images=1)
+
+        expected = [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+        ]
+
+        self.assertEqual(messages, expected)
+
+    def test_first_user_message_gets_image(self):
+        """Test that only the first user message gets an image placeholder."""
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+            {"role": "user", "content": "How about the grass?"},
+        ]
+
+        prepare_multimodal_messages(messages, num_images=1)
+
+        expected = [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+            {"role": "user", "content": [{"type": "text", "text": "How about the grass?"}]},
+        ]
+
+        self.assertEqual(messages, expected)
+
+    def test_multiple_images(self):
+        """Test that multiple images are added to the first user message."""
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": "It is blue."},
+        ]
+
+        prepare_multimodal_messages(messages, num_images=3)
+
+        expected = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "image"},
+                    {"type": "image"},
+                    {"type": "text", "text": "What color is the sky?"},
+                ],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+        ]
+
+        self.assertEqual(messages, expected)
+
+    def test_system_message_transformation(self):
+        """Test that system messages are properly transformed."""
+        messages = [
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "What color is the sky?"},
+        ]
+
+        prepare_multimodal_messages(messages, num_images=1)
+
+        expected = [
+            {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant"}]},
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
+        ]
+
+        self.assertEqual(messages, expected)
+
+    def test_already_prepared_messages_unchanged(self):
+        """Test that messages with list content are not modified."""
+        messages = [
+            {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant"}]},
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+        ]
+
+        original = copy.deepcopy(messages)
+        prepare_multimodal_messages(messages, num_images=1)
+
+        self.assertEqual(messages, original)
+
+    def test_mixed_prepared_and_unprepared_messages(self):
+        """Test handling of mixed prepared and unprepared messages."""
+        messages = [
+            {"role": "user", "content": "What color is the sky?"},
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+            {"role": "user", "content": "What about the grass?"},
+        ]
+
+        prepare_multimodal_messages(messages, num_images=1)
+
+        expected = [
+            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+            {"role": "user", "content": [{"type": "text", "text": "What about the grass?"}]},
+        ]
+
+        self.assertEqual(messages, expected)
 
 
 class IsConversationalTester(TrlTestCase):
@@ -336,6 +445,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -363,6 +473,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -393,6 +504,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -428,6 +540,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -465,6 +578,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_chosen = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -475,6 +589,8 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
         Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
+
+        # docstyle-ignore
         expected_rejected = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -507,6 +623,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
             model_identity="You are HuggingGPT.",
         )
 
+        # docstyle-ignore
         expected_prompt = textwrap.dedent(f"""\
         <|start|>system<|message|>You are HuggingGPT.
         Knowledge cutoff: 2024-06
@@ -762,6 +879,21 @@ class TestPackDatasetBfd(TrlTestCase):
             "input_ids": [[1, 2, 3, 4], [8, 9, 10, 11], [6, 7, 12]],
             "attention_mask": [[1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1]],
             "seq_lengths": [[4], [4], [2, 1]],
+        }
+        dataset = pack_dataset(dataset, seq_length, strategy="bfd")
+        self.assertEqual(dataset.to_dict(), expected_output)
+
+    def test_with_non_power_of_2(self):
+        examples = {
+            "input_ids": [[1, 2, 3, 4, 5], [6], [7, 8, 9, 10], [11, 12, 13]],
+            "attention_mask": [[1, 0, 0, 1, 1], [0], [0, 1, 0, 0], [1, 0, 1]],
+        }
+        dataset = Dataset.from_dict(examples)
+        seq_length = 5
+        expected_output = {
+            "input_ids": [[1, 2, 3, 4, 5], [7, 8, 9, 10, 6], [11, 12, 13]],
+            "attention_mask": [[1, 0, 0, 1, 1], [0, 1, 0, 0, 0], [1, 0, 1]],
+            "seq_lengths": [[5], [4, 1], [3]],
         }
         dataset = pack_dataset(dataset, seq_length, strategy="bfd")
         self.assertEqual(dataset.to_dict(), expected_output)

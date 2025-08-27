@@ -794,8 +794,12 @@ class PPOTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{mziegler2019fine-tuning,
             title        = {{Fine-Tuning Language Models from Human Preferences}},
