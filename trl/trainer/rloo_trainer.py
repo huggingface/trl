@@ -205,7 +205,8 @@ class RLOOTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[str, PreTrainedModel],
+        # Note for dev: we can remove the default None when we remove the deprecated model parameter in version 0.25.0
+        model: Union[str, PreTrainedModel] = None,
         reward_funcs: Union[RewardFunc, list[RewardFunc]] = None,
         args: Optional[RLOOConfig] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -215,10 +216,24 @@ class RLOOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
-        reward_model=None,  # Deprecated parameter
-        **kwargs,
+        # Deprecated parameters
+        config=None,
+        reward_model=None,
+        policy=None,
+        ref_policy=None,
+        data_collator=None,
     ):
-        # Handle deprecated reward_model parameter
+        # Handle deprecated parameters
+        if config is not None:
+            warnings.warn(
+                "Parameter 'config' is deprecated and will be removed in version 0.25.0. Please use 'args' instead. "
+                "We are setting args=config"
+            )
+            if args is None:
+                args = config
+            else:
+                raise ValueError("Cannot specify both 'config' (deprecated) and 'args'. Please use 'args' only.")
+
         if reward_model is not None:
             warnings.warn(
                 "Parameter 'reward_model' is deprecated and will be removed in version 0.25.0. Please use "
@@ -231,6 +246,25 @@ class RLOOTrainer(Trainer):
                     "Cannot specify both 'reward_model' (deprecated) and 'reward_funcs'. Please use 'reward_funcs' "
                     "only."
                 )
+        if policy is not None:
+            warnings.warn(
+                "Parameter 'policy' is deprecated and will be removed in version 0.25.0. Please use 'model' instead. "
+                "We are setting model=policy"
+            )
+            if model is None:
+                model = policy
+            else:
+                raise ValueError("Cannot specify both 'policy' (deprecated) and 'model'. Please use 'model' only.")
+        if ref_policy is not None:
+            warnings.warn(
+                "Parameter 'ref_policy' is deprecated and will be removed in version 0.25.0. To use the initial model "
+                "as the reference model, simply omit this parameter. The parameter is ignored."
+            )
+        if data_collator is not None:
+            warnings.warn(
+                "Parameter 'data_collator' is deprecated and will be removed in version 0.25.0. The RLOOTrainer does "
+                "not use a data collator, so this parameter is ignored."
+            )
 
         # Args
         if args is None:

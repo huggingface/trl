@@ -542,7 +542,7 @@ Note that [`RLOOTrainer`] supports multiple reward functions of different types.
 ## Migration Guide from the old implementation (0.21 and below)
 
 With the release of version 0.22.0, we have revamped the [`RLOOTrainer`] to be more alinged with other online trainers in the library like [`GRPOTrainer]. This new implementation introduces several changes to the configuration parameters and overall structure of the trainer.
-Below is a summary of the key changes:
+Below is a summary of the key changes for [`RLOOConfig`]:
 
 | TRL ≤ 0.21.x | TRL ≥ 0.22.0 |
 | --- | --- |
@@ -550,7 +550,6 @@ Below is a summary of the key changes:
 | `cliprange` | renamed to `epsilon` |
 | `kl_coef` | renamed to `beta` |
 | `exp_name` | renamed to `run_name`. Use `run_name = f"{exp_name}__{seed}__{int(time.time())}"` to replicate old behavior |
-| `reward_model` | renamed to `reward_funcs`, which now supports both reward models and custom reward functions |
 | `normalize_reward` | renamed to `normalize_advantages`. Note: this always normalized advantages (despite the old name) |
 | `num_ppo_epochs` | renamed to `num_iterations` (default: `1`) |
 | `token_level_kl` | **removed** – KL is now computed only at the sequence level |
@@ -563,3 +562,13 @@ Below is a summary of the key changes:
 | `stop_token` | **removed** |
 | `stop_token_id` | **removed** – use `processing_class.eos_token_id` instead |
 | `missing_eos_penalty` | **removed** – replicate with a custom reward function checking if `eos_token_id` is in `completion_ids` |
+
+Below is a summary of the key changes for [`RLOOTrainer`]:
+
+| TRL ≤ 0.21.x | TRL ≥ 0.22.0 |
+| --- | --- |
+| `config` | renamed to `args` |
+| `reward_model` | renamed to `reward_funcs`, which now supports both reward models and custom reward functions |
+| `policy` | renamed to `model` |
+| `ref_policy` | **removed** – the reference model is now created automatically from `model` |
+| `data_collator` | **removed** |

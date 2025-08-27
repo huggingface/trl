@@ -31,9 +31,9 @@ from datasets import load_dataset
 
 from trl import (
     DatasetMixtureConfig,
+    ModelConfig,
     RLOOConfig,
     RLOOTrainer,
-    ModelConfig,
     ScriptArguments,
     TrlParser,
     get_dataset,
