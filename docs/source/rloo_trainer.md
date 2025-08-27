@@ -105,7 +105,7 @@ $$
 ### Computing the advantage
 
 To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons.
-Once the rewards for each completion have been computed, we calculate a **baseline** as the average reward of all other samples in the same batch, excluding the current sample. This baseline is used to reduce the variance of the policy gradient estimate in reinforcement learning.
+Once the rewards for each completion have been computed, we calculate a **baseline** as the average reward of all other samples in the same batch, excluding the current sample. This baseline is used to reduce the variance of the policy gradient estimate.
 
 $$
 b_i = \frac{1}{G-1} \sum_{j \neq i} r_j
