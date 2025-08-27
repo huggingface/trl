@@ -1274,7 +1274,8 @@ class KTOTrainer(Trainer):
             if hasattr(model, "get_decoder"):
                 base_model = model.get_decoder()
             else:
-                base_model = getattr(model, self.args.base_model_attribute_name)
+                base_attr = getattr(model, "base_model_prefix", self.args.base_model_attribute_name)
+                base_model = getattr(model, base_attr, model)
             outputs = base_model(
                 batch["completion_input_ids"],
                 attention_mask=batch["completion_attention_mask"],
@@ -1286,7 +1287,8 @@ class KTOTrainer(Trainer):
             if hasattr(self.ref_model, "get_decoder"):
                 ref_base_model = self.ref_model.get_decoder()
             else:
-                ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name)
+                ref_attr = getattr(self.ref_model, "base_model_prefix", self.args.base_model_attribute_name)
+                ref_base_model = getattr(self.ref_model, ref_attr, self.ref_model)
             ref_outputs = ref_base_model(
                 batch["completion_input_ids"],
                 attention_mask=batch["completion_attention_mask"],
