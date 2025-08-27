@@ -12,7 +12,7 @@ import numpy as np
 from bioreason2.dataset.cafa5.collate import _coords_from_cif, _coords_from_pdb
 from bioreason2.dataset.cafa5.load import load_cafa5_dataset
 from bioreason2.utils import str2bool
- 
+
 
 def add_structures_to_dataset(dataset, max_length_protein: int = 2048, num_proc: int = 192):
     """
@@ -93,22 +93,51 @@ def _flatten_user_messages_to_text(prompt) -> str:
     return str(prompt)
 
 
+def _flatten_assistant_messages_to_text(prompt) -> str:
+    def _to_text(item):
+        if isinstance(item, str):
+            return item
+        if isinstance(item, dict):
+            if item.get("type") == "text":
+                return item.get("text", "")
+            if "content" in item:
+                return _to_text(item["content"])
+        if isinstance(item, list):
+            return " ".join(_to_text(x) for x in item)
+        return ""
+
+    if isinstance(prompt, list):
+        assistant_msgs = [m for m in prompt if m.get("role") == "assistant"]
+        assistant_texts = []
+        for m in assistant_msgs:
+            assistant_texts.append(_to_text(m.get("reasoning_content", "")))
+            assistant_texts.append("\n\n")
+            assistant_texts.append(_to_text(m.get("content", "")))
+            assistant_texts.append("\n\n")
+        return "\n".join(t.strip() for t in assistant_texts if t and t.strip())
+    return str(prompt)
+
+
 def build_batches(samples, batch_size: int, temperature: float, top_p: float,
                   max_new_tokens: int, repetition_penalty: float):
     batches = []
     for i in range(0, len(samples), batch_size):
         end = min(i + batch_size, len(samples))
         batch_ds = samples.select(range(i, end))
-        prompts, protein_seqs, go_aspects, structure_coords = [], [], [], []
+        protein_ids, prompts, assistant_texts, protein_seqs, go_aspects, structure_coords = [], [], [], [], [], []
 
         for s in batch_ds:
+            protein_ids.append(s["protein_id"])
             prompts.append(_flatten_user_messages_to_text(s["prompt"]))
-            protein_seqs.append(s.get("protein_sequences", []))
+            assistant_texts.append(_flatten_assistant_messages_to_text(s["prompt"]))
+            protein_seqs.append(s.get("protein_sequences", [s["sequence"]]))
             go_aspects.append(s.get("go_aspect") or None)
             structure_coords.append(s.get("structure_coords") or None)
 
         payload = {
+            "protein_ids": protein_ids,
             "prompts": prompts,
+            "assistant_texts": assistant_texts,
             "protein_sequences": protein_seqs,
             "go_aspects": go_aspects if any(a is not None for a in go_aspects) else None,
             "structure_coords": structure_coords if any(c is not None for c in structure_coords) else None,
@@ -162,9 +191,11 @@ async def main(args):
     )
 
     if batches:
-        with open(args.first_batch_out, "w") as f:
-            json.dump(batches[0], f, indent=2)
-        print(f"💾 Saved first batch payload → {args.first_batch_out}")
+        for i, batch in enumerate(batches):
+            batch_filename = args.first_batch_out.replace(".json", f"_{i}.json")
+            with open(batch_filename, "w") as f:
+                json.dump(batch, f, indent=4)
+            print(f"💾 Saved batch {i} payload → {batch_filename}")
 
     t0 = time.time()
     connector = aiohttp.TCPConnector(limit=args.concurrent_requests)
@@ -190,7 +221,7 @@ async def main(args):
             "results": results,
         }
         with open(args.results_out, "w") as f:
-            json.dump(out, f, indent=2)
+            json.dump(out, f, indent=4)
         print(f"💾 Saved results → {args.results_out}")
 
 
@@ -232,7 +263,7 @@ if __name__ == "__main__":
     p.add_argument("--repetition_penalty", type=float, default=1.0)
 
     p.add_argument("--save_results", action="store_true")
-    p.add_argument("--first_batch_out", type=str, default="batches_0.json")
+    p.add_argument("--first_batch_out", type=str, default="batches.json")
     p.add_argument("--results_out", type=str, default="cafa_vllm_results.json")
     p.add_argument("--client_timeout_sec", type=int, default=1800)
 
