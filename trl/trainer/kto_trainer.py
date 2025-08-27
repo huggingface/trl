@@ -1271,7 +1271,7 @@ class KTOTrainer(Trainer):
             )
         else:
             # skip the lm head and get the last hidden state
-            if hasattr(model, "get_decoder"):
+            if hasattr(model, "get_decoder") and model.get_decoder() is not None:
                 base_model = model.get_decoder()
             else:
                 base_attr = getattr(model, "base_model_prefix", self.args.base_model_attribute_name)
