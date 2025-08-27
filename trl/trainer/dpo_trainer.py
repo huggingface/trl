@@ -1333,7 +1333,7 @@ class DPOTrainer(Trainer):
                 model_kwargs["attention_mask"] = attention_mask
 
             # Get the base model outputs (before LM head)
-            if hasattr(unwrapped_model, "get_decoder"):
+            if hasattr(unwrapped_model, "get_decoder") and unwrapped_model.get_decoder() is not None:
                 base_model = unwrapped_model.get_decoder()
             else:
                 base_attr = getattr(unwrapped_model, "base_model_prefix", self.args.base_model_attribute_name)
