@@ -3,6 +3,7 @@
 [Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) lets you run training scripts on fully managed infrastructure (no need to handle GPUs, dependencies, or environment setup locally). This makes it easy to scale and monitor your experiments directly from the Hub.
 
 In this guide, you’ll learn how to:
+
 - Run TRL training scripts using Jobs.
 - Configure hardware, timeouts, environment variables, and secrets.
 - Monitor and manage jobs from the CLI or Python.
@@ -10,11 +11,12 @@ In this guide, you’ll learn how to:
 <Tip>
 
 When a model is trained using **TRL + Jobs**, a tag is automatically added to the model card.  
-You can explore models trained with this method [here](https://huggingface.co/models?other=generated_with_hf_jobs).
+You can explore models trained with this method [Hugging Face model hub](https://huggingface.co/models?other=generated_with_hf_jobs).
 
 </Tip>
 
-**Requirements**
+## Requirements
+
 - [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan.
 - Logged into the Hugging Face Hub (`hf auth login`).
 
@@ -88,7 +90,6 @@ run_uv_job(
 )
 ```
 
-
 </hfoption>
 </hfoptions>
 
@@ -118,10 +119,9 @@ run_job(
 </hfoption>
 </hfoptions>
 
-
 ### Adding Dependencies with UV
 
-All example scripts in TRL are compatible with `uv`, allowing seamless execution with Jobs. You can check the full list of examples [here](example_overview#maintained-examples).  
+All example scripts in TRL are compatible with `uv`, allowing seamless execution with Jobs. You can check the full list of examples in [Maintained examples](example_overview#maintained-examples).  
 
 Dependencies are specified at the top of the script using this structure:
 
@@ -184,7 +184,7 @@ Jobs allow you to select a specific hardware configuration using the `--flavor` 
 **GPU:** `t4-small`, `t4-medium`, `l4x1`, `l4x4`, `a10g-small`, `a10g-large`, `a10g-largex2`, `a10g-largex4`, `a100-large`  
 **TPU:** `v5e-1x1`, `v5e-2x2`, `v5e-2x4`  
 
-You can always check the latest list of supported hardware flavors [here](https://huggingface.co/docs/hub/en/spaces-config-reference).
+You can always check the latest list of supported hardware flavors in [Spaces config reference](https://huggingface.co/docs/hub/en/spaces-config-reference).
 
 By default, jobs have a **30-minute timeout**, after which they will automatically stop. For long-running tasks like training, you can increase the timeout as needed. Supported time units are:
 

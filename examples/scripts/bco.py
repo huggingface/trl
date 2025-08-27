@@ -79,16 +79,16 @@ from functools import partial
 
 import torch
 import torch.nn.functional as F
+from accelerate import Accelerator
+from datasets import load_dataset
+from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 from transformers.integrations import is_trackio_available
+
+from trl import BCOConfig, BCOTrainer, ModelConfig, ScriptArguments, get_peft_config
 
 
 if is_trackio_available():
     import trackio
-from accelerate import Accelerator
-from datasets import load_dataset
-from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
-
-from trl import BCOConfig, BCOTrainer, ModelConfig, ScriptArguments, get_peft_config
 
 
 def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):

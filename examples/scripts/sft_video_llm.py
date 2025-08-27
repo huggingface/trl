@@ -58,17 +58,17 @@ from typing import Any
 
 import requests
 import torch
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
+from transformers.integrations import is_trackio_available
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
+
+
+if is_trackio_available():
+    import trackio
 
 
 def download_video(url: str, cache_dir: str) -> str:

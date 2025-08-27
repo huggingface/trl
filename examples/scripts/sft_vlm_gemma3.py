@@ -57,15 +57,11 @@ import os
 import zipfile
 
 import torch
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 from datasets import DatasetDict, load_dataset
 from huggingface_hub import hf_hub_download, list_repo_files
 from PIL import Image
 from transformers import AutoModelForImageTextToText
+from transformers.integrations import is_trackio_available
 
 from trl import (
     ModelConfig,
@@ -77,6 +73,10 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+
+
+if is_trackio_available():
+    import trackio
 
 
 # For multi-image example

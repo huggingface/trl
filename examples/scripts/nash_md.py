@@ -54,13 +54,9 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
 """
 
 import torch
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer, GenerationConfig
+from transformers.integrations import is_trackio_available
 
 from trl import (
     HfPairwiseJudge,
@@ -76,6 +72,10 @@ from trl import (
     get_quantization_config,
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
+
+if is_trackio_available():
+    import trackio
 
 
 JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}

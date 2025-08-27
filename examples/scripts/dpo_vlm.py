@@ -59,13 +59,9 @@ accelerate launch examples/scripts/dpo_vlm.py \
 """
 
 import torch
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 from datasets import load_dataset
 from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers.integrations import is_trackio_available
 
 from trl import (
     DPOConfig,
@@ -77,6 +73,10 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+
+
+if is_trackio_available():
+    import trackio
 
 
 if __name__ == "__main__":

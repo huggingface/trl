@@ -51,14 +51,10 @@ python examples/scripts/reward_modeling.py \
 """
 
 import torch
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
+from transformers.integrations import is_trackio_available
 
 from trl import (
     ModelConfig,
@@ -70,6 +66,10 @@ from trl import (
     get_quantization_config,
     setup_chat_format,
 )
+
+
+if is_trackio_available():
+    import trackio
 
 
 logger = logging.get_logger(__name__)

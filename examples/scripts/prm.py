@@ -49,14 +49,10 @@ python examples/scripts/prm.py \
 """
 
 import torch
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForTokenClassification, AutoTokenizer, HfArgumentParser
+from transformers.integrations import is_trackio_available
 
 from trl import (
     ModelConfig,
@@ -70,6 +66,11 @@ from trl import (
 
 
 logger = logging.get_logger(__name__)
+
+
+if is_trackio_available():
+    import trackio
+
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))

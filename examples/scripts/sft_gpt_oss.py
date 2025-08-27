@@ -48,15 +48,15 @@ accelerate launch \
     --seed 42
 """
 
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 from transformers.integrations import is_trackio_available
+
+from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
 
 
 if is_trackio_available():
     import trackio
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
-
-from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
 
 
 def main(script_args, training_args, model_args):

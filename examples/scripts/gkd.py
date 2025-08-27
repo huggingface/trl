@@ -51,13 +51,9 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
+from transformers.integrations import is_trackio_available
 
 from trl import (
     GKDConfig,
@@ -70,6 +66,10 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+
+
+if is_trackio_available():
+    import trackio
 
 
 if __name__ == "__main__":

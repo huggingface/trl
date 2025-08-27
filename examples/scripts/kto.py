@@ -57,15 +57,15 @@ python trl/scripts/kto.py \
     --lora_alpha 16
 """
 
+from datasets import load_dataset
+from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 from transformers.integrations import is_trackio_available
+
+from trl import KTOConfig, KTOTrainer, ModelConfig, ScriptArguments, get_peft_config
 
 
 if is_trackio_available():
     import trackio
-from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
-
-from trl import KTOConfig, KTOTrainer, ModelConfig, ScriptArguments, get_peft_config
 
 
 if __name__ == "__main__":

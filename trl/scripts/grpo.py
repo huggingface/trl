@@ -45,6 +45,10 @@ from trl.rewards import get_soft_overlong_punishment, think_format_reward
 
 logger = logging.get_logger(__name__)
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 reward_funcs_registry = {
     "think_format_reward": think_format_reward,
     "get_soft_overlong_punishment": get_soft_overlong_punishment,
@@ -117,10 +121,6 @@ def main(script_args, training_args, model_args, dataset_args):
         )
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
-
-    # Initialize trackio
-    os.environ["TRACKIO_PROJECT"] = training_args.output_dir
-    os.environ["TRACKIO_SPACE_ID"] = training_args.output_dir + "-trackio"
 
     # Initialize the GRPO trainer
     trainer = GRPOTrainer(

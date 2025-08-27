@@ -40,16 +40,16 @@ from dataclasses import dataclass, field
 import numpy as np
 import torch
 import torch.nn as nn
+from huggingface_hub import hf_hub_download
+from huggingface_hub.utils import EntryNotFoundError
+from transformers import CLIPModel, CLIPProcessor, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available
 from transformers.integrations import is_trackio_available
+
+from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
 
 if is_trackio_available():
     import trackio
-from huggingface_hub import hf_hub_download
-from huggingface_hub.utils import EntryNotFoundError
-from transformers import CLIPModel, CLIPProcessor, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available
-
-from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
 
 
 @dataclass

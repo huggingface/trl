@@ -84,6 +84,9 @@ from trl import (
 
 logger = logging.get_logger(__name__)
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
 
 def main(script_args, training_args, model_args, dataset_args):
     # Load a pretrained model
@@ -114,10 +117,6 @@ def main(script_args, training_args, model_args, dataset_args):
         )
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
-
-    # Initialize trackio
-    os.environ["TRACKIO_PROJECT"] = training_args.output_dir
-    os.environ["TRACKIO_SPACE_ID"] = training_args.output_dir + "-trackio"
 
     # Initialize the KTO trainer
     trainer = KTOTrainer(

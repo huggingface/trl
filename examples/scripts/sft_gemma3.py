@@ -30,11 +30,11 @@ from datasets import load_dataset
 from transformers import AutoModelForImageTextToText
 from transformers.integrations import is_trackio_available
 
+from trl import SFTConfig, SFTTrainer
+
 
 if is_trackio_available():
     import trackio
-
-from trl import SFTConfig, SFTTrainer
 
 
 def main():

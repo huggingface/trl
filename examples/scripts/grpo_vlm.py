@@ -66,14 +66,10 @@ accelerate launch \
 """
 
 import torch
-from transformers.integrations import is_trackio_available
-
-
-if is_trackio_available():
-    import trackio
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
+from transformers.integrations import is_trackio_available
 
 from trl import (
     GRPOConfig,
@@ -86,6 +82,10 @@ from trl import (
     get_quantization_config,
 )
 from trl.rewards import think_format_reward
+
+
+if is_trackio_available():
+    import trackio
 
 
 if __name__ == "__main__":
