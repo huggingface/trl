@@ -55,6 +55,6 @@ Having one model per GPU can lead to high memory usage, which may not be feasibl
 
 </Tip>
 
-## Multi-Nodes Training
+## Multi-Node Training
 
 We're working on a guide for multi-node training. Stay tuned! 🚀
