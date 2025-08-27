@@ -1363,7 +1363,7 @@ class DPOTrainer(Trainer):
                 )
                 ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
             elif not self.reference_free:
-                if hasattr(unwrapped_model, "get_decoder"):
+                if hasattr(unwrapped_model, "get_decoder") and unwrapped_model.get_decoder() is not None:
                     ref_base_model = unwrapped_model.get_decoder()
                 else:
                     ref_attr = getattr(unwrapped_model, "base_model_prefix", self.args.base_model_attribute_name)
