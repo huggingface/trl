@@ -1427,7 +1427,6 @@ class GRPOTrainer(Trainer):
                         prompts_text = [re.sub(rf"({escaped_img_token})+", "", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
-        rollout_old_per_token_logps = None
         if self.use_vllm:
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -1557,8 +1556,8 @@ class GRPOTrainer(Trainer):
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-            rollout_old_per_token_logps = [torch.tensor(logp, device=device) for logp in logprobs]
-            rollout_old_per_token_logps = pad(rollout_old_per_token_logps, padding_value=0.0)
+            vllm_old_per_token_logps = [torch.tensor(logp, device=device) for logp in logprobs]
+            vllm_old_per_token_logps = pad(vllm_old_per_token_logps, padding_value=0.0)
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
@@ -1784,17 +1783,12 @@ class GRPOTrainer(Trainer):
             self._logs["image"].extend(gather_object(images))
 
         if self.vllm_importance_sampling_correction and old_per_token_logps is not None:
-            delta = old_per_token_logps - rollout_old_per_token_logps
+            delta = old_per_token_logps - vllm_old_per_token_logps
             probs_diff = torch.exp(delta)
             per_token_kl = probs_diff - delta - 1
             mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
             self._metrics[mode]["completions/kl_vllm"].append(self.accelerator.gather(mean_kl).nanmean().item())
-            self._metrics[mode]["completions/vllm_token_probability_difference/max"].append(
-                probs_diff.max().exp().item()
-            )
-            self._metrics[mode]["completions/vllm_token_probability_difference/mean"].append(
-                probs_diff.mean().exp().item()
-            )
+            self._metrics[mode]["completions/vllm_token_probability_difference/max"].append(probs_diff.max().item())
 
         output = {
             "prompt_ids": prompt_ids,
@@ -1807,7 +1801,7 @@ class GRPOTrainer(Trainer):
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
         if self.vllm_importance_sampling_correction:
-            output["rollout_old_per_token_logps"] = rollout_old_per_token_logps
+            output["vllm_old_per_token_logps"] = vllm_old_per_token_logps
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in prompt_inputs:
@@ -1942,10 +1936,10 @@ class GRPOTrainer(Trainer):
             per_token_loss = per_token_loss * entropy_mask
 
         if self.vllm_importance_sampling_correction and old_per_token_logps is not None:
-            rollout_old_per_token_logps = inputs.get("rollout_old_per_token_logps")
-            rollout_imp_ratio = torch.exp(old_per_token_logps - rollout_old_per_token_logps)
-            clammped_rollout_imp_ratio = torch.clamp(rollout_imp_ratio, max=self.rollout_importance_sampling_cap)
-            per_token_loss = per_token_loss * clammped_rollout_imp_ratio
+            vllm_old_per_token_logps = inputs.get("vllm_old_per_token_logps")
+            rollout_imp_ratio = torch.exp(old_per_token_logps - vllm_old_per_token_logps)
+            clamped_rollout_imp_ratio = torch.clamp(rollout_imp_ratio, max=self.vllm_importance_sampling_cap)
+            per_token_loss = per_token_loss * clamped_rollout_imp_ratio
 
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl

@@ -599,7 +599,7 @@ class GRPOConfig(TrainingArguments):
         },
     )
     vllm_importance_sampling_cap: float = field(
-        default=False,
+        default=2.0,
         metadata={
             "help": "The truncation parameter C for Truncated Importance Sampling. This sets an upper bound on the "
             "importance sampling ratio, improving training stability."
