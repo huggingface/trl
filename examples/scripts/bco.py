@@ -16,6 +16,10 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "einops",
+#     "scikit-learn",
+#     "joblib",
+#     "trackio",
 # ]
 # ///
 
@@ -35,18 +39,17 @@ python examples/scripts/bco.py \
     --gradient_accumulation_steps 1 \
     --eval_steps 0.2 \
     --save_strategy no \
-    --output_dir=bco-aligned-model \
+    --output_dir bco-aligned-model \
     --logging_first_step \
     --max_length 2048 \
     --max_prompt_length 1536 \
     --max_completion_length 1024 \
     --no_remove_unused_columns \
-    --warmup_ratio 0.1 \
-    --report_to wandb
+    --warmup_ratio 0.1
 
 # QLoRA:
 python examples/scripts/bco.py \
-    --model_name_or_path=nnheui/stablelm-2-1_6b-sft-full \
+    --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --trust_remote_code \
     --dataset_name trl-lib/ultrafeedback-gpt-3.5-turbo-helpfulness \
     --per_device_train_batch_size 16 \
@@ -57,10 +60,9 @@ python examples/scripts/bco.py \
     --gradient_accumulation_steps 1 \
     --eval_steps 0.2 \
     --save_strategy no \
-    --output_dir=bco-aligned-model-lora \
+    --output_dir bco-aligned-model-lora \
     --logging_first_step \
     --warmup_ratio 0.1 \
-    --report_to wandb \
     --max_length 2048 \
     --max_prompt_length 1536 \
     --max_completion_length 1024 \
@@ -68,11 +70,12 @@ python examples/scripts/bco.py \
     --warmup_ratio 0.1 \
     --use_peft \
     --load_in_4bit \
-    --lora_target_modules=all-linear \
-    --lora_r=16 \
-    --lora_alpha=16
+    --lora_target_modules all-linear \
+    --lora_r 16 \
+    --lora_alpha 16
 """
 
+import os
 from functools import partial
 
 import torch
@@ -82,6 +85,10 @@ from datasets import load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
 from trl import BCOConfig, BCOTrainer, ModelConfig, ScriptArguments, get_peft_config
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):

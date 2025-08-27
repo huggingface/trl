@@ -1,6 +1,6 @@
 # Sentiment Tuning Examples
 
-The notebooks and scripts in this examples show how to fine-tune a model with a sentiment classifier (such as `lvwerra/distilbert-imdb`).
+The notebooks and scripts in these examples show how to fine-tune a model with a sentiment classifier (such as `lvwerra/distilbert-imdb`).
 
 Here's an overview of the notebooks and scripts in the [trl repository](https://github.com/huggingface/trl/tree/main/examples):
 

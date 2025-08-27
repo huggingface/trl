@@ -15,6 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trackio",
 # ]
 # ///
 
@@ -47,6 +48,8 @@ python examples/scripts/prm.py \
     --lora_alpha 16
 """
 
+import os
+
 import torch
 from accelerate import logging
 from datasets import load_dataset
@@ -64,6 +67,11 @@ from trl import (
 
 
 logger = logging.get_logger(__name__)
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))
