@@ -139,7 +139,7 @@ def main(script_args, training_args, model_args, dataset_args):
 def make_parser(subparsers: argparse._SubParsersAction = None):
     dataclass_types = (RLOOScriptArguments, RLOOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
-        parser = subparsers.add_parser("grpo", help="Run the GRPO training script", dataclass_types=dataclass_types)
+        parser = subparsers.add_parser("rloo", help="Run the RLL training script", dataclass_types=dataclass_types)
     else:
         parser = TrlParser(dataclass_types)
     return parser
