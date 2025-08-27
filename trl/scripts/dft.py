@@ -22,7 +22,7 @@
 """
 # Full training
 ```
-python trl/scripts/sft.py \
+python trl/scripts/dft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --learning_rate 2.0e-5 \
@@ -34,13 +34,13 @@ python trl/scripts/sft.py \
     --eos_token '<|im_end|>' \
     --eval_strategy steps \
     --eval_steps 100 \
-    --output_dir Qwen2-0.5B-SFT \
+    --output_dir Qwen2-0.5B-DFT \
     --push_to_hub
 ```
 
 # LoRA
 ```
-python trl/scripts/sft.py \
+python trl/scripts/dft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
     --learning_rate 2.0e-4 \
@@ -55,15 +55,16 @@ python trl/scripts/sft.py \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16 \
-    --output_dir Qwen2-0.5B-SFT \
+    --output_dir Qwen2-0.5B-DFT \
     --push_to_hub
 ```
 """
 
 import argparse
 import warnings
-import torch
+from typing import Optional
 
+import torch
 from datasets import load_dataset
 from torch import nn
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -83,10 +84,9 @@ from trl import (
     get_quantization_config,
 )
 
-from typing import Optional
 
 def compute_loss_fn(outputs, labels, num_items_in_batch: Optional[int] = None, ignore_index: int = -100, **kwargs):
-    logits = outputs['logits']
+    logits = outputs["logits"]
     logits = logits.float()
     vocab_size = logits.shape[-1]
     # Upcast to float if we need to compute the loss to avoid potential precision issues
@@ -100,7 +100,7 @@ def compute_loss_fn(outputs, labels, num_items_in_batch: Optional[int] = None, i
     # Enable model parallelism
     shift_labels = shift_labels.to(shift_logits.device)
 
-    loss = nn.functional.cross_entropy(shift_logits, shift_labels, ignore_index=ignore_index, reduction='none')
+    loss = nn.functional.cross_entropy(shift_logits, shift_labels, ignore_index=ignore_index, reduction="none")
 
     probs = torch.softmax(shift_logits, dim=-1)
     prob_labels = torch.clamp(shift_labels, min=0)
