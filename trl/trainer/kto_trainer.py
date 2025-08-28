@@ -1271,10 +1271,11 @@ class KTOTrainer(Trainer):
             )
         else:
             # skip the lm head and get the last hidden state
-            if hasattr(model, "get_decoder"):
+            if hasattr(model, "get_decoder") and model.get_decoder() is not None:
                 base_model = model.get_decoder()
             else:
-                base_model = getattr(model, self.args.base_model_attribute_name)
+                base_attr = getattr(model, "base_model_prefix", self.args.base_model_attribute_name)
+                base_model = getattr(model, base_attr, model)
             outputs = base_model(
                 batch["completion_input_ids"],
                 attention_mask=batch["completion_attention_mask"],
@@ -1283,10 +1284,11 @@ class KTOTrainer(Trainer):
             )
 
             # reference model
-            if hasattr(self.ref_model, "get_decoder"):
+            if hasattr(self.ref_model, "get_decoder") and self.ref_model.get_decoder() is not None:
                 ref_base_model = self.ref_model.get_decoder()
             else:
-                ref_base_model = getattr(self.ref_model, self.args.base_model_attribute_name)
+                ref_attr = getattr(self.ref_model, "base_model_prefix", self.args.base_model_attribute_name)
+                ref_base_model = getattr(self.ref_model, ref_attr, self.ref_model)
             ref_outputs = ref_base_model(
                 batch["completion_input_ids"],
                 attention_mask=batch["completion_attention_mask"],
@@ -1705,6 +1707,9 @@ class KTOTrainer(Trainer):
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
 
         tags.update(self._tag_names)
 

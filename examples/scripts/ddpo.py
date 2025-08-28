@@ -15,21 +15,23 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "diffusers",
+#     "peft",
+#     "trackio",
 # ]
 # ///
 
 """
 python examples/scripts/ddpo.py \
-    --num_epochs=200 \
-    --train_gradient_accumulation_steps=1 \
-    --sample_num_steps=50 \
-    --sample_batch_size=6 \
-    --train_batch_size=3 \
-    --sample_num_batches_per_epoch=4 \
-    --per_prompt_stat_tracking=True \
-    --per_prompt_stat_tracking_buffer_size=32 \
-    --tracker_project_name="stable_diffusion_training" \
-    --log_with="wandb"
+    --num_epochs 200 \
+    --train_gradient_accumulation_steps 1 \
+    --sample_num_steps 50 \
+    --sample_batch_size 6 \
+    --train_batch_size 3 \
+    --sample_num_batches_per_epoch 4 \
+    --per_prompt_stat_tracking True \
+    --per_prompt_stat_tracking_buffer_size 32 \
+    --tracker_project_name "stable_diffusion_training"
 """
 
 import os
@@ -37,12 +39,16 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import torch
-import torch.nn as nn
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
+from torch import nn
 from transformers import CLIPModel, CLIPProcessor, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 @dataclass
