@@ -1463,7 +1463,6 @@ class GRPOTrainer(Trainer):
                             max_tokens=self.max_completion_length,
                             guided_decoding_regex=self.guided_decoding_regex,
                             generation_kwargs=self.args.generation_kwargs,
-                            logprobs=0,  # only return the logprob of the generated token
                         )
                         payload = (output["completion_ids"], output["logprobs"])
                 else:
