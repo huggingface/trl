@@ -540,7 +540,7 @@ Note that [`RLOOTrainer`] supports multiple reward functions of different types.
 
 ## Migration Guide from the old implementation (0.21 and below)
 
-With the release of version 0.22.0, we have revamped the [`RLOOTrainer`] to be more alinged with other online trainers in the library like [`GRPOTrainer]. This new implementation introduces several changes to the configuration parameters and overall structure of the trainer.
+With the release of version 0.22.0, we have revamped the [`RLOOTrainer`] to be more alinged with other online trainers in the library like [`GRPOTrainer`]. This new implementation introduces several changes to the configuration parameters and overall structure of the trainer.
 Below is a summary of the key changes for [`RLOOConfig`]:
 
 | TRL ≤ 0.21.x | TRL ≥ 0.22.0 |
