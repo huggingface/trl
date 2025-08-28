@@ -16,7 +16,7 @@ Sequence lengths in the dataset can vary widely. When data is batched, sequences
 
 To reduce memory usage, it's important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
-<hfoptions id="truncation">
+<hfoptions id="trainer">
 <hfoption id="DPO">
 
 DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
@@ -114,7 +114,7 @@ Packing may cause batch contamination, where adjacent sequences influence one an
 
 For more information, see [Liger Kernel Integration](liger_kernel_integration)
 
-<hfoptions id="liger">
+<hfoptions id="trainer">
 <hfoption id="DPO">
 
 To use Liger for reducing peak memory usage, use the following code snippet:
@@ -164,7 +164,7 @@ It's highly recommended to use padding-free batching with **FlashAttention 2** o
 
 </Tip>
 
-<hfoptions id="padding-free">
+<hfoptions id="trainer">
 <hfoption id="DPO">
 
 ```python
@@ -191,7 +191,7 @@ Activation offloading is a memory efficiency technique that reduces GPU VRAM usa
 
 To enable activation offloading in your SFT training configuration:
 
-<hfoptions>
+<hfoptions id="trainer">
 <hfoption id="SFT">
 
 ```python
@@ -227,7 +227,7 @@ When using DeepSpeed ZeRO-3, model weights are sharded across multiple GPUs. Onl
 
 If you encounter this issue, you can disable the gathering of model weights for generation by setting the following parameter:
 
-<hfoptions id="ds3_gather_for_generation">
+<hfoptions id="trainer">
 <hfoption id="GRPO">
 
 ```python
