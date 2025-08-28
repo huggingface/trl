@@ -554,7 +554,7 @@ Below is a summary of the key changes for [`RLOOConfig`]:
 | `token_level_kl` | **removed** – KL is now computed only at the sequence level |
 | `dataset_num_proc` | **removed** – it was unused |
 | `num_mini_batches` | renamed to `steps_per_generation` |
-| `total_episodes` | use `max_steps=total_episodes/(gradient_accumulation_steps*rloo_k)` instead |
+| `total_episodes` | use `max_steps=total_episodes / gradient_accumulation_steps` instead |
 | `local_rollout_forward_batch_size` | **removed** – now automatically set to `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation) |
 | `num_sample_generations` | **removed** – use `logging_steps` to control generation logging frequency |
 | `response_length` | renamed to `max_completion_length` (default: `256`) |
