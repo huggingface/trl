@@ -243,7 +243,7 @@ class GKDTrainer(SFTTrainer):
         if self.use_liger_gkd_loss:
             # Forward only through the base models (avoid lm_head to save memory)
             unwrapped_student = self.accelerator.unwrap_model(model)
-            if hasattr(unwrapped_student, "get_decoder"):
+            if hasattr(unwrapped_student, "get_decoder") and unwrapped_student.get_decoder() is not None:
                 base_student = unwrapped_student.get_decoder()
             else:
                 base_student = getattr(
@@ -259,7 +259,7 @@ class GKDTrainer(SFTTrainer):
 
             self.teacher_model.eval()
             unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
-            if hasattr(unwrapped_teacher, "get_decoder"):
+            if hasattr(unwrapped_teacher, "get_decoder") and unwrapped_teacher.get_decoder() is not None:
                 base_teacher = unwrapped_teacher.get_decoder()
             else:
                 base_teacher = getattr(
