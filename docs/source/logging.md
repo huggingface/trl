@@ -1,7 +1,7 @@
 # Logging
 
 As reinforcement learning algorithms are historically challenging to debug, it's important to pay careful attention to logging.
-By default, TRL trainers like [`PPOTrainer`] and [`GRPOTrainer`] save a lot of relevant information to supported experiment trackers like Weights & Biases (wandb) or TensorBoard.
+By default, TRL trainers like [`PPOTrainer`] and [`GRPOTrainer`] save a lot of relevant information to supported experiment trackers like Trackio, Weights & Biases (wandb) or TensorBoard.
 
 Upon initialization, pass the `report_to` argument to the respective configuration object (e.g., [`PPOConfig`] for `PPOTrainer`, or [`GRPOConfig`] for `GRPOTrainer`):
 
@@ -9,13 +9,13 @@ Upon initialization, pass the `report_to` argument to the respective configurati
 # For PPOTrainer
 ppo_config = PPOConfig(
     # ...,
-    report_to="wandb"  # or "tensorboard"
+    report_to="trackio"  # or "wandb" or "tensorboard"
 )
 
 # For GRPOTrainer
-grpc_config = GRPOConfig(
+grpo_config = GRPOConfig(
     # ...,
-    report_to="wandb"  # or "tensorboard"
+    report_to="trackio"  # or "wandb" or "tensorboard"
 )
 ```
 
