@@ -1343,10 +1343,11 @@ class DPOTrainer(Trainer):
                 model_kwargs["attention_mask"] = attention_mask
 
             # Get the base model outputs (before LM head)
-            if hasattr(unwrapped_model, "get_decoder"):
+            if hasattr(unwrapped_model, "get_decoder") and unwrapped_model.get_decoder() is not None:
                 base_model = unwrapped_model.get_decoder()
             else:
-                base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
+                base_attr = getattr(unwrapped_model, "base_model_prefix", self.args.base_model_attribute_name)
+                base_model = getattr(unwrapped_model, base_attr, unwrapped_model)
 
             outputs = base_model(
                 input_ids,
@@ -1359,12 +1360,11 @@ class DPOTrainer(Trainer):
             ref_hidden_states = None
             if not self.reference_free and self.ref_model is not None:
                 unwrapped_ref_model = self.accelerator.unwrap_model(self.ref_model)
-                if hasattr(unwrapped_ref_model, "get_decoder"):
+                if hasattr(unwrapped_ref_model, "get_decoder") and unwrapped_ref_model.get_decoder() is not None:
                     ref_base_model = unwrapped_ref_model.get_decoder()
                 else:
-                    ref_base_model = getattr(
-                        unwrapped_ref_model, self.args.base_model_attribute_name, unwrapped_ref_model
-                    )
+                    ref_attr = getattr(unwrapped_ref_model, "base_model_prefix", self.args.base_model_attribute_name)
+                    ref_base_model = getattr(unwrapped_ref_model, ref_attr, unwrapped_ref_model)
 
                 ref_outputs = ref_base_model(
                     input_ids,
@@ -1373,10 +1373,11 @@ class DPOTrainer(Trainer):
                 )
                 ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
             elif not self.reference_free:
-                if hasattr(unwrapped_model, "get_decoder"):
+                if hasattr(unwrapped_model, "get_decoder") and unwrapped_model.get_decoder() is not None:
                     ref_base_model = unwrapped_model.get_decoder()
                 else:
-                    ref_base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
+                    ref_attr = getattr(unwrapped_model, "base_model_prefix", self.args.base_model_attribute_name)
+                    ref_base_model = getattr(unwrapped_model, ref_attr, unwrapped_model)
                 with self.null_ref_context():
                     ref_outputs = ref_base_model(
                         input_ids,
@@ -1973,6 +1974,9 @@ class DPOTrainer(Trainer):
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
 
         tags.update(self._tag_names)
 
