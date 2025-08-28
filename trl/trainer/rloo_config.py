@@ -541,7 +541,7 @@ class RLOOConfig(TrainingArguments):
     )
     total_episodes: Optional[int] = field(
         default=None,
-        metadata={"help": "Deprecated: use `max_steps` instead."},
+        metadata={"help": "Deprecated: use `max_steps=total_episodes/(gradient_accumulation_steps*rloo_k)` instead."},
     )
     response_length: Optional[int] = field(
         default=None,
@@ -611,6 +611,8 @@ class RLOOConfig(TrainingArguments):
         for old_param, new_param in _DEPRECATED_PARAMS.items():
             if getattr(self, old_param) is not None:
                 old_value = getattr(self, old_param)
+                if old_param == "total_episodes":
+                    old_value = old_value // (self.gradient_accumulation_steps * self.num_generations)
                 warnings.warn(
                     f"Parameter '{old_param}' is deprecated and will be removed in version 0.25.0. Please use "
                     f"'{new_param}' instead. We are setting {new_param}={old_value}"
