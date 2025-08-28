@@ -18,6 +18,7 @@
 #     "Pillow>=9.4.0",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
