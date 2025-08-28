@@ -104,16 +104,15 @@ $$
 
 ### Computing the advantage
 
-To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons.
-Once the rewards for each completion have been computed, we calculate a **baseline** as the average reward of all other samples in the same batch, excluding the current sample. This baseline is used to reduce the variance of the policy gradient estimate.
+Once the rewards for each completion have been computed, we calculate a baseline as the average reward of all other samples in the same batch, excluding the current sample. This baseline is used to reduce the variance of the policy gradient estimate. The advantage for each completion is then obtained as the difference between its own reward and this leave-one-out baseline. 
 
+Formally, for a batch of G completions, the baseline for completion is:
 $$
 b_i = \frac{1}{G-1} \sum_{j \neq i} r_j
 $$
 
-This approach gives the method its name: **Leave-One-Out**.
 
-The advantage for each completion is then computed as the difference between its reward and the baseline:
+and then the advantage for each completion is computed as the difference between its reward and the baseline:
 
 $$
 A_i = r_i - b_i
