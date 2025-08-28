@@ -18,7 +18,7 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     importance_sampling_level="sequence",
     loss_type="grpo",
-    beta=0.0,  # GSPO set kl regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
+    beta=0.0,  # GSPO set KL regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
     epsilon=3e-4,  # GSPO paper (v2), section 5.1
     epsilon_high=4e-4,  # GSPO paper (v2), section 5.1
     gradient_accumulation_steps=1,
@@ -30,7 +30,7 @@ training_args = GRPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476
 
-The DAPO algorithm, includes 5 key components:
+The DAPO algorithm includes 5 key components:
 
 - Overlong Filtering
 - Clip-Higher
@@ -165,7 +165,7 @@ training_args = GRPOConfig(
     temperature=0.99,
     num_completions=8, # = num_return_sequences in the paper
     num_iterations=1,  # = ppo_epochs in the paper
-    per_device_train_batch_size=4
+    per_device_train_batch_size=4,
     gradient_accumulation_steps=32,
     steps_per_generation=8,  # (rollout_batch_size*num_return_sequences) / (per_device_train_batch_size*gradient_accumulation_steps)
 )
