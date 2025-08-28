@@ -662,7 +662,7 @@ class BEMACallback(TrainerCallback):
         update_ref_model (`bool`, *optional*, defaults to `False`):
             Whether to update the reference model with BEMA weights. This creates a lagged, smoothed version of the
             main model as the reference model.
-        ref_model_update_freq (`int`, *optional*, defaults to `100`):
+        ref_model_update_freq (`int`, *optional*, defaults to `400`):
             Update the reference model with BEMA weights every X steps.
         ref_model_update_after (`int`, *optional*, defaults to `0`):
             Number of steps to wait before starting to update the reference model.
