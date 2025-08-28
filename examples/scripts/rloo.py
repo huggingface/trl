@@ -29,6 +29,8 @@ export TRACKIO_PROJECT="RLOO-NuminaMath-TIR"
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/rloo.py
 """
 
+import os
+
 import torch
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
@@ -37,6 +39,10 @@ from peft import LoraConfig
 
 from trl import RLOOConfig, RLOOTrainer
 from trl.rewards import think_format_reward
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main():

@@ -18,6 +18,7 @@
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
+#     "trackio",
 # ]
 # ///
 
@@ -51,6 +52,8 @@ accelerate launch \
 
 """
 
+import os
+
 import torch
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
@@ -68,6 +71,9 @@ from trl import (
 )
 from trl.rewards import think_format_reward
 
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, GRPOConfig, ModelConfig))
