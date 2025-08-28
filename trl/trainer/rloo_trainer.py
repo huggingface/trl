@@ -276,7 +276,7 @@ class RLOOTrainer(Trainer):
                 return {"prompt": tokenizer.decode(example["input_ids"])}
 
             train_dataset = train_dataset.map(decode, fn_kwargs={"tokenizer": processing_class})
-        if "input_ids" in eval_dataset.column_names:
+        if eval_dataset is not None and "input_ids" in eval_dataset.column_names:
             warnings.warn(
                 "The evaluation dataset contains a column named 'input_ids', indicating that it is pre-tokenized. "
                 "Support for pre-tokenized datasets is deprecated and will be removed in version 0.25. Please provide "
