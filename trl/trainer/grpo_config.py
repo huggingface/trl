@@ -217,6 +217,20 @@ class GRPOConfig(TrainingArguments):
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
+        entropy_coef (`float`, *optional*, defaults to `0.0`):
+            Static coefficient of the entropy regularization term in the loss.
+            A positive coefficient adds an entropy bonus to encourage exploration.
+            It is also used as the initial entropy coefficient when using adaptive entropy control.
+        use_adaptive_entropy (`bool`, *optional*, defaults to `False`):
+            Whether to use adaptive entropy control, introduced in [Skywork OR1](https://huggingface.co/papers/2505.22312). This will adaptively adjust the entropy loss coefficient, `entropy_coef`, based on the target entropy `entropy_target` and the completion entropy.
+        entropy_coef_min (`float`, *optional*, defaults to `0.0`):
+            Lower bound for entropy coefficient when using adaptive entropy control.
+        entropy_coef_max (`float`, *optional*, defaults to `1.0`):
+            Upper bound for entropy coefficient when using adaptive entropy control.
+        entropy_coef_delta (`float`, *optional*, defaults to `0.005`):
+            Step size for adjusting entropy coefficient during adaptive entropy control.
+        entropy_target (`float`, *optional*, defaults to `0.2`):
+            Desired target entropy value maintained through adaptive entropy control.
 
         > Parameters that control the logging
 
@@ -578,6 +592,38 @@ class GRPOConfig(TrainingArguments):
     use_liger_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
+    entropy_coef: float = field(
+        default=0.0,
+        metadata={
+            "help": "Static coefficient of the entropy regularization term in the loss."
+            "A positive coefficient adds an entropy bonus to encourage exploration."
+            "When adaptive entropy control is used, this is used as the initial entropy coefficient."
+        },
+    )
+    use_adaptive_entropy: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use adaptive entropy control, introduced in "
+            "[Skywork OR1](https://huggingface.co/papers/2505.22312). This will adaptively adjust the entropy loss "
+            "coefficient `entropy_coef` based on the target entropy `entropy_target` and the completion entropy."
+        },
+    )
+    entropy_coef_min: float = field(
+        default=0.0,
+        metadata={"help": "Lower bound for entropy coefficient when using adaptive entropy control."},
+    )
+    entropy_coef_max: float = field(
+        default=1.0,
+        metadata={"help": "Upper bound for entropy coefficient when using adaptive entropy control."},
+    )
+    entropy_coef_delta: float = field(
+        default=0.005,
+        metadata={"help": "Step size for adjusting entropy coefficient during adaptive entropy control."},
+    )
+    entropy_target: float = field(
+        default=0.2,
+        metadata={"help": "Desired target entropy value maintained through adaptive entropy control."},
     )
 
     # Parameters that control the logging
