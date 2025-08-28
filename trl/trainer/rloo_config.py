@@ -612,7 +612,7 @@ class RLOOConfig(TrainingArguments):
             if getattr(self, old_param) is not None:
                 old_value = getattr(self, old_param)
                 if old_param == "total_episodes":
-                    old_value = old_value // (self.gradient_accumulation_steps * self.num_generations)
+                    old_value = old_value // self.gradient_accumulation_steps
                 warnings.warn(
                     f"Parameter '{old_param}' is deprecated and will be removed in version 0.25.0. Please use "
                     f"'{new_param}' instead. We are setting {new_param}={old_value}"
