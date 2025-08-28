@@ -1552,7 +1552,9 @@ class GRPOTrainer(Trainer):
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-            sampling_per_token_logps = [torch.tensor(logprobs, device=device) for logprobs in all_logprobs]
+            sampling_per_token_logps = [
+                torch.tensor(logprobs, device=device, dtype=torch.float32) for logprobs in all_logprobs
+            ]
             sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0)
 
         elif self.use_transformers_paged:
