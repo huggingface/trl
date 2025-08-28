@@ -21,6 +21,8 @@
     title: Command Line Interface (CLI)
   - local: jobs_training
     title: Training using Jobs
+  - local: kernels_hub
+    title: Kernels Hub Integration and Usage
   - local: customization
     title: Customizing the Training
   - local: reducing_memory_usage
