@@ -22,7 +22,6 @@
 import os
 import shutil
 
-import trackio
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
@@ -155,5 +154,3 @@ if __name__ == "__main__":
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trainer.generate_completions()
-
-    trackio.finish()

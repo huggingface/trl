@@ -38,7 +38,6 @@ import os
 from dataclasses import dataclass, field
 
 import numpy as np
-import trackio
 from transformers import HfArgumentParser
 
 from trl import AlignPropConfig, AlignPropTrainer, DefaultDDPOStableDiffusionPipeline
@@ -167,5 +166,3 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-    trackio.finish()

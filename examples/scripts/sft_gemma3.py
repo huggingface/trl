@@ -70,7 +70,6 @@ def main():
 
     # Push to hub
     trainer.push_to_hub(dataset_name="open-r1/codeforces-cots")
-    trackio.finish()
 
 
 if __name__ == "__main__":

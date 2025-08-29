@@ -24,7 +24,6 @@ import os
 import shutil
 
 import torch
-import trackio
 from accelerate import PartialState
 from datasets import load_dataset
 from transformers import (
@@ -160,12 +159,6 @@ if __name__ == "__main__":
         train_dataset = prepare_dataset(train_dataset, tokenizer)
         eval_dataset = prepare_dataset(eval_dataset, tokenizer)
 
-    # Initialize trackio if specified
-    if "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
     ################
     # Training
     ################
@@ -188,5 +181,3 @@ if __name__ == "__main__":
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
     trainer.generate_completions()
-
-    trackio.finish()

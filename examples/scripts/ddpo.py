@@ -230,12 +230,6 @@ if __name__ == "__main__":
         use_lora=script_args.use_lora,
     )
 
-    # Initialize trackio if specified
-    if "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
     trainer = DDPOTrainer(
         training_args,
         aesthetic_scorer(script_args.hf_hub_aesthetic_model_id, script_args.hf_hub_aesthetic_model_filename),
@@ -250,5 +244,3 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-
-    trackio.finish()
