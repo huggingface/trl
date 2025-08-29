@@ -838,7 +838,7 @@ class GRPOTrainer(Trainer):
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
                 )
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=2)
+                    self.llm.sleep(level=1)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
@@ -1543,7 +1543,7 @@ class GRPOTrainer(Trainer):
                     completion_ids = completion_ids[tp_slice]
 
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=2)
+                    self.llm.sleep(level=1)
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
