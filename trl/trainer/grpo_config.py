@@ -141,7 +141,8 @@ class GRPOConfig(TrainingArguments):
             the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
             implementation.
         vllm_sleep_enabled (`bool`, *optional*, defaults to `False`):
-            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken for weight sync and generation.
+            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
+            for weight sync and generation.
 
         > Parameters that control the training
 
@@ -421,7 +422,8 @@ class GRPOConfig(TrainingArguments):
     vllm_sleep_enabled: bool = field(
         default=False,
         metadata={
-            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken for weight sync and generation."
+            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
+            "and woken for weight sync and generation."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
