@@ -1068,7 +1068,7 @@ class GRPOTrainer(Trainer):
                 [
                     non_pad_entropies,
                     torch.zeros(
-                        max_non_pad_entropies_seq_length - non_pad_entropies_seq_length.item(),
+                        max_non_pad_entropies_seq_length - non_pad_entropies.numel(),
                         device=non_pad_entropies.device,
                     ),
                 ]
