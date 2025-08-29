@@ -26,12 +26,13 @@
 Total Batch size = 128 = 4 (num_gpus) * 8 (per_device_batch) * 4 (accumulation steps)
 Feel free to reduce batch size or increasing truncated_rand_backprop_min to a higher value to reduce memory usage.
 
-CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/scripts/alignprop.py \
+export CUDA_VISIBLE_DEVICES=0,1,2,3  # force to use CUDA device 0,1,2,3
+export ZE_AFFINITY_MASK=0,1,2,3  # force to use Intel XPU device 0,1,2,3
+python examples/scripts/alignprop.py \
     --num_epochs 20 \
     --train_gradient_accumulation_steps 4 \
     --sample_num_steps 50 \
-    --train_batch_size 8
-
+    --train_batch_size 8 \
 """
 
 import os

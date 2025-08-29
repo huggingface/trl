@@ -1,6 +1,6 @@
 # Reward Functions
 
-This module contains some useful reward functions, primarily intended for use with the [`GRPOTrainer`].
+This module contains some useful reward functions, primarily intended for use with the [`GRPOTrainer`] and [`RLOOTrainer`].
 
 ## Format rewards
 
