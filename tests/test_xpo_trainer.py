@@ -55,7 +55,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer = XPOTrainer(
             model=self.model,
             ref_model=self.ref_model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -82,7 +82,7 @@ class TestXPOTrainer(TrlTestCase):
 
         trainer = XPOTrainer(
             model=self.model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -111,7 +111,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer = XPOTrainer(
             model=self.model,
             ref_model=self.ref_model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -142,7 +142,7 @@ class TestXPOTrainer(TrlTestCase):
 
         trainer = XPOTrainer(
             model=model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -174,7 +174,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer = XPOTrainer(
             model=peft_model_instance,
             ref_model=None,
-            reward_model=self.reward_model,  # Using reward_model to ensure _generate_completions is used as expected
+            reward_funcs=self.reward_model,  # Using reward_model to ensure _generate_completions is used as expected
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset,

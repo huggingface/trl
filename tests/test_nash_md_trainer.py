@@ -55,7 +55,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer = NashMDTrainer(
             model=self.model,
             ref_model=self.ref_model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -82,7 +82,7 @@ class TestNashMDTrainer(TrlTestCase):
 
         trainer = NashMDTrainer(
             model=self.model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -111,7 +111,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer = NashMDTrainer(
             model=self.model,
             ref_model=self.ref_model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -142,7 +142,7 @@ class TestNashMDTrainer(TrlTestCase):
 
         trainer = NashMDTrainer(
             model=model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -175,7 +175,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer = NashMDTrainer(
             model=peft_model_instance,  # Pass the already PEFT model
             ref_model=None,  # Implicit reference from peft_model_instance's base
-            reward_model=self.reward_model,  # To trigger GeometricMixtureWrapper path
+            reward_funcs=self.reward_model,  # To trigger GeometricMixtureWrapper path
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset,
