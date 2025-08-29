@@ -835,10 +835,10 @@ class GRPOTrainer(Trainer):
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
-                    enable_sleep_mode=self.args.vllm_sleep_enabled,
+                    enable_sleep_mode=self.args.vllm_enable_sleep_mode,
                 )
-                if self.args.vllm_sleep_enabled:
-                    self.llm.sleep(level=1)
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.sleep(level=2)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
@@ -1429,7 +1429,7 @@ class GRPOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
-            if self.vllm_mode == "colocate" and self.args.vllm_sleep_enabled:
+            if self.vllm_mode == "colocate" and self.args.vllm_enable_sleep_mode:
                 # wake up colocated vLLM instances if needed
                 torch.cuda.empty_cache()  # required to avoid OOM in some cases
                 self.llm.wake_up()
@@ -1542,8 +1542,8 @@ class GRPOTrainer(Trainer):
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
 
-                if self.args.vllm_sleep_enabled:
-                    self.llm.sleep(level=1)
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.sleep(level=2)
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
