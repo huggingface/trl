@@ -387,7 +387,7 @@ When a feature or component is marked for deprecation, its use will emit a warni
 - **Removal Version**: The target version when the feature will be removed, providing users with a clear timeframe to transition.
 
 Example:
-   
+
    ```python
    warnings.warn(
        "The `Trainer.foo` method is deprecated and will be removed in version 0.14.0. "
@@ -432,7 +432,7 @@ Warnings play a critical role in guiding users toward resolving potential issues
    def my_function(foo, bar, _warn=True):
        if foo == bar:
            if _warn:
-               warnings.warn("foo and bar are the same, this is likely a mistake. Ignore this warning by setting `_warn=False`.")
+               logger.warning("foo and bar are the same, this is likely a mistake. Ignore this warning by setting `_warn=False`.")
            # Do something
    ```
 
@@ -442,7 +442,7 @@ Warnings play a critical role in guiding users toward resolving potential issues
    ```python
    def my_function(foo, bar):
        if foo and bar:
-           warnings.warn("Both `foo` and `bar` were provided, but only one is allowed. Ignoring `foo`. Please pass only one of these arguments.")
+           logger.warning("Both `foo` and `bar` were provided, but only one is allowed. Ignoring `foo`. Please pass only one of these arguments.")
            # Do something
    ```
 

@@ -1,7 +1,7 @@
 # Logging
 
 As reinforcement learning algorithms are historically challenging to debug, it's important to pay careful attention to logging.
-By default, TRL trainers like [`PPOTrainer`] and [`GRPOTrainer`] save a lot of relevant information to supported experiment trackers like Weights & Biases (wandb) or TensorBoard.
+By default, TRL trainers like [`PPOTrainer`] and [`GRPOTrainer`] save a lot of relevant information to supported experiment trackers like Trackio, Weights & Biases (wandb) or TensorBoard.
 
 Upon initialization, pass the `report_to` argument to the respective configuration object (e.g., [`PPOConfig`] for `PPOTrainer`, or [`GRPOConfig`] for `GRPOTrainer`):
 
@@ -9,13 +9,13 @@ Upon initialization, pass the `report_to` argument to the respective configurati
 # For PPOTrainer
 ppo_config = PPOConfig(
     # ...,
-    report_to="wandb"  # or "tensorboard"
+    report_to="trackio"  # or "wandb" or "tensorboard"
 )
 
 # For GRPOTrainer
-grpc_config = GRPOConfig(
+grpo_config = GRPOConfig(
     # ...,
-    report_to="wandb"  # or "tensorboard"
+    report_to="trackio"  # or "wandb" or "tensorboard"
 )
 ```
 
@@ -63,7 +63,8 @@ Here's a brief explanation for the logged metrics provided in the data for the G
 
 * `num_tokens`: Total number of input tokens processed during training so far.
 
-**Completions:**
+#### Completions
+
 * `completions/mean_length`: Mean length of all generated completions (including those not ending with an EOS token).
 * `completions/min_length`: Minimum length among all generated completions.
 * `completions/max_length`: Maximum length among all generated completions.
@@ -72,13 +73,15 @@ Here's a brief explanation for the logged metrics provided in the data for the G
 * `completions/min_terminated_length`: Minimum length among completions that ended with an EOS token.
 * `completions/max_terminated_length`: Maximum length among completions that ended with an EOS token.
 
-**Rewards:**
+#### Rewards
+
 * `rewards/{reward_func_name}/mean`: The mean reward obtained from a specific, named reward function (e.g., `rewards/my_custom_reward/mean`). This is logged for each reward function used.
 * `rewards/{reward_func_name}/std`: The standard deviation of rewards from a specific, named reward function.
 * `reward`: The overall mean of the (potentially weighted and, if `args.scale_rewards` is true, normalized) rewards, after group-wise normalization (advantages).
 * `reward_std`: The standard deviation of the (potentially weighted) rewards *before* group-wise normalization for advantages.
 
-**Policy and Loss Metrics:**
+#### Policy and Loss Metrics
+
 * `kl`: The mean Kullback-Leibler (KL) divergence between the current policy and the reference policy. This is logged only if `beta` (the KL coefficient in `GRPOConfig`) is non-zero.
 * `entropy`: Average entropy of token predictions across generated completions.
 * If Liger GRPOLoss is used (`use_liger_loss: True` in `GRPOConfig`):
@@ -91,6 +94,7 @@ Here's a brief explanation for the logged metrics provided in the data for the G
     *   `clip_ratio/region_mean`: The mean fraction of instances where the probability ratio was clipped at either the lower or upper bound.
 
 ### Crucial GRPO values
+
 During GRPO training, monitor these values for insights into performance and stability:
 
 1.  `reward`: This is the primary objective. It reflects the (group-wise normalized) rewards the policy is achieving. It should generally increase during successful training.

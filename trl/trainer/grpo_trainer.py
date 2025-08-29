@@ -17,9 +17,7 @@ import inspect
 import os
 import re
 import textwrap
-import warnings
 from collections import defaultdict, deque
-from collections.abc import Sequence, Sized
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
@@ -29,9 +27,9 @@ import datasets
 import torch
 import torch.utils.data
 import transformers
+from accelerate import logging
 from accelerate.utils import broadcast_object_list, gather, gather_object, is_peft_model, set_seed
 from datasets import Dataset, IterableDataset
-from packaging import version
 from torch import nn
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
@@ -51,27 +49,37 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template
+from ..data_utils import apply_chat_template, is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
-from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .callbacks import SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
+    RepeatSampler,
     disable_dropout_in_model,
     entropy_from_logits,
     generate_model_card,
     get_comet_experiment_url,
+    identity,
+    nanmax,
+    nanmin,
+    nanstd,
     pad,
     print_prompt_completions_sample,
     selective_log_softmax,
+    shuffle_sequence_dict,
+    split_pixel_values_by_grid,
+    split_tensor_dict,
+    truncate_with_protected_tokens,
+    unsplit_pixel_values_by_grid,
 )
 
 
 if is_peft_available():
-    from peft import PeftConfig, get_peft_model
+    from peft import PeftConfig, PeftModel
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearGRPOLoss
@@ -83,336 +91,12 @@ if is_vllm_available():
 if is_wandb_available():
     import wandb
 
+
+logger = logging.get_logger(__name__)
+
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
-
-
-class RepeatSampler(Sampler):
-    """
-    Sampler that repeats the indices of a dataset in a structured manner.
-
-    Args:
-        data_source (`Sized`):
-            Dataset to sample from.
-        mini_repeat_count (`int`):
-            Number of times to repeat each index per batch.
-        batch_size (`int`, *optional*, defaults to `1`):
-            Number of unique indices per batch.
-        repeat_count (`int`, *optional*, defaults to `1`):
-            Number of times to repeat the full sampling process.
-        shuffle (`bool`, *optional*, defaults to `True`):
-            Whether to shuffle the dataset.
-        seed (`int` or `None`, *optional*, defaults to `None`):
-            Random seed for reproducibility (only affects this sampler).
-
-    Example:
-    ```python
-    >>> sampler = RepeatSampler(
-    ...     ["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4
-    ... )
-    >>> list(sampler)
-    [4, 4, 3, 3, 0, 0,
-     4, 4, 3, 3, 0, 0,
-     4, 4, 3, 3, 0, 0,
-     4, 4, 3, 3, 0, 0,
-     1, 1, 2, 2, 6, 6,
-     1, 1, 2, 2, 6, 6,
-     1, 1, 2, 2, 6, 6,
-     1, 1, 2, 2, 6, 6]
-    ```
-
-    ```txt
-    mini_repeat_count = 3
-          -   -   -
-         [0,  0,  0,  1,  1,  1,  2,  2,  2,  3,  3,  3,      |
-          4,  4,  4,  5,  5,  5,  6,  6,  6,  7,  7,  7,      |
-          8,  8,  8,  9,  9,  9, 10, 10, 10, 11, 11, 11,      |
-                                                                repeat_count = 2
-          0,  0,  0,  1,  1,  1,  2,  2,  2,  3,  3,  3,      |
-          4,  4,  4,  5,  5,  5,  6,  6,  6,  7,  7,  7,      |
-          8,  8,  8,  9,  9,  9, 10, 10, 10, 11, 11, 11, ...] |
-          ---------   ---------   ---------   ---------
-           ---------   ---------   ---------   ---------
-            ---------   ---------   ---------   ---------
-                         batch_size = 12
-    ```
-    """
-
-    def __init__(
-        self,
-        data_source: Sized,
-        mini_repeat_count: int,
-        batch_size: int = 1,
-        repeat_count: int = 1,
-        shuffle: bool = True,
-        seed: Optional[int] = None,
-    ):
-        self.data_source = data_source
-        self.mini_repeat_count = mini_repeat_count
-        self.batch_size = batch_size
-        self.repeat_count = repeat_count
-        self.num_samples = len(data_source)
-        self.shuffle = shuffle
-        self.seed = seed
-
-        if shuffle:
-            self.generator = torch.Generator()  # Create a local random generator
-            if seed is not None:
-                self.generator.manual_seed(seed)
-
-    def __iter__(self):
-        if self.shuffle:
-            # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
-            indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
-        else:
-            indexes = list(range(self.num_samples))
-
-        #    [2, 4, 3, 1, 0, 6, 5]
-        # -> [[2, 4, 3], [1, 0, 6], [5]]  (batch_size = 3)
-        indexes = [indexes[i : i + self.batch_size] for i in range(0, len(indexes), self.batch_size)]
-
-        #    [[2, 4, 3], [1, 0, 6], [5]]
-        # -> [[2, 4, 3], [1, 0, 6]]
-        indexes = [chunk for chunk in indexes if len(chunk) == self.batch_size]
-
-        for chunk in indexes:
-            for _ in range(self.repeat_count):
-                for index in chunk:
-                    for _ in range(self.mini_repeat_count):
-                        yield index
-
-    def __len__(self) -> int:
-        return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
-
-
-# torch.nanstd doesn't exist, so we define it here
-def nanstd(tensor: torch.Tensor) -> torch.Tensor:
-    """
-    Compute the standard deviation of a tensor, ignoring NaNs. This function only supports 1D tensors.
-
-    Args:
-        tensor (`torch.Tensor`):
-            Input tensor of shape `(N,)`.
-
-    Returns:
-        `torch.Tensor`:
-            Standard deviation of the tensor, ignoring NaNs.
-    """
-    variance = torch.nanmean((tensor - torch.nanmean(tensor, keepdim=True)) ** 2)  # Compute variance ignoring NaNs
-    count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
-    variance *= count / (count - 1)  # Bessel's correction
-    return torch.sqrt(variance)
-
-
-def split_tensor_dict(
-    tensor_dict: dict[str, Optional[torch.Tensor]], num_chunks: int
-) -> list[dict[str, Optional[torch.Tensor]]]:
-    """
-    Splits a dictionary of tensors along the first dimension into `num_chunks` equal parts.
-
-    Example:
-    ```python
-    >>> x = torch.arange(12).reshape(6, 2)
-    >>> y = torch.arange(6).reshape(6, 1)
-    >>> tensor_dict = {"x": x, "y": y}
-    >>> split_tensor_dict(tensor_dict, 3)
-    [
-        {"x": tensor([[0, 1], [2, 3]]), "y": tensor([[0], [1]])},
-        {"x": tensor([[4, 5], [6, 7]]), "y": tensor([[2], [3]])},
-        {"x": tensor([[ 8,  9], [10, 11]]), "y": tensor([[4], [5]])}
-    ]
-    ```
-    """
-    first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
-    chunk_size = first_tensor.shape[0] // num_chunks
-    return [
-        {
-            key: tensor[i * chunk_size : (i + 1) * chunk_size] if tensor is not None else None
-            for key, tensor in tensor_dict.items()
-        }
-        for i in range(num_chunks)
-    ]
-
-
-def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
-    """
-    Shuffles all sequence-like values in a dictionary along the first dimension in unison.
-
-    Example:
-    ```python
-    >>> x = torch.arange(6).reshape(3, 2)
-    >>> y = ["a", "b", "c"]
-    >>> seq_dict = {"x": x, "y": y}
-    >>> shuffle_sequence_dict(seq_dict)
-    {'x': tensor([[2, 3],
-                  [0, 1],
-                  [4, 5]]),
-     'y': ['b', 'a', 'c']}
-    ```
-    """
-    # Determine batch size from the first non-None sequence
-    batch_size = len(next(v for v in seq_dict.values() if v is not None))
-    permutation = torch.randperm(batch_size)
-
-    def permute(v: Optional[Sequence]) -> Optional[Sequence]:
-        if v is None:
-            return None
-        if isinstance(v, torch.Tensor):
-            return v[permutation]
-        return [v[i] for i in permutation]
-
-    return {key: permute(val) for key, val in seq_dict.items()}
-
-
-def nanmin(tensor: torch.Tensor) -> torch.Tensor:
-    """
-    Compute the minimum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
-
-    Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
-
-    Returns:
-        `torch.Tensor`: Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
-    """
-    if torch.isnan(tensor).all():
-        return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
-    return torch.min(tensor[~torch.isnan(tensor)])
-
-
-def nanmax(tensor: torch.Tensor) -> torch.Tensor:
-    """
-    Compute the maximum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
-
-    Args:
-        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
-
-    Returns:
-        `torch.Tensor`: Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
-    """
-    if torch.isnan(tensor).all():
-        return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
-    return torch.max(tensor[~torch.isnan(tensor)])
-
-
-def identity(x):
-    """Do we really need docs for this?"""
-    return x
-
-
-def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
-    """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
-    `batch["image_grid_thw"]`, while keeping other entries unchanged.
-    """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch:
-        return batch
-
-    lengths = batch["image_grid_thw"].prod(dim=1).tolist()  # [batch_size]
-    pixel_values = batch["pixel_values"]  # [total, feature_dim]
-
-    if sum(lengths) != pixel_values.size(0):
-        raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
-
-    split_values = list(torch.split(batch["pixel_values"], lengths, dim=0))
-    return {**batch, "pixel_values": split_values}
-
-
-def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
-    """
-    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]`
-    back into a single tensor along the first dimension.
-    """
-    pixel_values = batch.get("pixel_values")
-
-    if isinstance(pixel_values, list):
-        merged = torch.cat(pixel_values, dim=0)
-        return {**batch, "pixel_values": merged}
-    else:
-        return batch
-
-
-def get_high_entropy_mask(entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
-    """
-    Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
-
-    Args:
-        entropies (`torch.Tensor`):
-            Tensor of shape (batch_size, seq_len) with per-token entropy values.
-        mask (`torch.Tensor`):
-            Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
-        threshold (`float`):
-            Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
-
-    Returns:
-        `torch.Tensor`:
-            Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold and
-            `False` otherwise.
-    """
-    non_pad_entropies = entropies[mask.bool()].float()
-    if non_pad_entropies.numel() == 0:
-        return torch.zeros_like(entropies, dtype=torch.bool)
-    entropy_threshold = torch.quantile(non_pad_entropies, threshold)
-    masked_entropies = entropies * mask.float()
-    entropy_mask = masked_entropies >= entropy_threshold
-    return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
-
-
-def truncate_with_protected_tokens(
-    ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Truncate tensors to target length while preserving protected tokens.
-
-    Args:
-        ids (`torch.Tensor`):
-            Input tensor of token IDs, shape (batch_size, sequence_length).
-        mask (`torch.Tensor`):
-            Input tensor of attention masks, shape (batch_size, sequence_length).
-        target_length (`int`):
-            Desired length of the output sequences.
-        protected_tokens (`list[int]`):
-            List of token IDs that should be preserved in the output.
-    """
-    protected_set = set(protected_tokens)
-
-    def process_sequence(ids, mask):
-        # Create boolean masks
-        is_protected = torch.tensor([x.item() in protected_set for x in ids])
-        is_non_protected = ~is_protected
-
-        # Count tokens
-        num_protected = is_protected.sum().item()
-        num_non_protected_needed = target_length - num_protected
-
-        if num_non_protected_needed < 0:
-            raise ValueError(
-                f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-                f"Please increase target length to at least {num_protected} or disable truncation."
-            )
-
-        # Select which non-protected tokens to keep (rightmost ones)
-        non_protected_indices = torch.where(is_non_protected)[0]
-        keep_non_protected = torch.zeros_like(is_non_protected)
-        if num_non_protected_needed > 0:
-            keep_indices = non_protected_indices[-num_non_protected_needed:]
-            keep_non_protected[keep_indices] = True
-
-        # Final mask: protected OR selected non-protected
-        keep_mask = is_protected | keep_non_protected
-
-        return ids[keep_mask], mask[keep_mask]
-
-    # Process each sequence in the batch
-    truncated_seq = []
-    truncated_mask = []
-
-    for i in range(ids.shape[0]):
-        new_ids, new_mask = process_sequence(ids[i], mask[i])
-        truncated_seq.append(new_ids)
-        truncated_mask.append(new_mask)
-
-    return torch.stack(truncated_seq), torch.stack(truncated_mask)
 
 
 class GRPOTrainer(Trainer):
@@ -487,9 +171,10 @@ class GRPOTrainer(Trainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
+        IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
@@ -510,7 +195,8 @@ class GRPOTrainer(Trainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
+        None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
@@ -561,9 +247,9 @@ class GRPOTrainer(Trainer):
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
-                raise ValueError(
+                logger.warning(
                     "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
-                    "This argument can only be used when the `model` argument is a string."
+                    "The `model_init_kwargs` will be ignored."
                 )
 
         # Some models (SmolVLM/Idefics3) don't support `logits_to_keep` argument and error out if we pass it
@@ -574,14 +260,8 @@ class GRPOTrainer(Trainer):
             else inspect.signature(model.get_base_model().forward).parameters.keys()
         )
 
-        if peft_config is not None:
-            if not is_peft_available():
-                raise ImportError("PEFT is required to use `peft_config`. Run `pip install peft`.")
-            model = get_peft_model(model, peft_config)
-
-        # Enable gradient checkpointing if requested
-        if args.gradient_checkpointing:
-            model = self._enable_gradient_checkpointing(model, args)
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+            model = prepare_peft_model(model, peft_config, args)
 
         # Processing class
         if processing_class is None:
@@ -637,9 +317,11 @@ class GRPOTrainer(Trainer):
             reward_processing_classes = [None] * len(reward_funcs)
         elif not isinstance(reward_processing_classes, list):
             reward_processing_classes = [reward_processing_classes]
-        else:
-            if len(reward_processing_classes) != len(reward_funcs):
-                raise ValueError("The number of reward processing classes must match the number of reward functions.")
+        if len(reward_processing_classes) != len(reward_funcs):
+            raise ValueError(
+                f"The number of reward processing classes ({len(reward_processing_classes)}) must match the number of "
+                f"reward functions ({len(reward_funcs)})."
+            )
 
         for i, (reward_processing_class, reward_func) in enumerate(zip(reward_processing_classes, reward_funcs)):
             if isinstance(reward_func, PreTrainedModel):
@@ -651,6 +333,7 @@ class GRPOTrainer(Trainer):
                 # So it's important to set the pad token ID to the padding token ID of the processing class.
                 reward_func.config.pad_token_id = reward_processing_class.pad_token_id
                 reward_processing_classes[i] = reward_processing_class
+
         self.reward_processing_classes = reward_processing_classes
 
         # Training arguments
@@ -669,7 +352,7 @@ class GRPOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
-        self.scale_rewards = args.scale_rewards
+        self.scale_rewards = {True: "group", False: "none"}.get(args.scale_rewards, args.scale_rewards)
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
@@ -725,6 +408,12 @@ class GRPOTrainer(Trainer):
             processing_class=processing_class,
             callbacks=callbacks,
             optimizers=optimizers,
+            # In Trainer, `training_step` scales the loss by `gradient_accumulation_steps` only if `compute_loss_func`
+            # is None. For DAPO, loss scaling instead depends on the total number of completions tokens across the
+            # global accumulated batch. To control scaling ourselves, we must disable Trainer’s built-in scaling. The
+            # simplest (though a bit hacky) way is to set `compute_loss_func` to any non-None value, which bypasses
+            # that behavior without rewriting `training_step`.
+            compute_loss_func="non-None value to disable scaling",
         )
 
         # Reference model
@@ -794,13 +483,14 @@ class GRPOTrainer(Trainer):
                     "`pip install vllm` to use it."
                 )
 
-            if self.vllm_mode == "server" and self.accelerator.is_main_process:
-                if args.vllm_server_base_url is not None:
-                    base_url = args.vllm_server_base_url
-                else:
-                    base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
-                self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
-                self.vllm_client.init_communicator(device=torch.cuda.current_device())
+            if self.vllm_mode == "server":
+                if self.accelerator.is_main_process:
+                    if args.vllm_server_base_url is not None:
+                        base_url = args.vllm_server_base_url
+                    else:
+                        base_url = f"http://{args.vllm_server_host}:{args.vllm_server_port}"
+                    self.vllm_client = VLLMClient(base_url=base_url, connection_timeout=args.vllm_server_timeout)
+                    self.vllm_client.init_communicator(device=torch.cuda.current_device())
 
             elif self.vllm_mode == "colocate":
                 # Make sure vllm_tensor_parallel_size group size evenly divides the world size - each group should have
@@ -847,6 +537,8 @@ class GRPOTrainer(Trainer):
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                 )
+            else:
+                raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
             # vLLM specific sampling arguments
             self.guided_decoding_regex = args.vllm_guided_decoding_regex
@@ -948,13 +640,10 @@ class GRPOTrainer(Trainer):
         if not isinstance(train_dataset, torch.utils.data.IterableDataset):
             dataloader_params["sampler"] = self._get_train_sampler()
             dataloader_params["drop_last"] = self.args.dataloader_drop_last
-            if version.parse(transformers.__version__) >= version.parse("4.52.0"):
-                # from transformers 4.52.0, the `seed_worker` requires the `num_workers` and `rank` arguments
-                dataloader_params["worker_init_fn"] = partial(
-                    seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
-                )
-            else:
-                dataloader_params["worker_init_fn"] = seed_worker
+            dataloader_params["worker_init_fn"] = partial(
+                seed_worker, num_workers=self.args.dataloader_num_workers, rank=self.args.process_index
+            )
+
             dataloader_params["prefetch_factor"] = self.args.dataloader_prefetch_factor
 
         return self.accelerator.prepare(DataLoader(train_dataset, **dataloader_params))
@@ -1003,28 +692,6 @@ class GRPOTrainer(Trainer):
             seed=self.args.seed,
         )
 
-    def _enable_gradient_checkpointing(self, model: PreTrainedModel, args: GRPOConfig) -> PreTrainedModel:
-        """Enables gradient checkpointing for the model."""
-        # Ensure use_cache is disabled
-        model.config.use_cache = False
-
-        # Enable gradient checkpointing on the base model for PEFT
-        if is_peft_model(model):
-            model.base_model.gradient_checkpointing_enable()
-        # Enable gradient checkpointing for non-PEFT models
-        else:
-            model.gradient_checkpointing_enable()
-
-        gradient_checkpointing_kwargs = args.gradient_checkpointing_kwargs or {}
-        use_reentrant = (
-            "use_reentrant" not in gradient_checkpointing_kwargs or gradient_checkpointing_kwargs["use_reentrant"]
-        )
-
-        if use_reentrant:
-            model.enable_input_require_grads()
-
-        return model
-
     @profiling_decorator
     def _get_last_hidden_state(
         self,
@@ -1061,12 +728,43 @@ class GRPOTrainer(Trainer):
             # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
             model_inputs["logits_to_keep"] = logits_to_keep + 1
 
+        model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
+
         last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
         # Exclude the last value: it corresponds to the next token pred
         last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
         # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
         last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
+
+    def get_high_entropy_mask(
+        self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float, accelerator=None
+    ) -> torch.Tensor:
+        """
+        Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
+
+        Args:
+            entropies (`torch.Tensor`):
+                Tensor of shape (batch_size, seq_len) with per-token entropy values.
+            mask (`torch.Tensor`):
+                Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
+            threshold (`float`):
+                Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
+
+        Returns:
+            `torch.Tensor`:
+                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold
+                and `False` otherwise.
+        """
+        non_pad_entropies = entropies[mask.bool()].float()
+        if non_pad_entropies.numel() == 0:
+            return torch.zeros_like(entropies, dtype=torch.bool)
+        all_non_pad_entropies = self.accelerator.gather(non_pad_entropies)
+        # Filter out any empty tensors that might result from processes with no valid tokens
+        entropy_threshold = torch.quantile(all_non_pad_entropies, threshold)
+        masked_entropies = entropies * mask.float()
+        entropy_mask = masked_entropies >= entropy_threshold
+        return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
@@ -1109,6 +807,8 @@ class GRPOTrainer(Trainer):
             if "logits_to_keep" in self.model_kwarg_keys:
                 # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
                 model_inputs["logits_to_keep"] = logits_to_keep + 1
+
+            model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
 
             logits = model(**model_inputs).logits
             # Exclude the last value: it corresponds to the next token pred
@@ -1330,11 +1030,13 @@ class GRPOTrainer(Trainer):
         # If all reward functions return None for a given row, issue a detailed warning
         if torch.isnan(rewards_per_func).all(dim=1).any():
             nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
-            row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()}
+            row_reward_kwargs = {
+                key: value[nan_row_idx] for key, value in reward_kwargs.items() if key != "trainer_state"
+            }
             row_reward_kwargs["prompt"] = prompts[nan_row_idx]
             row_reward_kwargs["completion"] = completions[nan_row_idx]
-            warnings.warn(
-                f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
+            logger.warning(
+                f"All reward functions returned None for the following kwargs:\n{row_reward_kwargs}\n"
                 "Please ensure that at least one reward function returns a valid reward."
             )
 
@@ -1365,17 +1067,8 @@ class GRPOTrainer(Trainer):
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
-                if isinstance(prompt, list):
-                    for message in prompt:
-                        if not isinstance(message, dict):
-                            continue
-                        content = message.get("content")
-                        role = message.get("role")
-                        if isinstance(content, str):
-                            if role == "user":
-                                message["content"] = [{"type": "image"}, {"type": "text", "text": content}]
-                            elif role == "system":
-                                message["content"] = [{"type": "text", "text": content}]
+                if isinstance(prompt, list):  # i.e., when using conversational data
+                    prepare_multimodal_messages(prompt, num_images=1)
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1405,14 +1098,32 @@ class GRPOTrainer(Trainer):
             )
             prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
 
-            # The chat template inserts a single image token into the prompt text. However, when this text is later
-            # tokenized, the single image token string is expanded into multiple image token IDs, depending on the
+            # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
+            # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
             # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
-            # collapse them back into a single token string to match the original template.
+            # collapse them back into a single token string to match the original chat template in case it originally
+            # applies it. Otherwise, it assumes that the chat template uses only vision_start_token_id to indicate images
+            # (e.g. Gemma 3) and removes all image_token instances and vision_end_token_id as well, leaving only
+            # the vision_start_token_id (e.g. <start_of_image>).
             if self.image_token is not None:
-                prompts_text = [
-                    re.sub(rf"({re.escape(self.image_token)})+", self.image_token, text) for text in prompts_text
-                ]
+                escaped_img_token = re.escape(self.image_token)
+                # Search for the image token in the chat template
+                if re.search(escaped_img_token, self.processing_class.chat_template):
+                    prompts_text = [
+                        re.sub(rf"({escaped_img_token})+", self.image_token, text) for text in prompts_text
+                    ]
+                else:
+                    # If the chat template doesn't use the image token, we remove all instances of it + vision_end_token_id
+                    if self.vision_end_token_id is not None:
+                        escaped_eoi_token = re.escape(
+                            self.processing_class.tokenizer.decode([self.vision_end_token_id])
+                        )
+                        prompts_text = [
+                            re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text
+                        ]
+                    else:
+                        # If vision_end_token_id is None, just remove the image tokens
+                        prompts_text = [re.sub(rf"({escaped_img_token})+", "", text) for text in prompts_text]
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1592,12 +1303,12 @@ class GRPOTrainer(Trainer):
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [
-            [id.item() for id, m in zip(row, mask_row) if m] for row, mask_row in zip(completion_ids, completion_mask)
-        ]
+        completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
 
         # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
         completion_lengths = completion_mask.sum(1)
+        agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        num_items_in_batch = agg_completion_lengths.sum()  # this is required for the DAPO loss
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
@@ -1682,15 +1393,26 @@ class GRPOTrainer(Trainer):
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-        is_std_zero = torch.isclose(std_grouped_rewards, torch.zeros_like(std_grouped_rewards))
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
-        if self.scale_rewards:
-            advantages = advantages / (std_grouped_rewards + 1e-4)
+
+        if self.scale_rewards in ["batch", "none"]:
+            # If self.scale_rewards = "none", we'll still log group level std
+            std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+            std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
+        elif self.scale_rewards == "group":
+            # Compute global std
+            std_rewards = rewards.std().expand_as(rewards)
+        else:
+            raise ValueError(
+                f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
+            )
+
+        is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
+        if self.scale_rewards in ["batch", "none"]:
+            advantages = advantages / (std_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -1706,7 +1428,6 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
-        agg_completion_lengths = self.accelerator.gather(completion_lengths)
         self._metrics[mode]["completions/mean_length"].append(agg_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_length"].append(agg_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
@@ -1726,10 +1447,10 @@ class GRPOTrainer(Trainer):
         for i, reward_func_name in enumerate(self.reward_func_names):
             mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
             self._metrics[mode][f"rewards/{reward_func_name}/mean"].append(mean_rewards)
-            std_rewards = nanstd(rewards_per_func[:, i]).item()
-            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
+            std_func_rewards = nanstd(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_func_rewards)
         self._metrics[mode]["reward"].append(mean_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(std_rewards.mean().item())
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
@@ -1748,6 +1469,7 @@ class GRPOTrainer(Trainer):
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "advantages": advantages,
+            "num_items_in_batch": num_items_in_batch,
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
@@ -1803,7 +1525,7 @@ class GRPOTrainer(Trainer):
         if self.beta != 0.0:
             self._metrics[mode]["kl"].append(self.accelerator.gather(mean_kl).mean().item())
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
-        return loss
+        return loss / self.current_gradient_accumulation_steps
 
     @profiling_decorator
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
@@ -1838,7 +1560,7 @@ class GRPOTrainer(Trainer):
         )
 
         if self.top_entropy_quantile < 1.0:
-            entropy_mask = get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
+            entropy_mask = self.get_high_entropy_mask(entropies, completion_mask, 1 - self.top_entropy_quantile)
         else:
             entropy_mask = None
 
@@ -1888,10 +1610,16 @@ class GRPOTrainer(Trainer):
 
         if self.loss_type == "grpo":
             loss = ((per_token_loss * completion_mask).sum(-1) / completion_mask.sum(-1).clamp(min=1.0)).mean()
+            loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "bnpo":
             loss = (per_token_loss * completion_mask).sum() / completion_mask.sum().clamp(min=1.0)
+            loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "dr_grpo":
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
+            loss = loss / self.current_gradient_accumulation_steps
+        elif self.loss_type == "dapo":
+            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+            loss = (per_token_loss * completion_mask).sum() / normalizer
         else:
             raise ValueError(f"Unknown loss type: {self.loss_type}")
 
@@ -2034,11 +1762,15 @@ class GRPOTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent(
             """\
-            @article{zhihong2024deepseekmath,
+            @article{shao2024deepseekmath,
                 title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
                 author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
                 year         = 2024,

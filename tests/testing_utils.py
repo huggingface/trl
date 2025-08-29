@@ -12,8 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import random
+import shutil
+import tempfile
 import unittest
+import warnings
 
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
@@ -124,3 +128,40 @@ class RandomPairwiseJudge(BasePairwiseJudge):
             return [random.randint(0, len(completion) - 1) for completion in completions]
         else:
             return [random.random() for _ in range(len(prompts))]
+
+
+class TrlTestCase(unittest.TestCase):
+    """
+    Base test case for TRL tests. Sets up a temporary directory for testing.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tmp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir)
+        super().tearDown()
+
+
+def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> callable:
+    """
+    Decorator to ignore warnings with a specific message and/or category.
+
+    Args:
+        message (`str`, *optional*, defaults to `None`):
+            Regex pattern for the warning message to ignore. If `None`, all messages are ignored.
+        category (`type[Warning]`, *optional*, defaults to `Warning`):
+            Warning class to ignore. Defaults to `Warning`, which ignores all warnings.
+    """
+
+    def decorator(test_func):
+        @functools.wraps(test_func)
+        def wrapper(*args, **kwargs):
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=message, category=category)
+                return test_func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator

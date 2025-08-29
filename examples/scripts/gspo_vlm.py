@@ -15,9 +15,12 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
+#     "torchvision",
+#     "trackio",
 # ]
 # ///
 
@@ -39,7 +42,6 @@ accelerate launch \
     --log_completions \
     --per_device_train_batch_size 8 \
     --num_generations 8 \
-    --bf16 True \
     --importance_sampling_level sequence \
     --epsilon 3e-4 \
     --epsilon_high 4e-4 \
@@ -49,6 +51,8 @@ accelerate launch \
     --steps_per_generation 8
 
 """
+
+import os
 
 import torch
 from datasets import load_dataset
@@ -66,6 +70,10 @@ from trl import (
     get_quantization_config,
 )
 from trl.rewards import think_format_reward
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

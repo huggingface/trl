@@ -85,7 +85,7 @@ Additionally, unlike standard text-based models where a `tokenizer` is used, for
 
 ```diff
 - model = AutoModelForCausalLM.from_pretrained(model_id)
-+ model = AutoModelForVision2Seq.from_pretrained(model_id)
++ model = AutoModelForImageTextToText.from_pretrained(model_id)
 
 - tokenizer = AutoTokenizer.from_pretrained(model_id)
 + processor = AutoProcessor.from_pretrained(model_id)
@@ -118,7 +118,7 @@ accelerate launch trl/scripts/dpo.py \
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following reward metrics:
 
 - `rewards/chosen`: the mean difference between the log probabilities of the policy model and the reference model for the chosen responses scaled by beta
 - `rewards/rejected`: the mean difference between the log probabilities of the policy model and the reference model for the rejected responses scaled by beta
@@ -192,7 +192,7 @@ To scale how much the auxiliary loss contributes to the total loss, use the hype
 
 You can further accelerate QLoRA / LoRA (2x faster, 60% less memory) using the [`unsloth`](https://github.com/unslothai/unsloth) library that is fully compatible with `SFTTrainer`. Currently `unsloth` supports only Llama (Yi, TinyLlama, Qwen, Deepseek etc) and Mistral architectures. Some benchmarks for DPO listed below:
 
-| GPU      | Model     | Dataset    | 🤗   | 🤗 + Flash Attention 2 | 🦥 Unsloth | 🦥 VRAM saved |
+| GPU      | Model     | Dataset    | 🤗   | 🤗 + FlashAttention 2 | 🦥 Unsloth | 🦥 VRAM saved |
 | -------- | --------- | ---------- | --- | --------------------- | --------- | ------------ |
 | A100 40G | Zephyr 7b | Ultra Chat | 1x  | 1.24x                 | **1.88x** | -11.6%       |
 | Tesla T4 | Zephyr 7b | Ultra Chat | 1x  | 1.09x                 | **1.55x** | -18.6%       |
@@ -258,7 +258,6 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.bfloat16,
     device_map="auto",
 )
-model.config.use_cache = False
 
 # Load the adapter.
 model = PeftModel.from_pretrained(

@@ -19,6 +19,8 @@
 - sections:
   - local: clis
     title: Command Line Interface (CLI)
+  - local: jobs_training
+    title: Training using Jobs
   - local: customization
     title: Customizing the Training
   - local: reducing_memory_usage
@@ -55,8 +57,6 @@
     title: Detoxifying a Language Model
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
-  - local: training_vlm_sft
-    title: Fine-tuning a Multimodal Model Using SFT (Single or Multi-Image Dataset)
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
