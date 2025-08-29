@@ -20,6 +20,7 @@
 #     "torchvision",
 #     "bitsandbytes",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 

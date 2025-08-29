@@ -19,6 +19,7 @@
 #     "Pillow>=9.4.0",
 #     "torchvision",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
