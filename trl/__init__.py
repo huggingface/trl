@@ -12,21 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 from pathlib import Path
-
-# Read version from VERSION file
-_version_file = Path(__file__).parent.parent / "VERSION"
-try:
-    with open(_version_file, "r", encoding="utf-8") as f:
-        __version__ = f.read().strip()
-except FileNotFoundError:
-    __version__ = "unknown"
-
 from typing import TYPE_CHECKING
 
 from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
 
+
+# Read version from VERSION file
+_version_file = Path(__file__).parent.parent / "VERSION"
+try:
+    with open(_version_file, encoding="utf-8") as f:
+        __version__ = f.read().strip()
+except FileNotFoundError:
+    __version__ = "unknown"
 
 _import_structure = {
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
