@@ -19,6 +19,7 @@
 # ]
 # ///
 
+import os
 import shutil
 
 import trackio
@@ -35,6 +36,10 @@ from trl import ModelConfig, RLOOConfig, RLOOTrainer, ScriptArguments
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 """
 python -i examples/scripts/rloo/rloo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
@@ -42,7 +47,7 @@ python -i examples/scripts/rloo/rloo.py \
     --learning_rate 3e-6 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-rloo \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
@@ -53,7 +58,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     examples/scripts/rloo/rloo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
-    --output_dir models/minimal/rloo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-rloo \
     --rloo_k 2 \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \

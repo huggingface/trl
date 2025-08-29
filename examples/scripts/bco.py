@@ -16,7 +16,6 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
-#     "diffusers>=0.18.0",
 #     "einops",
 #     "scikit-learn",
 #     "joblib",
@@ -76,6 +75,7 @@ python examples/scripts/bco.py \
     --lora_alpha 16
 """
 
+import os
 from functools import partial
 
 import torch
@@ -86,6 +86,10 @@ from datasets import load_dataset
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer, HfArgumentParser, PreTrainedModel
 
 from trl import BCOConfig, BCOTrainer, ModelConfig, ScriptArguments, get_peft_config
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def embed_prompt(input_ids: torch.LongTensor, attention_mask: torch.LongTensor, model: PreTrainedModel):

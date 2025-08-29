@@ -52,6 +52,8 @@ accelerate launch \
 
 """
 
+import os
+
 import torch
 import trackio
 from datasets import load_dataset
@@ -70,6 +72,9 @@ from trl import (
 )
 from trl.rewards import think_format_reward
 
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, GRPOConfig, ModelConfig))

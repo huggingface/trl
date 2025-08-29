@@ -57,11 +57,16 @@ python trl/scripts/kto.py \
     --lora_alpha 16
 """
 
-import trackio
+import os
+
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, HfArgumentParser
 
 from trl import KTOConfig, KTOTrainer, ModelConfig, ScriptArguments, get_peft_config
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

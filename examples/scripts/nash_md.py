@@ -53,6 +53,8 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero2.yaml
     --push_to_hub
 """
 
+import os
+
 import torch
 import trackio
 from datasets import load_dataset
@@ -72,6 +74,10 @@ from trl import (
     get_quantization_config,
 )
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 JUDGES = {"pair_rm": PairRMJudge, "openai": OpenAIPairwiseJudge, "hf": HfPairwiseJudge}

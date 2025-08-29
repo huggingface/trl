@@ -51,7 +51,8 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
-import trackio
+import os
+
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -66,6 +67,10 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

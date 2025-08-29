@@ -58,13 +58,16 @@ from typing import Any
 
 import requests
 import torch
-import trackio
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def download_video(url: str, cache_dir: str) -> str:
@@ -229,12 +232,6 @@ if __name__ == "__main__":
     # Prepare dataset
     prepared_dataset = [prepare_dataset(example, script_args.video_cache_dir) for example in dataset]
 
-    # Initialize trackio if specified
-    if "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
-
     # Initialize trainer
     trainer = SFTTrainer(
         model=model,
@@ -259,4 +256,3 @@ if __name__ == "__main__":
     del model
     del trainer
     torch.cuda.empty_cache()
-    trackio.finish()

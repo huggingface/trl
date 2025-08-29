@@ -30,10 +30,11 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python examples/scripts/alignprop.py \
     --num_epochs 20 \
     --train_gradient_accumulation_steps 4 \
     --sample_num_steps 50 \
-    --train_batch_size 8 \
+    --train_batch_size 8
 
 """
 
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -42,6 +43,10 @@ from transformers import HfArgumentParser
 
 from trl import AlignPropConfig, AlignPropTrainer, DefaultDDPOStableDiffusionPipeline
 from trl.models.auxiliary_modules import aesthetic_scorer
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 @dataclass
@@ -147,12 +152,6 @@ if __name__ == "__main__":
         pretrained_model_revision=script_args.pretrained_revision,
         use_lora=script_args.use_lora,
     )
-
-    # Initialize trackio if specified
-    if "trackio" in (
-        training_args.report_to if isinstance(training_args.report_to, (list, tuple)) else [training_args.report_to]
-    ):
-        trackio.init(project=training_args.output_dir, space_id=training_args.output_dir + "-trackio")
 
     trainer = AlignPropTrainer(
         training_args,

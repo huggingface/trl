@@ -40,6 +40,8 @@ python examples/scripts/mpo_vlm.py \
     --loss_weights 0.8 0.2 1.0
 """
 
+import os
+
 import torch
 import trackio
 from datasets import load_dataset
@@ -56,6 +58,10 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

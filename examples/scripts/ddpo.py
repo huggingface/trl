@@ -39,13 +39,16 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import torch
-import torch.nn as nn
-import trackio
 from huggingface_hub import hf_hub_download
 from huggingface_hub.utils import EntryNotFoundError
+from torch import nn
 from transformers import CLIPModel, CLIPProcessor, HfArgumentParser, is_torch_npu_available, is_torch_xpu_available
 
 from trl import DDPOConfig, DDPOTrainer, DefaultDDPOStableDiffusionPipeline
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 @dataclass

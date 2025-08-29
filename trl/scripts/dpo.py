@@ -62,6 +62,7 @@ python trl/scripts/dpo.py \
 """
 
 import argparse
+import os
 
 import torch
 import trackio
@@ -85,6 +86,9 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 logger = logging.get_logger(__name__)
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):

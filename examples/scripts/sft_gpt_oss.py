@@ -48,11 +48,16 @@ accelerate launch \
     --seed 42
 """
 
-import trackio
+import os
+
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args):

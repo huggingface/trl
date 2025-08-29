@@ -20,6 +20,7 @@
 # ]
 # ///
 
+import os
 import shutil
 
 import torch
@@ -45,12 +46,16 @@ from trl import (
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 """
 python -i examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
     --learning_rate 3e-6 \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
     --per_device_train_batch_size 64 \
     --gradient_accumulation_steps 1 \
     --total_episodes 10000 \
@@ -61,7 +66,7 @@ accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml
     examples/scripts/ppo/ppo.py \
     --dataset_name trl-internal-testing/descriptiveness-sentiment-trl-style \
     --dataset_train_split descriptiveness \
-    --output_dir models/minimal/ppo \
+    --output_dir pythia-1b-deduped-descriptiveness-sentiment-trl-style-ppo \
     --num_ppo_epochs 1 \
     --num_mini_batches 1 \
     --learning_rate 3e-6 \

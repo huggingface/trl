@@ -1527,6 +1527,9 @@ class BCOTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
         # docstyle-ignore

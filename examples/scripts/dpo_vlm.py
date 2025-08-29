@@ -58,6 +58,8 @@ accelerate launch examples/scripts/dpo_vlm.py \
 ```
 """
 
+import os
+
 import torch
 import trackio
 from datasets import load_dataset
@@ -74,6 +76,9 @@ from trl import (
     get_quantization_config,
 )
 
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))

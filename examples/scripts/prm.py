@@ -48,6 +48,8 @@ python examples/scripts/prm.py \
     --lora_alpha 16
 """
 
+import os
+
 import torch
 import trackio
 from accelerate import logging
@@ -66,6 +68,11 @@ from trl import (
 
 
 logger = logging.get_logger(__name__)
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))

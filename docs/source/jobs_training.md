@@ -8,9 +8,16 @@ In this guide, you’ll learn how to:
 - Configure hardware, timeouts, environment variables, and secrets.
 - Monitor and manage jobs from the CLI or Python.
 
+<Tip>
+
+When a model is trained using **TRL + Jobs**, a tag is automatically added to the model card.  
+You can explore models trained with this method [Hugging Face model hub](https://huggingface.co/models?other=hf_jobs).
+
+</Tip>
+
 ## Requirements
 
-- [Pro, Team, or Enterprise plan](https://huggingface.co/pricing).
+- [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan.
 - Logged into the Hugging Face Hub (`hf auth login`).
 
 ## Preparing your Script
@@ -21,19 +28,19 @@ You can launch Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs
 <hfoption id="bash">
 
 ```bash
-hf jobs uv run --flavor a10g-small "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" --model_name_or_path Qwen/Qwen3-0.6B --dataset_name trl-lib/Capybara --push_to_hub
+hf jobs uv run --flavor a100-large --secrets HF_TOKEN "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
 ```
 
 The script can also be a local file:
 
 ```bash
-hf jobs uv run --flavor a10g-small sft.py
+hf jobs uv run --flavor a100-large --secrets HF_TOKEN trl/scripts/sft.py --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
 ```
 
 Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you can also specify it:
 
 ```bash
-hf jobs uv run --flavor a10g-small --image pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel sft.py
+hf jobs uv run --flavor a100-large --secrets HF_TOKEN --image <docker-image> trl/scripts/sft.py --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
 ```
 
 </hfoption>
@@ -43,7 +50,12 @@ hf jobs uv run --flavor a10g-small --image pytorch/pytorch:2.6.0-cuda12.4-cudnn9
 from huggingface_hub import run_uv_job
 run_uv_job(
     "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py",
-    flavor="a10g-small"
+    token="hf...",
+    flavor="a100-large",
+    script_args=[
+        "--model_name_or_path", "Qwen/Qwen2-0.5B",
+        "--dataset_name", "trl-lib/Capybara",
+    ]
 )
 ```
 
@@ -52,8 +64,13 @@ The script can also be a local file:
 ```python
 from huggingface_hub import run_uv_job
 run_uv_job(
-    "sft.py",
-    flavor="a10g-small"
+    "trl/scripts/sft.py",
+    token="hf...",
+    flavor="a100-large",
+    script_args=[
+        "--model_name_or_path", "Qwen/Qwen2-0.5B",
+        "--dataset_name", "trl-lib/Capybara",
+    ]
 )
 ```
 
@@ -63,11 +80,15 @@ Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you c
 from huggingface_hub import run_uv_job
 run_uv_job(
     "sft.py",
-    flavor="a10g-small",
-    image="pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel"
+    token="hf...",
+    flavor="a100-large",
+    image="<docker-image>",
+    script_args=[
+        "--model_name_or_path", "Qwen/Qwen2-0.5B",
+        "--dataset_name", "trl-lib/Capybara",
+    ]
 )
 ```
-
 
 </hfoption>
 </hfoptions>
@@ -80,7 +101,7 @@ You can also run jobs without UV:
 In this case, we give the cli the Docker image and run it as:
 
 ```bash
-hf jobs run --flavor a10g-small pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel python -c "import torch; print(torch.cuda.get_device_name())"
+hf jobs run --flavor a100-large pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel python -c "import torch; print(torch.cuda.get_device_name())"
 ```
 
 </hfoption>
@@ -91,17 +112,16 @@ from huggingface_hub import run_job
 run_job(
     image="pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel",
     command=["python", "-c", "import torch; print(torch.cuda.get_device_name())"],
-    flavor="a10g-small",
+    flavor="a100-large",
 )
 ```
 
 </hfoption>
 </hfoptions>
 
-
 ### Adding Dependencies with UV
 
-All example scripts in TRL are compatible with `uv`, allowing seamless execution with Jobs. You can check the full list of examples [here](example_overview#maintained-examples).  
+All example scripts in TRL are compatible with `uv`, allowing seamless execution with Jobs. You can check the full list of examples in [Maintained examples](example_overview#maintained-examples).  
 
 Dependencies are specified at the top of the script using this structure:
 
@@ -125,10 +145,13 @@ Using the `--with` flag.
 
 ```bash
 hf jobs uv run \
-    --flavor a10g-small \
+    --flavor a100-large \
+    --secrets HF_TOKEN \
     --with transformers \
     --with torch \
-    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" 
+    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" \
+    --model_name_or_path Qwen/Qwen2-0.5B  \
+    --dataset_name trl-lib/Capybara
 ```
 
 </hfoption>
@@ -141,6 +164,12 @@ from huggingface_hub import run_uv_job
 run_uv_job(
     "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py",
     dependencies=["transformers", "torch"]
+    token="hf...",
+    flavor="a100-large",
+    script_args=[
+        "--model_name_or_path", "Qwen/Qwen2-0.5B",
+        "--dataset_name", "trl-lib/Capybara",
+    ]
 )
 ```
 
@@ -153,9 +182,9 @@ Jobs allow you to select a specific hardware configuration using the `--flavor` 
 
 **CPU:** `cpu-basic`, `cpu-upgrade`  
 **GPU:** `t4-small`, `t4-medium`, `l4x1`, `l4x4`, `a10g-small`, `a10g-large`, `a10g-largex2`, `a10g-largex4`, `a100-large`  
-**TPU:** `v5e-1x1`, `v5e-2x2`, `v5e-2x4`
+**TPU:** `v5e-1x1`, `v5e-2x2`, `v5e-2x4`  
 
-You can always check the latest list of supported hardware flavors [here](https://huggingface.co/docs/hub/en/spaces-config-reference).
+You can always check the latest list of supported hardware flavors in [Spaces config reference](https://huggingface.co/docs/hub/en/spaces-config-reference).
 
 By default, jobs have a **30-minute timeout**, after which they will automatically stop. For long-running tasks like training, you can increase the timeout as needed. Supported time units are:
 
@@ -174,8 +203,13 @@ Using the `--timeout` flag:
 ```bash
 hf jobs uv run \
     --timeout 2h \
-    --flavor a10g-small \
-    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" 
+    --flavor a100-large \
+    --secrets HF_TOKEN \
+    --with transformers \
+    --with torch \
+    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" \
+    --model_name_or_path Qwen/Qwen2-0.5B  \
+    --dataset_name trl-lib/Capybara
 ```
 
 </hfoption>
@@ -187,7 +221,13 @@ Using the `timeout` argument:
 from huggingface_hub import run_uv_job
 run_uv_job(
     "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py",
-    timeout="2h"
+    timeout="2h",
+    token="hf...",
+    flavor="a100-large",
+    script_args=[
+        "--model_name_or_path", "Qwen/Qwen2-0.5B",
+        "--dataset_name", "trl-lib/Capybara",
+    ]
 )
 ```
 
@@ -196,7 +236,7 @@ run_uv_job(
 
 ### Environment Variables, Secrets, and Token
 
-You can pass environment variables, secrets, and your auth token to your jobs.
+You can pass environment variables, secrets, and your auth token to your jobs. 
 
 <hfoptions id="script_type">
 <hfoption id="bash">
@@ -209,7 +249,7 @@ hf jobs uv run \
     --flavor a100-large \
     --env FOO=foo \
     --env BAR=bar \
-    --secrets HF_TOKEN \
+    --secrets HF_TOKEN=HF_TOKEN \
     --secrets MY_SECRET=password \
     --token hf...
 ```
@@ -254,7 +294,6 @@ hf jobs uv run \
     --packing \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 8 \
-    --gradient_checkpointing \
     --eos_token '<|im_end|>' \
     --eval_strategy steps \
     --eval_steps 100 \
@@ -281,7 +320,6 @@ run_uv_job(
         "--packing",
         "--per_device_train_batch_size", "2",
         "--gradient_accumulation_steps", "8",
-        "--gradient_checkpointing",
         "--eos_token", "<|im_end|>",
         "--eval_strategy", "steps",
         "--eval_steps", "100",

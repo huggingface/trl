@@ -75,6 +75,10 @@ from trl import (
 )
 
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 # For multi-image example
 def process_vision_info(messages: list[dict]) -> list[Image.Image]:
     image_inputs = []

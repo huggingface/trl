@@ -46,6 +46,10 @@ from trl.rewards import get_soft_overlong_punishment, think_format_reward
 
 logger = logging.get_logger(__name__)
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 reward_funcs_registry = {
     "think_format_reward": think_format_reward,
     "get_soft_overlong_punishment": get_soft_overlong_punishment,
