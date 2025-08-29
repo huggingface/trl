@@ -254,6 +254,7 @@ If the recommended value does not work in your environment, we suggest adding a 
 <Tip>
 
 If you still find you are getting out-of-memory errors set `vllm_sleep_enabled` to True and the vllm parameters and cache will be offloaded during the optimization step. For more information, see [Reducing Memory Usage with vLLM Sleep Mode](reducing-memory-usage#vllm-sleep-mode).
+
 </Tip>
 
 </Tip>
