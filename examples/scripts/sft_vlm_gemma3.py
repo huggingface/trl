@@ -48,7 +48,7 @@ accelerate launch \
     --output_dir Gemma-3-4B-SFT-MMIU \
     --torch_dtype bfloat16 \
     --use_peft \
-    --lora_target_modules all-linear
+    --lora_target_modules all-linear \
     --attn_implementation eager
 """
 
