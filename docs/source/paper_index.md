@@ -38,13 +38,7 @@ $$
 \pi_\theta (o_i \mid q) = \prod_{t=1}^{|o_i|} \pi_\theta  (o_{i,t} | q, o_{i, \lt t} ),
 $$
 
-where:
-
-- \\( \pi_\theta \\) is the policy  \\( \pi \\) with parameters  \\(\theta\\),
-- \\( o_i \\) is the  \\( i \\)-th output sequence  \\( o \\) and \\(y_{i,t}\\) is the  \\( t \\)-th token in this sequence,
-- \\( q \\) is the input query,
-
-The sequence likelihood ratio  \\( s_i (\theta) \\) is defined as:
+where  \\( \pi_\theta \\) is the policy  \\( \pi \\) with parameters  \\(\theta\\),  \\( o_i \\) is the  \\( i \\)-th output sequence  \\( o \\) and  \\(y_{i,t}\\) is the  \\( t \\)-th token in this sequence,  \\( q \\) is the input query. The sequence likelihood ratio  \\( s_i (\theta) \\) is defined as:
 
 $$
 s_i (\theta) = \left(\frac{\pi_\theta (o_i | q)}{\pi_{\theta_{old}} (o_i | q)} \right)^{\frac{1}{|o_i|}}
