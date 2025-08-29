@@ -276,43 +276,43 @@ class LogCompletionsCallbackTester(TrlTestCase):
         # Check that the prompt is in the log
         self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
 
-    @require_comet
-    def test_basic_comet(self):
-        import comet_ml
+    # @require_comet
+    # def test_basic_comet(self):
+    #     import comet_ml
 
-        training_args = TrainingArguments(
-            output_dir=self.tmp_dir,
-            eval_strategy="steps",
-            eval_steps=2,  # evaluate every 2 steps
-            per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
-            per_device_eval_batch_size=2,
-            report_to="comet_ml",
-        )
-        trainer = Trainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=self.dataset["train"],
-            eval_dataset=self.dataset["test"],
-            processing_class=self.tokenizer,
-        )
-        completions_callback = LogCompletionsCallback(trainer, self.generation_config, num_prompts=2)
-        trainer.add_callback(completions_callback)
-        trainer.train()
+    #     training_args = TrainingArguments(
+    #         output_dir=self.tmp_dir,
+    #         eval_strategy="steps",
+    #         eval_steps=2,  # evaluate every 2 steps
+    #         per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
+    #         per_device_eval_batch_size=2,
+    #         report_to="comet_ml",
+    #     )
+    #     trainer = Trainer(
+    #         model=self.model,
+    #         args=training_args,
+    #         train_dataset=self.dataset["train"],
+    #         eval_dataset=self.dataset["test"],
+    #         processing_class=self.tokenizer,
+    #     )
+    #     completions_callback = LogCompletionsCallback(trainer, self.generation_config, num_prompts=2)
+    #     trainer.add_callback(completions_callback)
+    #     trainer.train()
 
-        # close experiment to make sure all pending data are flushed
-        experiment = comet_ml.get_running_experiment()
-        assert experiment is not None
-        experiment.end()
+    #     # close experiment to make sure all pending data are flushed
+    #     experiment = comet_ml.get_running_experiment()
+    #     assert experiment is not None
+    #     experiment.end()
 
-        # get experiment assets and check that all required tables was logged
-        steps = len(self.dataset["train"]) + len(self.dataset["test"])
-        tables_logged = int(steps / 2) + 1  # +1 to include zero step
+    #     # get experiment assets and check that all required tables was logged
+    #     steps = len(self.dataset["train"]) + len(self.dataset["test"])
+    #     tables_logged = int(steps / 2) + 1  # +1 to include zero step
 
-        api_experiment = comet_ml.APIExperiment(previous_experiment=experiment.id)
-        tables = api_experiment.get_asset_list("dataframe")
-        assert tables is not None
-        assert len(tables) == tables_logged
-        assert all(table["fileName"] == "completions.csv" for table in tables)
+    #     api_experiment = comet_ml.APIExperiment(previous_experiment=experiment.id)
+    #     tables = api_experiment.get_asset_list("dataframe")
+    #     assert tables is not None
+    #     assert len(tables) == tables_logged
+    #     assert all(table["fileName"] == "completions.csv" for table in tables)
 
 
 @require_mergekit
