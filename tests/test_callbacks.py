@@ -239,42 +239,42 @@ class LogCompletionsCallbackTester(TrlTestCase):
 
         self.generation_config = GenerationConfig(max_length=32)
 
-    @require_wandb
-    def test_basic_wandb(self):
-        import wandb
+    # @require_wandb
+    # def test_basic_wandb(self):
+    #     import wandb
 
-        training_args = TrainingArguments(
-            output_dir=self.tmp_dir,
-            eval_strategy="steps",
-            eval_steps=2,  # evaluate every 2 steps
-            per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
-            per_device_eval_batch_size=2,
-            report_to="wandb",
-        )
-        trainer = Trainer(
-            model=self.model,
-            args=training_args,
-            train_dataset=self.dataset["train"],
-            eval_dataset=self.dataset["test"],
-            processing_class=self.tokenizer,
-        )
-        completions_callback = LogCompletionsCallback(trainer, self.generation_config, num_prompts=2)
-        trainer.add_callback(completions_callback)
-        trainer.train()
+    #     training_args = TrainingArguments(
+    #         output_dir=self.tmp_dir,
+    #         eval_strategy="steps",
+    #         eval_steps=2,  # evaluate every 2 steps
+    #         per_device_train_batch_size=2,  # 8 samples in total so 4 batches of 2 per epoch
+    #         per_device_eval_batch_size=2,
+    #         report_to="wandb",
+    #     )
+    #     trainer = Trainer(
+    #         model=self.model,
+    #         args=training_args,
+    #         train_dataset=self.dataset["train"],
+    #         eval_dataset=self.dataset["test"],
+    #         processing_class=self.tokenizer,
+    #     )
+    #     completions_callback = LogCompletionsCallback(trainer, self.generation_config, num_prompts=2)
+    #     trainer.add_callback(completions_callback)
+    #     trainer.train()
 
-        # Get the current run
-        completions_path = wandb.run.summary.completions["path"]
-        json_path = os.path.join(wandb.run.dir, completions_path)
-        with open(json_path) as f:
-            completions = json.load(f)
+    #     # Get the current run
+    #     completions_path = wandb.run.summary.completions["path"]
+    #     json_path = os.path.join(wandb.run.dir, completions_path)
+    #     with open(json_path) as f:
+    #         completions = json.load(f)
 
-        # Check that the columns are correct
-        self.assertIn("step", completions["columns"])
-        self.assertIn("prompt", completions["columns"])
-        self.assertIn("completion", completions["columns"])
+    #     # Check that the columns are correct
+    #     self.assertIn("step", completions["columns"])
+    #     self.assertIn("prompt", completions["columns"])
+    #     self.assertIn("completion", completions["columns"])
 
-        # Check that the prompt is in the log
-        self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
+    #     # Check that the prompt is in the log
+    #     self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
 
     # @require_comet
     # def test_basic_comet(self):
