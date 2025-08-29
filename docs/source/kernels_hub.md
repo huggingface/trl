@@ -37,6 +37,12 @@ Or when running a TRL training script:
 python sft.py ... --attn_implementation kernels-community/flash-attn
 ```
 
+Or using the TRL CLI:
+
+```bash
+trl sft ... --attn_implementation kernels-community/flash-attn
+```
+
 <Tip>
 
 This replaces your attention pipeline with a pre-optimized kernel from the Hub, speeding up both development and training.
