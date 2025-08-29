@@ -25,8 +25,9 @@ class TestGeometricMixtureWrapper(TrlTestCase):
     def setUp(self):
         super().setUp()
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
-        self.model = AutoModelForCausalLM.from_pretrained(model_id)
-        self.ref_model = create_reference_model(self.model)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = AutoModelForCausalLM.from_pretrained(model_id).to(self.device)
+        self.ref_model = create_reference_model(self.model).to(self.device)
         self.generation_config = GenerationConfig.from_pretrained(model_id)
         self.mixture_coef = 0.5
         self.wrapper = GeometricMixtureWrapper(
@@ -34,7 +35,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
         )
 
     def test_forward(self):
-        input_ids = torch.tensor([[1, 2, 3, 4, 5]])
+        input_ids = torch.tensor([[1, 2, 3, 4, 5]], device=self.device)
         attention_mask = torch.ones_like(input_ids)
 
         output = self.wrapper(input_ids=input_ids, attention_mask=attention_mask)
@@ -44,7 +45,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
         self.assertEqual(output.logits.shape, (1, 5, self.model.config.vocab_size))
 
     def test_mixture_coefficient(self):
-        input_ids = torch.tensor([[1, 2, 3, 4, 5]])
+        input_ids = torch.tensor([[1, 2, 3, 4, 5]], device=self.device)
         attention_mask = torch.ones_like(input_ids)
 
         with torch.no_grad():
@@ -59,7 +60,7 @@ class TestGeometricMixtureWrapper(TrlTestCase):
         self.assertTrue(torch.allclose(wrapper_output.logits, expected_logits, atol=1e-5))
 
     def test_prepare_inputs_for_generation(self):
-        input_ids = torch.tensor([[1, 2, 3, 4, 5]])
+        input_ids = torch.tensor([[1, 2, 3, 4, 5]], device=self.device)
         attention_mask = torch.ones_like(input_ids)
 
         inputs = self.wrapper.prepare_inputs_for_generation(input_ids, attention_mask=attention_mask, use_cache=True)
