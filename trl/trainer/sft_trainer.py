@@ -1010,9 +1010,67 @@ class SFTTrainer(Trainer):
                 # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
+
+                def get_trainable_tokens_for_language_modeling(dataset):
+                    return sum(len(row["input_ids"]) for row in dataset)
+
+                def get_trainable_tokens_for_conv_language_modeling(dataset):
+                    return sum(sum(row["assistant_masks"]) for row in dataset)
+
+                def get_trainable_tokens_for_non_conv_completions(dataset):
+                    return sum(sum(row["completion_mask"]) for row in dataset)
+
+                def get_trainable_tokens_for_conv_completions(dataset):
+                    total_trainable_tokens = 0
+                    for row in dataset:
+                        final_mask = [c_m and a_m for c_m, a_m in zip(row["completion_mask"], row["assistant_masks"])]
+                        total_trainable_tokens += sum(final_mask)
+                    return total_trainable_tokens
+
+                first_row = dataset[0] if isinstance(dataset, Dataset) else next(iter(dataset))
+                # Conversational Prompt Completions Dataset
+                if args.assistant_only_loss and "completion_mask" in first_row:
+                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_conv_completions(dataset)
+                # Prompt Completions/Instruction Tuning Dataset
+                elif "completion_mask" in first_row:
+                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_non_conv_completions(dataset)
+                # Conversational Language Modeling
+                elif args.assistant_only_loss:
+                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_conv_language_modeling(dataset)
+                # Language Modeling
+                else:
+                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_language_modeling(dataset)
+
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+
+                if args.assistant_only_loss and "completion_mask" in first_row:
+                    dataset = dataset.filter(lambda row: 1 in row["assistant_masks"] and 1 in row["completion_mask"])
+                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_conv_completions(dataset)
+                elif "completion_mask" in first_row:
+                    dataset = dataset.filter(lambda row: 1 in row["completion_mask"])
+                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_non_conv_completions(dataset)
+                elif "assistant_masks" in first_row:
+                    dataset = dataset.filter(lambda row: 1 in row["assistant_masks"])
+                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_conv_language_modeling(dataset)
+                else:
+                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_language_modeling(dataset)
+
+                if total_trainable_tokens_after_truncation == 0:
+                    raise RuntimeError(
+                        "After truncation, the dataset has no trainable  tokens. This usually means that "
+                        "the max length is too short."
+                    )
+
+                percentage_of_retained_assistant_tokens = (
+                    total_trainable_tokens_after_truncation / total_trainable_tokens_before_truncation
+                ) * 100
+                logger.info(
+                    f"Total number of trainable assistant tokens after truncation: {total_trainable_tokens_after_truncation}. "
+                    f"Percentage of retained assistant tokens after truncating dataset: {percentage_of_retained_assistant_tokens:.2f}%"
+                )
+
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
