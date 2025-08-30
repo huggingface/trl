@@ -360,7 +360,6 @@ hf jobs cancel job_id
 </hfoption>
 <hfoption id="python">
 
-
 ```python
 from huggingface_hub import list_jobs, inspect_job, fetch_job_logs, cancel_job
 
