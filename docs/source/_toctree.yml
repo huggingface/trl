@@ -39,6 +39,8 @@
     title: Liger Kernel
   - local: peft_integration
     title: PEFT
+  - local: trackio_integration
+    title: Trackio
   - local: unsloth_integration
     title: Unsloth
   - local: vllm_integration

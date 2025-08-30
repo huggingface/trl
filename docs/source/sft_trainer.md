@@ -13,7 +13,7 @@ This post-training method was contributed by [Younes Belkada](https://huggingfac
 This example demonstrates how to train a language model using the [`SFTTrainer`] from TRL. We train a [Qwen 3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model on the [Capybara dataset](https://huggingface.co/datasets/trl-lib/Capybara), a compact, diverse multi-turn dataset to benchmark reasoning and generalization.
 
 ```python
-from trl import SFTConfig, SFTTrainer
+from trl import SFTTrainer
 from datasets import load_dataset
 
 trainer = SFTTrainer(
