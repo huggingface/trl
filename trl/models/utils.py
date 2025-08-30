@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import dataclasses
 import itertools
 import warnings
 from contextlib import contextmanager
@@ -542,7 +541,7 @@ def prepare_peft_model(
             gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
         )
         # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
-        args = dataclasses.replace(args, gradient_checkpointing=False)
+        args.gradient_checkpointing = False
     elif args.gradient_checkpointing:
         model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
 
