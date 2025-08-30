@@ -51,7 +51,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 reward_funcs_registry = {
     "think_format_reward": think_format_reward,
-    "get_soft_overlong_punishment": get_soft_overlong_punishment,
+    "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
 }
 
 
@@ -65,8 +65,11 @@ class GRPOScriptArguments(ScriptArguments):
             Reward model id of a pretrained model hosted inside a model repo on huggingface.co or local path to a
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
         reward_funcs (`list[str]` or `None`, *optional*, defaults to `None`):
-            Reward functions to use. It can be either one of `"think_format_reward"`; or a dotted import path " (e.g.,
-            `'my_lib.rewards.custom_reward'`).
+            Reward functions to use. Supported values are:
+
+                - `"think_format_reward"`
+                - `"get_soft_overlong_punishment"` (used value are `max_completion_len=1280`, `soft_punish_cache=256`)
+                - any dotted import path " (e.g., `'my_lib.rewards.custom_reward'`).
     """
 
     reward_model_name_or_path: Optional[str] = field(
@@ -79,8 +82,9 @@ class GRPOScriptArguments(ScriptArguments):
     reward_funcs: Optional[list[str]] = field(
         default=None,
         metadata={
-            "help": "Reward functions to use. It can be either one of  'think_format_reward'; or a dotted "
-            "import path. (e.g., 'my_lib.rewards.custom_reward')."
+            "help": "Reward functions to use. Supported values are: `think_format_reward`, "
+            "`get_soft_overlong_punishment` (used value are `max_completion_len=1280`, `soft_punish_cache=256`), or "
+            "any dotted import path (e.g., `'my_lib.rewards.custom_reward'`)."
         },
     )
 
