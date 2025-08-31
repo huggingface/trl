@@ -600,6 +600,52 @@ class GRPOTrainer(Trainer):
                         reward_func, evaluation_mode=True, device_placement=True
                     )
 
+    @property
+    def current_gradient_accumulation_steps(self) -> int:
+        """
+        Effective number of micro-steps accumulated before an optimizer step *for this pass*.
+        We disable Trainer's built-in scaling, so we must scale the loss manually. This accessor:
+          • DeepSpeed ZeRO-2/3: queries the engine (handles dynamic GAS).
+          • DDP/FSDP/native: uses Accelerate's (state) value.
+          • Eval: returns 1 to avoid scaling evaluation loss.
+          • Fallback: args.gradient_accumulation_steps.
+        """
+        # Never scale in eval.
+        if not self.model.training:
+            return 1
+
+        # Prefer DeepSpeed's notion when enabled (covers ZeRO-2/3 and dynamic schedules).
+        if self.is_deepspeed_enabled:
+            try:
+                plugin = getattr(self.accelerator.state, "deepspeed_plugin", None)
+                engine = getattr(plugin, "deepspeed_engine", None)
+                if engine is not None and hasattr(engine, "gradient_accumulation_steps"):
+                    gas = int(engine.gradient_accumulation_steps())
+                    if gas > 0:
+                        return gas
+            except Exception:
+                pass  # fall through to Accelerate/args
+
+        # Fall back to Accelerate's view (DDP/FSDP/native).
+        gas = getattr(self.accelerator, "gradient_accumulation_steps", None)
+        if gas is None:
+            gas = getattr(self.accelerator.state, "gradient_accumulation_steps", None)
+
+        # If a scheduler is active, prefer its current value.
+        try:
+            sched = getattr(self.accelerator.state, "gradient_accumulation_scheduler", None)
+            if sched is not None:
+                if hasattr(sched, "current_value"):
+                    gas = int(sched.current_value)
+                elif hasattr(sched, "get_accumulation_steps"):
+                    gas = int(sched.get_accumulation_steps(self.state.global_step))
+                elif callable(sched):
+                    gas = int(sched(self.state.global_step))
+        except Exception:
+            pass
+
+        return int(gas) if gas is not None and int(gas) > 0 else int(getattr(self.args, "gradient_accumulation_steps", 1))
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs.
