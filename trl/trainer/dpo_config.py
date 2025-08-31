@@ -163,6 +163,13 @@ class DPOConfig(TrainingArguments):
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
+        dpop_penalty_coef (`float`, *optional*, defaults to `0.0`):
+            The hyperparameter from the DPOP paper (https://arxiv.org/pdf/2402.13228)
+            to address the reduction of the model's likelihood of chosen example in using DPO loss.
+            It controls the weighting of the penalty term max(0, log(ref_chosen_prob/policy_chosen_prob))
+            in the log-sigmoid to maintain likelihood of the chosen example.
+            A high value of this parameter penalizes more on the reward reduction of chosen example.
+            If `0.0`, no penalty is applied.
         loss_weights (`list[float]` or `None`, *optional*, defaults to `None`):
             List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
             0.2, 1.0]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults to equal weights
@@ -407,6 +414,17 @@ class DPOConfig(TrainingArguments):
         metadata={
             "help": "τ/temperature parameter from the DiscoPOP paper, which controls the shape of log ratio modulated "
             "loss. The paper recommends the default value `discopop_tau=0.05`."
+        },
+    )
+    dpop_penalty_coef: Optional[float] = field(
+        default=0.0,
+        metadata={
+            "help": "the hyperparameter from the DPOP paper (https://arxiv.org/pdf/2402.13228) "
+            "to address the reduction of the model's likelihood of chosen example in using DPO loss. "
+            "It controls the weighting of the penalty term max(0, log(ref_chosen_prob/policy_chosen_prob)) "
+            "in the log-sigmoid to maintain likelihood of the chosen example. "
+            "A high value of this parameter penalizes more on the reward reduction of chosen example. "
+            "If `0.0`, no penalty is applied"
         },
     )
     loss_weights: Optional[list[float]] = field(
