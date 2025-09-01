@@ -360,10 +360,6 @@ class GRPOTrainer(Trainer):
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.num_remains_in_group=  args.num_remains_in_group
-        if isinstance(self.num_remains_in_group, int) and self.num_remains_in_group <2:
-            raise ValueError(
-                    f"Number remains in Group {args.num_remains_in_group} should be >= 2"
-                )
         self.group_filter_func = args.group_filter_func
         if self.group_filter_func is None and self.num_remains_in_group is not None:
             raise ValueError(
