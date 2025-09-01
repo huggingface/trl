@@ -702,5 +702,9 @@ class GRPOConfig(TrainingArguments):
 
         if self.num_remains_in_group is not None and self.num_remains_in_group < 2:
             raise ValueError(
-                    f"Number remains in Group {args.num_remains_in_group} should be >= 2"
+                    f"Number remains in Group {args.num_remains_in_group} must be greater than 2."
+                )
+        if self.num_remains_in_group is not None and self.num_remains_in_group >= self.num_generations:
+            raise ValueError(
+                    f"Number remains in Group {args.num_remains_in_group} must be less than num_generations : {self.num_generations}."
                 )
