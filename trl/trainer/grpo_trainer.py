@@ -416,6 +416,10 @@ class GRPOTrainer(Trainer):
             compute_loss_func="non-None value to disable scaling",
         )
 
+        # Backing field used when HF Trainer (>=4.54) assigns to `self.current_gradient_accumulation_steps`;
+        # when not assigned (older versions), our getter computes a backend-aware fallback.
+        self._gas_override = None
+
         # Reference model
         self.beta = args.beta
         if self.beta == 0.0:
@@ -604,12 +608,23 @@ class GRPOTrainer(Trainer):
     def current_gradient_accumulation_steps(self) -> int:
         """
         Effective number of micro-steps accumulated before an optimizer step *for this pass*.
-        We disable Trainer's built-in scaling, so we must scale the loss manually. This accessor:
-          • DeepSpeed ZeRO-2/3: queries the engine (handles dynamic GAS).
-          • DDP/FSDP/native: uses Accelerate's (state) value.
-          • Eval: returns 1 to avoid scaling evaluation loss.
-          • Fallback: args.gradient_accumulation_steps.
+
+        Compatibility strategy:
+          • On Transformers >= 4.54, the base Trainer assigns to this attribute each update; our setter captures it.
+            If we have a captured value, we return it directly.
+          • On older versions (no assignment), we compute a backend-aware fallback:
+              - DeepSpeed ZeRO-2/3: query engine.gradient_accumulation_steps() (handles dynamic GAS)
+              - DDP/FSDP/native: use Accelerate's state/scheduler
+              - Eval: return 1
+              - Fallback: args.gradient_accumulation_steps or 1
         """
+        # If HF Trainer (>=4.54) assigned a value this step, prefer it.
+        if getattr(self, "_gas_override", None) is not None:
+            try:
+                return int(self._gas_override)
+            except Exception:
+                return self._gas_override  # be permissive
+
         # Never scale in eval.
         if not self.model.training:
             return 1
@@ -645,6 +660,11 @@ class GRPOTrainer(Trainer):
             pass
 
         return int(gas) if gas is not None and int(gas) > 0 else int(getattr(self.args, "gradient_accumulation_steps", 1))
+
+    @current_gradient_accumulation_steps.setter
+    def current_gradient_accumulation_steps(self, value: int) -> None:
+        # Capture value assigned by HF Trainer (>=4.54); used by our getter.
+        self._gas_override = value
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
@@ -1840,3 +1860,4 @@ class GRPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
+
