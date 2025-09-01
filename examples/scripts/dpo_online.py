@@ -112,6 +112,8 @@ if __name__ == "__main__":
             truncation=True,
             truncation_side="left",  # since we judge the completion, truncating left is more appropriate
         )
+        if reward_tokenizer.pad_token_id is None:
+            reward_tokenizer.pad_token = reward_tokenizer.eos_token
     else:
         reward_model = None
         reward_tokenizer = None

@@ -26,7 +26,7 @@
 """
 Example usage:
 accelerate launch \
-    --config_file deepspeed_zero2.yaml \
+    --config_file examples/accelerate_configs/deepspeed_zero2.yaml \
     examples/scripts/sft_video_llm.py \
     --dataset_name mfarre/simplevideoshorts \
     --video_cache_dir "/optional/path/to/cache/" \
