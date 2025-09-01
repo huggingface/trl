@@ -169,6 +169,10 @@ class GRPOConfig(TrainingArguments):
         reward_weights (`list[float]`, *optional*):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
+        num_remains_in_group (`int` *optional* defaults to `None`):
+            number of generations to keep after filtering (GFPO) and it should more than one for scale rewards need,
+            group filter is activated when `num_remains_in_group` is not None. In GFPO, `num_generations` is the outer
+            group generated before filtering, `num_remains_in_group` is the actual group trained by model.
         scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
             Specifies the scaling strategy for rewards. Supported values are:
 
