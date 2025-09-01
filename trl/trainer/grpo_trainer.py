@@ -1501,7 +1501,7 @@ class GRPOTrainer(Trainer):
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
-        if self.vllm_importance_sampling_correction:
+        if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             delta = delta[completion_mask.bool()]
             mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
