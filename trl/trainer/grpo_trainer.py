@@ -98,6 +98,7 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+GroupFilterFunc = Callable[[list, list], list[float]]
 
 class GRPOTrainer(Trainer):
     """
@@ -162,6 +163,9 @@ class GRPOTrainer(Trainer):
                   reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
+        group_filter_func (`GroupFilterFunc`, *optional*, defaults to `None`):
+            Group filter function to filter the group before GRPO, group_filter_func should be not None when
+            `num_remains_in_group` is given.
         args ([`GRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
@@ -354,6 +358,21 @@ class GRPOTrainer(Trainer):
         self.loss_type = args.loss_type
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
+        self.num_remains_in_group=  args.num_remains_in_group
+        if isinstance(self.num_remains_in_group, int) and self.num_remains_in_group <2:
+            raise ValueError(
+                    f"Number remains in Group {args.num_remains_in_group} should be >= 2"
+                )
+        self.group_filter_func = args.group_filter_func
+        if self.group_filter_func is None and self.num_remains_in_group is not None:
+            raise ValueError(
+                    f"Group filter function must not be None when num_remains_in_group ({self.num_remains_in_group}) is given."
+                )
+        if self.group_filter_func is not None and self.num_remains_in_group is None:
+            logger.warning(
+                f"Group filter function is not activated since num_remains_in_group is not set"
+            )
+
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
         if self.use_liger_loss and self.top_entropy_quantile < 1.0:
@@ -1454,17 +1473,49 @@ class GRPOTrainer(Trainer):
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
 
+        num_in_group = self.num_generations
+        num_inputs_in_device = len(prompts)
+
+        if self.num_remains_in_group is not None and mode == "train":
+            num_in_group = self.num_remains_in_group
+
+            all_completions = gather_object(completions)
+
+            group_filter_scores = self.group_filter(
+                completions=all_completions, rewards=rewards
+            )
+            group_filter_scores = torch.tensor(
+                group_filter_scores, device=device
+            ).view(-1, self.num_generations)
+            _, group_local_indices = torch.topk(
+                group_filter_scores, self.num_remains_in_group, dim=-1
+            )
+            group_row_offsets = torch.arange(
+                0, len(all_completions), self.num_generations, device=device
+            ).unsqueeze(1)
+            group_global_indices = group_row_offsets + group_local_indices
+            group_global_indices = group_global_indices.flatten()
+
+            rewards = rewards[group_global_indices].contiguous()
+            rewards_per_func = rewards_per_func[
+                group_global_indices, :
+            ].contiguous()
+
+            num_inputs_in_device = int(
+                len(prompts) / self.num_generations * self.num_remains_in_group
+            )
+
         # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
+        mean_grouped_rewards = rewards.view(-1, num_in_group).mean(dim=1)
 
         # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(num_in_group, dim=0)
         advantages = rewards - mean_grouped_rewards
 
         if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
-            std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
-            std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
+            std_rewards = rewards.view(-1, num_in_group).std(dim=1)
+            std_rewards = std_rewards.repeat_interleave(num_in_group, dim=0)
         elif self.scale_rewards == "batch":
             # Compute global std
             std_rewards = rewards.std().expand_as(rewards)
@@ -1479,11 +1530,26 @@ class GRPOTrainer(Trainer):
 
         # Slice to keep only the local part of the data
         process_slice = slice(
-            self.accelerator.process_index * len(prompts),
-            (self.accelerator.process_index + 1) * len(prompts),
+            self.accelerator.process_index * num_inputs_in_device,
+            (self.accelerator.process_index + 1) * num_inputs_in_device,
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
+
+        if self.num_remains_in_group is not None and mode == "train":
+            local_input_indices_to_keep = group_global_indices[
+                process_slice
+            ] - self.accelerator.process_index * len(
+                prompts
+            )  # step is length of prompts
+
+            prompt_ids = prompt_ids[local_input_indices_to_keep].contiguous()
+            prompt_mask = prompt_mask[local_input_indices_to_keep].contiguous()
+            completion_ids = completion_ids[local_input_indices_to_keep].contiguous()
+            completion_mask = completion_mask[local_input_indices_to_keep].contiguous()
+            attention_mask = attention_mask[local_input_indices_to_keep].contiguous()
+            completion_lengths = completion_mask.sum(1)
+            is_eos = completion_ids == self.eos_token_id
 
         # Log the metrics
         if mode == "train":
@@ -1517,14 +1583,28 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["frac_reward_zero_std"].append(is_std_zero.float().mean().item())
 
         # Log prompt and completion texts
-        self._logs["prompt"].extend(gather_object(prompts_text))
-        self._logs["completion"].extend(gather_object(completions_text))
+        all_prompts_text = gather_object(prompts_text)
+        all_completions_text = gather_object(completions_text)
+        all_images = gather_object(images) if has_images else None
+        if self.num_remains_in_group is not None and mode == "train":
+            group_global_indices_list = group_global_indices.tolist()
+            all_prompts_text = [
+                all_prompts_text[i] for i in group_global_indices_list
+            ]
+            all_completions_text = [
+                all_completions_text[i] for i in group_global_indices_list
+            ]
+            if has_images:
+                all_images = [all_images[i] for i in group_global_indices_list]
+
+        self._logs["prompt"].extend(all_prompts_text)
+        self._logs["completion"].extend(all_completions_text)
         for i, name in enumerate(self.reward_func_names):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
         if has_images:
-            self._logs["image"].extend(gather_object(images))
+            self._logs["image"].extend(all_images)
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
