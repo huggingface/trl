@@ -156,6 +156,41 @@ $$
 
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
+## Filter completions in GRPO
+
+GFPO proposed in the paper [Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning](https://www.arxiv.org/abs/2508.09726) is aimed to train a LLM that demonstrates efficient COT (Chain of Thought) without significant performance degradation.  
+To activate GFPO in GRPOTrainer:
+- set `num_remains_in_group` in [`GRPOConfig`]
+-  define a group filter function and set it to `group_filter_func` in [`GRPOTrainer`]. `group_filter_func` will score the `num_generations` completions and  filter the group to get top `num_remains_in_group` completions as a new group. Model will be trained on the filtered group.  
+
+
+```python
+# train_grpo.py
+from trl import GRPOConfig, GRPOTrainer
+
+class DummyGroupFilter:
+    def __call__(self, completions, **kwargs):
+        """rewards in kwargs"""
+        return [float(i) for i in range(len(completions))]
+
+assert training_args.num_remains_in_group is not None
+
+training_args = GRPOConfig(
+    output_dir="Qwen3-0.6B-GFPO"
+    per_device_train_batch_size=4,
+    num_remains_in_group=2,
+    bf16=True, 
+)
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    reward_funcs=...,
+    train_dataset=...,
+    args=training_args,
+    group_filter_func=DummyGroupFilter(),
+)
+trainer.train()
+``` 
+
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
