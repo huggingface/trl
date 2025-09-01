@@ -15,6 +15,7 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trackio",
 # ]
 # ///
 
@@ -45,9 +46,12 @@ python examples/scripts/reward_modeling.py \
     --eval_steps 50 \
     --max_length 2048 \
     --use_peft \
+    --lora_task_type SEQ_CLS \
     --lora_r 32 \
     --lora_alpha 16
 """
+
+import os
 
 import torch
 from accelerate import logging
@@ -67,6 +71,9 @@ from trl import (
 
 
 logger = logging.get_logger(__name__)
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":

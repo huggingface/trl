@@ -88,7 +88,7 @@ Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png" alt="Packing" width="600"/>
 </div>
 
-Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` and in the [`SFTConfig`].
+Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` in the [`SFTConfig`].
 
 <Tip>
 
@@ -267,3 +267,28 @@ training_args = RLOOConfig(..., ds3_gather_for_generation=False)
 </hfoptions>
 
 This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.
+
+## vLLM sleep mode
+
+When using vLLM as the generation backend, you can enable _sleep mode_ to offload vLLM parameters and cache to CPU RAM during the optimization step and reload them back to GPU VRAM when needed for weight synchronization and generation.
+
+<hfoptions id="vllm_sleep">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., vllm_sleep_enabled=True)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., vllm_sleep_enabled=True)
+```
+
+</hfoption>
+</hfoptions>

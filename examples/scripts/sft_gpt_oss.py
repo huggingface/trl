@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "kernels",
+#     "trackio",
 # ]
 # ///
 
@@ -26,7 +27,7 @@ Example:
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/sccripts/sft_gpt_oss.py \
+    examples/scripts/sft_gpt_oss.py \
     --torch_dtype bfloat16 \
     --model_name_or_path openai/gpt-oss-20b \
     --packing true packing_strategy wrapped \
@@ -47,10 +48,16 @@ accelerate launch \
     --seed 42
 """
 
+import os
+
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args):

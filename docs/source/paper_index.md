@@ -18,7 +18,7 @@ from trl import GRPOConfig
 training_args = GRPOConfig(
     importance_sampling_level="sequence",
     loss_type="grpo",
-    beta=0.0,  # GSPO set kl regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
+    beta=0.0,  # GSPO set KL regularization to zero: https://github.com/volcengine/verl/pull/2775#issuecomment-3131807306 
     epsilon=3e-4,  # GSPO paper (v2), section 5.1
     epsilon_high=4e-4,  # GSPO paper (v2), section 5.1
     gradient_accumulation_steps=1,
@@ -26,11 +26,39 @@ training_args = GRPOConfig(
 )
 ```
 
+Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
+
+### Policy ratio: GRPO vs. GSPO
+
+In GSPO, the policy ratio is defined at the sequence-level. In other words, it is the ratio between the probability of the current policy generating a sequence over the old policy generating that same sequence.
+
+The sequence likelihood is defined as:
+
+$$
+\pi_\theta (o_i \mid q) = \prod_{t=1}^{|o_i|} \pi_\theta  (o_{i,t} | q, o_{i, \lt t} ),
+$$
+
+where  \\( \pi_\theta \\) is the policy  \\( \pi \\) with parameters  \\(\theta\\),  \\( o_i \\) is the  \\( i \\)-th output sequence  \\( o \\) and  \\(y_{i,t}\\) is the  \\( t \\)-th token in this sequence,  \\( q \\) is the input query. The sequence likelihood ratio  \\( s_i (\theta) \\) is defined as:
+
+$$
+s_i (\theta) = \left(\frac{\pi_\theta (o_i | q)}{\pi_{\theta_{old}} (o_i | q)} \right)^{\frac{1}{|o_i|}}
+$$
+
+The exponent  \\( \frac{1}{|y_i|} \\) represents a sequence-length normalization, minimizing the influence of sequence lenght in sequence likelihood. In other terms, it computes the geometric mean of token probabilities, ensuring a fair comparison across sequences of varying lengths.
+
+While GSPO defines the policy ratio at the sequence level, GRPO operates at the token level. Specifically, GRPO computes an importance ratio for each token in the sequence:
+
+$$
+w_{i,t}(\theta) = \frac{\pi_\theta (o_{i,t} \mid q, o_{i,\lt t})}{\pi_{\theta_{\text{old}}} (o_{i,t} \mid q, o_{i,\lt t})}
+$$
+
+This token-level ratio is then combined with a shared advantage  \\( \hat{A}_i \\), and the GRPO objective clips and optimizes each token independently across the sequence.
+
 ## DAPO: An Open-Source LLM Reinforcement Learning System at Scale
 
 **📜 Paper**: https://huggingface.co/papers/2503.14476
 
-The DAPO algorithm, includes 5 key components:
+The DAPO algorithm includes 5 key components:
 
 - Overlong Filtering
 - Clip-Higher
@@ -103,6 +131,24 @@ training_args = DPOConfig(
 )
 ```
 
+## Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs
+
+**📜 Paper**: https://huggingface.co/papers/2402.14740
+
+RLOO is a variant of REINFORCE that reduces variance by using leave-one-out baselines. It computes rewards by comparing each sample against the average of all other samples in the batch, providing more stable gradients than standard REINFORCE. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    per_device_train_batch_size=512,  # section C Training Detail of the paper
+    steps_per_generation=2  # section C Training Detail of the paper
+    beta=0.03  # section C Training Detail of the paper
+    num_generations=2,  # experiments of paper different num_generations={2,4}
+    learning_rate=1e-6  # section C Training Detail of the paper
+)
+```
+
 ## AlphaPO -- Reward shape matters for LLM alignment
 
 **📜 Paper**: https://huggingface.co/papers/2501.03884
@@ -156,8 +202,8 @@ from trl import GRPOConfig
 
 training_args = GRPOConfig(
     ...
-    scale_rewards="group",
-    loss_type="bnpo",
+    scale_rewards="batch",
+    loss_type="dapo",
     # Other parameters used
     beta=0.0,  # = init_kl_coef in the paper
     top_p=0.99,
@@ -165,7 +211,7 @@ training_args = GRPOConfig(
     temperature=0.99,
     num_completions=8, # = num_return_sequences in the paper
     num_iterations=1,  # = ppo_epochs in the paper
-    per_device_train_batch_size=4
+    per_device_train_batch_size=4,
     gradient_accumulation_steps=32,
     steps_per_generation=8,  # (rollout_batch_size*num_return_sequences) / (per_device_train_batch_size*gradient_accumulation_steps)
 )
