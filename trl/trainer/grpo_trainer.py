@@ -1678,7 +1678,7 @@ class GRPOTrainer(Trainer):
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
-        if self.vllm_importance_sampling_correction:
+        if self.use_vllm and self.vllm_importance_sampling_correction:
             per_token_loss = per_token_loss * inputs["importance_sampling_ratio"]
 
         if self.beta != 0.0:
