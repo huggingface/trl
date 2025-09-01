@@ -1479,11 +1479,16 @@ class GRPOTrainer(Trainer):
             all_completions = gather_object(completions)
 
             group_filter_scores = self.group_filter_func(
-                completions=all_completions, rewards=rewards
+                group_completions=[
+                    all_completions[i : i + 1 * self.num_generations]
+                    for i in range(len(all_completions) // self.num_generations)
+                ],
+                group_rewards=rewards.view(-1, self.num_generations).tolist(),
             )
             group_filter_scores = torch.tensor(
                 group_filter_scores, device=device
-            ).view(-1, self.num_generations)
+            )
+
             _, group_local_indices = torch.topk(
                 group_filter_scores, self.num_remains_in_group, dim=-1
             )
