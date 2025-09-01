@@ -131,6 +131,184 @@ training_args = DPOConfig(
 )
 ```
 
+## A General Theoretical Paradigm to Understand Learning from Human Preferences
+
+**📜 Paper**: https://huggingface.co/papers/2310.12036
+
+A new general objective, $\Psi$PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="ipo", # Section 5.1 of the paper
+    per_device_train_batch_size=90, #  mini-batch size in Section C.1 of the paper
+    learning_rate=1e-2, # learning rate in Section C.1 of the paper
+)
+```
+
+These parameters only appear in the [published version](https://proceedings.mlr.press/v238/gheshlaghi-azar24a/gheshlaghi-azar24a.pdf)
+
+## SLiC-HF: Sequence Likelihood Calibration with Human Feedback
+
+**📜 Paper**: https://huggingface.co/papers/2305.10425
+
+Sequence Likelihood Calibration (SLiC) is shown to be an effective and simpler alternative to Reinforcement Learning from Human Feedback (RLHF) for learning from human preferences in language models. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="hinge", # Section 2 of the paper
+    per_device_train_batch_size=512, #  batch size in Section 3.2 of the paper
+    learning_rate=1e-4, # learning rate in Section 3.2 of the paper
+)
+```
+
+These parameters only appear in the [published version](https://openreview.net/pdf?id=0qSOodKmJaN)
+
+## Towards Efficient and Exact Optimization of Language Model Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2305.10425
+
+Efficient exact optimization (EXO) method is proposed to align language models with human preferences, providing a guaranteed and efficient alternative to reinforcement learning and direct preference optimization. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="exo_pair", # Section 3.2 of the paper
+        per_device_train_batch_size=64, #  batch size in Section B of the paper
+        learning_rate=1e-6, # learning rate in Section B of the paper
+        beta=0.1, # $\beta_r$ in Section B of the paper
+)
+```
+
+## Noise Contrastive Alignment of Language Models with Explicit Rewards
+
+**📜 Paper**: https://huggingface.co/papers/2402.05369
+
+A framework using Noise Contrastive Estimation enhances language model alignment with both scalar rewards and pairwise preferences, demonstrating advantages over Direct Preference Optimization. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="nca_pair", # Section 4.1 of the paper
+        per_device_train_batch_size=32, #  batch size in Section C of the paper
+        learning_rate=5e-6, # learning rate in Section C of the paper
+        beta=0.01, # $\alpha$ in Section C of the paper
+)
+```
+
+## Provably Robust DPO: Aligning Language Models with Noisy Feedback
+
+**📜 Paper**: https://huggingface.co/papers/2402.05369
+
+The paper introduces a robust direct preference optimization (rDPO) framework to address noise in preference-based feedback for language models, proving its sub-optimality gap and demonstrating its effectiveness through experiments. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="robust", # Section 3.1 of the paper
+        per_device_train_batch_size=16, #  batch size in Section B of the paper
+        learning_rate=1e-3, # learning rate in Section B of the paper
+        beta=0.01, # $\beta$ in Section B of the paper,
+        max_prompt_length=128, # max prompt length in Section B of the paper
+        max_length=512, # max length in Section B of the paper
+        label_smoothing=0.1 # label smoothing $\epsilon$ in section 6 of the paper
+
+)
+```
+
+## Binary Classifier Optimization for Large Language Model Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2404.04656
+
+Theoretical analysis and a new algorithm, Binary Classifier Optimization, explain and enhance the alignment of large language models using binary feedback signals. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="bco_pair", # Section 4 of the paper
+        per_device_train_batch_size=128, #  batch size in Section C of the paper
+        learning_rate=5e-7, # learning rate in Section C of the paper
+        beta=0.01, # $\beta$ in Section C of the paper,
+        max_prompt_length=1536, # max prompt length in Section C of the paper
+        max_completion_length=512, # max completion length in Section C of the paper
+)
+```
+
+## Self-Play Preference Optimization for Language Model Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2405.00675
+
+A self-play method called SPPO for language model alignment achieves state-of-the-art performance by approximating Nash equilibrium policy in a constant-sum game setting, outperforming other approaches with limited data. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="sppo_hard", # Section 3 of the paper
+        per_device_train_batch_size=64, #  batch size in Section C of the paper
+        learning_rate=5e-7, # learning rate in Section C of the paper
+)
+```
+
+## Discovering Preference Optimization Algorithms with and for Large Language Models
+
+**📜 Paper**: https://huggingface.co/papers/2406.08414
+
+An LLM-driven method automatically discovers performant preference optimization algorithms, leading to a new algorithm called DiscoPOP that blends logistic and exponential losses. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="discopop", # Section 3 of the paper
+        per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
+        learning_rate=5e-7, # learning rate in Section B.1 of the paper
+        beta=0.05, # $\beta$ in Section B.1 of the paper,
+        discopop_tau=0.05 # $\tau$ in Section E of the paper
+)
+```
+
+## Anchored Preference Optimization and Contrastive Revisions: Addressing Underspecification in Alignment
+
+**📜 Paper**: https://huggingface.co/papers/2408.06266
+
+CLAIR and APO enhance LLM alignment through more contrastive preference pairs and controlled alignment objectives, improving model performance close to GPT4-turbo. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="apo_zero", # Section 4 of the paper
+        per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
+        learning_rate=2e-7, # learning rate in Section 5.2 of the paper
+        beta=0.1, # $\beta$ in Section 5.2 of the paper,
+        max_prompt_length=512, # prompt length in Section 5.2 of the paper
+        max_completion_length=512, # completion length in Section 5.2 of the paper
+)
+```
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="apo_down", # Section 4 of the paper
+        per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
+        learning_rate=2e-7, # learning rate in Section 5.2 of the paper
+        beta=0.1, # $\beta$ in Section 5.2 of the paper,
+        max_prompt_length=512, # prompt length in Section 5.2 of the paper
+        max_completion_length=512, # completion length in Section 5.2 of the paper
+)
+```
+
+These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
+
 ## Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs
 
 **📜 Paper**: https://huggingface.co/papers/2402.14740
