@@ -168,12 +168,16 @@ To activate GFPO in GRPOTrainer:
 # train_grpo.py
 from trl import GRPOConfig, GRPOTrainer
 
-class DummyGroupFilter:
-    def __call__(self, completions, **kwargs):
-        """rewards in kwargs"""
-        return [float(i) for i in range(len(completions))]
-
-assert training_args.num_remains_in_group is not None
+class GroupFilter:
+    """
+    dummy group filter to scores the completions based on its indice in group
+    """
+    def __call__(self, group_completions, group_rewards, **kwargs) -> float:
+        group_scores = []
+        for completions, rewards in zip(group_completions, group_rewards):
+            scores = [float(i) for i in range(len(completions))]
+            group_scores.append(scores)
+        return group_scores
 
 training_args = GRPOConfig(
     output_dir="Qwen3-0.6B-GFPO"
@@ -186,7 +190,7 @@ trainer = GRPOTrainer(
     reward_funcs=...,
     train_dataset=...,
     args=training_args,
-    group_filter_func=DummyGroupFilter(),
+    group_filter_func=GroupFilter(),
 )
 trainer.train()
 ``` 
