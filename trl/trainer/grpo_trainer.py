@@ -1546,6 +1546,8 @@ class GRPOTrainer(Trainer):
             completion_mask = completion_mask[local_input_indices_to_keep].contiguous()
             attention_mask = attention_mask[local_input_indices_to_keep].contiguous()
             completion_lengths = completion_mask.sum(1)
+            agg_completion_lengths = self.accelerator.gather(completion_lengths)
+            num_items_in_batch = agg_completion_lengths.sum()
             is_eos = completion_ids == self.eos_token_id
 
         # Log the metrics
