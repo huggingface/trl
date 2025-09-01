@@ -172,7 +172,7 @@ class GroupFilter:
     """
     dummy group filter to scores the completions based on its indice in group
     """
-    def __call__(self, group_completions, group_rewards, **kwargs) -> float:
+    def __call__(self, group_completions, group_rewards, **kwargs):
         group_scores = []
         for completions, rewards in zip(group_completions, group_rewards):
             scores = [float(i) for i in range(len(completions))]
