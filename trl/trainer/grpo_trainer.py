@@ -1543,7 +1543,7 @@ class GRPOTrainer(Trainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
-        if self.vllm_importance_sampling_correction:
+        if self.use_vllm and self.vllm_importance_sampling_correction:
             output["importance_sampling_ratio"] = importance_sampling_ratio
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
