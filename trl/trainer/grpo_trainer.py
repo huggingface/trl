@@ -1478,7 +1478,7 @@ class GRPOTrainer(Trainer):
 
             all_completions = gather_object(completions)
 
-            group_filter_scores = self.group_filter(
+            group_filter_scores = self.group_filter_func(
                 completions=all_completions, rewards=rewards
             )
             group_filter_scores = torch.tensor(
