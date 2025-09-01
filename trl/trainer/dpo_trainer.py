@@ -103,6 +103,8 @@ def shift_tokens_right(input_ids: torch.Tensor, decoder_start_token_id: int) -> 
     shifted_input_ids[:, 1:] = input_ids[:, :-1].clone()
     shifted_input_ids[:, 0] = decoder_start_token_id
 
+    return shifted_input_ids
+
 
 @dataclass
 class DataCollatorForPreference(DataCollatorMixin):
