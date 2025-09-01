@@ -360,7 +360,7 @@ class GRPOTrainer(Trainer):
         self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.num_remains_in_group=  args.num_remains_in_group
-        self.group_filter_func = args.group_filter_func
+        self.group_filter_func = group_filter_func
         if self.group_filter_func is None and self.num_remains_in_group is not None:
             raise ValueError(
                     f"Group filter function must not be None when num_remains_in_group ({self.num_remains_in_group}) is given."
