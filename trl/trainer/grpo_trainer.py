@@ -610,9 +610,9 @@ class GRPOTrainer(Trainer):
         Effective number of micro-steps accumulated before an optimizer step *for this pass*.
 
         Compatibility strategy:
-          • On Transformers >= 4.54, the base Trainer assigns to this attribute each update; our setter captures it.
+          - On Transformers >= 4.54, the base Trainer assigns to this attribute each update; our setter captures it.
             If we have a captured value, we return it directly.
-          • On older versions (no assignment), we compute a backend-aware fallback:
+          - On older versions (no assignment), we compute a backend-aware fallback:
               - DeepSpeed ZeRO-2/3: query engine.gradient_accumulation_steps() (handles dynamic GAS)
               - DDP/FSDP/native: use Accelerate's state/scheduler
               - Eval: return 1
@@ -1860,4 +1860,3 @@ class GRPOTrainer(Trainer):
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
-
