@@ -527,16 +527,10 @@ class GRPOConfig(TrainingArguments):
             "rewards are weighted equally with weight `1.0`."
         },
     )
-    scale_rewards: str = field(
-        default="group",
+    num_remains_in_group: Optional[int] = field(
+        default=None,
         metadata={
-            "help": "Specifies the scaling strategy for rewards. Supported values are: "
-            "`True` or `group'` (default): rewards are scaled by the standard deviation within each group, ensuring "
-            "unit variance within a group. "
-            "`'batch'`: rewards are scaled by the standard deviation across the entire batch, as recommended in the "
-            "PPO Lite paper. "
-            "`False` or `'none'`: no scaling is applied. The Dr. GRPO paper recommends not scaling rewards, as "
-            "scaling by the standard deviation introduces a question-level difficulty bias."
+            "help": "number inputs remains after group filter function, `'num_remains_in_group'` must be >=2 if given."
         },
     )
     loss_type: str = field(
@@ -693,3 +687,8 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
+
+    if self.num_remains_in_group is not None and self.num_remains_in_group < 2:
+        raise ValueError(
+                f"Number remains in Group {args.num_remains_in_group} should be >= 2"
+            )
