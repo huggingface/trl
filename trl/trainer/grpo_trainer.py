@@ -98,7 +98,7 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-GroupFilterFunc = Callable[[list, list], list[float]]
+GroupFilterFunc = Callable[[list[list[Any]], list[list[Any]]], list[list[float]]]
 
 class GRPOTrainer(Trainer):
     """
