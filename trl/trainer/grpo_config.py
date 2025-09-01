@@ -688,7 +688,7 @@ class GRPOConfig(TrainingArguments):
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
 
-    if self.num_remains_in_group is not None and self.num_remains_in_group < 2:
-        raise ValueError(
-                f"Number remains in Group {args.num_remains_in_group} should be >= 2"
-            )
+        if self.num_remains_in_group is not None and self.num_remains_in_group < 2:
+            raise ValueError(
+                    f"Number remains in Group {args.num_remains_in_group} should be >= 2"
+                )
