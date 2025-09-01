@@ -20,7 +20,7 @@ from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Callable, Literal, Optional, Union, Dict
 
 import pandas as pd
 import torch
@@ -28,7 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState, logging
 from accelerate.utils import tqdm
-from datasets import Dataset, IterableDataset
+from datasets import Dataset, IterableDataset, load_from_disk
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
@@ -388,6 +388,8 @@ class DPOTrainer(Trainer):
         self.max_length = args.max_length
         self.truncation_mode = args.truncation_mode
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
+        self.save_ref_logps_dir = args.save_ref_logps_dir
+        self.load_ref_logps_dir = args.load_ref_logps_dir
         self.use_logits_to_keep = args.use_logits_to_keep
 
         if args.padding_free:
@@ -798,6 +800,23 @@ class DPOTrainer(Trainer):
 
         Subclass of transformers.src.transformers.trainer.get_train_dataloader to precompute `ref_log_probs`.
         """
+        if self.load_ref_logps_dir and not self._precomputed_train_ref_log_probs:
+            load_path = os.path.join(self.load_ref_logps_dir, "train")
+            if os.path.exists(load_path):
+                logger.info(f"Attempting to load precomputed train reference log probabilities from {load_path}")
+                loaded_dataset = load_from_disk(load_path)
+                logps_columns = {"ref_chosen_logps", "ref_rejected_logps"}
+
+                if not logps_columns.issubset(loaded_dataset.column_names):
+                    logger.warning(
+                            f"Loaded dataset from {load_path} is missing required columns: {logps_columns}. "
+                            "Recomputing reference log probabilities."
+                        )
+                else:
+                    self.train_dataset = loaded_dataset
+                    self._precomputed_train_ref_log_probs = True
+            else:
+                logger.warning(f"Load path {load_path} does not exist. Recomputing reference log probabilities.")
 
         if self.precompute_ref_log_probs and not self._precomputed_train_ref_log_probs:
             batch_size = self.args.precompute_ref_batch_size or self.args.per_device_train_batch_size
@@ -835,7 +854,12 @@ class DPOTrainer(Trainer):
             )
 
             self._precomputed_train_ref_log_probs = True
-
+            if self.save_ref_logps_dir and self.accelerator.is_main_process:
+                save_path = os.path.join(self.save_ref_logps_dir, "train")
+                os.makedirs(save_path, exist_ok=True)
+                logger.info(f"Saving train dataset with precomputed reference log probabilities to {save_path}")
+                self.train_dataset.save_to_disk(save_path)
+            self.accelerator.wait_for_everyone()
         return super().get_train_dataloader()
 
     def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
@@ -852,6 +876,24 @@ class DPOTrainer(Trainer):
         if eval_dataset is None and self.eval_dataset is None:
             raise ValueError("Trainer: evaluation requires an eval_dataset.")
         eval_dataset = eval_dataset if eval_dataset is not None else self.eval_dataset
+
+        if self.load_ref_logps_dir and not self._precomputed_eval_ref_log_probs:
+            load_path = os.path.join(self.load_ref_logps_dir, "eval")
+            if os.path.exists(load_path):
+                logger.info(f"Attempting to load precomputed eval reference log probabilities from {load_path}")
+                loaded_dataset = load_from_disk(load_path)
+                logps_columns = {"ref_chosen_logps", "ref_rejected_logps"}
+
+                if not logps_columns.issubset(loaded_dataset.column_names):
+                    logger.warning(
+                            f"Loaded dataset from {load_path} is missing required columns: {logps_columns}. "
+                            "Recomputing reference log probabilities."
+                        )
+                else:
+                    self.eval_dataset = loaded_dataset
+                    self._precomputed_eval_ref_log_probs = True
+            else:
+                logger.warning(f"Load path {load_path} does not exist. Recomputing reference log probabilities.")
 
         if self.precompute_ref_log_probs and not self._precomputed_eval_ref_log_probs:
             batch_size = self.args.precompute_ref_batch_size or self.args.per_device_eval_batch_size
@@ -882,6 +924,12 @@ class DPOTrainer(Trainer):
             eval_dataset = eval_dataset.add_column(name="ref_chosen_logps", column=all_ref_chosen_logps)
             eval_dataset = eval_dataset.add_column(name="ref_rejected_logps", column=all_ref_rejected_logps)
 
+            if self.save_ref_logps_dir and self.accelerator.is_main_process:
+                save_path = os.path.join(self.save_ref_logps_dir, "eval")
+                os.makedirs(save_path, exist_ok=True)
+                logger.info(f"Saving eval dataset with precomputed reference log probabilities to {save_path}")
+                eval_dataset.save_to_disk(save_path)
+            self.accelerator.wait_for_everyone()
             # Save calculated ref_chosen_logps and ref_rejected_logps to the eval_dataset for subsequent runs
             if self.eval_dataset is not None:
                 self.eval_dataset = eval_dataset
