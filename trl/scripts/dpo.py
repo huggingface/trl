@@ -35,7 +35,7 @@ python trl/scripts/dpo.py \
     --eval_strategy steps \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
-    --no_remove_unused_columns 
+    --no_remove_unused_columns
 ```
 
 # LoRA:
