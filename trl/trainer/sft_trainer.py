@@ -53,6 +53,8 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
+from ..models.modeling_mtp_extension import MTPExtension
+from .mtp_data_collator import DataCollatorForMTPLanguageModeling
 from .sft_config import SFTConfig
 from .utils import entropy_from_logits, flush_left, generate_model_card, get_comet_experiment_url, pad
 
@@ -748,14 +750,27 @@ class SFTTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-            data_collator = DataCollatorForLanguageModeling(
-                pad_token_id=pad_token_id,
-                completion_only_loss=self.completion_only_loss,
-                padding_free=self.padding_free,
-                # Using position_ids without flash_attn hurts the training
-                return_position_ids=use_flash_attention,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
+            # Use MTP data collator if MTP is enabled
+            if getattr(args, 'mtp_enabled', False):
+                data_collator = DataCollatorForMTPLanguageModeling(
+                    pad_token_id=pad_token_id,
+                    completion_only_loss=self.completion_only_loss,
+                    padding_free=self.padding_free,
+                    # Using position_ids without flash_attn hurts the training
+                    return_position_ids=use_flash_attention,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                    mtp_num_predictions=args.mtp_num_predictions,
+                    mtp_ignore_index=-100,
+                )
+            else:
+                data_collator = DataCollatorForLanguageModeling(
+                    pad_token_id=pad_token_id,
+                    completion_only_loss=self.completion_only_loss,
+                    padding_free=self.padding_free,
+                    # Using position_ids without flash_attn hurts the training
+                    return_position_ids=use_flash_attention,
+                    pad_to_multiple_of=args.pad_to_multiple_of,
+                )
         elif data_collator is None and self._is_vlm:
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
@@ -843,6 +858,19 @@ class SFTTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
+
+        # Initialize MTP functionality if enabled
+        self.mtp_enabled = getattr(args, 'mtp_enabled', False)
+        if self.mtp_enabled:
+            MTPExtension.add_mtp_to_model(
+                model=self.model,
+                num_predictions=args.mtp_num_predictions,
+                head_type=args.mtp_head_type,
+                dropout_prob=args.mtp_dropout_prob,
+                num_layers=args.mtp_num_layers,
+                init_strategy=args.mtp_init_strategy,
+            )
+            logger.info(f"MTP enabled with {args.mtp_num_predictions} predictions using {args.mtp_head_type} heads ({args.mtp_num_layers} layers, {args.mtp_init_strategy} init)")
 
     def _prepare_dataset(
         self,
@@ -1029,18 +1057,39 @@ class SFTTrainer(Trainer):
             if self._is_vlm:
                 self._signature_columns = ["messages", "prompt", "completion", "images"]
             else:
-                self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
+                signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
+                if self.mtp_enabled:
+                    signature_columns.append("mtp_labels")
+                self._signature_columns = signature_columns
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
-        Compute training loss and additionally compute token accuracies
+        Compute training loss and additionally compute token accuracies.
+        If MTP is enabled, also compute MTP auxiliary loss.
         """
         mode = "train" if self.model.training else "eval"
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
+        
+        # Compute standard loss
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
+        
+        # Add MTP loss if enabled
+        if self.mtp_enabled and hasattr(outputs, 'mtp_logits') and 'mtp_labels' in inputs:
+            mtp_loss = self._compute_mtp_loss(outputs.mtp_logits, inputs['mtp_labels'])
+            total_loss = loss + self.args.mtp_loss_weight * mtp_loss
+            
+            # Log MTP metrics
+            self._metrics[mode]["mtp_loss"].append(mtp_loss.item())
+            self._metrics[mode]["ntp_loss"].append(loss.item())
+            
+            # Update outputs with MTP loss
+            if hasattr(outputs, 'mtp_loss'):
+                outputs.mtp_loss = mtp_loss
+            
+            loss = total_loss
 
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
@@ -1105,6 +1154,47 @@ class SFTTrainer(Trainer):
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
         return (loss, outputs) if return_outputs else loss
+
+    def _compute_mtp_loss(self, mtp_logits: list[torch.Tensor], mtp_labels: torch.Tensor) -> torch.Tensor:
+        """
+        Compute Multi-Token Prediction auxiliary loss.
+        
+        Args:
+            mtp_logits: List of logits tensors, each of shape (batch_size, seq_len, vocab_size).
+            mtp_labels: MTP labels tensor of shape (batch_size, seq_len, num_predictions).
+            
+        Returns:
+            MTP loss tensor.
+        """
+        total_loss = 0.0
+        num_predictions = len(mtp_logits)
+        
+        # Get weight decay strategy
+        if self.args.mtp_weight_decay_strategy == "uniform":
+            weights = [1.0] * num_predictions
+        elif self.args.mtp_weight_decay_strategy == "harmonic":
+            weights = [1.0 / (i + 1) for i in range(num_predictions)]
+        else:
+            weights = [1.0] * num_predictions
+        
+        # Compute weighted loss for each prediction step
+        for i, (logits, weight) in enumerate(zip(mtp_logits, weights)):
+            # Shift logits and labels for causal LM (predict next token)
+            shift_logits = logits[..., :-1, :].contiguous()
+            shift_labels = mtp_labels[..., :-1, i].contiguous()
+            
+            # Flatten for cross entropy computation
+            flat_logits = shift_logits.view(-1, shift_logits.size(-1))
+            flat_labels = shift_labels.view(-1)
+            
+            # Compute cross entropy loss (ignore_index=-100 by default)
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+            step_loss = loss_fct(flat_logits, flat_labels)
+            
+            total_loss += weight * step_loss
+        
+        # Normalize by sum of weights
+        return total_loss / sum(weights)
 
     # Override training step to add activation offloading context.
     def training_step(self, *args, **kwargs):

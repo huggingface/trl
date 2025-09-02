@@ -44,6 +44,9 @@ _import_structure = {
         "clone_chat_template",
         "create_reference_model",
         "setup_chat_format",
+        "CausalLMOutputWithMTP",
+        "MTPHeads",
+        "MTPExtension",
     ],
     "trainer": [
         "AlignPropConfig",
@@ -90,6 +93,7 @@ _import_structure = {
         "RLOOTrainer",
         "SFTConfig",
         "SFTTrainer",
+        "DataCollatorForMTPLanguageModeling",
         "WinRateCallback",
         "XPOConfig",
         "XPOTrainer",
@@ -138,6 +142,9 @@ if TYPE_CHECKING:
         clone_chat_template,
         create_reference_model,
         setup_chat_format,
+        CausalLMOutputWithMTP,
+        MTPHeads,
+        MTPExtension,
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
@@ -185,6 +192,7 @@ if TYPE_CHECKING:
         RLOOTrainer,
         SFTConfig,
         SFTTrainer,
+        DataCollatorForMTPLanguageModeling,
         WinRateCallback,
         XPOConfig,
         XPOTrainer,

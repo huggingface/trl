@@ -92,6 +92,8 @@
       title: RLOO
     - local: sft_trainer
       title: SFT
+    - local: mtp_trainer
+      title: Multi-Token Prediction (MTP)
     - local: iterative_sft_trainer
       title: Iterative SFT
     - local: xpo_trainer

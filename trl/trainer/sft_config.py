@@ -251,6 +251,71 @@ class SFTConfig(TrainingArguments):
         metadata={"help": "Whether to offload the activations to the CPU."},
     )
 
+    # Parameters that control Multi-Token Prediction (MTP)
+    mtp_enabled: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable Multi-Token Prediction during training."},
+    )
+    mtp_num_predictions: int = field(
+        default=2,
+        metadata={"help": "Number of future tokens to predict in MTP. Must be >= 1."},
+    )
+    mtp_loss_weight: float = field(
+        default=0.5,
+        metadata={"help": "Weight for the MTP auxiliary loss. The total loss is: ntp_loss + mtp_loss_weight * mtp_loss."},
+    )
+    mtp_head_type: str = field(
+        default="linear",
+        metadata={
+            "help": "Type of MTP head architecture. Supported options: 'linear', 'ffn', 'mha_ffn', 'cnn', 'identical'."
+        },
+    )
+
+    mtp_weight_decay_strategy: str = field(
+        default="uniform",
+        metadata={
+            "help": "Weight decay strategy for MTP losses across prediction steps. Options: 'uniform', 'harmonic'."
+        },
+    )
+    mtp_dropout_prob: float = field(
+        default=0.1,
+        metadata={"help": "Dropout probability for MTP heads."},
+    )
+    mtp_num_layers: int = field(
+        default=1,
+        metadata={"help": "Number of layers in each MTP head. Allows multi-layer MTP heads for better capacity."},
+    )
+    mtp_init_strategy: str = field(
+        default="default",
+        metadata={
+            "help": "Parameter initialization strategy for MTP heads. Options: 'default', 'kaiming_uniform', 'kaiming_normal', 'xavier_uniform', 'xavier_normal', 'copy_lm_head'."
+        },
+    )
+
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+        
+        # Validate MTP parameters
+        if self.mtp_enabled:
+            if self.mtp_num_predictions < 1:
+                raise ValueError("mtp_num_predictions must be >= 1")
+            if self.mtp_loss_weight < 0:
+                raise ValueError("mtp_loss_weight must be >= 0")
+            if self.mtp_head_type not in ["linear", "ffn", "mha_ffn", "cnn", "identical"]:
+                raise ValueError(
+                    f"mtp_head_type must be one of ['linear', 'ffn', 'mha_ffn', 'cnn', 'identical'], got {self.mtp_head_type}"
+                )
+            if self.mtp_weight_decay_strategy not in ["uniform", "harmonic"]:
+                raise ValueError(
+                    f"mtp_weight_decay_strategy must be one of ['uniform', 'harmonic'], got {self.mtp_weight_decay_strategy}"
+                )
+            if not (0.0 <= self.mtp_dropout_prob <= 1.0):
+                raise ValueError("mtp_dropout_prob must be between 0.0 and 1.0")
+            if self.mtp_num_layers < 1:
+                raise ValueError("mtp_num_layers must be >= 1")
+            if self.mtp_init_strategy not in ["default", "kaiming_uniform", "kaiming_normal", "xavier_uniform", "xavier_normal", "copy_lm_head"]:
+                raise ValueError(
+                    f"mtp_init_strategy must be one of ['default', 'kaiming_uniform', 'kaiming_normal', 'xavier_uniform', 'xavier_normal', 'copy_lm_head'], got {self.mtp_init_strategy}"
+                )
+        
         super().__post_init__()
