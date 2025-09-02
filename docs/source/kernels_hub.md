@@ -52,10 +52,19 @@ This replaces your attention pipeline with a pre-optimized kernel from the Hub, 
 
 ## Comparing Attention Implementations
 
-[TODO!]
+We compared different attention implementations supported in Transformers and various kernels using **TRL** and **SFT**. The tests were conducted on a machine with a single **H100 GPU**, using **Qwen3-8B**, a **batch size of 8**, **gradient accumulation of 1**, and **bfloat16** precision. These numbers are illustrative for this particular setup and may vary depending on the final training configuration.
 
-- Speed (throughput, latency)
-- Memory usage
+### Latency
+
+Latency measures the time taken for a training step, which is particularly relevant since we are conducting training using TRL. The results below show that kernel-based implementations provide noticeable improvements over more naive attention approaches. Interestingly, increasing the `max_length` of the model appears to further enhance performance.
+
+[PLOT]
+
+### Memory Usage
+
+A similar trend is observed when considering memory usage. Kernel-based implementations tend to be more memory-efficient compared to naive attention, especially as model sequence lengths increase.
+
+[PLOT]
 
 ## Combining FlashAttention Kernels with Liger Kernels
 
@@ -85,9 +94,10 @@ training_args = SFTConfig(
 )
 ```
 
-## Benchmarking FA Build-from-Source vs Hub Kernel
+Learn more about this integration [here](./liger_kernel_integration).
 
-[TODO!]
-- Scripts comparing throughput of FA compiled locally vs Hub kernel
-- Speedups in training loops
-- Memory savings for large models
+## Benchmarking: Flash Attention (Build-from-Source) vs. Hub Kernels
+
+Building Flash Attention from source can be highly time-consuming, often taking several minutes to hours, depending on your hardware, CUDA/PyTorch configuration, and the availability of precompiled wheels.  
+
+By contrast, **Hugging Face Kernels** deliver a much faster and more reliable workflow. In our benchmarks, kernels were ready to use in about **2.5 seconds**, with no compilation required. This means you can start training almost instantly, significantly accelerating development. All you need to do is specify the desired version, and `kernels` handles the rest.
