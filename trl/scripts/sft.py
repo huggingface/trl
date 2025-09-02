@@ -66,7 +66,7 @@ import os
 
 from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 
 from trl import (
@@ -113,6 +113,8 @@ def main(script_args, training_args, model_args, dataset_args):
 
         model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
     else:
+        from transformers import AutoModelForCausalLM
+        
         model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
     # Create tokenizer
@@ -123,7 +125,7 @@ def main(script_args, training_args, model_args, dataset_args):
     # Set default chat template if needed
     if tokenizer.chat_template is None:
         # TODO: source should be passed as an argument
-        model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
+        model, tokenizer, _added_tokens = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
@@ -159,13 +161,11 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
 
-def make_parser(subparsers: argparse._SubParsersAction = None):
+def make_parser(subparsers: argparse._SubParsersAction | None = None):
     dataclass_types = (ScriptArguments, SFTConfig, ModelConfig, DatasetMixtureConfig)
-    if subparsers is not None:
-        parser = subparsers.add_parser("sft", help="Run the SFT training script", dataclass_types=dataclass_types)
-    else:
-        parser = TrlParser(dataclass_types)
-    return parser
+    if subparsers is None:
+        return TrlParser(dataclass_types)
+    return subparsers.add_parser("sft", help="Run the SFT training script", dataclass_types=dataclass_types)
 
 
 if __name__ == "__main__":
