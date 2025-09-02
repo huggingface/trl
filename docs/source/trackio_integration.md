@@ -15,7 +15,7 @@ training_args = SFTConfig(
 
 ## Organizing Your Experiments with Run Names and Projects
 
-Trackio assigns default run name. However, we highly recommend setting a descriptive `run_name` to make it easier to organize experiments. For example:
+By default, Trackio will generate a name to identify each run. However, we highly recommend setting a descriptive `run_name` to make it easier to organize experiments. For example:
 
 ```python
 from trl import SFTConfig
