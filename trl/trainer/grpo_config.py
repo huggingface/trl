@@ -615,7 +615,7 @@ class GRPOConfig(TrainingArguments):
 
         super().__post_init__()
 
-        self.scale_rewards = {"true": "group", "false": "none"}.get(self.scale_rewards.lower(), self.scale_rewards.lower())
+        self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards).lower()
         if self.scale_rewards not in ["batch", "none", "group"]:
             raise ValueError(
                 f"Invalid value for scale_rewards: {self.scale_rewards}. Must be one of 'batch', 'group', or 'none'."
