@@ -268,6 +268,133 @@ training_args = RLOOConfig(..., ds3_gather_for_generation=False)
 
 This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.
 
+## Context Parallelism
+
+Context Parallelism (CP) is a parallelization technique that enables training with longer sequences by splitting the sequence dimension across multiple GPUs. Each GPU processes a portion of the sequence, allowing you to train with sequences longer than what would fit on a single GPU's memory.
+
+For more details on Context Parallelism, see the [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism).
+
+Context parallelism is particularly useful when:
+- You want to train with very long sequences (>2048 tokens)
+- Single GPU memory is insufficient for your desired sequence length
+- You need to maintain sequence coherence across the full context
+
+### Requirements and Limitations
+
+Context Parallelism has specific requirements:
+
+1. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
+2. **SDPA attention** - Flash Attention is currently not supported with Context Parallelism
+3. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`
+
+### Configuration
+
+To enable Context Parallelism, you need to configure both Accelerate and your training arguments:
+
+#### Accelerate Configuration
+
+Create an accelerate config file (e.g. `context_parallel_config.yaml` for 2 GPUs):
+
+```yaml
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+fsdp_config:
+  fsdp_activation_checkpointing: false
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_offload_params: false
+  fsdp_reshard_after_forward: true
+  fsdp_state_dict_type: FULL_STATE_DICT
+  fsdp_version: 2
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2  # Number of GPUs
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
+parallelism_config:
+  parallelism_config_dp_replicate_size: 1
+  parallelism_config_dp_shard_size: 1
+  parallelism_config_tp_size: 1
+  parallelism_config_cp_size: 2  # Context parallel size
+```
+
+#### Training Configuration
+
+<hfoptions id="context-parallel">
+<hfoption id="SFT">
+
+You can configure context parallelism training either programmatically or via command line:
+
+**Option 1: Using SFTConfig**
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    max_seq_length=2048,              # Long sequence length
+    packing=True,
+    packing_strategy="wrapped",       # Ensures consistent sequence lengths
+    pad_to_multiple_of=4,             # Optional: ensures divisibility by cp_size * 2
+    torch_dtype="bfloat16",           # Memory efficient precision
+    gradient_checkpointing=True,      # Further memory savings
+    use_liger_kernel=True,            # Compatible with Context Parallelism
+    # Standard training arguments...
+    output_dir="./sft-context-parallel",
+    learning_rate=2e-5,
+    per_device_train_batch_size=1,
+    num_train_epochs=1,
+    logging_steps=10,
+)
+```
+
+**Option 2: Using Command Line with sft.py**
+
+```bash
+accelerate launch \
+    --config_file examples/accelerate_configs/context_parallel_2gpu.yaml \
+    trl/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --max_seq_length 2048 \
+    --packing \
+    --packing_strategy wrapped \
+    --pad_to_multiple_of 4 \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --use_liger_kernel \
+    --output_dir ./sft-context-parallel \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 1 \
+    --num_train_epochs 1 \
+    --logging_steps 10 \
+    --report_to none
+```
+
+</hfoption>
+</hfoptions>
+
+### Best Practices
+
+1. **Always use `packing_strategy="wrapped"`** - This is crucial for context parallelism as it ensures all sequences are exactly `max_seq_length` tokens, which guarantees divisibility by `cp_size * 2`. The default "bfd" (best-fit decreasing) strategy can create variable-length sequences that cause assertion errors.
+2. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
+3. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
+4. **Monitor memory usage** across all GPUs to ensure balanced workload
+
+<Tip warning={true}>
+
+**Critical**: Context Parallelism requires sequences to be divisible by `cp_size * 2`. You **must** use `packing_strategy="wrapped"` instead of the default "bfd" strategy. The "wrapped" strategy creates sequences of exactly `max_seq_length` tokens, ensuring compatibility, while "bfd" can create variable-length sequences (like 793 tokens) that will cause assertion errors.
+
+</Tip>
+
 ## vLLM sleep mode
 
 When using vLLM as the generation backend, you can enable _sleep mode_ to offload vLLM parameters and cache to CPU RAM during the optimization step and reload them back to GPU VRAM when needed for weight synchronization and generation.
