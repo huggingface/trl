@@ -47,6 +47,7 @@ python examples/scripts/reward_modeling.py \
     --eval_steps 50 \
     --max_length 2048 \
     --use_peft \
+    --lora_task_type SEQ_CLS \
     --lora_r 32 \
     --lora_alpha 16
 """

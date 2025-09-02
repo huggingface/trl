@@ -26,7 +26,6 @@
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-7 \
     --num_train_epochs 1 \
@@ -44,7 +43,6 @@ python trl/scripts/dpo.py \
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-6 \
     --num_train_epochs 1 \
