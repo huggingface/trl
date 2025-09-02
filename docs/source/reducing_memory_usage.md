@@ -336,6 +336,7 @@ You can configure context parallelism training either programmatically or via co
 
 **Option 1: Using SFTConfig**
 
+**With Wrapped Strategy:**
 ```python
 from trl import SFTConfig
 
@@ -343,12 +344,32 @@ training_args = SFTConfig(
     max_seq_length=2048,              # Long sequence length
     packing=True,
     packing_strategy="wrapped",       # Ensures consistent sequence lengths
-    pad_to_multiple_of=4,             # Optional: ensures divisibility by cp_size * 2
     torch_dtype="bfloat16",           # Memory efficient precision
     gradient_checkpointing=True,      # Further memory savings
     use_liger_kernel=True,            # Compatible with Context Parallelism
     # Standard training arguments...
-    output_dir="./sft-context-parallel",
+    output_dir="./sft-context-parallel-wrapped",
+    learning_rate=2e-5,
+    per_device_train_batch_size=1,
+    num_train_epochs=1,
+    logging_steps=10,
+)
+```
+
+**With BFD Strategy:**
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    max_seq_length=2048,              # Long sequence length
+    packing=True,
+    packing_strategy="bfd",           # Preserves sequence boundaries
+    pad_to_multiple_of=4,             # Required: ensures divisibility by cp_size * 2
+    torch_dtype="bfloat16",           # Memory efficient precision
+    gradient_checkpointing=True,      # Further memory savings
+    use_liger_kernel=True,            # Compatible with Context Parallelism
+    # Standard training arguments...
+    output_dir="./sft-context-parallel-bfd",
     learning_rate=2e-5,
     per_device_train_batch_size=1,
     num_train_epochs=1,
@@ -358,6 +379,7 @@ training_args = SFTConfig(
 
 **Option 2: Using Command Line with sft.py**
 
+**With Wrapped Strategy:**
 ```bash
 accelerate launch \
     --config_file examples/accelerate_configs/context_parallel_2gpu.yaml \
@@ -367,11 +389,32 @@ accelerate launch \
     --max_seq_length 2048 \
     --packing \
     --packing_strategy wrapped \
+    --torch_dtype bfloat16 \
+    --gradient_checkpointing \
+    --use_liger_kernel \
+    --output_dir ./sft-context-parallel-wrapped \
+    --learning_rate 2e-5 \
+    --per_device_train_batch_size 1 \
+    --num_train_epochs 1 \
+    --logging_steps 10 \
+    --report_to none
+```
+
+**With BFD Strategy:**
+```bash
+accelerate launch \
+    --config_file examples/accelerate_configs/context_parallel_2gpu.yaml \
+    trl/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --max_seq_length 2048 \
+    --packing \
+    --packing_strategy bfd \
     --pad_to_multiple_of 4 \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_liger_kernel \
-    --output_dir ./sft-context-parallel \
+    --output_dir ./sft-context-parallel-bfd \
     --learning_rate 2e-5 \
     --per_device_train_batch_size 1 \
     --num_train_epochs 1 \
@@ -384,16 +427,30 @@ accelerate launch \
 
 ### Best Practices
 
-1. **Always use `packing_strategy="wrapped"`** - This is crucial for context parallelism as it ensures all sequences are exactly `max_seq_length` tokens, which guarantees divisibility by `cp_size * 2`. The default "bfd" (best-fit decreasing) strategy can create variable-length sequences that cause assertion errors.
+1. **Use compatible packing strategies** - Context Parallelism requires sequences divisible by `cp_size * 2`. You have two options:
+   - `packing_strategy="wrapped"` - Always creates sequences of exactly `max_seq_length` tokens
+   - `packing_strategy="bfd"` with `pad_to_multiple_of=cp_size*2` - Preserves sequence boundaries and uses the data collator to ensure compatibility
 2. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
 3. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
 4. **Monitor memory usage** across all GPUs to ensure balanced workload
 
-<Tip warning={true}>
+### Packing Strategy Options
 
-**Critical**: Context Parallelism requires sequences to be divisible by `cp_size * 2`. You **must** use `packing_strategy="wrapped"` instead of the default "bfd" strategy. The "wrapped" strategy creates sequences of exactly `max_seq_length` tokens, ensuring compatibility, while "bfd" can create variable-length sequences (like 793 tokens) that will cause assertion errors.
+**Option 1: Wrapped Strategy (Recommended for maximum efficiency)**
+```bash
+--packing_strategy wrapped
+```
+- Creates sequences of exactly `max_seq_length` tokens
+- Guaranteed Context Parallelism compatibility
+- More aggressive packing but may cut sequences mid-sentence
 
-</Tip>
+**Option 2: BFD Strategy with Padding (Recommended for sequence quality)**
+```bash
+--packing_strategy bfd --pad_to_multiple_of 4  # For cp_size=2
+```
+- Preserves sequence boundaries (better training quality)
+- Data collator ensures compatibility by padding during batch creation
+- Slightly less efficient but maintains data integrity
 
 ## vLLM sleep mode
 
