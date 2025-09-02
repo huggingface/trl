@@ -27,7 +27,7 @@ training_args = SFTConfig(
 )
 ```
 
-You can also group related experiments by project:
+You can also group related experiments by project by setting the following environment variable:
 
 ```bash
 export TRACKIO_PROJECT="my_project"
