@@ -350,9 +350,11 @@ class GRPOTrainer(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
+        self.vllm_importance_sampling_correction = args.vllm_importance_sampling_correction
+        self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
-        self.scale_rewards = {True: "group", False: "none"}.get(args.scale_rewards, args.scale_rewards)
+        self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
@@ -1183,7 +1185,7 @@ class GRPOTrainer(Trainer):
                         ordered_set_of_images = None
 
                     with profiling_context(self, "vLLM.generate"):
-                        completion_ids = self.vllm_client.generate(
+                        output = self.vllm_client.generate(
                             prompts=ordered_set_of_prompts,
                             images=ordered_set_of_images,
                             n=self.num_generations,
@@ -1196,16 +1198,21 @@ class GRPOTrainer(Trainer):
                             guided_decoding_regex=self.guided_decoding_regex,
                             generation_kwargs=self.args.generation_kwargs,
                         )
+                        payload = (output["completion_ids"], output["logprobs"])
                 else:
-                    completion_ids = [None] * len(all_prompts_text)
-                # Broadcast the completions from the main process to all processes, ensuring each process receives its
-                # corresponding slice.
-                completion_ids = broadcast_object_list(completion_ids, from_process=0)
+                    payload = None
+
+                # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
+                obj_list = [payload]
+                broadcast_object_list(obj_list, from_process=0)
+                completion_ids, all_logprobs = obj_list[0]
+
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
                 completion_ids = completion_ids[process_slice]
+                all_logprobs = all_logprobs[process_slice]
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
@@ -1223,6 +1230,7 @@ class GRPOTrainer(Trainer):
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
                     "guided_decoding": guided_decoding,
+                    "logprobs": 0,  # only return the logprob of the generated token
                 }
                 if self.args.generation_kwargs is not None:
                     generation_kwargs.update(self.args.generation_kwargs)
@@ -1260,6 +1268,11 @@ class GRPOTrainer(Trainer):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+                all_logprobs = [
+                    [next(iter(lp.values())).logprob for lp in output.logprobs]
+                    for outputs in all_outputs
+                    for output in outputs.outputs
+                ]
 
                 if self.vllm_tensor_parallel_size > 1:
                     # Slice completions for this rank within its TP group.
@@ -1267,6 +1280,7 @@ class GRPOTrainer(Trainer):
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
+                    all_logprobs = all_logprobs[tp_slice]
 
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=1)
@@ -1275,6 +1289,10 @@ class GRPOTrainer(Trainer):
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+            sampling_per_token_logps = [
+                torch.tensor(logprobs, device=device, dtype=torch.float32) for logprobs in all_logprobs
+            ]
+            sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0)
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
@@ -1363,8 +1381,12 @@ class GRPOTrainer(Trainer):
             # samples may come from an earlier version of the model. In that case, we need to track old_per_token_logps
             # for importance sampling. If the steps are aligned, importance sampling isn't necessary and we set
             # old_per_token_logps to None.
+            # When using vLLM, we always compute old_per_token_logps for importance sampling, it was shown that the
+            # distribution mismatch between vLLM and the training model can be large and harm the training.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            if self.args.gradient_accumulation_steps % generate_every != 0:
+            if self.args.gradient_accumulation_steps % generate_every != 0 or (
+                self.use_vllm and self.vllm_importance_sampling_correction
+            ):
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
@@ -1378,6 +1400,13 @@ class GRPOTrainer(Trainer):
                 )
             else:
                 old_per_token_logps = None
+
+            # Compute the importance sampling ratio when using vLLM, to correct for potential distribution mismatch
+            if self.use_vllm and self.vllm_importance_sampling_correction:
+                importance_sampling_ratio = torch.exp(old_per_token_logps - sampling_per_token_logps)
+                importance_sampling_ratio = torch.clamp(
+                    importance_sampling_ratio, max=self.vllm_importance_sampling_cap
+                )
 
             # Compute the per-token log probabilities for the reference model
             if self.beta != 0.0:
@@ -1434,11 +1463,11 @@ class GRPOTrainer(Trainer):
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
 
-        if self.scale_rewards in ["batch", "none"]:
+        if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
             std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
             std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
-        elif self.scale_rewards == "group":
+        elif self.scale_rewards == "batch":
             # Compute global std
             std_rewards = rewards.std().expand_as(rewards)
         else:
@@ -1447,7 +1476,7 @@ class GRPOTrainer(Trainer):
             )
 
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
-        if self.scale_rewards in ["batch", "none"]:
+        if self.scale_rewards != "none":
             advantages = advantages / (std_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
@@ -1499,6 +1528,38 @@ class GRPOTrainer(Trainer):
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
+        if self.use_vllm and self.vllm_importance_sampling_correction:
+            delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
+            delta = delta[completion_mask.bool()]
+            mean_delta = torch.mean(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
+            max_delta = torch.max(delta) if delta.numel() > 0 else torch.tensor(0.0, device=device)
+            self._metrics[mode]["sampling/sampling_logp_difference/mean"].append(
+                self.accelerator.gather(mean_delta).mean().item()
+            )
+            self._metrics[mode]["sampling/sampling_logp_difference/max"].append(
+                self.accelerator.gather(max_delta).max().item()
+            )
+
+            flat_is_ratio = importance_sampling_ratio[completion_mask.bool()]
+            min_importance_sampling_ratio = (
+                torch.min(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            mean_importance_sampling_ratio = (
+                torch.mean(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            max_importance_sampling_ratio = (
+                torch.max(flat_is_ratio) if flat_is_ratio.numel() > 0 else torch.tensor(0.0, device=device)
+            )
+            self._metrics[mode]["sampling/importance_sampling_ratio/min"].append(
+                nanmin(self.accelerator.gather(min_importance_sampling_ratio)).item()
+            )
+            self._metrics[mode]["sampling/importance_sampling_ratio/mean"].append(
+                self.accelerator.gather(mean_importance_sampling_ratio).nanmean().item()
+            )
+            self._metrics[mode]["sampling/importance_sampling_ratio/max"].append(
+                nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
+            )
+
         output = {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
@@ -1509,6 +1570,8 @@ class GRPOTrainer(Trainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
+        if self.use_vllm and self.vllm_importance_sampling_correction:
+            output["importance_sampling_ratio"] = importance_sampling_ratio
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in prompt_inputs:
@@ -1609,9 +1672,11 @@ class GRPOTrainer(Trainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
-        # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
-        # old_per_token_logps == per_token_logps, so we can skip it's computation
-        # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
+        # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
+        # old_per_token_logps == per_token_logps. In this case we can skip its computation
+        # (see _generate_and_score_completions) and instead use per_token_logps.detach().
+        # The exception is when using vLLM, where we always compute old_per_token_logps
+        # for importance sampling
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
@@ -1641,6 +1706,10 @@ class GRPOTrainer(Trainer):
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
+
+        if self.use_vllm and self.vllm_importance_sampling_correction:
+            per_token_loss = per_token_loss * inputs["importance_sampling_ratio"]
+
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
 
