@@ -350,7 +350,7 @@ accelerate launch \
     trl/scripts/sft.py \
     --model_name_or_path Qwen/Qwen2-0.5B \
     --dataset_name trl-lib/Capybara \
-    --max_seq_length 2048 \
+    --max_seq_length 16384 \
     --packing \
     --pad_to_multiple_of 4 \
     --torch_dtype bfloat16 \
