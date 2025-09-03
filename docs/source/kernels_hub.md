@@ -57,13 +57,19 @@ The experiments were run on a single **H100 GPU** with **CUDA 12.9**, leveraging
 Keep in mind that the results shown here are specific to this setup and may vary with different training configurations.
 
 The following figure illustrates both **latency** (time per training step) and **peak allocated memory** for the different attention implementations and kernel backends.  
-Kernel-based implementations perform on par with custom-installed attention, and increasing the model’s `max_length` further enhances performance. Memory consumption is similar across all implementations, showing no significant differences. We get the same performance but with less friction, as described in [a following section](#benchmarking-flash-attention-build-from-source-vs-hub-kernels).
+Kernel-based implementations perform on par with custom-installed attention, and increasing the model’s `max_length` further enhances performance. Memory consumption is similar across all implementations, showing no significant differences. We get the same performance but with less friction, as described in [the following section](#benchmarking-flash-attention-build-from-source-vs-hub-kernels).
 
 
 <div class="flex justify-center">
   <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kernels_guide_latency.png" alt="Latency and Memory Usage" width="600"/>
   <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kernels_guide_peak_allocated_memory.png" alt="Latency and Memory Usage" width="600"/>
 </div>
+
+## Flash Attention (Build-from-Source) vs. Hub Kernels
+
+Building Flash Attention from source can be time-consuming, often taking anywhere from several minutes to hours, depending on your hardware, CUDA/PyTorch configuration, and whether precompiled wheels are available.  
+
+In contrast, **Hugging Face Kernels** provide a much faster and more reliable workflow. Developers don’t need to worry about complex setups—everything is handled automatically. In our benchmarks, kernels were ready to use in about **2.5 seconds**, with no compilation required. This allows you to start training almost instantly, significantly accelerating development. Simply specify the desired version, and `kernels` takes care of the rest.
 
 ## Combining FlashAttention Kernels with Liger Kernels
 
@@ -95,9 +101,4 @@ training_args = SFTConfig(
 
 Learn more about this integration [here](./liger_kernel_integration).
 
-## Benchmarking: Flash Attention (Build-from-Source) vs. Hub Kernels
-
-Building Flash Attention from source can be time-consuming, often taking anywhere from several minutes to hours, depending on your hardware, CUDA/PyTorch configuration, and whether precompiled wheels are available.  
-
-In contrast, **Hugging Face Kernels** provide a much faster and more reliable workflow. Developers don’t need to worry about complex setups—everything is handled automatically. In our benchmarks, kernels were ready to use in about **2.5 seconds**, with no compilation required. This allows you to start training almost instantly, significantly accelerating development. Simply specify the desired version, and `kernels` takes care of the rest.
 
