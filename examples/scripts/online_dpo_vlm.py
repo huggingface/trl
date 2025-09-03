@@ -83,6 +83,7 @@ python examples/scripts/online_dpo_vlm.py \
 """
 
 import os
+
 import torch
 import transformers
 from datasets import load_dataset
@@ -102,6 +103,7 @@ from trl import (
     get_quantization_config,
 )
 from trl.rewards import think_format_reward
+
 
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
