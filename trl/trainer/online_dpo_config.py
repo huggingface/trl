@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -47,7 +48,7 @@ class OnlineDPOConfig(TrainingArguments):
         missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
             generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
-            value. **Note**: This parameter only works when using `reward_funcs` and not when using `judge`.
+            value. This parameter only works when using `reward_funcs` and not when using `judge`.
         beta (`float` or `list[float]`, *optional*, defaults to `0.1`):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
@@ -371,10 +372,22 @@ class OnlineDPOConfig(TrainingArguments):
         },
     )
 
+    # Deprecated parameters
+    dataset_num_proc: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
+
+        if self.dataset_num_proc is not None:
+            warnings.warn(
+                "The parameter `dataset_num_proc` is deprecated and will be removed in version 0.25.0. "
+                "Since OnlineDPO does not involve dataset preparation, you can safely remove it.",
+            )
 
         if hasattr(self.beta, "__len__") and len(self.beta) == 1:
             self.beta = self.beta[0]
