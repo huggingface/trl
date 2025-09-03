@@ -335,23 +335,6 @@ parallelism_config:
 You can configure context parallelism training either programmatically or via command line:
 
 **Option 1: Using SFTConfig**
-
-**With Wrapped Strategy:**
-```python
-from trl import SFTConfig
-
-training_args = SFTConfig(
-    max_seq_length=2048,              # Long sequence length
-    packing=True,
-    packing_strategy="wrapped",       # Ensures consistent sequence lengths
-    torch_dtype="bfloat16",           # Memory efficient precision
-    use_liger_kernel=True,            # Compatible with Context Parallelism
-    # Standard training arguments...
-    per_device_train_batch_size=1,
-)
-```
-
-**With BFD Strategy:**
 ```python
 from trl import SFTConfig
 
@@ -367,24 +350,7 @@ training_args = SFTConfig(
 )
 ```
 
-**Option 2: Using Command Line with sft.py**
-
-**With Wrapped Strategy:**
-```bash
-accelerate launch \
-    --config_file examples/accelerate_configs/context_parallel_2gpu.yaml \
-    trl/scripts/sft.py \
-    --model_name_or_path Qwen/Qwen2-0.5B \
-    --dataset_name trl-lib/Capybara \
-    --max_seq_length 2048 \
-    --packing \
-    --packing_strategy wrapped \
-    --torch_dtype bfloat16 \
-    --use_liger_kernel \
-    --per_device_train_batch_size 1
-```
-
-**With BFD Strategy:**
+**Option 2: Using Command Line with `sft.py`**
 ```bash
 accelerate launch \
     --config_file examples/accelerate_configs/context_parallel_2gpu.yaml \
@@ -405,24 +371,15 @@ accelerate launch \
 
 ### Best Practices
 
-1. **Use compatible packing strategies** - Context Parallelism requires sequences divisible by `cp_size * 2`. You have two options:
-   - `packing_strategy="wrapped"` - Always creates sequences of exactly `max_seq_length` tokens
-   - `packing_strategy="bfd"` with `pad_to_multiple_of=cp_size*2` - Preserves sequence boundaries and uses the data collator to ensure compatibility
+1. **Use compatible packing strategies** - Context Parallelism requires sequences divisible by `cp_size * 2`.
+   - Boundary-preserving packing (use `packing_strategy="bfd"` with `pad_to_multiple_of=cp_size*2`) - Preserves sequence boundaries and uses the data collator to ensure compatibility
 2. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
 3. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
 4. **Monitor memory usage** across all GPUs to ensure balanced workload
 
 ### Packing Strategy Options
 
-**Option 1: Wrapped Strategy (Recommended for maximum efficiency)**
-```bash
---packing_strategy wrapped
-```
-- Creates sequences of exactly `max_seq_length` tokens
-- Guaranteed Context Parallelism compatibility
-- More aggressive packing but may cut sequences mid-sentence
-
-**Option 2: BFD Strategy with Padding (Recommended for sequence quality)**
+**BFD Strategy with Padding (Recommended)**
 ```bash
 --packing_strategy bfd --pad_to_multiple_of 4  # For cp_size=2
 ```
