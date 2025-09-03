@@ -84,7 +84,7 @@ writer.writerow(["model_id", "mean_toxicity", "std_toxicity"])
 
 
 for model_id in tqdm(MODELS_TO_TEST):
-    model = AutoModelForCausalLM.from_pretrained(model_id, device_map={"": device}, torch_dtype=torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(model_id, device_map={"": device}, dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
