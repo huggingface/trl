@@ -402,14 +402,8 @@ accelerate launch \
     --packing_strategy bfd \
     --pad_to_multiple_of 4 \
     --torch_dtype bfloat16 \
-    --gradient_checkpointing \
     --use_liger_kernel \
-    --output_dir ./sft-context-parallel-bfd \
-    --learning_rate 2e-5 \
     --per_device_train_batch_size 1 \
-    --num_train_epochs 1 \
-    --logging_steps 10 \
-    --report_to none
 ```
 
 </hfoption>
