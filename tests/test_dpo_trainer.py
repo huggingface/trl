@@ -172,12 +172,6 @@ class DPOTrainerTester(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
     def test_train(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -238,6 +232,39 @@ class DPOTrainerTester(TrlTestCase):
         )
         trainer = DPOTrainer(
             model=model_id,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
+    @require_liger_kernel
+    def test_train_encoder_decoder_liger(self):
+        model_id = "trl-internal-testing/tiny-BartModel"
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        training_args = DPOConfig(
+            output_dir="selftmp_dir",
+            per_device_train_batch_size=2,
+            learning_rate=9e-1,
+            report_to="none",
+            use_liger_loss=True,
+        )
+        trainer = DPOTrainer(
+            model=model,
             args=training_args,
             processing_class=tokenizer,
             train_dataset=dataset,
