@@ -1359,7 +1359,9 @@ class GRPOTrainer(Trainer):
             # When using vLLM, we always compute old_per_token_logps for importance sampling, it was shown that the
             # distribution mismatch between vLLM and the training model can be large and harm the training.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            if self.args.gradient_accumulation_steps % generate_every != 0 or self.use_vllm:
+            if self.args.gradient_accumulation_steps % generate_every != 0 or (
+                self.use_vllm and self.vllm_importance_sampling_correction
+            ):
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
@@ -1645,9 +1647,11 @@ class GRPOTrainer(Trainer):
 
         # Compute the loss
         advantages = inputs["advantages"]
-        # When using num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps
-        # old_per_token_logps == per_token_logps, so we can skip it's computation
-        # (see _generate_and_score_completions) and use per_token_logps.detach() instead.
+        # When num_iterations == 1 and steps_per_generation <= gradient_accumulation_steps,
+        # old_per_token_logps == per_token_logps. In this case we can skip its computation
+        # (see _generate_and_score_completions) and instead use per_token_logps.detach().
+        # The exception is when using vLLM, where we always compute old_per_token_logps
+        # for importance sampling
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
