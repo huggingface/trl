@@ -27,7 +27,7 @@ from transformers import AutoModelForCausalLM
 
 model = AutoModelForCausalLM.from_pretrained(
     "your-model-name",
-    attn_implementation="kernels-community/flash-attn"  # other options: kernels-community/flash-attn3, kernels-community/vllm-flash-attn3, kernels-community/paged-attention
+    attn_implementation="kernels-community/flash-attn"  # other options: kernels-community/vllm-flash-attn3, kernels-community/paged-attention
 )
 ```
 
