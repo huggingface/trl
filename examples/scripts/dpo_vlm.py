@@ -17,6 +17,8 @@
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
 #     "Pillow>=9.4.0",
+#     "torchvision",
+#     "trackio",
 # ]
 # ///
 
@@ -34,8 +36,7 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --lora_target_modules=all-linear \
-    --report_to wandb
+    --lora_target_modules all-linear
 ```
 
 With dataset streaming:
@@ -53,14 +54,15 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --torch_dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
-    --lora_target_modules=all-linear \
-    --report_to wandb
+    --lora_target_modules all-linear
 ```
 """
 
+import os
+
 import torch
 from datasets import load_dataset
-from transformers import AutoModelForVision2Seq, AutoProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 from trl import (
     DPOConfig,
@@ -73,6 +75,9 @@ from trl import (
     get_quantization_config,
 )
 
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, DPOConfig, ModelConfig))
@@ -93,14 +98,14 @@ if __name__ == "__main__":
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path,
         trust_remote_code=model_args.trust_remote_code,
         **model_kwargs,
     )
     peft_config = get_peft_config(model_args)
     if peft_config is None:
-        ref_model = AutoModelForVision2Seq.from_pretrained(
+        ref_model = AutoModelForImageTextToText.from_pretrained(
             model_args.model_name_or_path,
             trust_remote_code=model_args.trust_remote_code,
             **model_kwargs,

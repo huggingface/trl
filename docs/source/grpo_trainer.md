@@ -14,10 +14,10 @@ This post-training method was contributed by [Quentin Gallouédec](https://huggi
 
 ## Quick start
 
-This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [TLDR dataset](https://huggingface.co/datasets/trl-lib/tldr) (completion column is ignored!). You can view the data in the dataset here:
+This example demonstrates how to train a model using the GRPO method. We train a [Qwen 0.5B Instruct model](https://huggingface.co/Qwen/Qwen2-0.5B-Instruct) with the prompts from the [UltraFeedback prompts dataset](https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt). You can view the data in the dataset here:
 
 <iframe
-  src="https://huggingface.co/datasets/trl-lib/tldr/embed/viewer/default/train?row=0"
+  src="https://huggingface.co/datasets/trl-lib/ultrafeedback-prompt/embed/viewer/default/train?row=0"
   frameborder="0"
   width="100%"
   height="560px"
@@ -30,16 +30,18 @@ Below is the script to train the model.
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
 
-dataset = load_dataset("trl-lib/tldr", split="train")
+dataset = load_dataset("trl-lib/ultrafeedback-prompt", split="train")
 
-# Define the reward function, which rewards completions that are close to 20 characters
-def reward_len(completions, **kwargs):
-    return [-abs(20 - len(completion)) for completion in completions]
+# Dummy reward function for demonstration purposes
+def reward_num_unique_letters(completions, **kwargs):
+    """Reward function that rewards completions with more unique letters."""
+    completion_contents = [completion[0]["content"] for completion in completions]
+    return [float(len(set(content))) for content in completion_contents]
 
 training_args = GRPOConfig(output_dir="Qwen2-0.5B-GRPO")
 trainer = GRPOTrainer(
     model="Qwen/Qwen2-0.5B-Instruct",
-    reward_funcs=reward_len,
+    reward_funcs=reward_num_unique_letters,
     args=training_args,
     train_dataset=dataset,
 )
@@ -68,7 +70,7 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 
 ### Computing the advantage
 
-For each of the  \\( G \\) sequences, we compute the reward using a reward model. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
+For each of the  \\( G \\) sequences, we compute the reward using a reward model or reward function. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:
 
 $$\hat{A}_{i,t} = \frac{r_i - \text{mean}(\mathbf{r})}{\text{std}(\mathbf{r})}$$
 
@@ -77,6 +79,12 @@ This approach gives the method its name: **Group Relative Policy Optimization (G
 <Tip>
 
 It was shown in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that scaling by  \\( \text{std}(\mathbf{r}) \\) may cause a question-level difficulty bias. You can disable this scaling by setting `scale_rewards=False` in [`GRPOConfig`].
+
+</Tip>
+
+<Tip>
+
+[Part I: Tricks or Traps? A Deep Dive into RL for LLM Reasoning (Lite PPO)](https://huggingface.co/papers/2508.08221) showed that calculating the mean at the local (group) level and the standard deviation at the global (batch) level enables more robust reward shaping. You can use this scaling strategy by setting `scale_rewards="batch"` in [`GRPOConfig`].
 
 </Tip>
 
@@ -138,6 +146,7 @@ $$
 \mathcal{L}_{\text{DAPO}}(\theta) = - \frac{1}{\sum_{i=1}^G |o_i|} \sum_{i=1}^G \sum_{t=1}^{|o_i|} l_{i,t},
 $$
 
+To use this formulation, set `loss_type="dapo"` in [`GRPOConfig`].
 
 Furthermore, it was demonstrated in the paper [Understanding R1-Zero-Like Training: A Critical Perspective](https://huggingface.co/papers/2503.20783) that the initial GRPO formulation introduces a response length bias. They show that while the DAPO formulation reduces this bias, it does not eliminate it completely. To fully remove this bias, they propose dividing by a constant instead of the sequence length, resulting in the following formulation:
 
@@ -148,6 +157,8 @@ $$
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
 ## Logged metrics
+
+While training and evaluating, we record the following reward metrics:
 
 - `num_tokens`: The total number of tokens processed so far, including both prompts and completions.
 - `completions/mean_length`: The average length of generated completions.
@@ -160,7 +171,9 @@ This constant is recommended to be the maximum completion length. To use this fo
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after applying reward weights.
-- `reward_std`: The standard deviation of the overall reward within each batch after applying reward weights.
+- `reward_std`: The standard deviation of rewards after applying reward weights.  
+  - If `scale_rewards` is `"group"` or `"none"`, this is the average of the per-group standard deviations.
+  - If `scale_rewards` is `"batch"`, this is the standard deviation computed over all rewards in the batch (ignoring groups).
 - `frac_reward_zero_std`: The fraction of samples in the generation batch with a reward std of zero, implying there is little diversity for that prompt (all answers are correct or incorrect).
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
@@ -239,6 +252,8 @@ We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-mem
 ></iframe>
 
 If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
+
+If you still find you are getting out-of-memory errors set `vllm_sleep_enabled` to True and the vllm parameters and cache will be offloaded during the optimization step. For more information, see [Reducing Memory Usage with vLLM Sleep Mode](reducing_memory_usage#vllm-sleep-mode).
 
 </Tip>
 

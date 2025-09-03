@@ -102,7 +102,8 @@ class WeightSyncWorkerExtension:
             world_size (`int`):
                 Total number of participating processes in the update group.
             client_device_uuid (`str`):
-                UUID of the device of client main process. Used to assert that devices are different from vllm workers devices.
+                UUID of the device of client main process. Used to assert that devices are different from vllm workers
+                devices.
         """
         if self.pynccl_comm is not None:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
@@ -376,6 +377,17 @@ def chunk_list(lst: list, n: int) -> list[list]:
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
 
+def sanitize_logprob(logprob):
+    import math
+
+    value = logprob.logprob
+    if math.isnan(value):
+        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
+        return None
+
+    return value
+
+
 def main(script_args: ScriptArguments):
     if not is_fastapi_available():
         raise ImportError(
@@ -467,6 +479,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
+        logprobs: list[list[float]]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -476,20 +489,31 @@ def main(script_args: ScriptArguments):
         Args:
             request (`GenerateRequest`):
                 - `prompts` (list of `str`): A list of prompts (text strings) for the model to generate completions.
-                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process along with prompts.
+                - `images` (list of `str`, *optional*, default to `None`): A list of base64 encoded images to process
+                  along with prompts.
                 - `n` (`int`, *optional*, defaults to `1`): Number of completions to generate for each prompt.
-                - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during generation.
-                - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead to more random outputs.
-                - `top_p` (`float`, *optional*, defaults to `1.0`): Top-p (nucleus) sampling parameter. It controls the diversity of the generated text.
-                - `top_k` (`int`, *optional*, defaults to `-1`): Top-k sampling parameter. If set to `-1`, it disables top-k sampling.
+                - `repetition_penalty` (`float`, *optional*, defaults to `1.0`): Repetition penalty to apply during
+                  generation.
+                - `temperature` (`float`, *optional*, defaults to `1.0`): Temperature for sampling. Higher values lead
+                  to more random outputs.
+                - `top_p` (`float`, *optional*, defaults to `1.0`): Top-p (nucleus) sampling parameter. It controls the
+                  diversity of the generated text.
+                - `top_k` (`int`, *optional*, defaults to `-1`): Top-k sampling parameter. If set to `-1`, it disables
+                  top-k sampling.
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
-                - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each completion.
-                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the model will only generate tokens that match this regex pattern.
-                - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they will override them.
+                - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
+                  completion.
+                - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
+                  model will only generate tokens that match this regex pattern.
+                - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
+                  `SamplingParams`. This can include parameters like `seed`, `frequency_penalty`, etc. If it contains
+                  keys that conflict with the other parameters, they will override them.
 
         Returns:
             `GenerateResponse`:
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
+                - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
+                  generated completions.
 
         Example request:
         ```json
@@ -498,7 +522,7 @@ def main(script_args: ScriptArguments):
 
         Example response:
         ```json
-        {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
+        {"completion_ids": [[101, 102, 103], [201, 202, 203]], "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]}
         ```
         """
         request.images = request.images or [None] * len(request.prompts)
@@ -525,6 +549,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
+            "logprobs": 0,
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
@@ -551,7 +576,12 @@ def main(script_args: ScriptArguments):
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids}
+        logprobs: list[list[float]] = [
+            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
+            for outputs in all_outputs
+            for output in outputs.outputs
+        ]
+        return {"completion_ids": completion_ids, "logprobs": logprobs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str

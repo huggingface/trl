@@ -87,6 +87,12 @@ class BCOConfig(TrainingArguments):
             "will be interpreted as ratio of total training steps."
         },
     )
+    gradient_checkpointing: bool = field(
+        default=True,
+        metadata={
+            "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
+        },
+    )
     bf16: Optional[bool] = field(
         default=None,
         metadata={

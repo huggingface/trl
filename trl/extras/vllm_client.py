@@ -209,8 +209,11 @@ class VLLMClient:
                 will override them.
 
         Returns:
-            `list[list[int]]`:
-                List of lists of token IDs representing the model-generated completions for each prompt.
+            `dict` with keys:
+                - `completion_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the model-generated completions for each prompt.
+                - `logprobs` (`list[list[float]]`):
+                    List of lists of log probabilities for each generated token.
         """
         url = f"{self.base_url}/generate/"
 
@@ -240,7 +243,8 @@ class VLLMClient:
             },
         )
         if response.status_code == 200:
-            return response.json()["completion_ids"]
+            json_response = response.json()
+            return {"completion_ids": json_response["completion_ids"], "logprobs": json_response["logprobs"]}
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -250,8 +254,8 @@ class VLLMClient:
 
         Args:
             device (`torch.device`, `str`, or `int`, *optional*, defaults to `0`):
-                Device of trainer main process. It's the device that will be used for the weights synchronization.
-                Can be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
+                Device of trainer main process. It's the device that will be used for the weights synchronization. Can
+                be a `torch.device` object, a string like `'cuda:0'`, or an integer device index.
         """
         # Get the world size from the server
         url = f"{self.base_url}/get_world_size/"

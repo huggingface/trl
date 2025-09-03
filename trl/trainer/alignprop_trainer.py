@@ -20,8 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
 import torch
-from accelerate import Accelerator
-from accelerate.logging import get_logger
+from accelerate import Accelerator, logging
 from accelerate.utils import ProjectConfiguration, set_seed
 from huggingface_hub import PyTorchModelHubMixin
 from transformers import is_wandb_available
@@ -34,7 +33,7 @@ from .utils import generate_model_card, get_comet_experiment_url
 if is_wandb_available():
     import wandb
 
-logger = get_logger(__name__)
+logger = logging.get_logger(__name__)
 
 
 class AlignPropTrainer(PyTorchModelHubMixin):
@@ -71,7 +70,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
             DeprecationWarning,
         )
         if image_samples_hook is None:
-            warnings.warn("No image_samples_hook provided; no images will be logged")
+            logger.warning("No image_samples_hook provided; no images will be logged")
 
         self.prompt_fn = prompt_function
         self.reward_fn = reward_function
@@ -156,7 +155,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
 
         # Enable TF32 for faster training on Ampere GPUs,
         # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
-        if self.config.allow_tf32:
+        if self.config.allow_tf32 and torch.cuda.is_available():
             torch.backends.cuda.matmul.allow_tf32 = True
 
         self.optimizer = self._setup_optimizer(
@@ -442,8 +441,12 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{prabhudesai2024aligning,
             title        = {{Aligning Text-to-Image Diffusion Models with Reward Backpropagation}},

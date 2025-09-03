@@ -89,6 +89,7 @@ class PolicyAndValueWrapper(nn.Module):
         self.policy = policy
         self.value_model = value_model
         self.critic_backbone = getattr(value_model, value_model.base_model_prefix)
+        self.is_gradient_checkpointing = policy.is_gradient_checkpointing
 
     def forward(self, **kwargs):
         output = self.critic_backbone(**kwargs)
@@ -681,7 +682,7 @@ class PPOTrainer(Trainer):
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
         if self.control.should_save:
-            self._save_checkpoint(model, trial=None, metrics=None)
+            self._save_checkpoint(model, trial=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
@@ -793,8 +794,12 @@ class PPOTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{mziegler2019fine-tuning,
             title        = {{Fine-Tuning Language Models from Human Preferences}},

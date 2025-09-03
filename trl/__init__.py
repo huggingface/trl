@@ -12,28 +12,34 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.21.0.dev0"
-
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
 
 
+try:
+    __version__ = version("trl")
+except PackageNotFoundError:
+    __version__ = "unknown"
+
 _import_structure = {
-    "scripts": ["init_zero_verbose", "ScriptArguments", "TrlParser"],
+    "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
     "data_utils": [
         "apply_chat_template",
         "extract_prompt",
         "is_conversational",
+        "is_conversational_from_value",
         "maybe_apply_chat_template",
         "maybe_convert_to_chatml",
         "maybe_extract_prompt",
         "maybe_unpair_preference_dataset",
         "pack_dataset",
+        "prepare_multimodal_messages",
         "truncate_dataset",
         "unpair_preference_dataset",
     ],
-    "environment": ["TextEnvironment", "TextHistory"],
     "extras": ["BestOfNSampler"],
     "models": [
         "SUPPORTED_ARCHITECTURES",
@@ -70,7 +76,6 @@ _import_structure = {
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
-        "MergeModelCallback",
         "ModelConfig",
         "NashMDConfig",
         "NashMDTrainer",
@@ -94,7 +99,7 @@ _import_structure = {
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.callbacks": ["BEMACallback", "MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
@@ -119,15 +124,16 @@ if TYPE_CHECKING:
         apply_chat_template,
         extract_prompt,
         is_conversational,
+        is_conversational_from_value,
         maybe_apply_chat_template,
         maybe_convert_to_chatml,
         maybe_extract_prompt,
         maybe_unpair_preference_dataset,
         pack_dataset,
+        prepare_multimodal_messages,
         truncate_dataset,
         unpair_preference_dataset,
     )
-    from .environment import TextEnvironment, TextHistory
     from .extras import BestOfNSampler
     from .models import (
         SUPPORTED_ARCHITECTURES,
@@ -138,7 +144,7 @@ if TYPE_CHECKING:
         create_reference_model,
         setup_chat_format,
     )
-    from .scripts import ScriptArguments, TrlParser, init_zero_verbose
+    from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
         AlignPropConfig,
         AlignPropTrainer,
@@ -165,7 +171,6 @@ if TYPE_CHECKING:
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
-        MergeModelCallback,
         ModelConfig,
         NashMDConfig,
         NashMDTrainer,
@@ -189,7 +194,7 @@ if TYPE_CHECKING:
         XPOConfig,
         XPOTrainer,
     )
-    from .trainer.callbacks import RichProgressCallback, SyncRefModelCallback
+    from .trainer.callbacks import BEMACallback, MergeModelCallback, RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
 
     try:
