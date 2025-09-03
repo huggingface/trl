@@ -167,7 +167,7 @@ class RLOOTrainerTester(TrlTestCase):
 
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            torch_dtype=torch.float32,  # Use float32 for testing to avoid precision issues
+            dtype=torch.float32,  # Use float32 for testing to avoid precision issues
         )
 
         lora_config = LoraConfig(
