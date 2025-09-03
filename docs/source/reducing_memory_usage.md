@@ -361,14 +361,9 @@ training_args = SFTConfig(
     packing_strategy="bfd",           # Preserves sequence boundaries
     pad_to_multiple_of=4,             # Required: ensures divisibility by cp_size * 2
     torch_dtype="bfloat16",           # Memory efficient precision
-    gradient_checkpointing=True,      # Further memory savings
     use_liger_kernel=True,            # Compatible with Context Parallelism
     # Standard training arguments...
-    output_dir="./sft-context-parallel-bfd",
-    learning_rate=2e-5,
     per_device_train_batch_size=1,
-    num_train_epochs=1,
-    logging_steps=10,
 )
 ```
 
