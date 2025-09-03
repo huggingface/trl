@@ -309,6 +309,15 @@ class SFTTrainer(Trainer):
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoTokenizer.from_pretrained`].
+        compute_loss_func (`Callable`, *optional*):
+            A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
+            batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618) used by [`Trainer`].
+        compute_metrics (`Callable[[EvalPrediction], Dict]`, *optional*):
+            The function that will be used to compute metrics at evaluation. Must take a [`EvalPrediction`] and return
+            a dictionary string to metric values. *Note* When passing TrainingArgs with `batch_eval_metrics` set to
+            `True`, your compute_metrics function must take a boolean `compute_result` argument. This will be triggered
+            after the last eval batch to signal that the function needs to calculate and return the global summary
+            statistics rather than accumulating the batch-level statistics
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
