@@ -21,8 +21,6 @@
     title: Command Line Interface (CLI)
   - local: jobs_training
     title: Training using Jobs
-  - local: kernels_hub
-    title: Kernels Hub Integration and Usage
   - local: customization
     title: Customizing the Training
   - local: reducing_memory_usage
@@ -37,6 +35,8 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
+  - local: kernels_hub
+    title: Kernels Hub Integration and Usage
   - local: liger_kernel_integration
     title: Liger Kernel
   - local: peft_integration
