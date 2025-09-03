@@ -275,7 +275,7 @@ Context Parallelism (CP) is a parallelization technique that enables training wi
 For more details on Context Parallelism, see the [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism).
 
 Context parallelism is particularly useful when:
-- You want to train with very long sequences (>2048 tokens)
+- You want to train with very long sequences (>32k tokens)
 - Single GPU memory is insufficient for your desired sequence length
 - You need to maintain sequence coherence across the full context
 
