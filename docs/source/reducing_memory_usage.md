@@ -345,7 +345,6 @@ training_args = SFTConfig(
     packing=True,
     packing_strategy="wrapped",       # Ensures consistent sequence lengths
     torch_dtype="bfloat16",           # Memory efficient precision
-    gradient_checkpointing=True,      # Further memory savings
     use_liger_kernel=True,            # Compatible with Context Parallelism
     # Standard training arguments...
     learning_rate=2e-5,
