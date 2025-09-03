@@ -9,7 +9,7 @@ Kernels are **optimized code pieces** that help in model development, training, 
 
 ## Installation
 
-To use kernels, install the library:
+To use kernels with TRL, you'd need to install the library in your Python environment:
 
 ```bash
 pip install kernels
