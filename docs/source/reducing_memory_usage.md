@@ -348,7 +348,6 @@ training_args = SFTConfig(
     gradient_checkpointing=True,      # Further memory savings
     use_liger_kernel=True,            # Compatible with Context Parallelism
     # Standard training arguments...
-    output_dir="./sft-context-parallel-wrapped",
     learning_rate=2e-5,
     per_device_train_batch_size=1,
 )
