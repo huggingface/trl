@@ -15,6 +15,7 @@
 import os
 import re
 import textwrap
+import warnings
 from contextlib import nullcontext
 from functools import wraps
 from pathlib import Path
@@ -181,11 +182,8 @@ class OnlineDPOTrainer(Trainer):
         self,
         model: Union[PreTrainedModel, nn.Module, str],
         ref_model: Union[PreTrainedModel, nn.Module, None] = None,
-        judge: Optional[BasePairwiseJudge] = None,
         reward_funcs: Optional[Union[RewardFunc, list[RewardFunc]]] = None,
-        # Deprecated parameters for backward compatibility
-        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
+        judge: Optional[BasePairwiseJudge] = None,
         args: Optional[OnlineDPOConfig] = None,
         data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -197,6 +195,9 @@ class OnlineDPOTrainer(Trainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        # Deprecated parameters
+        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
+        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
     ) -> None:
         if ref_model is model:
             raise ValueError(
@@ -208,39 +209,32 @@ class OnlineDPOTrainer(Trainer):
 
         # Handle deprecated parameters for backward compatibility
         if reward_model is not None:
-            logger.warning(
-                "The `reward_model` parameter is deprecated and will be removed in a future version. "
+            warnings.warn(
+                "The `reward_model` parameter is deprecated and will be removed in version 0.25.0. "
                 "Please use `reward_funcs` instead. For example, change `reward_model=model` to `reward_funcs=model`.",
-                DeprecationWarning,
-                stacklevel=2,
             )
             # Convert old reward_model to new reward_funcs format
             if reward_funcs is None:
                 reward_funcs = reward_model
             else:
-                logger.warning(
-                    "Both `reward_model` and `reward_funcs` are provided. Using `reward_funcs` and ignoring `reward_model`.",
-                    UserWarning,
-                    stacklevel=2,
+                warnings.warn(
+                    "Both `reward_model` and `reward_funcs` are provided. Using `reward_funcs` and ignoring "
+                    "`reward_model`.",
                 )
 
         if reward_processing_class is not None:
-            logger.warning(
-                "The `reward_processing_class` parameter is deprecated and will be removed in a future version. "
-                "Please use `reward_processing_classes` instead. For example, change `reward_processing_class=tokenizer` "
-                "to `reward_processing_classes=tokenizer`.",
-                DeprecationWarning,
-                stacklevel=2,
+            warnings.warn(
+                "The `reward_processing_class` parameter is deprecated and will be removed in version 0.25.0. "
+                "Please use `reward_processing_classes` instead. For example, change "
+                "`reward_processing_class=tokenizer` to `reward_processing_classes=tokenizer`.",
             )
             # Convert old reward_processing_class to new reward_processing_classes format
             if reward_processing_classes is None:
                 reward_processing_classes = reward_processing_class
             else:
-                logger.warning(
-                    "Both `reward_processing_class` and `reward_processing_classes` are provided. "
-                    "Using `reward_processing_classes` and ignoring `reward_processing_class`.",
-                    UserWarning,
-                    stacklevel=2,
+                warnings.warn(
+                    "Both `reward_processing_class` and `reward_processing_classes` are provided. Using "
+                    "`reward_processing_classes` and ignoring `reward_processing_class`.",
                 )
 
         # Validate reward configuration - must have exactly one of: judge, or reward_funcs

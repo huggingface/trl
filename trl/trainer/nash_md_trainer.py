@@ -108,8 +108,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         The following parameters are deprecated and will be removed in a future version:
 
         * `reward_model`: Use `reward_funcs` instead. For example, change `reward_model=model` to `reward_funcs=model`.
-        * `reward_processing_class`: Use `reward_processing_classes` instead. For example, change
-          `reward_processing_class=tokenizer` to `reward_processing_classes=tokenizer`.
     """
 
     _tag_names = ["trl", "nash-md"]
@@ -120,9 +118,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         ref_model: Union[PreTrainedModel, nn.Module] = None,
         reward_funcs: Union[PreTrainedModel, nn.Module, None] = None,
         judge: Optional[BasePairwiseJudge] = None,
-        # Deprecated parameters for backward compatibility
-        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         args: Optional[NashMDConfig] = None,
         data_collator: Optional[Callable] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -130,32 +125,31 @@ class NashMDTrainer(OnlineDPOTrainer):
         processing_class: Optional[
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ] = None,
-        reward_processing_classes: Optional[Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]] = None,
         peft_config: Optional[dict] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        # Deprecated parameters
+        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
     ) -> None:
         super().__init__(
             model=model,
             ref_model=ref_model,
             reward_funcs=reward_funcs,
             judge=judge,
-            # Pass deprecated parameters through so parent can handle deprecation warnings
-            reward_model=reward_model,
-            reward_processing_class=reward_processing_class,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            reward_processing_classes=reward_processing_classes,
+            reward_processing_classes=processing_class,
             peft_config=peft_config,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            reward_model=reward_model,
         )
 
         self._mixture_coef = self.args.mixture_coef
@@ -178,9 +172,9 @@ class NashMDTrainer(OnlineDPOTrainer):
             "mixture_coef": [],
         }
         if self.reward_funcs is not None:
-            self.reward_funcs = self.reward_funcs[
-                0
-            ]  # only support one reward function / reward model for NashMDTrainer
+            if len(self.reward_funcs) != 1:
+                raise ValueError("NashMDTrainer only supports one reward function/model.")
+            self.reward_funcs = self.reward_funcs[0]
             self.stats["rewards/chosen"] = []
             self.stats["rewards/rejected"] = []
 

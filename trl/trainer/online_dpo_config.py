@@ -377,6 +377,13 @@ class OnlineDPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
+    gpu_memory_utilization: Optional[float] = field(
+        default=None,
+        metadata={
+            "help": "This parameter is deprecated and will be removed in version 0.25.0. Please use "
+            "`vllm_gpu_memory_utilization` instead.",
+        },
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
@@ -388,6 +395,12 @@ class OnlineDPOConfig(TrainingArguments):
                 "The parameter `dataset_num_proc` is deprecated and will be removed in version 0.25.0. "
                 "Since OnlineDPO does not involve dataset preparation, you can safely remove it.",
             )
+        if self.gpu_memory_utilization is not None:
+            warnings.warn(
+                "The parameter `gpu_memory_utilization` is deprecated and will be removed in version 0.25.0. "
+                "Please use `vllm_gpu_memory_utilization` instead.",
+            )
+            self.vllm_gpu_memory_utilization = self.gpu_memory_utilization
 
         if hasattr(self.beta, "__len__") and len(self.beta) == 1:
             self.beta = self.beta[0]

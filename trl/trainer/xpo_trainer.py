@@ -120,9 +120,6 @@ class XPOTrainer(OnlineDPOTrainer):
         ref_model: Union[PreTrainedModel, nn.Module] = None,
         reward_funcs: Optional[nn.Module] = None,
         judge: Optional[BasePairwiseJudge] = None,
-        # Deprecated parameters for backward compatibility
-        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
-        reward_processing_class: Optional[PreTrainedTokenizerBase] = None,
         args: Optional[XPOConfig] = None,
         data_collator: Optional[Callable] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -136,15 +133,15 @@ class XPOTrainer(OnlineDPOTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        # Deprecated parameters
+        reward_model: Optional[Union[PreTrainedModel, nn.Module]] = None,
     ) -> None:
         super().__init__(
             model=model,
             ref_model=ref_model,
             judge=judge,
             reward_funcs=reward_funcs,
-            # Pass deprecated parameters through so parent can handle deprecation warnings
             reward_model=reward_model,
-            reward_processing_class=reward_processing_class,
             args=args,
             data_collator=data_collator,
             train_dataset=train_dataset,
@@ -156,6 +153,7 @@ class XPOTrainer(OnlineDPOTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
+            reward_model=reward_model,
         )
 
         self._alpha = self.args.alpha
@@ -181,8 +179,9 @@ class XPOTrainer(OnlineDPOTrainer):
             "beta": [],
         }
         if self.reward_funcs is not None:
-            self.reward_funcs = self.reward_funcs[0]  # only support one reward function / reward model for XPOTrainer
-            # Replace "scores" by "model_scores" and "ref_scores"
+            if len(self.reward_funcs) != 1:
+                raise ValueError("XPOTrainer only supports one reward function/model.")
+            self.reward_funcs = self.reward_funcs[0]
             self.stats["objective/model_scores"] = []
             self.stats["objective/ref_scores"] = []
             self.stats["objective/scores_margin"] = []
