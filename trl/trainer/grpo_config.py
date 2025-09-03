@@ -220,6 +220,15 @@ class GRPOConfig(TrainingArguments):
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
+        vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
+            Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
+            logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
+            Training](https://fengyao.notion.site/off-policy-rl) highlights that using a separate generation framework
+            (such as vLLM) can introduce off-policy effects due to subtle implementation differences between generation
+            and training backends. TIS is proposed as a remedy for this issue.
+        vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
+            Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
+            sampling ratio, improving training stability.
 
         > Parameters that control the logging
 
@@ -588,6 +597,23 @@ class GRPOConfig(TrainingArguments):
     use_liger_loss: bool = field(
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
+    )
+    vllm_importance_sampling_correction: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
+            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
+            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
+            "effects due to subtle implementation differences between generation and training backends. TIS is "
+            "proposed as a remedy for this issue."
+        },
+    )
+    vllm_importance_sampling_cap: float = field(
+        default=2.0,
+        metadata={
+            "help": "Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the "
+            "importance sampling ratio, improving training stability."
+        },
     )
 
     # Parameters that control the logging
