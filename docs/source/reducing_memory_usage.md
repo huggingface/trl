@@ -351,8 +351,6 @@ training_args = SFTConfig(
     output_dir="./sft-context-parallel-wrapped",
     learning_rate=2e-5,
     per_device_train_batch_size=1,
-    num_train_epochs=1,
-    logging_steps=10,
 )
 ```
 
