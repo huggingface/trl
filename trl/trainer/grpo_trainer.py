@@ -740,9 +740,7 @@ class GRPOTrainer(Trainer):
         last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
         return last_hidden_state
 
-    def get_high_entropy_mask(
-        self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float, accelerator=None
-    ) -> torch.Tensor:
+    def get_high_entropy_mask(self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
         """
         Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
 
@@ -762,36 +760,35 @@ class GRPOTrainer(Trainer):
         non_pad_entropies = entropies[mask.bool()].float()
         if non_pad_entropies.numel() == 0:
             return torch.zeros_like(entropies, dtype=torch.bool)
-        if self.accelerator.num_processes > 1:
-            # The shape of non_pad_entropies can be different on each gpu/device.
-            # this can cause the gather operation to hang. So we first gather the lengths
-            # of non_pad_entropies and pad them to the max length before doing a gather.
-            non_pad_entropies_seq_length = torch.tensor([non_pad_entropies.numel()], device=entropies.device)
-            max_non_pad_entropies_seq_length = self.accelerator.gather(non_pad_entropies_seq_length).max().item()
-            padded_entropies = torch.cat(
-                [
-                    non_pad_entropies,
-                    torch.zeros(
-                        max_non_pad_entropies_seq_length - non_pad_entropies.numel(),
-                        device=non_pad_entropies.device,
-                    ),
-                ]
-            )
-            padded_entropies_mask = torch.cat(
-                [
-                    torch.ones_like(non_pad_entropies),
-                    torch.zeros(
-                        max_non_pad_entropies_seq_length - non_pad_entropies_seq_length.item(),
-                        device=non_pad_entropies.device,
-                    ),
-                ]
-            )
-            all_padded_entropies = self.accelerator.gather(padded_entropies)
-            all_padded_entropies_mask = self.accelerator.gather(padded_entropies_mask)
-            all_non_padded_entropies = all_padded_entropies[all_padded_entropies_mask.bool()].flatten()
-        else:
-            all_non_padded_entropies = non_pad_entropies
-        # Filter out any empty tensors that might result from processes with no valid tokens
+
+        # The shape of non_pad_entropies can be different on each gpu/device.
+        # this can cause the gather operation to hang. So we first gather the lengths
+        # of non_pad_entropies and pad them to the max length before doing a gather.
+        non_pad_entropies_seq_length = torch.tensor([non_pad_entropies.numel()], device=entropies.device)
+        max_non_pad_entropies_seq_length = self.accelerator.gather(non_pad_entropies_seq_length).max().item()
+        padded_entropies = torch.cat(
+            [
+                non_pad_entropies,
+                torch.zeros(
+                    max_non_pad_entropies_seq_length - non_pad_entropies.numel(),
+                    device=non_pad_entropies.device,
+                ),
+            ]
+        )
+        padded_entropies_mask = torch.cat(
+            [
+                torch.ones_like(non_pad_entropies),
+                torch.zeros(
+                    max_non_pad_entropies_seq_length - non_pad_entropies.numel(),
+                    device=non_pad_entropies.device,
+                ),
+            ]
+        )
+        all_padded_entropies = self.accelerator.gather(padded_entropies)
+        all_padded_entropies_mask = self.accelerator.gather(padded_entropies_mask)
+        # Filter out entropies corresponding to padding.
+        all_non_padded_entropies = all_padded_entropies[all_padded_entropies_mask.bool()]
+
         entropy_threshold = torch.quantile(all_non_padded_entropies, threshold)
         masked_entropies = entropies * mask.float()
         entropy_mask = masked_entropies >= entropy_threshold
