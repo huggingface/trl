@@ -45,7 +45,7 @@ trl sft ... --attn_implementation kernels-community/flash-attn
 
 <Tip>
 
-This replaces your attention pipeline with a pre-optimized kernel from the Hub, speeding up both development and training.
+Now you can leverage faster attention backends with a pre-optimized kernel for your hardware configuration from the Hub, speeding up both development and training.
 
 </Tip>
 
