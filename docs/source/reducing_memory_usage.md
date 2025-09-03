@@ -347,7 +347,6 @@ training_args = SFTConfig(
     torch_dtype="bfloat16",           # Memory efficient precision
     use_liger_kernel=True,            # Compatible with Context Parallelism
     # Standard training arguments...
-    learning_rate=2e-5,
     per_device_train_batch_size=1,
 )
 ```
