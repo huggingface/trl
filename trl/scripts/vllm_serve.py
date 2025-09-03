@@ -377,6 +377,17 @@ def chunk_list(lst: list, n: int) -> list[list]:
     return [lst[i * k + min(i, r) : (i + 1) * k + min(i + 1, r)] for i in range(n)]
 
 
+def sanitize_logprob(logprob):
+    import math
+
+    value = logprob.logprob
+    if math.isnan(value):
+        logger.warning(f"Generated NaN logprob, token logprob '{logprob}' will be ignored")
+        return None
+
+    return value
+
+
 def main(script_args: ScriptArguments):
     if not is_fastapi_available():
         raise ImportError(
@@ -468,6 +479,7 @@ def main(script_args: ScriptArguments):
 
     class GenerateResponse(BaseModel):
         completion_ids: list[list[int]]
+        logprobs: list[list[float]]
 
     @app.post("/generate/", response_model=GenerateResponse)
     async def generate(request: GenerateRequest):
@@ -500,6 +512,8 @@ def main(script_args: ScriptArguments):
         Returns:
             `GenerateResponse`:
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
+                - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
+                  generated completions.
 
         Example request:
         ```json
@@ -508,7 +522,7 @@ def main(script_args: ScriptArguments):
 
         Example response:
         ```json
-        {"completion_ids": [[101, 102, 103], [201, 202, 203]]}
+        {"completion_ids": [[101, 102, 103], [201, 202, 203]], "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]}
         ```
         """
         request.images = request.images or [None] * len(request.prompts)
@@ -535,6 +549,7 @@ def main(script_args: ScriptArguments):
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
             "guided_decoding": guided_decoding,
+            "logprobs": 0,
         }
         generation_kwargs.update(request.generation_kwargs)
         sampling_params = SamplingParams(**generation_kwargs)
@@ -561,7 +576,12 @@ def main(script_args: ScriptArguments):
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
-        return {"completion_ids": completion_ids}
+        logprobs: list[list[float]] = [
+            [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
+            for outputs in all_outputs
+            for output in outputs.outputs
+        ]
+        return {"completion_ids": completion_ids, "logprobs": logprobs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str
