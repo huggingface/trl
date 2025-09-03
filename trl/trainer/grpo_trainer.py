@@ -354,7 +354,7 @@ class GRPOTrainer(Trainer):
         self.vllm_importance_sampling_cap = args.vllm_importance_sampling_cap
         self.use_liger_loss = args.use_liger_loss
         self.loss_type = args.loss_type
-        self.scale_rewards = {True: "group", False: "none"}.get(args.scale_rewards, args.scale_rewards)
+        self.scale_rewards = args.scale_rewards
         self.importance_sampling_level = args.importance_sampling_level
         self.mask_truncated_completions = args.mask_truncated_completions
         self.top_entropy_quantile = args.top_entropy_quantile
@@ -1436,11 +1436,11 @@ class GRPOTrainer(Trainer):
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         advantages = rewards - mean_grouped_rewards
 
-        if self.scale_rewards in ["batch", "none"]:
+        if self.scale_rewards in ["group", "none"]:
             # If self.scale_rewards = "none", we'll still log group level std
             std_rewards = rewards.view(-1, self.num_generations).std(dim=1)
             std_rewards = std_rewards.repeat_interleave(self.num_generations, dim=0)
-        elif self.scale_rewards == "group":
+        elif self.scale_rewards == "batch":
             # Compute global std
             std_rewards = rewards.std().expand_as(rewards)
         else:
@@ -1449,7 +1449,7 @@ class GRPOTrainer(Trainer):
             )
 
         is_std_zero = torch.isclose(std_rewards, torch.zeros_like(std_rewards))
-        if self.scale_rewards in ["batch", "none"]:
+        if self.scale_rewards != "none":
             advantages = advantages / (std_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
