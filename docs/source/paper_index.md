@@ -38,13 +38,13 @@ $$
 \pi_\theta (o_i | q) = \prod_{t=1}^{|o_i|} \pi_\theta  (o_{i,t} | q, o_{i, < t} ),
 $$
 
-where $\pi_\theta$ is the policy $\pi$ with parameters $\theta$, $o_i$ is the $i$-th output sequence $o$ and $o_{i,t}$ is the $t$-th token in this sequence, $q$ is the input query. The sequence likelihood ratio $s_i (\theta)$ is defined as:
+where \\( \pi_\theta \\) is the policy \\( \pi \\) with parameters \\(\theta\\), \\( o_i \\) is the \\( i \\)-th output sequence \\( o \\) and \\(o_{i,t}\\) is the \\( t \\)-th token in this sequence, \\( q \\) is the input query. The sequence likelihood ratio \\( s_i (\theta) \\) is defined as:
 
 $$
 s_i (\theta) = \left(\frac{\pi_\theta (o_i | q)}{\pi_{\theta_{old}} (o_i | q)} \right)^{\frac{1}{|o_i|}}
 $$
 
-The exponent $\frac{1}{|o_i|}$ represents a sequence-length normalization, minimizing the influence of sequence length in sequence likelihood. In other terms, it computes the geometric mean of token probabilities, ensuring a fair comparison across sequences of varying lengths.
+The exponent \( \frac{1}{|o_i|} \) represents a sequence-length normalization, minimizing the influence of sequence length in sequence likelihood. In other terms, it computes the geometric mean of token probabilities, ensuring a fair comparison across sequences of varying lengths.
 
 While GSPO defines the policy ratio at the sequence level, GRPO operates at the token level. Specifically, GRPO computes an importance ratio for each token in the sequence:
 
@@ -135,7 +135,7 @@ training_args = DPOConfig(
 
 **📜 Paper**: https://huggingface.co/papers/2310.12036
 
-A new general objective, $\Psi$PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration:
+A new general objective,  \\( \Psi \\)$PO, bypasses both key approximations in reinforcement learning from human preferences, allowing for theoretical analysis and empirical superiority over DPO. To reproduce the paper's setting, use this configuration: To reproduce the paper's setting, use this configuration:
 
 ```python
 from trl import DPOConfig
@@ -178,9 +178,9 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="exo_pair", # Section 3.2 of the paper
-        per_device_train_batch_size=64, #  batch size in Section B of the paper
-        learning_rate=1e-6, # learning rate in Section B of the paper
-        beta=0.1, # $\beta_r$ in Section B of the paper
+    per_device_train_batch_size=64, #  batch size in Section B of the paper
+    learning_rate=1e-6, # learning rate in Section B of the paper
+    beta=0.1, # $\beta_r$ in Section B of the paper
 )
 ```
 
@@ -195,15 +195,15 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="nca_pair", # Section 4.1 of the paper
-        per_device_train_batch_size=32, #  batch size in Section C of the paper
-        learning_rate=5e-6, # learning rate in Section C of the paper
-        beta=0.01, # $\alpha$ in Section C of the paper
+    per_device_train_batch_size=32, #  batch size in Section C of the paper
+    learning_rate=5e-6, # learning rate in Section C of the paper
+    beta=0.01, # $\alpha$ in Section C of the paper
 )
 ```
 
 ## Provably Robust DPO: Aligning Language Models with Noisy Feedback
 
-**📜 Paper**: https://huggingface.co/papers/2402.05369
+**📜 Paper**: https://huggingface.co/papers/2403.00409
 
 The paper introduces a robust direct preference optimization (rDPO) framework to address noise in preference-based feedback for language models, proving its sub-optimality gap and demonstrating its effectiveness through experiments. To reproduce the paper's setting, use this configuration:
 
@@ -212,12 +212,12 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="robust", # Section 3.1 of the paper
-        per_device_train_batch_size=16, #  batch size in Section B of the paper
-        learning_rate=1e-3, # learning rate in Section B of the paper
-        beta=0.01, # $\beta$ in Section B of the paper,
-        max_prompt_length=128, # max prompt length in Section B of the paper
-        max_length=512, # max length in Section B of the paper
-        label_smoothing=0.1 # label smoothing $\epsilon$ in section 6 of the paper
+    per_device_train_batch_size=16, #  batch size in Section B of the paper
+    learning_rate=1e-3, # learning rate in Section B of the paper
+    beta=0.01, # $\beta$ in Section B of the paper,
+    max_prompt_length=128, # max prompt length in Section B of the paper
+    max_length=512, # max length in Section B of the paper
+    label_smoothing=0.1 # label smoothing $\epsilon$ in section 6 of the paper
 
 )
 ```
@@ -233,13 +233,15 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="bco_pair", # Section 4 of the paper
-        per_device_train_batch_size=128, #  batch size in Section C of the paper
-        learning_rate=5e-7, # learning rate in Section C of the paper
-        beta=0.01, # $\beta$ in Section C of the paper,
-        max_prompt_length=1536, # max prompt length in Section C of the paper
-        max_completion_length=512, # max completion length in Section C of the paper
+    per_device_train_batch_size=128, #  batch size in Section C of the paper
+    learning_rate=5e-7, # learning rate in Section C of the paper
+    beta=0.01, # $\beta$ in Section C of the paper,
+    max_prompt_length=1536, # max prompt length in Section C of the paper
+    max_completion_length=512, # max completion length in Section C of the paper
 )
 ```
+
+For the unpaired version, the user should utilize `BCOConfig` and `BCOTrainer`.
 
 ## Self-Play Preference Optimization for Language Model Alignment
 
@@ -252,10 +254,34 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="sppo_hard", # Section 3 of the paper
-        per_device_train_batch_size=64, #  batch size in Section C of the paper
-        learning_rate=5e-7, # learning rate in Section C of the paper
+    per_device_train_batch_size=64, #  batch size in Section C of the paper
+    learning_rate=5e-7, # learning rate in Section C of the paper
 )
 ```
+
+## Distributional Preference Alignment of LLMs via Optimal Transport
+
+**📜 Paper**: https://huggingface.co/papers/2406.05882
+
+Alignment via Optimal Transport (AOT) aligns large language models distributionally by penalizing violations of stochastic dominance between positive and negative sample distributions, achieving state-of-the-art performance on alignment benchmarks. To reproduce the paper's setting, use this configuration:
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="aot", # Section 3 of the paper
+)
+```
+
+```python
+from trl import DPOConfig
+
+training_args = DPOConfig(
+    loss_type="aot_pair", # Section 3 of the paper
+)
+```
+
+There is no additional hyperparameter in the paper.
 
 ## Discovering Preference Optimization Algorithms with and for Large Language Models
 
@@ -268,10 +294,10 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="discopop", # Section 3 of the paper
-        per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-        learning_rate=5e-7, # learning rate in Section B.1 of the paper
-        beta=0.05, # $\beta$ in Section B.1 of the paper,
-        discopop_tau=0.05 # $\tau$ in Section E of the paper
+    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
+    learning_rate=5e-7, # learning rate in Section B.1 of the paper
+    beta=0.05, # $\beta$ in Section B.1 of the paper,
+    discopop_tau=0.05 # $\tau$ in Section E of the paper
 )
 ```
 
@@ -286,11 +312,11 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="apo_zero", # Section 4 of the paper
-        per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-        learning_rate=2e-7, # learning rate in Section 5.2 of the paper
-        beta=0.1, # $\beta$ in Section 5.2 of the paper,
-        max_prompt_length=512, # prompt length in Section 5.2 of the paper
-        max_completion_length=512, # completion length in Section 5.2 of the paper
+    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
+    learning_rate=2e-7, # learning rate in Section 5.2 of the paper
+    beta=0.1, # $\beta$ in Section 5.2 of the paper,
+    max_prompt_length=512, # prompt length in Section 5.2 of the paper
+    max_completion_length=512, # completion length in Section 5.2 of the paper
 )
 ```
 
@@ -299,11 +325,11 @@ from trl import DPOConfig
 
 training_args = DPOConfig(
     loss_type="apo_down", # Section 4 of the paper
-        per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
-        learning_rate=2e-7, # learning rate in Section 5.2 of the paper
-        beta=0.1, # $\beta$ in Section 5.2 of the paper,
-        max_prompt_length=512, # prompt length in Section 5.2 of the paper
-        max_completion_length=512, # completion length in Section 5.2 of the paper
+    per_device_train_batch_size=64, #  batch size in Section B.1 of the paper
+    learning_rate=2e-7, # learning rate in Section 5.2 of the paper
+    beta=0.1, # $\beta$ in Section 5.2 of the paper,
+    max_prompt_length=512, # prompt length in Section 5.2 of the paper
+    max_completion_length=512, # completion length in Section 5.2 of the paper
 )
 ```
 
