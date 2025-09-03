@@ -768,29 +768,15 @@ class GRPOTrainer(Trainer):
         # of non_pad_entropies and pad them to the max length before doing a gather.
         non_pad_entropies_seq_length = torch.tensor([non_pad_entropies.numel()], device=entropies.device)
         max_non_pad_entropies_seq_length = self.accelerator.gather(non_pad_entropies_seq_length).max().item()
-        padded_entropies = torch.cat(
-            [
-                non_pad_entropies,
-                torch.zeros(
-                    max_non_pad_entropies_seq_length - non_pad_entropies.numel(),
-                    device=non_pad_entropies.device,
-                ),
-            ]
+        padding = torch.zeros(
+            max_non_pad_entropies_seq_length - non_pad_entropies.numel(), device=non_pad_entropies.device
         )
-        padded_entropies_mask = torch.cat(
-            [
-                torch.ones_like(non_pad_entropies),
-                torch.zeros(
-                    max_non_pad_entropies_seq_length - non_pad_entropies.numel(),
-                    device=non_pad_entropies.device,
-                ),
-            ]
-        )
+        padded_entropies = torch.cat([non_pad_entropies, padding])
+        padded_entropies_mask = torch.cat([torch.ones_like(non_pad_entropies), padding])
         all_padded_entropies = self.accelerator.gather(padded_entropies)
         all_padded_entropies_mask = self.accelerator.gather(padded_entropies_mask)
         # Filter out entropies corresponding to padding.
         all_non_padded_entropies = all_padded_entropies[all_padded_entropies_mask.bool()]
-
         entropy_threshold = torch.quantile(all_non_padded_entropies, threshold)
         masked_entropies = entropies * mask.float()
         entropy_mask = masked_entropies >= entropy_threshold
