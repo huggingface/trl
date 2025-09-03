@@ -605,6 +605,8 @@ class GRPOConfig(TrainingArguments):
 
         super().__post_init__()
 
+        self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
+
         num_processes = self.world_size
         # The current default effective batch size
         if self.generation_batch_size is None and self.steps_per_generation is None:
