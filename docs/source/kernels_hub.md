@@ -52,19 +52,18 @@ This replaces your attention pipeline with a pre-optimized kernel from the Hub, 
 
 ## Comparing Attention Implementations
 
-We compared different attention implementations supported in Transformers and various kernels using **TRL** and **SFT**. The tests were conducted on a machine with a single **H100 GPU**, using **Qwen3-8B**, a **batch size of 8**, **gradient accumulation of 1**, and **bfloat16** precision. These numbers are illustrative for this particular setup and may vary depending on the final training configuration.
+We evaluated various attention implementations available in transformers, along with different kernel backends, using **TRL** and **SFT**.  
+The experiments were run on a single **H100 GPU** with **CUDA 12.9**, leveraging **Qwen3-8B** with a **batch size of 8**, **gradient accumulation of 1**, and **bfloat16** precision.  
+Keep in mind that the results shown here are specific to this setup and may vary with different training configurations.
 
-### Latency
+The following figure illustrates both **latency** (time per training step) and **peak allocated memory** for the different attention implementations and kernel backends.  
+Kernel-based implementations perform on par with custom-installed attention, and increasing the model’s `max_length` further enhances performance. Memory consumption is similar across all implementations, showing no significant differences. We get the same performance but with less friction, as described in [a following section](#benchmarking-flash-attention-build-from-source-vs-hub-kernels).
 
-Latency measures the time taken for a training step, which is particularly relevant since we are conducting training using TRL. The results below show that kernel-based implementations provide noticeable improvements over more naive attention approaches. Interestingly, increasing the `max_length` of the model appears to further enhance performance.
 
-[PLOT]
-
-### Memory Usage
-
-A similar trend is observed when considering memory usage. Kernel-based implementations tend to be more memory-efficient compared to naive attention, especially as model sequence lengths increase.
-
-[PLOT]
+<div class="flex justify-center">
+  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kernels_guide_latency.png" alt="Latency and Memory Usage" width="600"/>
+  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/kernels_guide_peak_allocated_memory.png" alt="Latency and Memory Usage" width="600"/>
+</div>
 
 ## Combining FlashAttention Kernels with Liger Kernels
 
@@ -98,6 +97,7 @@ Learn more about this integration [here](./liger_kernel_integration).
 
 ## Benchmarking: Flash Attention (Build-from-Source) vs. Hub Kernels
 
-Building Flash Attention from source can be highly time-consuming, often taking several minutes to hours, depending on your hardware, CUDA/PyTorch configuration, and the availability of precompiled wheels.  
+Building Flash Attention from source can be time-consuming, often taking anywhere from several minutes to hours, depending on your hardware, CUDA/PyTorch configuration, and whether precompiled wheels are available.  
 
-By contrast, **Hugging Face Kernels** deliver a much faster and more reliable workflow. In our benchmarks, kernels were ready to use in about **2.5 seconds**, with no compilation required. This means you can start training almost instantly, significantly accelerating development. All you need to do is specify the desired version, and `kernels` handles the rest.
+In contrast, **Hugging Face Kernels** provide a much faster and more reliable workflow. Developers don’t need to worry about complex setups—everything is handled automatically. In our benchmarks, kernels were ready to use in about **2.5 seconds**, with no compilation required. This allows you to start training almost instantly, significantly accelerating development. Simply specify the desired version, and `kernels` takes care of the rest.
+
