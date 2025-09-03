@@ -221,29 +221,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             if "assistant_masks" in examples[0]:
                 assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
                 output["labels"][assistant_masks == 0] = -100
-
-            # Apply padding to multiple if needed
-            if self.pad_to_multiple_of is not None:
-                seq_len = output["input_ids"].shape[1]
-                remainder = seq_len % self.pad_to_multiple_of
-                if remainder != 0:
-                    padding_length = self.pad_to_multiple_of - remainder
-                    # Pad input_ids
-                    output["input_ids"] = torch.nn.functional.pad(
-                        output["input_ids"], (0, padding_length), value=self.pad_token_id
-                    )
-                    # Pad attention_mask if present
-                    if "attention_mask" in output:
-                        output["attention_mask"] = torch.nn.functional.pad(
-                            output["attention_mask"], (0, padding_length), value=0
-                        )
-                    # Pad position_ids if present
-                    if "position_ids" in output:
-                        output["position_ids"] = torch.nn.functional.pad(
-                            output["position_ids"], (0, padding_length), value=0
-                        )
-                    # Pad labels
-                    output["labels"] = torch.nn.functional.pad(output["labels"], (0, padding_length), value=-100)
         else:
             output["input_ids"] = pad(
                 input_ids,
