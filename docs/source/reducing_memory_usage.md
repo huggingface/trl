@@ -285,7 +285,7 @@ Context Parallelism has specific requirements:
 
 1. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
 2. **SDPA attention** - Flash Attention is currently not supported with Context Parallelism
-3. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`
+3. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is now automatically handled using the `pad_to_multiple_of` parameter in the data collator, which works seamlessly with both standard and padding-free modes.
 
 ### Configuration
 
@@ -293,7 +293,7 @@ To enable Context Parallelism, you need to configure both Accelerate and your tr
 
 #### Accelerate Configuration
 
-Create an accelerate config file (e.g. `context_parallel_config.yaml` for 2 GPUs):
+Use one of the provided accelerate config files (e.g. `fsdp_context_parallel_2gpu.yaml` for 2 GPUs):
 
 ```yaml
 compute_environment: LOCAL_MACHINE
@@ -339,10 +339,9 @@ You can configure context parallelism training either programmatically or via co
 from trl import SFTConfig
 
 training_args = SFTConfig(
-    max_seq_length=2048,              # Long sequence length
+    max_seq_length=16384,             # Long sequence length
     packing=True,
-    packing_strategy="bfd",           # Preserves sequence boundaries
-    pad_to_multiple_of=4,             # Required: ensures divisibility by cp_size * 2
+    pad_to_multiple_of=4,             # REQUIRED: ensures divisibility by cp_size * 2
     torch_dtype="bfloat16",           # Memory efficient precision
     use_liger_kernel=True,            # Compatible with Context Parallelism
     # Standard training arguments...
@@ -359,7 +358,6 @@ accelerate launch \
     --dataset_name trl-lib/Capybara \
     --max_seq_length 2048 \
     --packing \
-    --packing_strategy bfd \
     --pad_to_multiple_of 4 \
     --torch_dtype bfloat16 \
     --use_liger_kernel \
@@ -371,21 +369,41 @@ accelerate launch \
 
 ### Best Practices
 
-1. **Use compatible packing strategies** - Context Parallelism requires sequences divisible by `cp_size * 2`.
-   - Boundary-preserving packing (use `packing_strategy="bfd"` with `pad_to_multiple_of=cp_size*2`) - Preserves sequence boundaries and uses the data collator to ensure compatibility
-2. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
-3. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
-4. **Monitor memory usage** across all GPUs to ensure balanced workload
+1. **Use the `pad_to_multiple_of` parameter** - This is now the recommended way to ensure sequence length divisibility:
+   - For `cp_size=2`: use `pad_to_multiple_of=4` (since `cp_size * 2 = 4`)
+   - For `cp_size=4`: use `pad_to_multiple_of=8` (since `cp_size * 2 = 8`)
+   - The data collator automatically pads sequences to the required multiple, ensuring compatibility with Context Parallelism
 
-### Packing Strategy Options
+2. **Use packing with padding** - The default BFD (Best Fit Decreasing) strategy works perfectly:
+   - Preserves sequence boundaries and maintains training quality
+   - Works seamlessly with both `padding_free=True` and standard padding modes
+   - No need to specify `packing_strategy` as BFD is the default
 
-**BFD Strategy with Padding (Recommended)**
+3. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
+
+4. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
+
+5. **Monitor memory usage** across all GPUs to ensure balanced workload
+
+
+### Common Context Parallelism Configurations
+
+Here are typical configurations for different context parallel sizes:
+
+#### 2-GPU Context Parallelism (cp_size=2)
 ```bash
---packing_strategy bfd --pad_to_multiple_of 4  # For cp_size=2
+accelerate launch \
+    --config_file examples/accelerate_configs/fsdp_context_parallel_2gpu.yaml \
+    trl/scripts/sft.py \
+    --model_name_or_path Qwen/Qwen2-0.5B \
+    --dataset_name trl-lib/Capybara \
+    --max_seq_length 16384 \
+    --packing \
+    --pad_to_multiple_of 4 \     # cp_size * 2 = 2 * 2 = 4
+    --torch_dtype bfloat16 \
+    --use_liger_kernel \
+    --per_device_train_batch_size 2
 ```
-- Preserves sequence boundaries (better training quality)
-- Data collator ensures compatibility by padding during batch creation
-- Slightly less efficient but maintains data integrity
 
 ## vLLM sleep mode
 
