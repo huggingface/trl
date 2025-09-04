@@ -355,7 +355,7 @@ accelerate launch \
     --pad_to_multiple_of 4 \
     --dtype bfloat16 \
     --use_liger_kernel \
-    --per_device_train_batch_size 1 \
+    --per_device_train_batch_size 1
 ```
 
 </hfoption>
