@@ -336,7 +336,7 @@ training_args = SFTConfig(
     max_seq_length=16384,             # Long sequence length
     packing=True,
     pad_to_multiple_of=4,             # REQUIRED: ensures divisibility by cp_size * 2
-    torch_dtype="bfloat16",           # Memory efficient precision
+    dtype="bfloat16",           # Memory efficient precision
     use_liger_kernel=True,            # Compatible with Context Parallelism
     # Standard training arguments...
     per_device_train_batch_size=1,
