@@ -550,30 +550,6 @@ class DPOTrainer(Trainer):
         )
         self.pad_token_id = value
 
-    def _create_model_from_path(self, model_path: str, args: DPOConfig, is_ref: bool = False) -> PreTrainedModel:
-        """Creates a model from a path or model identifier."""
-        if not is_ref:
-            model_init_kwargs = args.model_init_kwargs or {}
-        else:
-            model_init_kwargs = args.ref_model_init_kwargs or {}
-
-        # Handle torch dtype
-        dtype = model_init_kwargs.get("dtype")
-        if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-            pass  # dtype is already a torch.dtype or "auto" or None
-        elif isinstance(dtype, str):  # it's a str, but not "auto"
-            dtype = getattr(torch, dtype)
-            model_init_kwargs["dtype"] = dtype
-        else:
-            raise ValueError(
-                "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
-                f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
-            )
-
-        # Create model
-        model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        return model
-
     def _prepare_peft_model(
         self, model: PreTrainedModel, ref_model: PreTrainedModel, peft_config: Any, args: DPOConfig
     ) -> PreTrainedModel:
