@@ -497,11 +497,11 @@ class SFTTrainer(Trainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
-              `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported. If you're training
-            a Causal (Visual or Text) Language Model with an MoE architecture and want to include the load balancing/auxilliary loss as a part of the final loss, remember to set
-            the `output_router_logits` config of the model to `True`.
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object.
+            If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
+            as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator (`DataCollator`, *optional*):
