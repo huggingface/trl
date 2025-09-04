@@ -1899,6 +1899,7 @@ def truncate_with_protected_tokens(
 
 
 def create_model_from_path(model_id: str, init_kwargs: Optional[dict]) -> PreTrainedModel:
+    init_kwargs = init_kwargs or {}
     torch_dtype = init_kwargs.get("torch_dtype")
     if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
         pass  # torch_dtype is already a torch.dtype or "auto" or None
@@ -1907,7 +1908,7 @@ def create_model_from_path(model_id: str, init_kwargs: Optional[dict]) -> PreTra
         init_kwargs["torch_dtype"] = torch_dtype
     else:
         raise ValueError(
-            "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
+            "Invalid `torch_dtype` passed to the config. Expected either 'auto' or a string representing "
             f"a valid `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
         )
     config = AutoConfig.from_pretrained(model_id)
