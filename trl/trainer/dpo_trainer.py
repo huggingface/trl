@@ -33,7 +33,6 @@ from datasets import Dataset, IterableDataset
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
-    AutoModelForCausalLM,
     AutoProcessor,
     BaseImageProcessor,
     DataCollator,
