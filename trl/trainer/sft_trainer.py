@@ -132,7 +132,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl import DataCollatorForLanguageModeling
+    >>> from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
     >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
@@ -321,7 +321,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Example:
     ```python
-    >>> from trl import DataCollatorForVisionLanguageModeling
+    >>> from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
     >>> from transformers import AutoProcessor
 
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
