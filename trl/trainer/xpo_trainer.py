@@ -153,7 +153,6 @@ class XPOTrainer(OnlineDPOTrainer):
             callbacks=callbacks,
             optimizers=optimizers,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
-            reward_model=reward_model,
         )
 
         self._alpha = self.args.alpha
