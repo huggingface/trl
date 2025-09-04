@@ -143,7 +143,7 @@ class TrainerArgTester(TrlTestCase):
             label_smoothing=0.5,
             loss_type="hinge",
             label_pad_token_id=-99,
-            padding_value=-99,
+            pad_token="<pad>",
             truncation_mode="keep_start",
             max_length=256,
             max_prompt_length=64,
@@ -177,7 +177,7 @@ class TrainerArgTester(TrlTestCase):
         self.assertEqual(trainer.args.label_smoothing, 0.5)
         self.assertEqual(trainer.args.loss_type, "hinge")
         self.assertEqual(trainer.args.label_pad_token_id, -99)
-        self.assertEqual(trainer.args.padding_value, -99)
+        self.assertEqual(trainer.args.pad_token, "<pad>")
         self.assertEqual(trainer.args.truncation_mode, "keep_start")
         self.assertEqual(trainer.args.max_length, 256)
         self.assertEqual(trainer.args.max_prompt_length, 64)

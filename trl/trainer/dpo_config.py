@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Union
@@ -70,8 +71,9 @@ class DPOConfig(TrainingArguments):
 
         dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
             Number of processes to use for processing the dataset.
-        padding_value (`int` or `None`, *optional*, defaults to `None`):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
+        pad_token (`str` or `None`, *optional*, defaults to `None`):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Padding value to use for labels.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
@@ -265,9 +267,12 @@ class DPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    padding_value: Optional[int] = field(
+    pad_token: Optional[str] = field(
         default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
+        metadata={
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
+            "is also `None`, it falls back to `processing_class.eos_token`."
+        },
     )
     label_pad_token_id: int = field(
         default=-100,
@@ -449,6 +454,12 @@ class DPOConfig(TrainingArguments):
         },
     )
 
+    # Deprecated arguments
+    padding_value: Optional[int] = field(
+        default=None,
+        metadata={"help": "Deprecated, use `pad_token` (str) instead."},
+    )
+
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
@@ -465,3 +476,11 @@ class DPOConfig(TrainingArguments):
                     f"({loss_types})."
                 )
         super().__post_init__()
+
+        if self.padding_value is not None:
+            warnings.warn(
+                "The `padding_value` argument is deprecated and will be removed in version 0.25.0. Please use "
+                "`pad_token` (str) instead."
+            )
+            if self.pad_token is None:
+                self.pad_token = self.padding_value

@@ -56,7 +56,7 @@ class SFTConfig(TrainingArguments):
         eos_token (`str` or `None`, *optional*, defaults to `None`):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
-        pad_token (`int` or `None`, *optional*, defaults to `None`):
+        pad_token (`str` or `None`, *optional*, defaults to `None`):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
