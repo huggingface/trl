@@ -333,17 +333,17 @@ class OnlineDPOTrainer(Trainer):
         if isinstance(model, str):
             model_id = model
 
-            # Handle torch_dtype in model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
+            # Handle dtype in model_init_kwargs
+            dtype = model_init_kwargs.get("dtype")
+            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass
-            elif isinstance(torch_dtype, str):
-                torch_dtype = getattr(torch, torch_dtype)
-                model_init_kwargs["torch_dtype"] = torch_dtype
+            elif isinstance(dtype, str):
+                dtype = getattr(torch, dtype)
+                model_init_kwargs["dtype"] = dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `OnlineDPOConfig`. Expected either 'auto' or a string "
-                    f"representing a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                    "Invalid `dtype` passed to `OnlineDPOConfig`. Expected either 'auto' or a string "
+                    f"representing a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
 
             model = AutoModelForCausalLM.from_pretrained(model_id, **model_init_kwargs)
