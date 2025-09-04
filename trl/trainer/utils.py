@@ -1899,17 +1899,31 @@ def truncate_with_protected_tokens(
 
 
 def create_model_from_path(model_id: str, init_kwargs: Optional[dict]) -> PreTrainedModel:
+    """
+    Create a model from a given path using the specified initialization arguments.
+
+    Args:
+        model_id (`str`):
+            Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
+        init_kwargs (`dict` or `None`):
+            Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
+            specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
+            or `'auto'`.
+
+    Returns:
+        `transformers.PreTrainedModel`:
+            The instantiated model.
+    """
     init_kwargs = init_kwargs or {}
-    torch_dtype = init_kwargs.get("torch_dtype")
-    if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-        pass  # torch_dtype is already a torch.dtype or "auto" or None
-    elif isinstance(torch_dtype, str) and torch_dtype in ["bfloat16", "float16", "float32"]:
-        torch_dtype = getattr(torch, torch_dtype)
-        init_kwargs["torch_dtype"] = torch_dtype
+    dtype = init_kwargs.get("dtype")
+    if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+        pass  # dtype is already a torch.dtype or "auto" or None
+    elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
+        init_kwargs["dtype"] = getattr(torch, dtype)
     else:
         raise ValueError(
-            "Invalid `torch_dtype` passed to the config. Expected either 'auto' or a string representing "
-            f"a valid `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
+            f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
         )
     config = AutoConfig.from_pretrained(model_id)
     architecture = getattr(transformers, config.architectures[0])
