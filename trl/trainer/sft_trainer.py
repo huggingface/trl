@@ -521,7 +521,7 @@ class SFTTrainer(Trainer):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
-        compute_loss_func (`Callable`, *optional*):
+        compute_loss_func (`Callable` or `None`, *optional*, defaults to `None`):
             A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
             batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618) used by [`Trainer`].
         compute_metrics (`Callable[[EvalPrediction], dict]` or `None`, *optional*, defaults to `None`):
