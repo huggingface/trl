@@ -290,7 +290,7 @@ class DPOTrainer(Trainer):
                 )
         model_id = model.config._name_or_path
         if isinstance(ref_model, str):
-            model = create_model_from_path(ref_model, args.ref_model_init_kwargs)
+            ref_model = create_model_from_path(ref_model, args.ref_model_init_kwargs)
         else:
             if args.ref_model_init_kwargs is not None:
                 logger.warning(
