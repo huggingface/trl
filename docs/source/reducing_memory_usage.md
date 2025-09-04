@@ -394,7 +394,7 @@ accelerate launch \
     --max_seq_length 16384 \
     --packing \
     --pad_to_multiple_of 4 \     # cp_size * 2 = 2 * 2 = 4
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --use_liger_kernel \
     --per_device_train_batch_size 2
 ```
