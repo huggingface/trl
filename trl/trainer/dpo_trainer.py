@@ -286,7 +286,7 @@ class DPOTrainer(Trainer):
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed model_init_kwargs to the `DPOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
         model_id = model.config._name_or_path
