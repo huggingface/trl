@@ -114,9 +114,7 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
-    dtype = (
-        model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
