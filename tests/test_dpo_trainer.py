@@ -970,15 +970,15 @@ class DPOTrainerTester(TrlTestCase):
         # train the model
         trainer.train()
 
-    def test_dpo_trainer_torch_dtype(self):
+    def test_dpo_trainer_dtype(self):
         # See https://github.com/huggingface/trl/issues/1751
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            model_init_kwargs={"torch_dtype": "float16"},
-            ref_model_init_kwargs={"torch_dtype": "float16"},
+            model_init_kwargs={"dtype": "float16"},
+            ref_model_init_kwargs={"dtype": "float16"},
             report_to="none",
         )
 
@@ -989,15 +989,15 @@ class DPOTrainerTester(TrlTestCase):
             args=training_args,
             train_dataset=dummy_dataset["train"],
         )
-        self.assertEqual(trainer.model.config.torch_dtype, torch.float16)
-        self.assertEqual(trainer.ref_model.config.torch_dtype, torch.float16)
+        self.assertEqual(trainer.model.config.dtype, torch.float16)
+        self.assertEqual(trainer.ref_model.config.dtype, torch.float16)
 
-        # Now test when `torch_dtype` is provided but is wrong to either the model or the ref_model
+        # Now test when `dtype` is provided but is wrong to either the model or the ref_model
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            model_init_kwargs={"torch_dtype": -1},
+            model_init_kwargs={"dtype": -1},
             report_to="none",
         )
 
@@ -1010,7 +1010,7 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 
@@ -1018,7 +1018,7 @@ class DPOTrainerTester(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            ref_model_init_kwargs={"torch_dtype": -1},
+            ref_model_init_kwargs={"dtype": -1},
             report_to="none",
         )
 
@@ -1032,7 +1032,7 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 

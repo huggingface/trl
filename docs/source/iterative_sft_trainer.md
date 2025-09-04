@@ -79,7 +79,7 @@ from trl import IterativeSFTConfig
 
 config = IterativeSFTConfig(
     # Model initialization parameters
-    model_init_kwargs={"torch_dtype": "bfloat16"},
+    model_init_kwargs={"dtype": "bfloat16"},
 
     # Data preprocessing parameters
     max_length=512,
@@ -104,7 +104,7 @@ You can control how the model is initialized by passing keyword arguments to `mo
 ```python
 config = IterativeSFTConfig(
     model_init_kwargs={
-        "torch_dtype": "bfloat16",
+        "dtype": "bfloat16",
         "device_map": "auto",
         "trust_remote_code": True,
     }
