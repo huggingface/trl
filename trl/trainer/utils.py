@@ -1473,31 +1473,41 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
     return per_token_logps
 
 
-def entropy_from_logits(logits, chunk_size: int = 1) -> torch.Tensor:
+def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Tensor:
     """
-    Compute the Shannon entropy (in nats) for each row of *logits* without materialising the full soft-max in memory.
-    The batch dimension is processed in chunks of size `chunk_size` so that only a subset of rows is expanded to
-    probabilities at any one time.
+    Compute the Shannon entropy (in nats) for each row of *logits* in a memory-efficient way.
+
+    Instead of materializing the full softmax for all rows at once, the logits are flattened to shape (N, num_classes),
+    where N is the product of all leading dimensions. Computation is then performed in chunks of size `chunk_size`
+    along this flattened dimension, reducing peak memory usage. The result is reshaped back to match the input's
+    leading dimensions.
 
     Args:
         logits (`torch.Tensor`):
             Logits tensor of shape `(..., num_classes)`. Entropy is taken along the last axis; all leading dimensions
-            are preserved.
-        chunk_size (`int`, *optional*, defaults to `1`):
-            Number of rows to process per iteration.
+            are preserved in the output.
+        chunk_size (`int`, *optional*, defaults to `128`):
+            Number of rows from the flattened logits to process per iteration. Smaller values reduce memory usage at
+            the cost of more iterations.
 
     Returns:
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
-    per_token_entropies = []
-    for logits_chunk in logits.split(chunk_size, dim=0):
-        logps = F.log_softmax(logits_chunk, dim=-1)
-        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
-        per_token_entropies.extend(chunk_entropy)
+    original_shape = logits.shape[:-1]  # all dims except num_classes
+    num_classes = logits.shape[-1]
 
-    per_token_entropies = torch.stack(per_token_entropies)
-    return per_token_entropies
+    # Flatten all leading dimensions into one
+    flat_logits = logits.reshape(-1, num_classes)
+
+    entropies = []
+    for chunk in flat_logits.split(chunk_size, dim=0):
+        logps = F.log_softmax(chunk, dim=-1)
+        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
+        entropies.append(chunk_entropy)
+
+    entropies = torch.cat(entropies, dim=0)
+    return entropies.reshape(original_shape)
 
 
 def print_prompt_completions_sample(
