@@ -36,7 +36,7 @@ accelerate launch \
     --output_dir grpo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
     --gradient_checkpointing \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --max_prompt_length 2048 \
     --max_completion_length 1024 \
     --use_vllm \
@@ -54,7 +54,7 @@ accelerate launch \
     --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --output_dir grpo-SmolVLM2-2.2B-Instruct \
     --learning_rate 1e-5 \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --max_prompt_length 2048 \
     --max_completion_length 1024 \
     --use_peft \
@@ -96,14 +96,12 @@ if __name__ == "__main__":
     ################
     # Model & Processor
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )

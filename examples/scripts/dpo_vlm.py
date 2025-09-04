@@ -34,7 +34,7 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
     --lora_target_modules all-linear
@@ -52,7 +52,7 @@ accelerate launch examples/scripts/dpo_vlm.py \
     --gradient_accumulation_steps 32 \
     --dataset_num_proc 32 \
     --output_dir dpo_idefics_rlaif-v \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
     --lora_target_modules all-linear
@@ -87,15 +87,13 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
 
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )

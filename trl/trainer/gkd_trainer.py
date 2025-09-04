@@ -127,10 +127,10 @@ class GKDTrainer(SFTTrainer):
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["torch_dtype"] = (
-                teacher_model_init_kwargs["torch_dtype"]
-                if teacher_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["torch_dtype"])
+            teacher_model_init_kwargs["dtype"] = (
+                teacher_model_init_kwargs["dtype"]
+                if teacher_model_init_kwargs["dtype"] in ["auto", None]
+                else getattr(torch, teacher_model_init_kwargs["dtype"])
             )
 
         if isinstance(teacher_model, str):

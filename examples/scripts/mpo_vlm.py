@@ -33,7 +33,7 @@ python examples/scripts/mpo_vlm.py \
     --gradient_accumulation_steps 8 \
     --dataset_num_proc 1 \
     --output_dir dpo_idefics_rlaif-v \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --gradient_checkpointing \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj \
@@ -71,16 +71,14 @@ if __name__ == "__main__":
     ################
     # Model & Processor
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
 
     model_kwargs = dict(
         trust_remote_code=model_args.trust_remote_code,
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )

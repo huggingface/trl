@@ -124,7 +124,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             that are no in the completion.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly. The attention mask will be set to 1 for all tokens.
+            generated accordingly.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -206,48 +206,48 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         if "assistant_masks" in examples[0]:
             assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
 
-        # Pad
+        # If padding_free, flatten everything into a single sequence
         output = {}
         if self.padding_free:
-            output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
+            input_ids = [torch.cat(input_ids, dim=0)]
             if not has_packed_position_ids:
-                output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+                attention_mask = [torch.cat(attention_mask, dim=0)]
             if self.return_position_ids:
-                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
-            output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
+                position_ids = [torch.cat(position_ids, dim=0)]
+            labels = [torch.cat(labels, dim=0)]
             if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
-                output["labels"][completion_mask == 0] = -100
+                completion_mask = [torch.cat(completion_mask, dim=0)]
             if "assistant_masks" in examples[0]:
-                assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
-                output["labels"][assistant_masks == 0] = -100
-        else:
-            output["input_ids"] = pad(
-                input_ids,
-                padding_value=self.pad_token_id,
-                padding_side="right",
-                pad_to_multiple_of=self.pad_to_multiple_of,
-            )
+                assistant_masks = [torch.cat(assistant_masks, dim=0)]
+
+        # Pad
+        output["input_ids"] = pad(
+            input_ids,
+            padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        if not has_packed_position_ids:
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-            if self.return_position_ids:
-                output["position_ids"] = pad(
-                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-            output["labels"] = pad(
-                labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        if self.return_position_ids:
+            output["position_ids"] = pad(
+                position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-            if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = pad(
-                    completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-            if "assistant_masks" in examples[0]:
-                assistant_masks = pad(
-                    assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][assistant_masks == 0] = -100
+        output["labels"] = pad(
+            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        if self.completion_only_loss and "completion_mask" in examples[0]:
+            completion_mask = pad(
+                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
+        if "assistant_masks" in examples[0]:
+            assistant_masks = pad(
+                assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"][assistant_masks == 0] = -100
         return output
 
     @staticmethod
@@ -586,16 +586,16 @@ class SFTTrainer(Trainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-                pass  # torch_dtype is already a torch.dtype or "auto" or None
-            elif isinstance(torch_dtype, str) and torch_dtype in ["bfloat16", "float16", "float32"]:
-                torch_dtype = getattr(torch, torch_dtype)
-                model_init_kwargs["torch_dtype"] = torch_dtype
+            dtype = model_init_kwargs.get("dtype")
+            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+                pass  # dtype is already a torch.dtype or "auto" or None
+            elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
+                dtype = getattr(torch, dtype)
+                model_init_kwargs["dtype"] = dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                    f"a valid `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                    "Invalid `dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
+                    f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])

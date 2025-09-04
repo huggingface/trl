@@ -162,6 +162,18 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0], [0, 1, 0, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, -100], [4, 5, -100, -100]]))
 
+    def test_pad_to_multiple_of_and_padding_free(self):
+        """Test padding to multiple of specified value."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, pad_to_multiple_of=4)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0]]))
+        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1, 0, 0, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 0, 0, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4, 5, -100, -100, -100]]))
+
     def test_custom_position_ids(self):
         """Test handling of custom position IDs in examples."""
         self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
@@ -346,14 +358,14 @@ class SFTTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-    def test_train_model_torch_dtype(self):
+    def test_train_model_dtype(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            model_init_kwargs={"torch_dtype": torch.float16},
+            model_init_kwargs={"dtype": torch.float16},
             learning_rate=0.1,
             report_to="none",
         )
@@ -1282,7 +1294,7 @@ class SFTTrainerTester(TrlTestCase):
             max_length=None,
             per_device_train_batch_size=1,
             gradient_checkpointing=True,
-            model_init_kwargs={"torch_dtype": "bfloat16"},
+            model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
         )
         trainer = SFTTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
