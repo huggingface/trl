@@ -32,7 +32,7 @@ accelerate launch \
     --model_name_or_path llava-hf/llava-1.5-7b-hf \
     --gradient_accumulation_steps 8 \
     --output_dir LLaVA-1.5-7B-SFT \
-    --torch_dtype bfloat16
+    --dtype bfloat16
 
 For LLaVA-NeXT, use: (requires transformers>=4.45)
     --model_name_or_path llava-hf/llava-v1.6-mistral-7b-hf
@@ -48,7 +48,7 @@ accelerate launch \
     --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 1 \
     --output_dir SmolVLM-SFT \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --use_peft \
     --lora_target_modules down_proj, o_proj, k_proj, q_proj, gate_proj, up_proj, v_proj
 """
@@ -83,14 +83,12 @@ if __name__ == "__main__":
     ################
     # Model, Tokenizer & Processor
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )

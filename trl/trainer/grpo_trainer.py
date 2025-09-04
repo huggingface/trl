@@ -229,16 +229,16 @@ class GRPOTrainer(Trainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-                pass  # torch_dtype is already a torch.dtype or "auto" or None
-            elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
-                torch_dtype = getattr(torch, torch_dtype)
-                model_init_kwargs["torch_dtype"] = torch_dtype
+            dtype = model_init_kwargs.get("dtype")
+            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+                pass  # dtype is already a torch.dtype or "auto" or None
+            elif isinstance(dtype, str):  # it's a str, but not "auto"
+                dtype = getattr(torch, dtype)
+                model_init_kwargs["dtype"] = dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
-                    f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                    "Invalid `dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
+                    f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
             config = AutoConfig.from_pretrained(model_id)
