@@ -500,7 +500,7 @@ class SFTTrainer(Trainer):
               using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported. If you're training
-            a MoE model and want to include the load balancing/auxilliary loss as a part of the final loss, remember to set
+            a Causal (Visual or Text) Language Model with an MoE architecture and want to include the load balancing/auxilliary loss as a part of the final loss, remember to set
             the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
@@ -1121,7 +1121,8 @@ class SFTTrainer(Trainer):
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
                 if self.aux_loss_enabled:
-                    self._metrics[mode]["aux_loss"].append(aux_loss.item())
+                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
+                    self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
 
