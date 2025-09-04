@@ -295,7 +295,7 @@ class DPOTrainer(Trainer):
         else:
             if args.ref_model_init_kwargs is not None:
                 logger.warning(
-                    "You passed ref_model_init_kwargs to the `DPOConfig`, but your model is already instantiated. "
+                    "You passed `ref_model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
                     "The `ref_model_init_kwargs` will be ignored."
                 )
         if ref_model is model:
