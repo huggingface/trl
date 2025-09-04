@@ -1473,7 +1473,7 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
     return per_token_logps
 
 
-def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 1024) -> torch.Tensor:
+def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Tensor:
     """
     Compute the Shannon entropy (in nats) for each row of *logits* in a memory-efficient way.
 
@@ -1486,7 +1486,7 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 1024) -> torch.T
         logits (`torch.Tensor`):
             Logits tensor of shape `(..., num_classes)`. Entropy is taken along the last axis; all leading dimensions
             are preserved in the output.
-        chunk_size (`int`, *optional*, defaults to `1024`):
+        chunk_size (`int`, *optional*, defaults to `128`):
             Number of rows from the flattened logits to process per iteration. Smaller values reduce memory usage at
             the cost of more iterations.
 
