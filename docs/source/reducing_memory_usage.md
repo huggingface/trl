@@ -333,7 +333,7 @@ You can configure context parallelism training either programmatically or via co
 from trl import SFTConfig
 
 training_args = SFTConfig(
-    max_seq_length=16384,             # Long sequence length
+    max_length=16384,             # Long sequence length
     packing=True,
     pad_to_multiple_of=4,             # REQUIRED: ensures divisibility by cp_size * 2
     dtype="bfloat16",           # Memory efficient precision
