@@ -20,6 +20,7 @@
 #     "scikit-learn",
 #     "joblib",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 

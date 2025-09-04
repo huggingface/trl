@@ -21,6 +21,7 @@
 #     "latex2sympy2_extended",
 #     "torchvision",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 

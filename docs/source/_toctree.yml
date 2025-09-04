@@ -35,6 +35,8 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
+  - local: kernels_hub
+    title: Kernels Hub
   - local: liger_kernel_integration
     title: Liger Kernel
   - local: peft_integration

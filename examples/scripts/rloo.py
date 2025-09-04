@@ -20,6 +20,7 @@
 #     "latex2sympy2_extended",
 #     "trackio",
 #     "vllm",
+#     "kernels",
 # ]
 # ///
 
