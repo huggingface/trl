@@ -17,7 +17,7 @@ pip install kernels
 
 ## Using Kernels from the Hub in TRL
 
-Kernels can directly replace attention implementations, removing the need to manually compile attention backends like Flash Attention and boost training speed just by pulling the respective attention kernel from the Hub.
+Kernels can directly replace attention implementations, removing the need to manually compile attention backends like Flash Attention and boosting training speed just by pulling the respective attention kernel from the Hub.
 
 You can specify a kernel when loading a model:
 
