@@ -36,7 +36,7 @@ accelerate launch \
     --output_dir online-dpo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
     --gradient_checkpointing \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --max_length 1536 \
     --max_new_tokens 1024 \
     --use_vllm \
@@ -56,7 +56,7 @@ accelerate launch \
     --reward_model_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --output_dir online-dpo-SmolVLM2-2.2B-Instruct \
     --learning_rate 1e-5 \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --max_length 1536 \
     --max_new_tokens 1024 \
     --use_peft \
@@ -70,7 +70,7 @@ python examples/scripts/online_dpo_vlm.py \
     --reward_model_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
     --output_dir online-dpo-SmolVLM2-2.2B-Instruct-test \
     --learning_rate 1e-5 \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --max_length 1536 \
     --max_new_tokens 128 \
     --use_peft \
@@ -114,14 +114,14 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
+    dtype = (
+        model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     )
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
