@@ -257,7 +257,7 @@ class DPOTrainerTester(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         training_args = DPOConfig(
-            output_dir="selftmp_dir",
+            output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             learning_rate=9e-1,
             report_to="none",
