@@ -72,16 +72,19 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
-    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+    model_kwargs = {}
+    if model_args.revision is not None:
+        model_kwargs["revision"] = model_args.revision
+    if model_args.trust_remote_code is not None:
+        model_kwargs["trust_remote_code"] = model_args.trust_remote_code
+    if model_args.attn_implementation is not None:
+        model_kwargs["attn_implementation"] = model_args.attn_implementation
+    if model_args.dtype is not None:
+        model_kwargs["dtype"] = "auto" if model_args.dtype == "auto" else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
-    model_kwargs = dict(
-        revision=model_args.model_revision,
-        attn_implementation=model_args.attn_implementation,
-        dtype=dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
-    )
+    if quantization_config is not None:
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
 
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs

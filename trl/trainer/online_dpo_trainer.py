@@ -303,7 +303,6 @@ class OnlineDPOTrainer(Trainer):
                 top_k=50,
                 top_p=1.0,
                 do_sample=True,
-                use_cache=False if args.gradient_checkpointing else True,
             )
 
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the

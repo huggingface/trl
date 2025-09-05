@@ -65,6 +65,7 @@ python trl/scripts/sft.py \
 import argparse
 import os
 
+import torch
 from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
@@ -95,15 +96,19 @@ def main(script_args, training_args, model_args, dataset_args):
     ################
     # Model init kwargs & Tokenizer
     ################
+    model_kwargs = {}
+    if model_args.revision is not None:
+        model_kwargs["revision"] = model_args.revision
+    if model_args.trust_remote_code is not None:
+        model_kwargs["trust_remote_code"] = model_args.trust_remote_code
+    if model_args.attn_implementation is not None:
+        model_kwargs["attn_implementation"] = model_args.attn_implementation
+    if model_args.dtype is not None:
+        model_kwargs["dtype"] = "auto" if model_args.dtype == "auto" else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
-    model_kwargs = dict(
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        attn_implementation=model_args.attn_implementation,
-        dtype=model_args.dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
-    )
+    if quantization_config is not None:
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
 
     # Create model
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)

@@ -31,7 +31,7 @@ accelerate launch \
     examples/scripts/sft_gpt_oss.py \
     --dtype bfloat16 \
     --model_name_or_path openai/gpt-oss-20b \
-    --packing true packing_strategy wrapped \
+    --packing \
     --run_name 20b-full-eager \
     --attn_implementation kernels-community/vllm-flash-attn3 \
     --dataset_num_proc 12 \
@@ -51,6 +51,7 @@ accelerate launch \
 
 import os
 
+import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
@@ -63,15 +64,17 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 def main(script_args, training_args, model_args):
     # Load model & tokenizer
-    quantization_config = Mxfp4Config(dequantize=True)
-    model_kwargs = dict(
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        attn_implementation=model_args.attn_implementation,
-        dtype=model_args.dtype,
-        use_cache=False if training_args.gradient_checkpointing else True,
-        quantization_config=quantization_config,
-    )
+    model_kwargs = {}
+    if model_args.revision is not None:
+        model_kwargs["revision"] = model_args.revision
+    if model_args.trust_remote_code is not None:
+        model_kwargs["trust_remote_code"] = model_args.trust_remote_code
+    if model_args.attn_implementation is not None:
+        model_kwargs["attn_implementation"] = model_args.attn_implementation
+    if model_args.dtype is not None:
+        model_kwargs["dtype"] = "auto" if model_args.dtype == "auto" else getattr(torch, model_args.dtype)
+    model_kwargs["device_map"] = quantization_config = Mxfp4Config(dequantize=True)
+    model_kwargs["quantization_config"] = quantization_config
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
