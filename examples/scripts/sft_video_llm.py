@@ -187,9 +187,6 @@ if __name__ == "__main__":
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config, split="train")
 
-    # Setup model
-    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
-
     # Quantization configuration for 4-bit training
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -199,13 +196,17 @@ if __name__ == "__main__":
     )
 
     # Model initialization
-    model_kwargs = dict(
-        revision=model_args.model_revision,
-        trust_remote_code=model_args.trust_remote_code,
-        dtype=dtype,
-        device_map=get_kbit_device_map(),
-        quantization_config=bnb_config,
-    )
+    model_kwargs = {}
+    if model_args.revision is not None:
+        model_kwargs["revision"] = model_args.revision
+    if model_args.trust_remote_code is not None:
+        model_kwargs["trust_remote_code"] = model_args.trust_remote_code
+    if model_args.attn_implementation is not None:
+        model_kwargs["attn_implementation"] = model_args.attn_implementation
+    if model_args.dtype is not None:
+        model_kwargs["dtype"] = "auto" if model_args.dtype == "auto" else getattr(torch, model_args.dtype)
+    model_kwargs["device_map"] = get_kbit_device_map()
+    model_kwargs["quantization_config"] = bnb_config
 
     model = AutoModelForImageTextToText.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 

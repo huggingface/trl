@@ -76,30 +76,36 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))
-    script_args, training_args, model_config = parser.parse_args_into_dataclasses()
+    script_args, training_args, model_args = parser.parse_args_into_dataclasses()
     training_args.gradient_checkpointing_kwargs = dict(use_reentrant=False)
 
     ################
     # Model & Tokenizer
     ################
-    dtype = model_config.dtype if model_config.dtype in ["auto", None] else getattr(torch, model_config.dtype)
-    quantization_config = get_quantization_config(model_config)
-    model_kwargs = dict(
-        revision=model_config.model_revision,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
-        use_cache=False if training_args.gradient_checkpointing else True,
-    )
+    model_kwargs = {}
+    if model_args.revision is not None:
+        model_kwargs["revision"] = model_args.revision
+    if model_args.trust_remote_code is not None:
+        model_kwargs["trust_remote_code"] = model_args.trust_remote_code
+    if model_args.attn_implementation is not None:
+        model_kwargs["attn_implementation"] = model_args.attn_implementation
+    if model_args.dtype is not None:
+        model_kwargs["dtype"] = "auto" if model_args.dtype == "auto" else getattr(torch, model_args.dtype)
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     tokenizer = AutoTokenizer.from_pretrained(
-        model_config.model_name_or_path, trust_remote_code=model_config.trust_remote_code, use_fast=True
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )
     model = AutoModelForTokenClassification.from_pretrained(
-        model_config.model_name_or_path, num_labels=2, trust_remote_code=model_config.trust_remote_code, **model_kwargs
+        model_args.model_name_or_path, num_labels=2, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
     # Align padding tokens between tokenizer and model
     model.config.pad_token_id = tokenizer.pad_token_id
 
-    if model_config.use_peft and model_config.lora_task_type != "TOKEN_CLS":
+    if model_args.use_peft and model_args.lora_task_type != "TOKEN_CLS":
         logger.warning(
             "You are using a `task_type` that is different than `TOKEN_CLS` for PEFT. This will lead to silent bugs"
             " Make sure to pass --lora_task_type TOKEN_CLS when using this script with PEFT.",
@@ -121,7 +127,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split],
-        peft_config=get_peft_config(model_config),
+        peft_config=get_peft_config(model_args),
     )
     trainer.train()
 
