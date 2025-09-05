@@ -319,6 +319,18 @@ class DPOConfig(TrainingArguments):
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
+
+    save_ref_logps_dir: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Directory to save the precomputed reference model log probabilities."
+            }) 
+            
+    load_ref_logps_dir: Optional[str] = field(
+        default=None,
+        metadata={"help": "Directory to load the precomputed reference model log probabilities from."
+        })
+
     tools: Optional[list[Union[dict, Callable]]] = field(
         default=None,
         metadata={
