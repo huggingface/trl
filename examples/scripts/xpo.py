@@ -119,7 +119,7 @@ if __name__ == "__main__":
     trainer = XPOTrainer(
         model=model,
         ref_model=ref_model,
-        reward_model=reward_model,
+        reward_funcs=reward_model,
         judge=judge,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
