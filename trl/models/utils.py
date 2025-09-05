@@ -14,6 +14,7 @@
 
 import itertools
 import warnings
+from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -431,7 +432,7 @@ class _ForwardRedirection:
     """
 
     def __call__(
-        self, wrapper_module: nn.Module, original_module: nn.Module, method: callable, *args: Any, **kwargs: Any
+        self, wrapper_module: nn.Module, original_module: nn.Module, method: Callable, *args: Any, **kwargs: Any
     ):
         """Reroutes a method call through the `wrapper_module`'s `forward` method.
 
