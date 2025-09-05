@@ -24,7 +24,7 @@
 """
 Usage:
 
-python examples/scripts/dpo_online.py \
+python examples/scripts/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
@@ -36,7 +36,7 @@ python examples/scripts/dpo_online.py \
     --missing_eos_penalty 1.0
 
 With LoRA:
-python examples/scripts/dpo_online.py \
+python examples/scripts/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
@@ -138,13 +138,13 @@ if __name__ == "__main__":
 
     trainer = OnlineDPOTrainer(
         model=model,
-        reward_model=reward_model,
+        reward_funcs=reward_model,
         judge=judge,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
-        reward_processing_class=reward_tokenizer,
+        reward_processing_classes=reward_tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
