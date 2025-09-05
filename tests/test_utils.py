@@ -661,14 +661,14 @@ class RepeatRandomSamplerTester(TrlTestCase):
 class TestEntropyFromLogits(TrlTestCase):
     @parameterized.expand(
         [
-            (dtype, chunk_size)
+            (dtype, chunk_size, shape)
             for dtype in (torch.float64, torch.float32, torch.float16, torch.bfloat16)
             for chunk_size in (1, 16)
+            for shape in [(768,), (32, 768), (8, 16, 768), (2, 4, 8, 768)]
         ]
     )
-    def test_entropy_from_logits(self, dtype, chunk_size):
-        batch_size, seq_len, vocab_size = 64, 384, 768
-        logits = torch.randn(batch_size, seq_len, vocab_size, dtype=dtype)
+    def test_entropy_from_logits_2_dims(self, dtype, chunk_size, shape):
+        logits = torch.randn(*shape, dtype=dtype)
         if dtype in (torch.float64, torch.float32):
             p = logits.softmax(-1)
             entropy = -torch.sum(p * p.log(), dim=-1)

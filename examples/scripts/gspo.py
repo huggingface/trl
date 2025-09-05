@@ -19,6 +19,7 @@
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
