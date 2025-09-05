@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Union
 
 import torch
 
-from .sft_trainer import DataCollatorForLanguageModeling
+from .data_collator import DataCollatorForLanguageModeling
 
 
 @dataclass

@@ -26,14 +26,20 @@ class CausalLMOutputWithMTP(CausalLMOutput):
     """
     Extended CausalLMOutput to include Multi-Token Prediction logits and loss.
     
+    This class extends the standard CausalLMOutput to support all original fields
+    plus MTP-specific fields.
+    
     Args:
         mtp_logits (`List[torch.FloatTensor]` of shape `(batch_size, sequence_length, config.vocab_size)`, *optional*):
             Prediction scores for each future token position (k predictions).
         mtp_loss (`torch.FloatTensor` of shape `(1,)`, *optional*):
             Multi-token prediction loss.
+        past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*):
+            Contains pre-computed hidden-states (key and values in the attention blocks).
     """
     mtp_logits: Optional[List[torch.FloatTensor]] = None
     mtp_loss: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[tuple] = None
 
 
 class MTPHeads(nn.Module):
@@ -67,7 +73,8 @@ class MTPHeads(nn.Module):
         self.head_type = head_type
         self.num_layers = num_layers
         self.init_strategy = init_strategy
-        self.lm_head_module = lm_head_module
+        # DON'T store lm_head_module to avoid shared tensor references
+        # self.lm_head_module = lm_head_module
         
         # Get hidden size from config (handle different model architectures)
         hidden_size = self._get_hidden_size(config)
@@ -104,7 +111,7 @@ class MTPHeads(nn.Module):
             raise ValueError(f"Unsupported head_type: {head_type}. Supported types: 'linear', 'ffn', 'mha_ffn', 'cnn', 'identical'")
         
         # Apply initialization strategy
-        self._initialize_parameters()
+        self._initialize_parameters(lm_head_module)
     
     def _get_hidden_size(self, config):
         """Extract hidden size from different model configurations."""
@@ -189,25 +196,22 @@ class MTPHeads(nn.Module):
             # For complex modules, create a simple linear layer as fallback
             return nn.Linear(hidden_size, vocab_size)
     
-    def _initialize_parameters(self):
+    def _initialize_parameters(self, lm_head_module: Optional[nn.Module] = None):
         """Initialize parameters based on the specified strategy."""
         if self.init_strategy == "default":
             # Use PyTorch's default initialization
             return
-        elif self.init_strategy == "copy_lm_head" and self.lm_head_module is not None:
-            self._copy_lm_head_parameters()
+        elif self.init_strategy == "copy_lm_head" and lm_head_module is not None:
+            self._copy_lm_head_parameters(lm_head_module)
         else:
             # Apply specific initialization strategies
             for head in self.heads:
                 self._apply_initialization_to_module(head, self.init_strategy)
     
-    def _copy_lm_head_parameters(self):
+    def _copy_lm_head_parameters(self, lm_head_module: nn.Module):
         """Copy parameters from the original LM head to MTP heads."""
-        if self.lm_head_module is None:
-            return
-        
         for head in self.heads:
-            self._copy_module_parameters(self.lm_head_module, head)
+            self._copy_module_parameters(lm_head_module, head)
     
     def _copy_module_parameters(self, source: nn.Module, target: nn.Module):
         """Copy parameters from source module to target module."""
@@ -216,7 +220,7 @@ class MTPHeads(nn.Module):
         
         for name, param in target_params.items():
             if name in source_params and param.shape == source_params[name].shape:
-                param.data.copy_(source_params[name].data)
+                param.data.copy_(source_params[name].data.clone().detach())
     
     def _apply_initialization_to_module(self, module: nn.Module, strategy: str):
         """Apply initialization strategy to a module."""
@@ -247,8 +251,12 @@ class MTPHeads(nn.Module):
         hidden_states = self.dropout(hidden_states)
         
         # Ensure proper dtype for numerical stability
-        if hidden_states.dtype != self.heads[0][0].weight.dtype if isinstance(self.heads[0], nn.Sequential) else self.heads[0].weight.dtype:
-            target_dtype = self.heads[0][0].weight.dtype if isinstance(self.heads[0], nn.Sequential) else self.heads[0].weight.dtype
+        if isinstance(self.heads[0], nn.Sequential):
+            target_dtype = self.heads[0][0].weight.dtype
+        else:
+            target_dtype = self.heads[0].weight.dtype
+        
+        if hidden_states.dtype != target_dtype:
             hidden_states = hidden_states.to(target_dtype)
         
         # Generate predictions for each future position
@@ -387,6 +395,7 @@ class MTPExtension:
             model.config.mtp_init_strategy = init_strategy
         
         # Get reference to LM head for structure copying if needed
+        # IMPORTANT: Don't store direct reference to avoid shared tensor issues during saving
         lm_head_module = None
         if hasattr(model, 'lm_head'):
             lm_head_module = model.lm_head
@@ -396,7 +405,7 @@ class MTPExtension:
             lm_head_module = model.output_layer
         
         # Create and attach MTP heads
-        model.mtp_heads = MTPHeads(
+        mtp_heads = MTPHeads(
             config=model.config,
             num_predictions=num_predictions,
             head_type=head_type,
@@ -407,10 +416,17 @@ class MTPExtension:
             **kwargs
         )
         
-        # Store original forward method and replace with MTP-enabled version
-        if not hasattr(model, '_original_forward'):
-            model._original_forward = model.forward
-            model.forward = lambda *args, **kwargs: mtp_forward(model, *args, **kwargs)
+        # Ensure MTP heads are on the same device as the main model
+        try:
+            device = next(model.parameters()).device
+            mtp_heads = mtp_heads.to(device)
+        except StopIteration:
+            # Model has no parameters, likely an empty model
+            pass
+        
+        # Add MTP heads as a named module for proper DDP registration
+        model.add_module('mtp_heads', mtp_heads)
+        
     
     @staticmethod
     def remove_mtp_from_model(model: PreTrainedModel):
@@ -431,47 +447,3 @@ class MTPExtension:
         for attr in ['mtp_enabled', 'mtp_num_predictions', 'mtp_head_type', 'mtp_num_layers', 'mtp_init_strategy']:
             if hasattr(model.config, attr):
                 delattr(model.config, attr)
-
-
-def mtp_forward(model: PreTrainedModel, *args, **kwargs):
-    """
-    Modified forward pass that includes MTP predictions.
-    
-    This function replaces the model's original forward method when MTP is enabled.
-    """
-    # Call original forward method
-    outputs = model._original_forward(*args, **kwargs)
-    
-    # Only add MTP during training
-    if not model.training or not hasattr(model, 'mtp_heads'):
-        return outputs
-    
-    # Get hidden states from the last layer
-    if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
-        # Use the last layer's hidden states
-        hidden_states = outputs.hidden_states[-1]
-    elif hasattr(outputs, 'last_hidden_state'):
-        hidden_states = outputs.last_hidden_state
-    else:
-        # Fallback: try to get hidden states from logits
-        # This is a rough approximation and may not work for all models
-        if hasattr(model, 'transformer') and hasattr(model.transformer, 'ln_f'):
-            # For GPT-style models
-            hidden_states = model.transformer.ln_f(outputs.logits)
-        else:
-            # Skip MTP if we can't get hidden states
-            return outputs
-    
-    # Generate MTP predictions
-    mtp_logits = model.mtp_heads(hidden_states)
-    
-    # Create extended output
-    return CausalLMOutputWithMTP(
-        loss=outputs.loss,
-        logits=outputs.logits,
-        past_key_values=outputs.past_key_values,
-        hidden_states=outputs.hidden_states,
-        attentions=outputs.attentions,
-        mtp_logits=mtp_logits,
-        mtp_loss=None,  # Will be computed in the trainer
-    )

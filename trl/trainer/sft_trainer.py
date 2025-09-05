@@ -54,6 +54,7 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from ..models.modeling_mtp_extension import MTPExtension
+from .data_collator import DataCollatorForLanguageModeling
 from .mtp_data_collator import DataCollatorForMTPLanguageModeling
 from .sft_config import SFTConfig
 from .utils import entropy_from_logits, flush_left, generate_model_card, get_comet_experiment_url, pad
@@ -100,184 +101,6 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         }
     else:
         raise TypeError("Input must be a list or a dictionary.")
-
-
-@dataclass
-class DataCollatorForLanguageModeling(DataCollatorMixin):
-    """
-    Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
-
-    This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
-    If the input contains a `"completion_mask"`, it is used to set the labels to `-100` for tokens that are not in the
-    completion. If `"assistant_masks"` are present, they are used to set the labels to `-100` for tokens that are not
-    in the assistant part of the sequence. The collator returns a dictionary containing the following keys:
-    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
-    - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
-    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
-    - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `completion_only_loss` is set to
-    `True`, tokens that are not in the completion are set to -100. If `assistant_masks` are present, tokens that are
-    not in the assistant part of the sequence are set to -100.
-
-    Args:
-        pad_token_id (`int`):
-            Token ID to use for padding.
-        completion_only_loss (`bool`, *optional*, defaults to `True`):
-            When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
-            that are no in the completion.
-        padding_free (`bool`, *optional*, defaults to `False`):
-            If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly. The attention mask will be set to 1 for all tokens.
-        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
-            If set, the sequences will be padded to a multiple of this value.
-        return_tensors (`str`, *optional*, defaults to `"pt"`):
-            Type of Tensor to return. Only `"pt"` is currently supported.
-
-    Examples:
-    ```python
-    >>> from trl import DataCollatorForLanguageModeling
-
-    >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
-    >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
-    >>> collator(examples)
-    {'input_ids': tensor([[  1,  2,  3],
-                          [  4,  5,  0]]),
-     'attention_mask': tensor([[  1,  1,  1],
-                               [  1,  1,  0]]),
-     'position_ids': tensor([[0, 1, 2],
-                             [0, 1, 0]]),
-     'labels': tensor([[   1,    2,    3],
-                       [   4,    5, -100]])}
-
-    >>> # With completion mask
-    >>> examples = [
-    ...     {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
-    ...     {"input_ids": [4, 5], "completion_mask": [0, 1]},
-    ... ]
-    >>> collator(examples)
-    {'input_ids': tensor([[  1,  2,  3],
-                          [  4,  5,  0]]),
-     'attention_mask': tensor([[  1,  1,  1],
-                               [  1,  1,  0]]),
-     'position_ids': tensor([[0, 1, 2],
-                             [0, 1, 0]]),
-     'labels': tensor([[-100,    2,    3],
-                       [-100,    5, -100]])}
-
-    >>> # With padding_free
-    >>> collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
-    >>> collator(examples)
-    {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
-     'attention_mask': tensor([[1, 1, 1, 1, 1]]),
-     'position_ids': tensor([[0, 1, 2, 0, 1]]),
-     'labels': tensor([[1, 2, 3, 4, 5]])}
-    ```
-    """
-
-    pad_token_id: int
-    completion_only_loss: bool = True
-    padding_free: bool = False
-    return_position_ids: bool = True
-    pad_to_multiple_of: Optional[int] = None
-    return_tensors: str = "pt"
-
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
-        # Convert to tensor
-        input_ids = [torch.tensor(example["input_ids"]) for example in examples]
-
-        # Check if we have meaningful seq_lengths from packing (restarting sequences)
-        has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
-
-        # For packing with position_ids, we should NOT create attention_mask as it causes
-        # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
-        if not has_packed_position_ids:
-            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
-
-        if self.return_position_ids:
-            if "seq_lengths" in examples[0]:
-                position_ids = self.get_position_ids_from_packed_seq_lengths(
-                    [example["seq_lengths"] for example in examples]
-                )
-            else:
-                position_ids = [torch.arange(len(ids)) for ids in input_ids]
-        if "labels" in examples[0]:
-            labels = [torch.tensor(example["labels"]) for example in examples]
-        else:
-            labels = [torch.tensor(example["input_ids"]) for example in examples]
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
-        if "assistant_masks" in examples[0]:
-            assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
-
-        # Pad
-        output = {}
-        if self.padding_free:
-            output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
-            if not has_packed_position_ids:
-                output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
-            if self.return_position_ids:
-                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
-            output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
-            if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
-                output["labels"][completion_mask == 0] = -100
-            if "assistant_masks" in examples[0]:
-                assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
-                output["labels"][assistant_masks == 0] = -100
-        else:
-            output["input_ids"] = pad(
-                input_ids,
-                padding_value=self.pad_token_id,
-                padding_side="right",
-                pad_to_multiple_of=self.pad_to_multiple_of,
-            )
-            output["attention_mask"] = pad(
-                attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-            if self.return_position_ids:
-                output["position_ids"] = pad(
-                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-            output["labels"] = pad(
-                labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-            if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = pad(
-                    completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-            if "assistant_masks" in examples[0]:
-                assistant_masks = pad(
-                    assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][assistant_masks == 0] = -100
-        return output
-
-    @staticmethod
-    def get_position_ids_from_packed_seq_lengths(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
-        """
-        Get position IDs for packed sequences.
-
-        Args:
-            batch_seq_lengths (`list[list[int]]`):
-                A list of lists containing the lengths of each individual document in the packed batch.
-
-        Return:
-            `list[torch.Tensor]`:
-                A list of tensors containing the position IDs for each packed sequence.
-        """
-        # Get lengths per row
-        example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
-        # Flat list of lengths
-        batch_seq_lengths = torch.tensor(
-            [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
-        )
-        position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
-        position_ids[0] = 0
-        # Reset position ids to 0 at the start of each sequence
-        position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
-        position_ids = position_ids.cumsum(0)
-        # Split back into one tensor per example
-        return list(position_ids.split(example_lengths))
 
 
 @dataclass
@@ -612,7 +435,11 @@ class SFTTrainer(Trainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model_id)
+            try:
+                processing_class = AutoProcessor.from_pretrained(model_id)
+            except ValueError:
+                from transformers import AutoTokenizer
+                processing_class = AutoTokenizer.from_pretrained(model_id)
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -859,19 +686,19 @@ class SFTTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
-        # Initialize MTP functionality if enabled
+        # Store MTP configuration for later initialization (after accelerator.prepare)
         self.mtp_enabled = getattr(args, 'mtp_enabled', False)
         if self.mtp_enabled:
-            MTPExtension.add_mtp_to_model(
-                model=self.model,
-                num_predictions=args.mtp_num_predictions,
-                head_type=args.mtp_head_type,
-                dropout_prob=args.mtp_dropout_prob,
-                num_layers=args.mtp_num_layers,
-                init_strategy=args.mtp_init_strategy,
-            )
-            logger.info(f"MTP enabled with {args.mtp_num_predictions} predictions using {args.mtp_head_type} heads ({args.mtp_num_layers} layers, {args.mtp_init_strategy} init)")
-
+            self.mtp_config = {
+                'num_predictions': args.mtp_num_predictions,
+                'head_type': args.mtp_head_type,
+                'dropout_prob': args.mtp_dropout_prob,
+                'num_layers': args.mtp_num_layers,
+                'init_strategy': args.mtp_init_strategy,
+            }
+            logger.info(f"MTP will be enabled with {args.mtp_num_predictions} predictions using {args.mtp_head_type} heads ({args.mtp_num_layers} layers, {args.mtp_init_strategy} init)")
+        else:
+            self.mtp_config = None
     def _prepare_dataset(
         self,
         dataset: Union[Dataset, IterableDataset],
@@ -1071,32 +898,48 @@ class SFTTrainer(Trainer):
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
         
+        # Ensure output_hidden_states for MTP
+        if self.mtp_enabled:
+            inputs["output_hidden_states"] = True
+        
         # Compute standard loss
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
         
-        # Add MTP loss if enabled
-        if self.mtp_enabled and hasattr(outputs, 'mtp_logits') and 'mtp_labels' in inputs:
-            mtp_loss = self._compute_mtp_loss(outputs.mtp_logits, inputs['mtp_labels'])
-            total_loss = loss + self.args.mtp_loss_weight * mtp_loss
+        # Compute MTP loss if enabled
+        if self.mtp_enabled and mode == "train" and 'mtp_labels' in inputs:
+            # Unwrap model if it's DDP wrapped
+            actual_model = model.module if hasattr(model, 'module') else model
             
-            # Log MTP metrics
-            self._metrics[mode]["mtp_loss"].append(mtp_loss.item())
-            self._metrics[mode]["ntp_loss"].append(loss.item())
-            
-            # Update outputs with MTP loss
-            if hasattr(outputs, 'mtp_loss'):
-                outputs.mtp_loss = mtp_loss
-            
-            loss = total_loss
+            if hasattr(actual_model, 'mtp_heads'):
+                # Get hidden states for MTP
+                if hasattr(outputs, 'hidden_states') and outputs.hidden_states is not None:
+                    last_hidden_state = outputs.hidden_states[-1]
+                    mtp_logits = actual_model.mtp_heads(last_hidden_state)
+                else:
+                    raise ValueError("hidden_states is None, which MTP requires")
+                    
+                mtp_labels = inputs['mtp_labels']
+                mtp_loss = self._compute_mtp_loss(mtp_logits, mtp_labels)
+                total_loss = loss + self.args.mtp_loss_weight * mtp_loss
+                
+                # Log MTP metrics
+                self._metrics[mode]["mtp_loss"].append(mtp_loss.item())
+                self._metrics[mode]["ntp_loss"].append(loss.item())
+                
+                # Update outputs with MTP loss
+                if hasattr(outputs, 'mtp_loss'):
+                    outputs.mtp_loss = mtp_loss
+                
+                loss = total_loss
 
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 per_token_entropy = entropy_from_logits(outputs.logits)
                 if "attention_mask" in inputs:
-                    attention_mask = inputs["attention_mask"]
+                    attention_mask = inputs["attention_mask"]     
                     # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
                     virtual_attention_mask = torch.ones(
                         attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
@@ -1166,7 +1009,9 @@ class SFTTrainer(Trainer):
         Returns:
             MTP loss tensor.
         """
-        total_loss = 0.0
+        if len(mtp_logits) == 0:
+            return torch.tensor(0.0, device=mtp_labels.device, requires_grad=True)
+        
         num_predictions = len(mtp_logits)
         
         # Get weight decay strategy
@@ -1178,6 +1023,7 @@ class SFTTrainer(Trainer):
             weights = [1.0] * num_predictions
         
         # Compute weighted loss for each prediction step
+        weighted_losses = []
         for i, (logits, weight) in enumerate(zip(mtp_logits, weights)):
             # Shift logits and labels for causal LM (predict next token)
             shift_logits = logits[..., :-1, :].contiguous()
@@ -1188,16 +1034,45 @@ class SFTTrainer(Trainer):
             flat_labels = shift_labels.view(-1)
             
             # Compute cross entropy loss (ignore_index=-100 by default)
-            loss_fct = nn.CrossEntropyLoss(ignore_index=-100)
+            loss_fct = nn.CrossEntropyLoss(ignore_index=-100, reduction='mean')
             step_loss = loss_fct(flat_logits, flat_labels)
             
-            total_loss += weight * step_loss
+            # Apply weight and collect
+            weighted_losses.append(weight * step_loss)
         
-        # Normalize by sum of weights
+        # Sum weighted losses and normalize by sum of weights
+        total_loss = torch.stack(weighted_losses).sum()
         return total_loss / sum(weights)
 
-    # Override training step to add activation offloading context.
+    def _initialize_mtp_after_prepare(self):
+        """Initialize MTP heads after the model has been prepared by accelerator."""
+        if not self.mtp_enabled or hasattr(self, '_mtp_initialized'):
+            return
+        
+        # Get the actual model (unwrap DDP if necessary)
+        actual_model = self.model.module if hasattr(self.model, 'module') else self.model
+        
+        # Add MTP to the actual model
+        MTPExtension.add_mtp_to_model(
+            model=actual_model,
+            **self.mtp_config
+        )
+        
+        # If model is DDP wrapped, we need to re-register the new parameters
+        if hasattr(self.model, 'module'):
+            # Re-prepare the model to include MTP heads in DDP
+            logger.info("Re-preparing model with MTP heads for DDP")
+            # Note: This is a bit hacky but necessary for DDP to recognize new parameters
+            self.model = self.accelerator.prepare_model(actual_model)
+        
+        logger.info(f"MTP initialized after accelerator.prepare() with {self.mtp_config['num_predictions']} predictions")
+        self._mtp_initialized = True
+
+    # Override training step to add activation offloading context and initialize MTP.
     def training_step(self, *args, **kwargs):
+        # Initialize MTP after accelerator.prepare (only once)
+        self._initialize_mtp_after_prepare()
+        
         with self.maybe_activation_offload_context:
             return super().training_step(*args, **kwargs)
 

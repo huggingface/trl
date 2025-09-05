@@ -26,14 +26,51 @@ This script demonstrates how to fine-tune mainstream language models with enhanc
 Supported models include Llama, Qwen, DeepSeek, Mistral, and other popular architectures.
 
 Example usage:
-    # Basic MTP training with Qwen2.5
-    python sft_with_mtp.py \
+    # Complete MTP training with Qwen2.5
+    CUDA_VISIBLE_DEVICES=0 python examples/scripts/sft_with_mtp.py \
         --model_name_or_path Qwen/Qwen2.5-0.5B \
         --dataset_name trl-lib/Capybara \
+        --train_split train \
+        --output_dir ./results/qwen-identical-mtp \
         --mtp_enabled \
+        --mtp_head_type identical \
+        --mtp_init_strategy copy_lm_head \
+        --mtp_num_layers 1 \
         --mtp_num_predictions 2 \
         --mtp_loss_weight 0.5 \
-        --output_dir ./results/qwen-mtp
+        --learning_rate 2e-5 \
+        --per_device_train_batch_size 8 \
+        --per_device_eval_batch_size 4 \
+        --gradient_accumulation_steps 4 \
+        --num_train_epochs 3 \
+        --warmup_steps 100 \
+        --weight_decay 0.01 \
+        --lr_scheduler_type cosine \
+        --max_length 512 \
+        --save_steps 100 \
+        --logging_steps 10
+        
+    # Multi GPU training using accelerate config
+    accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
+        examples/scripts/sft_with_mtp.py \
+        --model_name_or_path Qwen/Qwen2.5-0.5B \
+        --dataset_name trl-lib/Capybara \
+        --train_split train \
+        --output_dir ./results/qwen-mtp-multi-gpu \
+        --mtp_enabled \
+        --mtp_num_predictions 2 \
+        --mtp_head_type ffn \
+        --mtp_num_layers 2 \
+        --mtp_loss_weight 0.5 \
+        --learning_rate 2e-5 \
+        --per_device_train_batch_size 1 \
+        --gradient_accumulation_steps 4 \
+        --num_train_epochs 1 \
+        --warmup_steps 50 \
+        --max_length 512 \
+        --save_steps 100 \
+        --logging_steps 10 \
+        --bf16 true
 
     # Identical head structure with parameter copying
     python sft_with_mtp.py \
@@ -82,7 +119,7 @@ Example usage:
 import logging
 from dataclasses import dataclass, field
 from typing import Optional
-
+import os
 import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, HfArgumentParser
@@ -271,6 +308,20 @@ def main():
     parser = HfArgumentParser((ModelArguments, DataArguments, SFTConfig))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
     
+    # Print GPU information (like test.py)
+    logger.info(f"GPU Number: {torch.cuda.device_count()}")
+    logger.info(f"Current Device: {torch.cuda.current_device()}")
+    
+    # Force single GPU if CUDA_VISIBLE_DEVICES is set
+    if "CUDA_VISIBLE_DEVICES" in os.environ:
+        logger.info(f"CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
+    
+    # Print training configuration (like test.py)
+    logger.info(f"Training Configuration:")
+    logger.info(f"  per_device_train_batch_size: {training_args.per_device_train_batch_size}")
+    logger.info(f"  gradient_accumulation_steps: {training_args.gradient_accumulation_steps}")
+    logger.info(f"  gradient_checkpointing: {training_args.gradient_checkpointing}")
+    
     # Set up logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -284,10 +335,10 @@ def main():
         logger.info("ENHANCED MULTI-TOKEN PREDICTION (MTP) ENABLED")
         logger.info("=" * 60)
         logger.info("New Features:")
-        logger.info("  ✅ Identical head structure copying")
-        logger.info("  ✅ Multi-layer MTP heads")
-        logger.info("  ✅ Flexible parameter initialization")
-        logger.info("  ✅ Advanced head architectures")
+        logger.info("  Identical head structure copying")
+        logger.info("  Multi-layer MTP heads")
+        logger.info("  Flexible parameter initialization")
+        logger.info("  Advanced head architectures like MHA+FFN, CNN, etc.")
         logger.info("")
         logger.info("Configuration:")
         logger.info(f"  - Head type: {training_args.mtp_head_type}")
