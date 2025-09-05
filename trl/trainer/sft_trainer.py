@@ -504,10 +504,10 @@ class SFTTrainer(Trainer):
             as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
-        data_collator ([`~transformers.DataCollator`] or `None`, *optional*, defaults to `None`):
+        data_collator ([`~transformers.DataCollator`] or `None`, *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to a custom [`DataCollatorForLanguageModeling`] if the model is a language model and
-            [`DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
+            Will default to [`trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
+            and [`trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. SFT supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -525,7 +525,9 @@ class SFTTrainer(Trainer):
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
         compute_loss_func (`Callable` or `None`, *optional*, defaults to `None`):
             A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
-            batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618) used by [`Trainer`].
+            batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss
+            function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618)
+            used by [`Trainer`].
         compute_metrics (`Callable[[EvalPrediction], dict]` or `None`, *optional*, defaults to `None`):
             The function that will be used to compute metrics at evaluation. Must take a
             [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
