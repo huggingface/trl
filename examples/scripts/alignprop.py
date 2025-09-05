@@ -19,6 +19,7 @@
 #     "torchvision",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 

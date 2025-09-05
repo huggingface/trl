@@ -18,6 +18,7 @@
 #     "diffusers",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
