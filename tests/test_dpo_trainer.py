@@ -1564,6 +1564,7 @@ class DPOVisionTrainerTester(TrlTestCase):
 
         model = _MinimalModel()
 
+        # Mock tokenizer with required token IDs to avoid external dependencies
         mock_tokenizer = MagicMock()
         mock_tokenizer.pad_token_id = 0
         mock_tokenizer.eos_token_id = 1
@@ -1574,6 +1575,7 @@ class DPOVisionTrainerTester(TrlTestCase):
 
         mock_tokenizer.side_effect = _tok_call
 
+        # Mock processor that returns pixel_values to simulate vision processing
         processor = MagicMock()
         processor.tokenizer = mock_tokenizer
         # Ensure DPOTrainer reads an integer pad_token_id
@@ -1599,8 +1601,7 @@ class DPOVisionTrainerTester(TrlTestCase):
                 }
             ]
         )
-
-        # Args to avoid reference model creation and multiprocessing/pickling
+        # Test-optimized config to avoid multiprocessing and reference model creation
         args = DPOConfig(
             output_dir=self.tmp_dir,
             dataset_num_proc=1,
