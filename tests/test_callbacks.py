@@ -493,3 +493,42 @@ class BEMACallbackTester(TrlTestCase):
             callbacks=[bema_callback],
         )
         trainer.train()
+
+    def test_updates_reference_model(self):
+        """Test that BEMACallback updates the reference model when provided via DPOTrainer callback handler."""
+        pref_dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            num_train_epochs=1,
+            report_to="none",
+            per_device_train_batch_size=2,
+        )
+
+        bema_callback = BEMACallback(
+            update_freq=1,
+            update_after=0,
+            update_ref_model=True,
+            ref_model_update_freq=1,
+            ref_model_update_after=0,
+        )
+
+        # Patch the internal update method to assert it's called with the reference model
+        with patch.object(bema_callback, "_update_model_with_bema_weights") as mock_update:
+            trainer = DPOTrainer(
+                model=self.model,
+                ref_model=ref_model,
+                args=training_args,
+                train_dataset=pref_dataset,
+                processing_class=self.tokenizer,
+                callbacks=[bema_callback],
+            )
+
+            trainer.train()
+
+            # Ensure the reference model (not the policy model) received the BEMA weights
+            assert mock_update.call_count > 0
+            # First argument of the first call is the model that was updated
+            updated_model_arg = mock_update.call_args_list[0].args[0]
+            self.assertIs(updated_model_arg, ref_model)
