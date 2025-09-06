@@ -329,6 +329,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         Args:
             batch_size (int): Batch size to use for sampling
             with_grad (bool): Whether the generated RGBs should have gradients attached to it.
+            prompts (list[str], *optional*): If provided, use these prompts instead of generating new ones.
 
         Returns:
             prompt_image_pairs (dict[Any])

@@ -205,6 +205,7 @@ def scheduler_step(
     from the learned model outputs (most often the predicted noise).
 
     Args:
+        self: scheduler.
         model_output (`torch.FloatTensor`): direct output from learned diffusion model.
         timestep (`int`): current discrete timestep in the diffusion chain.
         sample (`torch.FloatTensor`):
@@ -215,9 +216,7 @@ def scheduler_step(
             `self.config.clip_sample` is `True`. If no clipping has happened, "corrected" `model_output` would coincide
             with the one provided as input and `use_clipped_model_output` will have not effect.
         generator: random number generator.
-        variance_noise (`torch.FloatTensor`): instead of generating noise for the variance using `generator`, we
-            can directly provide the noise for the variance itself. This is useful for methods such as CycleDiffusion.
-            (https://huggingface.co/papers/2210.05559)
+        prev_sample (`torch.FloatTensor`, *optional*): if not `None`, the previous sample to be used
 
     Returns:
         `DDPOSchedulerOutput`: the predicted sample at the previous timestep and the log probability of the sample
@@ -564,6 +563,7 @@ def pipeline_step_with_grad(
     Function to get RGB image with gradients attached to the model weights.
 
     Args:
+        pipeline (`StableDiffusionPipeline`): Pipeline to be used for image generation.
         prompt (`str` or `list[str]`, *optional*, defaults to `None`):
             The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`
             instead.

@@ -691,7 +691,7 @@ def truncate_dataset(
     Args:
         dataset (`Dataset` or `DatasetDict`):
             Dataset to truncate.
-        seq_length (`int`):
+        max_length (`int`):
             Maximum sequence length to truncate to.
         map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to the dataset's map method when truncating examples.

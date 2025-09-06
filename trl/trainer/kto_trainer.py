@@ -1013,6 +1013,12 @@ class KTOTrainer(Trainer):
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
+            label_pad_token_id:
+                The label value to ignore when computing log probabilities.
+            is_encoder_decoder:
+                Whether the model is an encoder-decoder model. If True, the labels are not shifted and the logits are
+                assumed to already be aligned with the labels. If False, the labels are shifted to the right by one
+                position, and the logits are assumed to be aligned with the shifted labels.
 
         Returns:
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the

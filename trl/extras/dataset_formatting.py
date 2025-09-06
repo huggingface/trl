@@ -94,6 +94,8 @@ def get_formatting_func_from_dataset(
     Args:
         dataset (Dataset): User dataset
         tokenizer (AutoTokenizer): Tokenizer used for formatting
+        tools (list, *optional*): List of tools (callable functions) that will be accessible to the model.
+            If the template does not support function calling, this argument will have no effect.
 
     Returns:
         Callable: Formatting function if the dataset format is supported else None
