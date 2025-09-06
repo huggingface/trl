@@ -22,7 +22,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.types
 from datasets import Dataset, DatasetDict
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
@@ -119,7 +119,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
 def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: Union[PreTrainedTokenizerBase, ProcessorMixin],
     tools: Optional[list[Union[dict, Callable]]] = None,
     **template_kwargs,
 ) -> dict[str, str]:
