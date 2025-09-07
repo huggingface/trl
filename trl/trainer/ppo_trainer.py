@@ -107,10 +107,10 @@ class PPOTrainer(Trainer):
             Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
         ],
         model: nn.Module,
-        ref_model: Optional[nn.Module],
         reward_model: nn.Module,
         train_dataset: Dataset,
         value_model: nn.Module,
+        ref_model: Optional[nn.Module] = None,
         data_collator: Optional[DataCollatorWithPadding] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         # less commonly used
