@@ -1015,6 +1015,29 @@ class DPOTrainer(Trainer):
                 Log probabilities of the reference model for the chosen responses. Shape: `(batch_size,)`.
             ref_rejected_logps (`torch.FloatTensor`):
                 Log probabilities of the reference model for the rejected responses. Shape: `(batch_size,)`.
+            loss_type (`str`, defaults to `"sigmoid"`):
+                The type of loss to compute. One of:
+                - `"sigmoid"`: Sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
+                - `"hinge"`: Hinge loss on the normalized likelihood from the
+                  [SLiC](https://huggingface.co/papers/2305.10425) paper.
+                - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
+                - `"exo_pair"`: Pairwise EXO loss from the [EXO](https://huggingface.co/papers/2402.00856) paper.
+                - `"nca_pair"`: Pairwise NCA loss from the [NCA](https://huggingface.co/papers/2402.05369) paper.
+                - `"robust"`: Unbiased estimate of the DPO loss that is robust to preference noise from the [Robust
+                  DPO](https://huggingface.co/papers/2403.00409) paper.
+                - `"bco_pair"`: Pairwise BCO loss from the [BCO](https://huggingface.co/papers/2404.04656) paper.
+                - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
+                  paper.
+                - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
+                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
+                  paper.
+                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
+                  [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
+                - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"sft"`: Negative log-likelihood loss (standard supervised fine-tuning loss).
+            model_output (`dict[str, torch.FloatTensor]`, *optional*):
+                The output of the model's forward pass. This is used to compute auxiliary losses if enabled.
 
         Returns:
             A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`. The losses tensor contains the DPO
