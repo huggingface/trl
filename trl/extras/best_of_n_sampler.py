@@ -83,7 +83,7 @@ class BestOfNSampler:
         device: Optional[Union[str, torch.device]] = None,
         **generation_kwargs,
     ) -> list[list[str]]:
-        r"""
+        """
         Generate the best of n samples for input queries.
 
         Args:
