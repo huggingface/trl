@@ -88,8 +88,8 @@ class BestOfNSampler:
 
         Args:
             tokenized_query (`list[int]` or `torch.Tensor` or `list[torch.Tensor]` or `list[int]`):
-                represents either a single tokenized query (a single tensor or a list of integers) or a batch of
-                tokenized queries (a list of tensors or a list of lists of integers).
+                Either a single tokenized query (a single tensor or a list of integers) or a batch of tokenized queries
+                (a list of tensors or a list of lists of integers).
             skip_special_tokens (`bool`, *optional*, defaults to `True`):
                 Whether to remove the special tokens from the output.
             device (`str` or `torch.device`, *optional*):
