@@ -87,7 +87,7 @@ class BestOfNSampler:
         Generate the best of n samples for input queries.
 
         Args:
-            tokenized_query (`list[int]` or `torch.Tensor` or `list[torch.Tensor]` or `list[int]`):
+            tokenized_query (`list[int]` or `torch.Tensor` or `list[torch.Tensor]` or `list[list[int]]`):
                 Either a single tokenized query (a single tensor or a list of integers) or a batch of tokenized queries
                 (a list of tensors or a list of lists of integers).
             skip_special_tokens (`bool`, *optional*, defaults to `True`):
