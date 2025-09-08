@@ -21,7 +21,8 @@ from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
 
 
 class BestOfNSampler:
-    """Initialize the sampler for best-of-n generation
+    """
+    Sampler for best-of-n generation.
 
     Args:
         model (`PreTrainedModelWrapper`):
