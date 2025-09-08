@@ -94,8 +94,8 @@ class RewardTrainer(Trainer):
             Training arguments.
         data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
-            (`RewardDataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
+            [`~trainer.utils.RewardDataCollatorWithPadding`] will be used which will pad the sequences to the maximum
+            length of the sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`], *optional*):
             The dataset to use for training.
         eval_dataset ([`~datasets.Dataset`], *optional*):
