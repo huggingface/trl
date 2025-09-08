@@ -94,7 +94,7 @@ class BestOfNSampler:
                 Whether to remove the special tokens from the output.
             device (`str` or `torch.device`, *optional*):
                 The device on which the model will be loaded.
-            **generation_kwargs (`dict`, *optional*):
+            **generation_kwargs:
                 Additional keyword arguments passed along to the underlying model's `generate` method. This is used to
                 override generation config.
 
