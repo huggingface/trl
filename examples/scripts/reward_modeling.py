@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -84,16 +85,14 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
         use_cache=False if training_args.gradient_checkpointing else True,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
     )
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True

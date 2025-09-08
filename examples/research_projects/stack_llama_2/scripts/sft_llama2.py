@@ -205,7 +205,7 @@ elif is_torch_npu_available():
 else:
     torch.cuda.empty_cache()
 
-model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", torch_dtype=torch.bfloat16)
+model = AutoPeftModelForCausalLM.from_pretrained(output_dir, device_map="auto", dtype=torch.bfloat16)
 model = model.merge_and_unload()
 
 output_merged_dir = os.path.join(training_args.output_dir, "final_merged_checkpoint")

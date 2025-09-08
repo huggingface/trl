@@ -40,7 +40,7 @@ def generate_tokens_with_assistance(model, inputs, assistant_early_exit):
 if __name__ == "__main__":
     ckpt = config.hub_model_id
 
-    model = AutoModelForCausalLM.from_pretrained(ckpt, device_map="auto", torch_dtype=torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(ckpt, device_map="auto", dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(ckpt)
 
     prompt = "### Instruction: What are my alarms for the rest of the day?\n ### Response: "

@@ -17,6 +17,7 @@
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "kernels",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -28,7 +29,7 @@ Example:
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
     examples/scripts/sft_gpt_oss.py \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --model_name_or_path openai/gpt-oss-20b \
     --packing true packing_strategy wrapped \
     --run_name 20b-full-eager \
@@ -67,7 +68,7 @@ def main(script_args, training_args, model_args):
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=model_args.torch_dtype,
+        dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         quantization_config=quantization_config,
     )

@@ -573,7 +573,7 @@ accelerate launch \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
   --gradient_checkpointing \
-  --torch_dtype bfloat16 \
+  --dtype bfloat16 \
   --max_prompt_length 2048 \
   --max_completion_length 1024 \
   --use_vllm \

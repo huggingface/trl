@@ -263,7 +263,7 @@ class GRPOTrainerSlowTester(TrlTestCase):
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             attn_implementation="flash_attention_2",
-            torch_dtype="bfloat16",
+            dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
@@ -421,7 +421,7 @@ class GRPOTrainerSlowTester(TrlTestCase):
                     model = AutoModelForCausalLM.from_pretrained(
                         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                         quantization_config=quantization_config,
-                        torch_dtype=torch.bfloat16,
+                        dtype=torch.bfloat16,
                     )
 
                     trainer = GRPOTrainer(
