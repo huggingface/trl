@@ -1102,8 +1102,15 @@ class SFTTrainer(Trainer):
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
         if "labels" in inputs and not self.args.use_liger_kernel:
             with torch.no_grad():
-                shift_logits = outputs.logits[..., :-1, :].contiguous()
-                shift_labels = inputs["labels"][..., 1:].contiguous()
+                if "shift_labels" in inputs:
+                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
+                    # - The last logits require the label from process n+1
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = inputs["labels"][..., 1:].contiguous()
 
                 # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
                 # not correspond to actual input labels.
