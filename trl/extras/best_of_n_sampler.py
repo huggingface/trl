@@ -21,6 +21,29 @@ from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper
 
 
 class BestOfNSampler:
+    """Initialize the sampler for best-of-n generation
+
+    Args:
+        model (`PreTrainedModelWrapper`):
+            The pretrained model to use for generation
+        tokenizer (`PreTrainedTokenizer` or `PreTrainedTokenizerFast`):
+            Tokenizer associated with the pretrained model
+        queries_to_scores (`Callable[[list[str]], list[float]]`):
+            Callable that takes a list of generated texts and returns the associated reward scores
+        length_sampler (`Any`):
+            Sampler used to sample the length of the generated text
+        sample_size (`int`):
+            Number of samples to generate for each query
+        seed (`int`, *optional*):
+            Random seed used to control generation
+        n_candidates (`int`):
+            Number of candidates to return for each query
+        generation_config (`GenerationConfig`, *optional*):
+            Generation config passed to the underlying model's `generate` method. See `GenerationConfig`
+            (https://huggingface.co/docs/transformers/v4.29.1/en/main_classes/text_generation#transformers.GenerationConfig)
+            for more details
+    """
+
     def __init__(
         self,
         model: PreTrainedModelWrapper,
@@ -32,29 +55,6 @@ class BestOfNSampler:
         n_candidates: int = 1,
         generation_config: Optional[GenerationConfig] = None,
     ) -> None:
-        r"""
-        Initialize the sampler for best-of-n generation
-
-        Args:
-            model (`PreTrainedModelWrapper`):
-                The pretrained model to use for generation
-            tokenizer (`PreTrainedTokenizer` or `PreTrainedTokenizerFast`):
-                Tokenizer associated with the pretrained model
-            queries_to_scores (`Callable[[list[str]], list[float]]`):
-                Callable that takes a list of generated texts and returns the associated reward scores
-            length_sampler (`Any`):
-                Sampler used to sample the length of the generated text
-            sample_size (`int`):
-                Number of samples to generate for each query
-            seed (`int`, *optional*):
-                Random seed used to control generation
-            n_candidates (`int`):
-                Number of candidates to return for each query
-            generation_config (`GenerationConfig`, *optional*):
-                Generation config passed to the underlying model's `generate` method. See `GenerationConfig`
-                (https://huggingface.co/docs/transformers/v4.29.1/en/main_classes/text_generation#transformers.GenerationConfig)
-                for more details
-        """
         if seed is not None:
             set_seed(seed)
 
