@@ -99,7 +99,7 @@ class BestOfNSampler:
                 override generation config.
 
         Returns:
-            list[list[str]]: A list of lists of generated texts.
+            `list[list[str]]`: A list of lists of generated texts.
         """
         queries = None
 
