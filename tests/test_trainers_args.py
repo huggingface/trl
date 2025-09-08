@@ -262,7 +262,7 @@ class TrainerArgTester(TrlTestCase):
             processing_class=tokenizer,
             model=model,
             ref_model=ref_model,
-            reward_model=reward_model,
+            reward_funcs=reward_model,
             train_dataset=dataset,
         )
         self.assertEqual(trainer.args.mixture_coef, 0.5 if not mixtures_coef_list else [0.5, 0.6])
@@ -282,23 +282,21 @@ class TrainerArgTester(TrlTestCase):
             missing_eos_penalty=0.33,
             beta=0.6 if not beta_list else [0.6, 0.7],
             loss_type="hinge",
-            dataset_num_proc=4,
         )
         trainer = OnlineDPOTrainer(
             model=model,
             ref_model=ref_model,
-            reward_model=reward_model,
+            reward_funcs=reward_model,
             args=training_args,
             train_dataset=dataset,
             processing_class=tokenizer,
-            reward_processing_class=tokenizer,
+            reward_processing_classes=tokenizer,
         )
         self.assertEqual(trainer.args.max_new_tokens, 42)
         self.assertEqual(trainer.args.temperature, 0.5)
         self.assertEqual(trainer.args.missing_eos_penalty, 0.33)
         self.assertEqual(trainer.args.beta, 0.6 if not beta_list else [0.6, 0.7])
         self.assertEqual(trainer.args.loss_type, "hinge")
-        self.assertEqual(trainer.args.dataset_num_proc, 4)
 
     def test_orpo(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -390,7 +388,7 @@ class TrainerArgTester(TrlTestCase):
             processing_class=tokenizer,
             model=model,
             ref_model=ref_model,
-            reward_model=reward_model,
+            reward_funcs=reward_model,
             train_dataset=dataset,
         )
         self.assertEqual(trainer.args.alpha, 0.5 if not alpha_list else [0.5, 0.6])
