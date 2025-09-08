@@ -26,6 +26,8 @@ from multiprocessing.connection import Connection
 from typing import Optional
 
 import torch
+import torch.distributed.distributed_c10d as c10d
+
 from transformers import is_vision_available
 
 from trl import TrlParser
@@ -57,7 +59,6 @@ if is_vision_available():
 if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-    from vllm.distributed.device_communicators.xpu_communicator import XpuCommunicator
     from vllm.distributed.parallel_state import get_world_group
     from vllm.distributed.utils import StatelessProcessGroup
     from vllm.sampling_params import GuidedDecodingParams
@@ -79,7 +80,7 @@ class WeightSyncWorkerExtension:
     """
     A vLLM worker extension that enables weight synchronization between a client and multiple server workers.
 
-    This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` or `XpuCommunicator` to handle
+    This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` or `ProcessGroupXCCL` to handle
     efficient GPU-based communication using NCCL. The primary purpose of this class is to receive updated model weights
     from a client process and distribute them to all worker processes participating in model inference.
     """
@@ -120,12 +121,25 @@ class WeightSyncWorkerExtension:
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
-        # Create a stateless process group to manage communication between training processes and vLLM workers.
-        pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
-
-        # Initialize the NCCL-based communicator for weight synchronization.
-        comm_class = XpuCommunicator if (hasattr(torch, "xpu") and torch.xpu.is_available()) else PyNcclCommunicator
-        self.communicator = comm_class(pg, device=self.device)
+        if (hasattr(torch, "xpu") and torch.xpu.is_available()):
+            store = torch.distributed.TCPStore(
+                host_name=host,
+                port=port,
+                world_size=world_size,
+                is_master=(rank == 0)
+            )
+            prefixed_store = c10d.PrefixStore("client2server", store)
+            pg = c10d.ProcessGroupXCCL(
+                store=prefixed_store,
+                rank=rank,
+                size=world_size,
+            )
+            self.communicator = pg
+        else:
+            # Create a stateless process group to manage communication between training processes and vLLM workers.
+            # Initialize the NCCL-based communicator for weight synchronization.
+            pg = StatelessProcessGroup.create(host=host, port=port, rank=rank, world_size=world_size)
+            self.communicator = PyNcclCommunicator(pg, device=self.device)
 
         # The client process that sends updated weights has the highest rank (world_size - 1).
         self.client_rank = world_size - 1
@@ -149,9 +163,14 @@ class WeightSyncWorkerExtension:
         # Allocate memory for the incoming weight tensor on the correct device.
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
-        # Use NCCL to broadcast the updated weights from the client (src) to all workers.
-        self.communicator.broadcast(weight, src=self.client_rank)
-        self.communicator.group.barrier()
+        if isinstance(self.communicator, torch.distributed.distributed_c10d.ProcessGroupXCCL):
+            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weight, root=self.client_rank)
+            self.communicator.barrier()
+        else:
+            # Use NCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weight, src=self.client_rank)
+            self.communicator.group.barrier()
 
         # Load the received weights into the model.
         self.model_runner.model.load_weights(weights=[(name, weight)])

@@ -23,6 +23,7 @@ from urllib.parse import urlparse
 
 import torch
 from torch import nn
+import torch.distributed.distributed_c10d as c10d
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -34,7 +35,6 @@ if is_requests_available():
 
 if is_vllm_available():
     from vllm.distributed.device_communicators.pynccl import PyNcclCommunicator
-    from vllm.distributed.device_communicators.xpu_communicator import XpuCommunicator
     from vllm.distributed.utils import StatelessProcessGroup
 
     if is_vllm_ascend_available():
@@ -274,8 +274,8 @@ class VLLMClient:
         response = self.session.post(
             url,
             json={
-                "host": "localhost",
-                "port": self.server_port,
+                "host": "0.0.0.0",
+                "port": self.group_port,
                 "world_size": world_size,
                 "client_device_uuid": client_device_uuid,
             },
@@ -289,9 +289,23 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        comm_class = XpuCommunicator if (hasattr(torch, "xpu") and torch.xpu.is_available()) else PyNcclCommunicator
-        self.communicator = comm_class(pg, device=device)
+        if (hasattr(torch, "xpu") and torch.xpu.is_available()):
+            store = torch.distributed.TCPStore(
+                host_name=self.host,
+                port=self.group_port,
+                world_size=world_size,
+                is_master=(self.rank == 0)
+            )
+            prefixed_store = c10d.PrefixStore("client2server", store)
+            pg = c10d.ProcessGroupXCCL(
+                store=prefixed_store,
+                rank=self.rank,
+                size=world_size,
+            )
+            self.communicator = pg
+        else:
+            pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
+            self.communicator = PyNcclCommunicator(pg, device=self.device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -312,9 +326,14 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        # Broadcast the weights to the other processes
-        self.communicator.broadcast(weights, src=self.rank)
-        self.communicator.group.barrier()
+        if isinstance(self.communicator, torch.distributed.distributed_c10d.ProcessGroupXCCL):
+            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, root=self.rank)
+            self.communicator.barrier()
+        else:
+            # Use NCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, src=self.rank)
+            self.communicator.group.barrier()
 
     def update_model_params(self, model: nn.Module):
         """

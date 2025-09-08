@@ -15,6 +15,7 @@
 import importlib.resources as resources
 import os
 import sys
+import torch
 
 from accelerate import logging
 from accelerate.commands.launch import launch_command, launch_command_parser
@@ -125,7 +126,7 @@ def main():
         # Known issue: Using DeepSpeed with tensor_parallel_size=1 and data_parallel_size>1 may cause a crash when
         # launched via the CLI. Suggest running the module directly.
         # More information: https://github.com/vllm-project/vllm/issues/17079
-        if script_args.tensor_parallel_size == 1 and script_args.data_parallel_size > 1:
+        if script_args.tensor_parallel_size == 1 and script_args.data_parallel_size > 1 and torch.cuda.is_available():
             logger.warning(
                 "Detected configuration: tensor_parallel_size=1 and data_parallel_size>1. This setup is known to "
                 "cause a crash when using the `trl vllm-serve` CLI entry point. As a workaround, please run the "

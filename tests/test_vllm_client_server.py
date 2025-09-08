@@ -126,8 +126,8 @@ class TestVLLMClientServer(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
+            child.kill()
+        parent.kill()
         cls.server_process.wait()
 
 
@@ -205,8 +205,8 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
+            child.kill()
+        parent.kill()
         cls.server_process.wait()
 
 
@@ -231,7 +231,7 @@ class TestVLLMClientServerTP(TrlTestCase):
         )
 
         # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240)
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
         cls.client.init_communicator()
 
     def test_generate(self):
@@ -268,8 +268,8 @@ class TestVLLMClientServerTP(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
+            child.kill()
+        parent.kill()
         cls.server_process.wait()
 
 
@@ -294,7 +294,7 @@ class TestVLLMClientServerDP(TrlTestCase):
         )
 
         # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240)
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
         cls.client.init_communicator()
 
     def test_generate(self):
@@ -331,8 +331,8 @@ class TestVLLMClientServerDP(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
+            child.kill()
+        parent.kill()
         cls.server_process.wait()
 
 
@@ -357,7 +357,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
 
     def test_init_communicator_with_device_int(self):
         """Test init_communicator with integer device parameter."""
-        client = VLLMClient(connection_timeout=240)
+        client = VLLMClient(connection_timeout=240, host="localhost")
         client.init_communicator(device=0)  # Explicitly specify device 0
 
         # Test basic functionality
@@ -370,7 +370,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
 
     def test_init_communicator_with_device_string(self):
         """Test init_communicator with string device parameter."""
-        client = VLLMClient(connection_timeout=240)
+        client = VLLMClient(connection_timeout=240, host="localhost")
         client.init_communicator(device=0)  # Explicitly specify device as string
 
         # Test basic functionality
@@ -385,7 +385,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         """Test init_communicator with torch.device object."""
         import torch
 
-        client = VLLMClient(connection_timeout=240)
+        client = VLLMClient(connection_timeout=240, host="localhost")
         device = torch.device(0)
         client.init_communicator(device=device)  # Explicitly specify torch.device object
 
@@ -406,6 +406,6 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
+            child.kill()
+        parent.kill()
         cls.server_process.wait()
