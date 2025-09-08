@@ -362,7 +362,6 @@ class DPOTrainer(Trainer):
                     "You set `use_liger_loss=True` but the loss type is not from `[sigmoid, apo_zero, apo_down, sppo_hard, nca_pair`. "
                     "Please set `loss_type='[sigmoid | apo_zero | apo_down | sppo_hard | nca_pair]'` to use the liger kernel."
                 )
-
             self.dpo_loss_fn = LigerFusedLinearDPOLoss(
                 ignore_index=args.label_pad_token_id,
                 beta=args.beta,
@@ -390,13 +389,6 @@ class DPOTrainer(Trainer):
         self.max_length = args.max_length
         self.truncation_mode = args.truncation_mode
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
-        if args.use_liger_loss and self.precompute_ref_log_probs:
-            logger.warning(
-                "You set `use_liger_loss=True`, but also enabled `precompute_ref_log_probs`. "
-                "The `precompute_ref_log_probs` setting will be ignored."
-            )
-            self.precompute_ref_log_probs = False
-
         self.use_logits_to_keep = args.use_logits_to_keep
 
         if args.padding_free:
