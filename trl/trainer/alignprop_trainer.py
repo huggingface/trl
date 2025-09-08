@@ -155,7 +155,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
 
         # Enable TF32 for faster training on Ampere GPUs,
         # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
-        if self.config.allow_tf32:
+        if self.config.allow_tf32 and torch.cuda.is_available():
             torch.backends.cuda.matmul.allow_tf32 = True
 
         self.optimizer = self._setup_optimizer(
@@ -329,6 +329,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         Args:
             batch_size (int): Batch size to use for sampling
             with_grad (bool): Whether the generated RGBs should have gradients attached to it.
+            prompts (list[str], *optional*): If provided, use these prompts instead of generating new ones.
 
         Returns:
             prompt_image_pairs (dict[Any])

@@ -20,6 +20,7 @@
 #     "scikit-learn",
 #     "joblib",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -141,7 +142,7 @@ if __name__ == "__main__":
         "nomic-ai/nomic-embed-text-v1.5",
         trust_remote_code=model_args.trust_remote_code,
         safe_serialization=True,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map="auto",
     )
     embedding_model = accelerator.prepare_model(embedding_model)

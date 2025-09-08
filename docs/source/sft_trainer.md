@@ -13,7 +13,7 @@ This post-training method was contributed by [Younes Belkada](https://huggingfac
 This example demonstrates how to train a language model using the [`SFTTrainer`] from TRL. We train a [Qwen 3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model on the [Capybara dataset](https://huggingface.co/datasets/trl-lib/Capybara), a compact, diverse multi-turn dataset to benchmark reasoning and generalization.
 
 ```python
-from trl import SFTConfig, SFTTrainer
+from trl import SFTTrainer
 from datasets import load_dataset
 
 trainer = SFTTrainer(
@@ -130,16 +130,16 @@ While training and evaluating we record the following reward metrics:
 You can directly pass the kwargs of the [`~transformers.AutoModelForCausalLM.from_pretrained()`] method to the [`SFTConfig`]. For example, if you want to load a model in a different precision, analogous to
 
 ```python
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", torch_dtype=torch.bfloat16)
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", dtype=torch.bfloat16)
 ```
 
-you can do so by passing the `model_init_kwargs={"torch_dtype": torch.bfloat16}` argument to the [`SFTConfig`].
+you can do so by passing the `model_init_kwargs={"dtype": torch.bfloat16}` argument to the [`SFTConfig`].
 
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(
-    model_init_kwargs={"torch_dtype": torch.bfloat16},
+    model_init_kwargs={"dtype": torch.bfloat16},
 )
 ```
 

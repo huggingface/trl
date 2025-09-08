@@ -168,9 +168,7 @@ peft_config = LoraConfig(
     lora_dropout=0.1,
 )
 
-model = AutoModelForSequenceClassification.from_pretrained(
-    script_args.model_name, num_labels=1, torch_dtype=torch.bfloat16
-)
+model = AutoModelForSequenceClassification.from_pretrained(script_args.model_name, num_labels=1, dtype=torch.bfloat16)
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
 

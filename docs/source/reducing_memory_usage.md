@@ -191,17 +191,11 @@ Activation offloading is a memory efficiency technique that reduces GPU VRAM usa
 
 To enable activation offloading in your SFT training configuration:
 
-<hfoptions>
-<hfoption id="SFT">
-
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(..., activation_offloading=True)
 ```
-
-</hfoption>
-</hfoptions>
 
 <Tip warning={true}>
 
@@ -267,3 +261,28 @@ training_args = RLOOConfig(..., ds3_gather_for_generation=False)
 </hfoptions>
 
 This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.
+
+## vLLM sleep mode
+
+When using vLLM as the generation backend, you can enable _sleep mode_ to offload vLLM parameters and cache to CPU RAM during the optimization step and reload them back to GPU VRAM when needed for weight synchronization and generation.
+
+<hfoptions id="vllm_sleep">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., vllm_sleep_enabled=True)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., vllm_sleep_enabled=True)
+```
+
+</hfoption>
+</hfoptions>
