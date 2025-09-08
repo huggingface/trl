@@ -64,21 +64,6 @@ accelerate launch \
     --gradient_accumulation_steps 2 \
     --num_generations 2
 
-
-python examples/scripts/grpo_vlm.py \
-    --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
-    --output_dir grpo-SmolVLM2-2.2B-Instruct \
-    --learning_rate 1e-5 \
-    --dtype bfloat16 \
-    --max_prompt_length 2048 \
-    --max_completion_length 1024 \
-    --use_peft \
-    --lora_target_modules "q_proj", "v_proj" \
-    --log_completions \
-    --per_device_train_batch_size 1 \
-    --gradient_accumulation_steps 2 \
-    --num_generations 2
-
 """
 
 import os
@@ -87,12 +72,16 @@ import torch
 from datasets import load_dataset
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
-from peft import LoraConfig
 
 from trl import (
     GRPOConfig,
     GRPOTrainer,
+    ModelConfig,
+    ScriptArguments,
+    TrlParser,
     get_kbit_device_map,
+    get_peft_config,
+    get_quantization_config,
 )
 from trl.rewards import think_format_reward
 
@@ -102,24 +91,19 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":
+    parser = TrlParser((ScriptArguments, GRPOConfig, ModelConfig))
+    script_args, training_args, model_args = parser.parse_args_and_config()
     ################
     # Model & Processor
     ################
-    dtype = torch.bfloat16
-    quantization_config = None
-    training_args = GRPOConfig(
-        model_init_kwargs=dict(
-            attn_implementation="sdpa",
-            dtype=dtype,
-            device_map=get_kbit_device_map() if quantization_config is not None else None,
-            quantization_config=quantization_config,
-        ),
-        learning_rate=1e-5,
-        max_prompt_length=4096,
-        max_completion_length=1024,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=2,
-        num_generations=2,
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+    quantization_config = get_quantization_config(model_args)
+    training_args.model_init_kwargs = dict(
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
+        dtype=dtype,
+        device_map=get_kbit_device_map() if quantization_config is not None else None,
+        quantization_config=quantization_config,
     )
 
     ################
@@ -161,7 +145,7 @@ if __name__ == "__main__":
     dataset = dataset.map(convert_to_rgb)
 
     train_dataset = dataset["train"]
-    eval_dataset = dataset["test"]
+    eval_dataset = dataset["test"] if training_args.eval_strategy != "no" else None
 
     ################
     # Reward Function for Training
@@ -214,26 +198,18 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    peft_config = LoraConfig(
-        r=8,
-        lora_alpha=8,
-        lora_dropout=0.1,
-        target_modules=["q_proj", "v_proj"],
-        bias="none",
-    )
-
-    # model_id = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
-    model_id = "llava-hf/llava-onevision-qwen2-0.5b-ov-hf"
     trainer = GRPOTrainer(
-        model=model_id,
+        model=model_args.model_name_or_path,
         args=training_args,
         reward_funcs=[think_format_reward, accuracy_reward],
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        peft_config=peft_config,
+        peft_config=get_peft_config(model_args),
     )
 
     trainer.train()
 
     # Save and push to hub
-    # trainer.save_model("temp_trained_model")
+    trainer.save_model(training_args.output_dir)
+    if training_args.push_to_hub:
+        trainer.push_to_hub(dataset_name=script_args.dataset_name)
