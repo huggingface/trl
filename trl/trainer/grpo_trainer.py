@@ -367,7 +367,7 @@ class GRPOTrainer(Trainer):
                 )
         if self.group_filter_func is not None and self.num_remains_in_group is None:
             logger.warning(
-                f"Group filter function is not activated since num_remains_in_group is not set"
+                "Group filter function is not activated since num_remains_in_group is not set"
             )
 
         self.mask_truncated_completions = args.mask_truncated_completions
