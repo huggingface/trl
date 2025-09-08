@@ -98,6 +98,42 @@ class PolicyAndValueWrapper(nn.Module):
 
 
 class PPOTrainer(Trainer):
+    """Trainer for Proximal Policy Optimization (PPO).
+
+    For details on PPO, see the paper: [Proximal Policy Optimization
+    Algorithms](https://huggingface.co/papers/1707.06347).
+
+    Args:
+        args ([`PPOConfig`]):
+            Training arguments.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
+            Class to process the data.
+        model (`nn.Module`):
+            Model to be trained. This is the policy model.
+        ref_model (`nn.Module`, *optional*):
+            Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
+        reward_model (`nn.Module`):
+            Reward model used to compute the rewards.
+        train_dataset ([`~datasets.Dataset`]):
+            Dataset for training.
+        value_model (`nn.Module`):
+            Value model used to predict the value of a state.
+        data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
+            Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
+            using the `processing_class`.
+        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
+            Dataset for evaluation.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*):
+            Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`, the
+            optimizer and the learning rate scheduler are created using the
+            [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
+        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
+            Callbacks to use during training.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
+            will be wrapped with the specified PEFT adapter.
+    """
+
     _tag_names = ["trl", "ppo"]
 
     def __init__(
