@@ -1079,12 +1079,18 @@ class GRPOTrainer(Trainer):
         # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
         kwargs = {}
         has_images = "image" in inputs[0]
+        image_split_sizes = None
         if has_images:
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
                 if isinstance(prompt, list):  # i.e., when using conversational data
                     prepare_multimodal_messages(prompt, num_images=1)
+
+            if hasattr(self.processing_class, "_get_num_multimodal_tokens"):
+                image_sizes = [(image.height, image.width) for image in images]
+                multimodal_extra_data = self.processing_class._get_num_multimodal_tokens(image_sizes)
+                image_split_sizes = multimodal_extra_data.num_image_patches
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1568,6 +1574,8 @@ class GRPOTrainer(Trainer):
             output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
         if "image_sizes" in prompt_inputs:
             output["image_sizes"] = prompt_inputs["image_sizes"]
+        if image_split_sizes is not None:
+            output["image_split_sizes"] = image_split_sizes
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
