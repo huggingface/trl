@@ -104,8 +104,14 @@ def build_dataset(
     customize this function to train the model on its own dataset.
 
     Args:
+        config (`PPOConfig`):
+            The configuration of the PPO training.
         dataset_name (`str`):
             The name of the dataset to be loaded.
+        input_min_text_length (`int`, defaults to 5):
+            The minimum length of the input text.
+        input_max_text_length (`int`, defaults to 10):
+            The maximum length of the input text.
 
     Returns:
         dataloader (`torch.utils.data.DataLoader`):

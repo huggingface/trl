@@ -1002,6 +1002,10 @@ def prepare_deepspeed(
             The model to be prepared for DeepSpeed training.
         per_device_train_batch_size (`int`):
             The training batch size per device.
+        fp16 (`bool`, defaults to `False`):
+            Whether to use FP16 precision.
+        bf16 (`bool`, defaults to `False`):
+            Whether to use BF16 precision.
 
     Returns:
         `torch.nn.Module`:
@@ -1359,7 +1363,7 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor
     Args:
         mask (`torch.Tensor`):
             2D tensor (binary mask) with shape `(N, M)`.
-        *tensors (`torch.Tensor`)
+        *tensors (`torch.Tensor`):
             One or more 2D tensors with the same shape as `mask`. These tensors will be processed alongside `mask`,
             with non-zero values shifted and excess zero columns truncated in the same manner.
 
