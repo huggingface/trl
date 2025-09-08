@@ -305,6 +305,14 @@ class ScriptArguments:
             "model implementation."
         },
     )
+    enable_sleep_mode: Optional[bool] = field(
+        default=None,
+        metadata={"help": "Enable sleep mode for vLLM to offload VRAM when idle."},
+    )
+    sleep_timeout: Optional[int] = field(
+        default=None,
+        metadata={"help": "Timeout in seconds before entering sleep mode."},
+    )
 
 
 def llm_worker(
@@ -332,6 +340,8 @@ def llm_worker(
         worker_extension_cls="trl.scripts.vllm_serve.WeightSyncWorkerExtension",
         trust_remote_code=script_args.trust_remote_code,
         model_impl=script_args.vllm_model_impl,
+        enable_sleep_mode=script_args.enable_sleep_mode,
+        sleep_timeout=script_args.sleep_timeout,
     )
 
     # Send ready signal to parent process
