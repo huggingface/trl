@@ -441,7 +441,7 @@ $$
 }
 $$
 
-Despite $\textcolor{red}{\pi_{\text{inference}}}$ and $\textcolor{blue}{\pi_{\text{training}}}$ sharing the same model parameters $\theta$, they can produce significantly different token probabilities. This unexpected behavior implicitly breaks the on-policy assumption, and silently turns training off-policy. 
+Despite \\( \textcolor{red}{\pi_{\text{inference}}} \\) and  \\( \textcolor{blue}{\pi_{\text{training}}} \\) sharing the same model parameters  \\( \theta \\), they can produce significantly different token probabilities. This unexpected behavior implicitly breaks the on-policy assumption, and silently turns training off-policy. 
 
 Truncated Importance Sampling (TIS) addresses this issue by adapting the model update via importance-sampling correction. The gradient computation of the aforementioned PPO objective becomes
 
@@ -459,15 +459,15 @@ $$
 }
 $$
 
-where C is a hyper-parameter. In TRL, TIS is implemented for GRPO, and enabled by default when vLLM is used for generation (`use_vllm=True`)
+where \\( C \\) is a hyper-parameter. In TRL, TIS is implemented for GRPO, and enabled by default when vLLM is used for generation (`use_vllm=True`)
 
 ```python
 from trl import GRPOConfig
 
 training_args = GRPOConfig(
     ...
-    use_vllm=True
-    vllm_importance_sampling_correction=True # default True
-    vllm_importance_sampling_cap # hyper-parameter C
+    use_vllm=True,
+    vllm_importance_sampling_correction=True, # default True
+    vllm_importance_sampling_cap=2.0, # hyper-parameter C
 )
 ```
