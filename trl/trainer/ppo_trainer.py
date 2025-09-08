@@ -110,13 +110,13 @@ class PPOTrainer(Trainer):
             Class to process the data.
         model (`torch.nn.Module`):
             Model to be trained. This is the policy model.
-        ref_model (`nn.Module`, *optional*):
+        ref_model (`torch.nn.Module`, *optional*):
             Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
-        reward_model (`nn.Module`):
+        reward_model (`torch.nn.Module`):
             Reward model used to compute the rewards.
         train_dataset ([`~datasets.Dataset`]):
             Dataset for training.
-        value_model (`nn.Module`):
+        value_model (`torch.nn.Module`):
             Value model used to predict the value of a state.
         data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
             Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
