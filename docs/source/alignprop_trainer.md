@@ -96,8 +96,6 @@ This work is heavily influenced by the repo [here](https://github.com/mihirp1998
 
 [[autodoc]] AlignPropTrainer
     - train
-    - save_model
-    - push_to_hub
 
 ## AlignPropConfig
 
