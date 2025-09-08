@@ -1809,10 +1809,10 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Unio
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
     `batch["image_grid_thw"]`, while keeping other entries unchanged.
     """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch:
+    if "image_split_sizes" not in batch or "pixel_values" not in batch:
         return batch
 
-    lengths = batch["image_grid_thw"].prod(dim=1).tolist()  # [batch_size]
+    lengths = batch["image_split_sizes"]  # [batch_size]
     pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
     if sum(lengths) != pixel_values.size(0):
