@@ -88,37 +88,38 @@ class RewardTrainer(Trainer):
     Trainer for custom reward.
 
     Args:
-        model (`transformers.PreTrainedModel`):
-            The model to train, preferably an `AutoModelForSequenceClassification`.
-        args (`RewardConfig`):
-            The arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        model ([`~transformers.PreTrainedModel`] or `torch.nn.Module`, *optional*):
+            Model to be trained, preferably an [`~transformers.AutoModelForSequenceClassification`].
+        args ([`RewardConfig`], *optional*):
+            Training arguments.
+        data_collator ([`~transformers.DataCollator`], *optional*):
             The data collator to use for training. If None is specified, the default data collator
             (`RewardDataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+        train_dataset ([`~datasets.Dataset`], *optional*):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`], *optional*):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
+        model_init (`Callable[[], transformers.PreTrainedModel]`, *optional*):
             The model initializer to use for training. If None is specified, the default model initializer will be
             used.
-        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to `compute_accuracy`):
-            The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`)
-            will be used.
-        callbacks (`list[transformers.TrainerCallback]`):
-            The callbacks to use for training.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
-            The optimizer and scheduler to use for training.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
-            The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
-            a PEFT model.
+        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to [`~trainer.utils.compute_accuracy`]):
+            Function to compute metrics at evaluation. Must take in an [`~transformers.EvalPrediction`] and return a
+            dictionary string to float.
+        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
+            Callbacks to use during training.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*):
+            Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
+            return the logits to be used for metrics computation.
+        peft_config (`dict`, *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
+            wrapped with the specified PEFT adapter.
     """
 
     _tag_names = ["trl", "reward-trainer"]

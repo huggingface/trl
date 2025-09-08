@@ -108,7 +108,7 @@ class PPOTrainer(Trainer):
             Training arguments.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
             Class to process the data.
-        model (`nn.Module`):
+        model (`torch.nn.Module`):
             Model to be trained. This is the policy model.
         ref_model (`nn.Module`, *optional*):
             Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
@@ -123,13 +123,13 @@ class PPOTrainer(Trainer):
             using the `processing_class`.
         eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
             Dataset for evaluation.
-        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*):
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
             Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`, the
             optimizer and the learning rate scheduler are created using the
             [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
         callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
             Callbacks to use during training.
-        peft_config ([`~peft.PeftConfig`], *optional*):
+        peft_config ([`~peft.config.PeftConfig`], *optional*):
             PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
             will be wrapped with the specified PEFT adapter.
     """

@@ -83,20 +83,18 @@ class GKDTrainer(SFTTrainer):
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
            Class to process the data.
         compute_metrics (`Callable`, *optional*):
-            Function that will be used to compute metrics at evaluation. Must take in an
-            [`~transformers.trainer_utils.EvalPrediction`] and return a dictionary string to float.
+            Function to compute metrics at evaluation. Must take in an [`~transformers.EvalPrediction`] and return a
+            dictionary string to float.
         callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
             Callbacks to use during training.
-        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*):
-            Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`, the
-            optimizer and the learning rate scheduler are created using the
-            [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training.
         preprocess_logits_for_metrics (`Callable`, *optional*):
             Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
             return the logits to be used for metrics computation.
-        peft_config ([`~peft.PeftConfig`], *optional*):
-            PEFT configuration to use for parameter-efficient fine-tuning. If `None`, PEFT is not used. If provided,
-            the `model` will be wrapped with the specified PEFT adapter.
+        peft_config ([`~peft.config.PeftConfig`], *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
+            wrapped with the specified PEFT adapter.
         formatting_func (`Callable`, *optional*):
             Function to format the dataset. Must take in an example and return an example.
     """
