@@ -25,9 +25,9 @@ class BestOfNSampler:
     Sampler for best-of-n generation.
 
     Args:
-        model (`PreTrainedModelWrapper`):
+        model ([`PreTrainedModelWrapper`]):
             The pretrained model to use for generation.
-        tokenizer (`PreTrainedTokenizer` or `PreTrainedTokenizerFast`):
+        tokenizer ([`~transformers.PreTrainedTokenizer`] or [`~transformers.PreTrainedTokenizerFast`]):
             Tokenizer associated with the pretrained model.
         queries_to_scores (`Callable[[list[str]], list[float]]`):
             Callable that takes a list of generated texts and returns the associated reward scores.
@@ -39,10 +39,9 @@ class BestOfNSampler:
             Random seed used to control generation.
         n_candidates (`int`, *optional*, default to `1`):
             Number of candidates to return for each query.
-        generation_config (`GenerationConfig`, *optional*):
-            Generation config passed to the underlying model's `generate` method. See `GenerationConfig`
-            (https://huggingface.co/docs/transformers/v4.29.1/en/main_classes/text_generation#transformers.GenerationConfig)
-            for more details.
+        generation_config ([`~transformers.`GenerationConfig`], *optional*):
+            Generation config passed to the underlying model's `generate` method. See
+            [`~transformers.`GenerationConfig`] for more details.
     """
 
     def __init__(
