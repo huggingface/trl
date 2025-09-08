@@ -39,9 +39,9 @@ class BestOfNSampler:
             Random seed used to control generation.
         n_candidates (`int`, *optional*, default to `1`):
             Number of candidates to return for each query.
-        generation_config ([`~transformers.`GenerationConfig`], *optional*):
+        generation_config ([`~transformers.GenerationConfig`], *optional*):
             Generation config passed to the underlying model's `generate` method. See
-            [`~transformers.`GenerationConfig`] for more details.
+            [`~transformers.GenerationConfig`] for more details.
     """
 
     def __init__(
