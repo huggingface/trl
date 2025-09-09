@@ -309,7 +309,7 @@ class VLLMClient:
             self.communicator = pg
         else:
             pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-            self.communicator = PyNcclCommunicator(pg, device=self.device)
+            self.communicator = PyNcclCommunicator(pg, device=device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -330,7 +330,7 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        if isinstance(self.communicator, torch.distributed.distributed_c10d.ProcessGroupXCCL):
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
             # Use XCCL to broadcast the updated weights from the client (src) to all workers.
             self.communicator.broadcast(weights, root=self.rank)
             self.communicator.barrier()

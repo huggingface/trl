@@ -163,7 +163,7 @@ class WeightSyncWorkerExtension:
         # Allocate memory for the incoming weight tensor on the correct device.
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
-        if isinstance(self.communicator, torch.distributed.distributed_c10d.ProcessGroupXCCL):
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
             # Use XCCL to broadcast the updated weights from the client (src) to all workers.
             self.communicator.broadcast(weight, root=self.client_rank)
             self.communicator.barrier()
