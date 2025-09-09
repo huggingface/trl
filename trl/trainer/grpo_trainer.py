@@ -1175,6 +1175,12 @@ class GRPOTrainer(Trainer):
                 if has_images:
                     all_images = gather_object(images)
 
+                # Gather extra columns data for vLLM server mode
+                all_extra_columns_data = {}
+                if self.wandb_log_extra_columns is not None and extra_columns_data:
+                    for col, values in extra_columns_data.items():
+                        all_extra_columns_data[col] = gather_object(values)
+
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
@@ -1216,6 +1222,12 @@ class GRPOTrainer(Trainer):
                 completion_ids = completion_ids[process_slice]
                 all_logprobs = all_logprobs[process_slice]
 
+                # Slice extra columns data back to process-specific portion
+                if self.wandb_log_extra_columns is not None and all_extra_columns_data:
+                    extra_columns_data = {}
+                    for col, all_values in all_extra_columns_data.items():
+                        extra_columns_data[col] = all_values[process_slice]
+
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
@@ -1252,9 +1264,18 @@ class GRPOTrainer(Trainer):
                         all_images = [img for sublist in gathered_images for img in sublist]
                     else:
                         all_images = None
+
+                    # Gather extra columns for tensor parallel
+                    all_extra_columns_data = {}
+                    if self.wandb_log_extra_columns is not None and extra_columns_data:
+                        for col, values in extra_columns_data.items():
+                            gathered_col_values = [None for _ in range(self.vllm_tensor_parallel_size)]
+                            torch.distributed.all_gather_object(gathered_col_values, values, group=self.tp_group)
+                            all_extra_columns_data[col] = [v for sublist in gathered_col_values for v in sublist]
                 else:
                     all_prompts_text = prompts_text
                     all_images = images if has_images else None
+                    all_extra_columns_data = extra_columns_data  # No gathering needed for single GPU
 
                 if has_images and all_images:
                     vllm_inputs = []
@@ -1283,6 +1304,14 @@ class GRPOTrainer(Trainer):
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
                     all_logprobs = all_logprobs[tp_slice]
+
+                    # Slice extra columns back to this rank's portion
+                    if self.wandb_log_extra_columns is not None and all_extra_columns_data:
+                        extra_columns_data = {}
+                        for col, all_values in all_extra_columns_data.items():
+                            extra_columns_data[col] = all_values[tp_slice]
+                    else:
+                        extra_columns_data = all_extra_columns_data
 
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=1)
