@@ -77,7 +77,6 @@ from trl import (
     SFTConfig,
     SFTTrainer,
     TrlParser,
-    clone_chat_template,
     get_dataset,
     get_kbit_device_map,
     get_peft_config,
