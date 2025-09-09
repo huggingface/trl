@@ -266,25 +266,26 @@ This adjustment prevents model weights from being gathered, avoiding OOM errors,
 
 Context Parallelism (CP) is a parallelization technique that enables training with longer sequences by splitting the sequence dimension across multiple GPUs. Each GPU processes a portion of the sequence, allowing you to train with sequences longer than what would fit on a single GPU's memory.
 
-For more details on Context Parallelism, see the [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism).
+For more details on CP, see the [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism).
 
-Context parallelism is particularly useful when:
+CP is particularly useful when:
+
 - You want to train with very long sequences (>32k tokens)
 - Single GPU memory is insufficient for your desired sequence length
 - You need to maintain sequence coherence across the full context
 
 ### Requirements and Limitations
 
-Context Parallelism has specific requirements:
+CP has specific requirements:
 
 1. **Accelerate 1.10 or higher** is required
 2. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
-3. **SDPA attention** - Flash Attention is currently not supported with Context Parallelism
+3. **SDPA attention** - Flash Attention is currently not supported with CP
 4. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is now automatically handled using the `pad_to_multiple_of` parameter in the data collator, which works seamlessly with both standard and padding-free modes.
 
 ### Configuration
 
-To enable Context Parallelism, you need to configure both Accelerate and your training arguments:
+To enable CP, you need to configure both Accelerate and your training arguments:
 
 #### Accelerate Configuration
 
@@ -324,35 +325,25 @@ parallelism_config:
 
 #### Training Configuration
 
-You can configure context parallelism training either programmatically or via command line:
-
-**Option 1: Using SFTConfig**
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(
-    max_length=16384,             # Long sequence length
-    packing=True,
-    pad_to_multiple_of=4,             # REQUIRED: ensures divisibility by cp_size * 2
-    use_liger_kernel=True,            # Compatible with Context Parallelism
-    # Standard training arguments...
+    # required
+    pad_to_multiple_of=4,           # ensures divisibility by cp_size * 2
+    # to get the most out of CP
+    max_length=16384,               # long sequence length
+    packing=True,                   # use packing to reduce padding
+    use_liger_kernel=True,          # compatible with CP
     per_device_train_batch_size=1,
+    ...
 )
 ```
 
-**Option 2: Using Command Line with `sft.py`**
+Then, launch your training script with the appropriate accelerate config file:
+
 ```bash
-accelerate launch \
-    --config_file examples/accelerate_configs/context_parallel_2gpu.yaml \
-    trl/scripts/sft.py \
-    --model_name_or_path Qwen/Qwen2-0.5B \
-    --dataset_name trl-lib/Capybara \
-    --max_length 16384 \
-    --packing \
-    --pad_to_multiple_of 4 \
-    --dtype bfloat16 \
-    --use_liger_kernel \
-    --per_device_train_batch_size 1
+accelerate launch --config_file fsdp_context_parallel_2gpu.yaml train.py
 ```
 
 ### Best Practices
@@ -360,7 +351,7 @@ accelerate launch \
 1. **Use the `pad_to_multiple_of` parameter** - This is now the recommended way to ensure sequence length divisibility:
    - For `cp_size=2`: use `pad_to_multiple_of=4` (since `cp_size * 2 = 4`)
    - For `cp_size=4`: use `pad_to_multiple_of=8` (since `cp_size * 2 = 8`)
-   - The data collator automatically pads sequences to the required multiple, ensuring compatibility with Context Parallelism
+   - The data collator automatically pads sequences to the required multiple, ensuring compatibility with CP
 
 2. **Use packing with padding** - The default BFD (Best Fit Decreasing) strategy works perfectly:
    - Preserves sequence boundaries and maintains training quality
