@@ -42,7 +42,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
     heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/ As of now only Stable Diffusion based
     pipelines are supported
 
-    Attributes:
+    Args:
         config (`AlignPropConfig`):
             Configuration object for AlignPropTrainer. Check the documentation of `PPOConfig` for more details.
         reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
