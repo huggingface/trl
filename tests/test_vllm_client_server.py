@@ -126,9 +126,20 @@ class TestVLLMClientServer(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+            try:
+                child.send_signal(signal.SIGTERM)
+                child.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        try:
+            cls.server_process.terminate()
+            cls.server_process.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            cls.server_process.kill()
+        except psutil.NoSuchProcess:
+            pass
 
 
 # Same as above but using base_url to instantiate the client.
@@ -205,9 +216,20 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+            try:
+                child.send_signal(signal.SIGTERM)
+                child.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        try:
+            cls.server_process.terminate()
+            cls.server_process.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            cls.server_process.kill()
+        except psutil.NoSuchProcess:
+            pass
 
 
 @pytest.mark.slow
@@ -268,10 +290,20 @@ class TestVLLMClientServerTP(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
-
+            try:
+                child.send_signal(signal.SIGTERM)
+                child.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        try:
+            cls.server_process.terminate()
+            cls.server_process.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            cls.server_process.kill()
+        except psutil.NoSuchProcess:
+            pass
 
 @pytest.mark.slow
 @require_3_accelerators
@@ -331,9 +363,20 @@ class TestVLLMClientServerDP(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+            try:
+                child.send_signal(signal.SIGTERM)
+                child.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        try:
+            cls.server_process.terminate()
+            cls.server_process.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            cls.server_process.kill()
+        except psutil.NoSuchProcess:
+            pass
 
 
 @pytest.mark.slow
@@ -406,6 +449,17 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+            try:
+                child.send_signal(signal.SIGTERM)
+                child.wait(timeout=5)
+            except psutil.TimeoutExpired:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+        try:
+            cls.server_process.terminate()
+            cls.server_process.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            cls.server_process.kill()
+        except psutil.NoSuchProcess:
+            pass
