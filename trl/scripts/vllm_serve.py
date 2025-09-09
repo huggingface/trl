@@ -670,7 +670,7 @@ def main(script_args: ScriptArguments):
     uvicorn.run(app, host=script_args.host, port=script_args.port, log_level=script_args.log_level)
 
 
-def make_parser(subparsers: argparse._SubParsersAction = None):
+def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
     if subparsers is not None:
         parser = subparsers.add_parser("vllm-serve", help="Run the vLLM serve script", dataclass_types=ScriptArguments)
     else:
