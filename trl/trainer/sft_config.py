@@ -92,6 +92,9 @@ class SFTConfig(TrainingArguments):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
+        loss_type (`str`, *optional*, defaults to `"nll"`):
+            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
+            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -122,16 +125,6 @@ class SFTConfig(TrainingArguments):
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
             "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
             "`fp16` is not set."
-        },
-    )
-    # Note: In transformers>=4.54.0, `average_tokens_across_devices` defaults to True. Overriding this setting is only
-    # needed for earlier versions. Once we require transformers>=4.54.0, this line can be safely removed.
-    # See https://github.com/huggingface/transformers/pull/39395
-    average_tokens_across_devices: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
-            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
         },
     )
 
@@ -247,6 +240,15 @@ class SFTConfig(TrainingArguments):
                 "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
                 "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
                 "loss is computed on the entire sequence."
+            )
+        },
+    )
+    loss_type: str = field(
+        default="nll",
+        metadata={
+            "help": (
+                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
+                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
             )
         },
     )

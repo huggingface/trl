@@ -54,7 +54,14 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import entropy_from_logits, flush_left, generate_model_card, get_comet_experiment_url, pad
+from .utils import (
+    entropy_from_logits,
+    flush_left,
+    generate_model_card,
+    get_comet_experiment_url,
+    pad,
+    selective_log_softmax,
+)
 
 
 if is_peft_available():
@@ -472,6 +479,21 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
+def dft_loss(outputs, labels, num_items_in_batch):
+    """
+    DFT loss function, as presented in [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward
+    Rectification](https://huggingface.co/papers/2508.05629)
+    """
+    labels = nn.functional.pad(labels, (0, 1), value=-100)
+    shift_labels = labels[..., 1:].contiguous()
+    loss_mask = shift_labels != -100
+    shift_labels[~loss_mask] = 0
+    logprobs = selective_log_softmax(outputs.logits, shift_labels)
+    per_token_loss = -logprobs.exp().detach() * logprobs
+    loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
+    return loss
+
+
 class SFTTrainer(Trainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
@@ -517,7 +539,7 @@ class SFTTrainer(Trainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`], `dict[str, Union[Dataset, IterableDataset]]` or `None`, *optional*, defaults to `None`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -820,6 +842,20 @@ class SFTTrainer(Trainer):
                         eval_dataset, processing_class, args, packing, formatting_func, "eval"
                     )
 
+        # Loss function
+        if args.loss_type == "nll":
+            pass  # use the default loss
+        elif args.loss_type == "dft":
+            if compute_loss_func is not None:
+                raise ValueError(
+                    "You passed a `compute_loss_func` together with `loss_type='dft'` to the `SFTTrainer`. "
+                    "When using `loss_type='dft'`, the loss function is internally set to the DFT loss, so passing a "
+                    "`compute_loss_func` is not allowed."
+                )
+            compute_loss_func = dft_loss
+        else:
+            raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
@@ -1103,8 +1139,15 @@ class SFTTrainer(Trainer):
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
         if "labels" in inputs and not self.args.use_liger_kernel:
             with torch.no_grad():
-                shift_logits = outputs.logits[..., :-1, :].contiguous()
-                shift_labels = inputs["labels"][..., 1:].contiguous()
+                if "shift_labels" in inputs:
+                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
+                    # - The last logits require the label from process n+1
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = inputs["labels"][..., 1:].contiguous()
 
                 # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
                 # not correspond to actual input labels.
