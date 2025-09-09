@@ -1307,6 +1307,19 @@ class GRPOTrainer(Trainer):
                     )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+
+            # Handle case where no completions are generated
+            if not completion_ids:
+                # Create empty completion tensors with the same batch size as prompts
+                batch_size = paged_prompt_inputs.input_ids.shape[0]
+                completion_ids = torch.empty((batch_size, 0), dtype=torch.int64, device=device)
+                prompt_ids = [torch.tensor(ids, device=device) for ids in paged_prompt_inputs.input_ids]
+                prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+                prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+                # Restore the original attention implementation, training mode
+                self.model_wrapped.config._attn_implementation = previous_attn
+                return prompt_completion_ids
+
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
             prompt_ids = [torch.tensor(ids, device=device) for ids in paged_prompt_inputs.input_ids]
             prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")

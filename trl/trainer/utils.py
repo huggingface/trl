@@ -284,6 +284,12 @@ def pad(
             [0, 0]]])
     ```
     """
+    # Handle empty tensors list
+    if not tensors:
+        # Return an empty tensor with shape (0,) and appropriate dtype
+        # We use int64 as default since most use cases involve token IDs
+        return torch.empty((0,), dtype=torch.int64)
+
     # Determine the maximum shape for each dimension
     output_shape = np.max([t.shape for t in tensors], 0).tolist()
 

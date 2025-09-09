@@ -1112,6 +1112,15 @@ class OnlineDPOTrainer(Trainer):
                     )
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+
+            # Handle case where no completions are generated
+            if not completion_ids:
+                # Create empty completion tensors with the same batch size as prompts
+                batch_size = prompt_ids.size(0)
+                completion_ids = torch.empty((batch_size, 0), dtype=torch.int64, device=device)
+                completion_mask = torch.empty((batch_size, 0), dtype=torch.bool, device=device)
+                return prompt_ids, prompt_mask, completion_ids, completion_mask
+
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
             # Restore the original attention implementation, training mode

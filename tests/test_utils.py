@@ -136,6 +136,28 @@ class TestPad(TrlTestCase):
         expected = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
         self.assertTrue(torch.equal(output, expected))
 
+    def test_pad_empty_list(self):
+        # Test that pad function handles empty list gracefully
+        output = pad([], padding_value=0, padding_side="right")
+        expected = torch.empty((0,), dtype=torch.int64)
+        self.assertTrue(torch.equal(output, expected))
+        self.assertEqual(output.shape, (0,))
+        self.assertEqual(output.dtype, torch.int64)
+
+    def test_pad_empty_list_with_padding_value(self):
+        # Test that pad function handles empty list with different padding values
+        output = pad([], padding_value=42, padding_side="left")
+        expected = torch.empty((0,), dtype=torch.int64)
+        self.assertTrue(torch.equal(output, expected))
+        self.assertEqual(output.shape, (0,))
+
+    def test_pad_empty_list_with_pad_to_multiple_of(self):
+        # Test that pad function handles empty list with pad_to_multiple_of
+        output = pad([], padding_value=0, padding_side="right", pad_to_multiple_of=4)
+        expected = torch.empty((0,), dtype=torch.int64)
+        self.assertTrue(torch.equal(output, expected))
+        self.assertEqual(output.shape, (0,))
+
 
 @require_peft
 class TestGetPEFTConfig(TrlTestCase):
