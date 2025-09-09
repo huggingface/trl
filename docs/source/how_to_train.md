@@ -9,7 +9,7 @@ To address this, we recommend focusing on two key metrics first:
 **Mean Reward**: The primary goal is to maximize the reward achieved by the model during RL training.
 **Objective KL Divergence**: KL divergence (Kullback-Leibler divergence) measures the dissimilarity between two probability distributions. In the context of RL training, we use it to quantify the difference between the current model and a reference model. Ideally, we want to keep the KL divergence between 0 and 10 to ensure the model's generated text remains close to what the reference model produces.
 
-However, there are more metrics that can be useful for debugging, checkout the [logging section](logging).
+However, there are more metrics that can be useful for debugging, check out the [logging section](logging).
 
 ## Why Do We Use a Reference Model, and What's the Purpose of KL Divergence?
 
@@ -26,7 +26,7 @@ To address this issue, we add a penalty to the reward function based on the KL d
 
 ## What Is the Concern with Negative KL Divergence?
 
-If you generate text by purely sampling from the model distribution things work fine in general. But when you use the `generate` method there are a few caveats because it does not always purely sample depending on the settings which can cause KL-divergence to go negative. Essentially when the active model achieves `log_p_token_active < log_p_token_ref` we get negative KL-div. This can happen in a several cases:
+If you generate text by purely sampling from the model distribution things work fine in general. But when you use the `generate` method there are a few caveats because it does not always purely sample depending on the settings which can cause KL-divergence to go negative. Essentially when the active model achieves `log_p_token_active < log_p_token_ref` we get negative KL-div. This can happen in several cases:
 
 - **top-k sampling**: the model can smooth out the probability distribution causing the top-k tokens having a smaller probability than those of the reference model but they still are selected
 - **min_length**: this ignores the EOS token until `min_length` is reached. thus the model can assign a very low log prob to the EOS token and very high probs to all others until min_length is reached
@@ -50,7 +50,7 @@ generation_kwargs = {
 }
 ```
 
-With these settings we usually don't encounter any issues. You can also experiments with other settings but if you encounter issues with negative KL-divergence try to go back to these and see if they persist.
+With these settings we usually don't encounter any issues. You can also experiment with other settings but if you encounter issues with negative KL-divergence try to go back to these and see if they persist.
 
 ## How can debug your own use-case?
 
@@ -60,6 +60,6 @@ Debugging the RL pipeline can be challenging due to its complexity. Here are som
 - **Start small, scale later**: Training large models can be very slow and take several hours or days until you see any improvement. For debugging this is not a convenient timescale so try to use small model variants during the development phase and scale up once that works. That being said you sometimes have to be careful as small models might not have the capacity to solve a complicated task either.
 - **Start simple**: Try to start with a minimal example and build complexity from there. Your use-case might require for example a complicated reward function consisting of many different rewards - try to use one signal first and see if you can optimize that and then add more complexity after that.
 - **Inspect the generations**: It's always a good idea to inspect what the model is generating. Maybe there is a bug in your post-processing or your prompt. Due to bad settings you might cut-off generations too soon. These things are very hard to see on the metrics but very obvious if you look at the generations.
-- **Inspect the reward model**: If you reward is not improving over time maybe there's an issue with the reward model. You can look at extreme cases to see if it does what it should: e.g. in the sentiment case you can check if simple positive and negative examples really get different rewards. And you can look at the distribution of your dataset. Finally, maybe the reward is dominated by the query which the model can't affect so you might need to normalize this (e.g. reward of query+response minus reward of the query).
+- **Inspect the reward model**: If your reward is not improving over time maybe there's an issue with the reward model. You can look at extreme cases to see if it does what it should: e.g. in the sentiment case you can check if simple positive and negative examples really get different rewards. And you can look at the distribution of your dataset. Finally, maybe the reward is dominated by the query which the model can't affect so you might need to normalize this (e.g. reward of query+response minus reward of the query).
 
 These are just a few tips that we find helpful - if you have more useful tricks feel free to open a PR to add them as well!

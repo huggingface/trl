@@ -16,6 +16,7 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -46,6 +47,7 @@ python examples/scripts/reward_modeling.py \
     --eval_steps 50 \
     --max_length 2048 \
     --use_peft \
+    --lora_task_type SEQ_CLS \
     --lora_r 32 \
     --lora_alpha 16
 """
@@ -83,17 +85,18 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
         use_cache=False if training_args.gradient_checkpointing else True,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )

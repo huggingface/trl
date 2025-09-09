@@ -43,7 +43,7 @@ if __name__ == "__main__":
 
     # load the model and tokenizer
     print("[INFO] loading the model and tokenizer...")
-    model = AutoModelForCausalLM.from_pretrained(config.model_name, device_map="auto", torch_dtype=torch.bfloat16)
+    model = AutoModelForCausalLM.from_pretrained(config.model_name, device_map="auto", dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(config.tokenizer_name, add_eos_token=True)
 
     # adding pad and eos tokens if not provided in the tokenizer

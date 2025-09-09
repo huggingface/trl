@@ -663,8 +663,9 @@ def pack_dataset(
     >>> dataset = Dataset.from_dict(examples)
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
-    {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
-     'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
+    {'input_ids': [[1, 2, 3, 9], [6, 7, 8], [4, 5]],
+    'attention_mask': [[1, 1, 0, 1], [1, 0, 0], [1, 0]],
+    'seq_lengths': [[3, 1], [3], [2]]}
     ```
     """
     if map_kwargs is None:
@@ -690,7 +691,7 @@ def truncate_dataset(
     Args:
         dataset (`Dataset` or `DatasetDict`):
             Dataset to truncate.
-        seq_length (`int`):
+        max_length (`int`):
             Maximum sequence length to truncate to.
         map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
             Additional keyword arguments to pass to the dataset's map method when truncating examples.

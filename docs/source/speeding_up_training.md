@@ -70,4 +70,39 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 </Tip>
 
 </hfoption>
+<hfoption id="RLOO">
+
+First, start a vLLM server by running:
+
+```bash
+trl vllm-serve --model <model_name>
+```
+
+Then, run the training script and pass `use_vllm=True` in the training arguments.
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., use_vllm=True)
+```
+
+You can customize the server configuration by passing additional arguments. For more information, see [vLLM integration](vllm_integration).
+
+<Tip warning={true}>
+
+When using vLLM, ensure that the GPUs assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation using `CUDA_VISIBLE_DEVICES`.  
+
+Set GPUs **0-3** for vLLM generation:  
+```sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model <model_name>
+```  
+
+And GPUs **4-7** for training:  
+```sh
+CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
+```  
+
+</Tip>
+
+</hfoption>
 </hfoptions>

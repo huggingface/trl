@@ -104,8 +104,14 @@ def build_dataset(
     customize this function to train the model on its own dataset.
 
     Args:
+        config (`PPOConfig`):
+            The configuration of the PPO training.
         dataset_name (`str`):
             The name of the dataset to be loaded.
+        input_min_text_length (`int`, defaults to 5):
+            The minimum length of the input text.
+        input_max_text_length (`int`, defaults to 10):
+            The maximum length of the input text.
 
     Returns:
         dataloader (`torch.utils.data.DataLoader`):
@@ -155,7 +161,7 @@ set_seed(config.seed)
 
 # Now let's build the model, the reference model, and the tokenizer. We first load the model
 # in bfloat16 to save memory using `transformers`.
-model = AutoModelForCausalLM.from_pretrained(config.model_name, torch_dtype=torch.bfloat16)
+model = AutoModelForCausalLM.from_pretrained(config.model_name, dtype=torch.bfloat16)
 # And then we pass the loaded model to `AutoModelForCausalLMWithValueHead`.
 model = AutoModelForCausalLMWithValueHead.from_pretrained(model)
 
@@ -186,7 +192,7 @@ ppo_trainer = PPOTrainer(
 toxicity_model_id = "facebook/roberta-hate-speech-dynabench-r4-target"
 toxicity_tokenizer = RobertaTokenizer.from_pretrained(toxicity_model_id)
 # We load the toxicity model in fp16 to save memory.
-toxicity_model = RobertaForSequenceClassification.from_pretrained(toxicity_model_id, torch_dtype=torch.float16).to(
+toxicity_model = RobertaForSequenceClassification.from_pretrained(toxicity_model_id, dtype=torch.float16).to(
     ppo_trainer.accelerator.device
 )
 
