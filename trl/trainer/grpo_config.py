@@ -110,6 +110,10 @@ class GRPOConfig(TrainingArguments):
               server is running (start with `trl vllm-serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
         vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
@@ -136,10 +140,6 @@ class GRPOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
-        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
-            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
-            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
-            implementation.
         vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
             Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
             for weight sync and generation.
@@ -403,17 +403,10 @@ class GRPOConfig(TrainingArguments):
             "generation instead of the default model.generate(). Requires `vllm` to be installed."
         },
     )
-    vllm_server_base_url: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
-            "and `vllm_server_port` are ignored."
-        },
-    )
     vllm_mode: str = field(
         default="server",
         metadata={
-            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
             "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
@@ -441,6 +434,13 @@ class GRPOConfig(TrainingArguments):
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+    vllm_server_base_url: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
+            "and `vllm_server_port` are ignored."
+        },
+    )
     vllm_server_host: str = field(
         default="0.0.0.0",
         metadata={"help": "Host of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},

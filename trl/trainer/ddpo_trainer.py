@@ -44,13 +44,14 @@ class DDPOTrainer(PyTorchModelHubMixin):
     inspired by the work here: https://github.com/kvablack/ddpo-pytorch As of now only Stable Diffusion based pipelines
     are supported
 
-    Attributes:
-        **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more:
-         details.
-        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used:
-        **prompt_function** (Callable[[], tuple[str, Any]]) -- Function to generate prompts to guide model
-        **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
-        **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
+    Args:
+        config ([`DDPOConfig`]):
+            Configuration object for DDPOTrainer. Check the documentation of [`PPOConfig`] for more details.
+        reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
+            Reward function to be used.
+        prompt_function (`Callable[[], tuple[str, Any]]`): Function to generate prompts to guide model
+        sd_pipeline ([`DDPOStableDiffusionPipeline`]): Stable Diffusion pipeline to be used for training.
+        image_samples_hook (`Optional[Callable[[Any, Any, Any], Any]]`): Hook to be called to log images.
     """
 
     _tag_names = ["trl", "ddpo"]
