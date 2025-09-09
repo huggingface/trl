@@ -1382,7 +1382,7 @@ class SFTTrainerTester(TrlTestCase):
             output_dir=self.tmp_dir,
             report_to="none",
             per_device_train_batch_size=1,
-            max_length=128,
+            max_length=32,
             assistant_only_loss=assistant_only_loss,
             gradient_checkpointing=True,
         )
