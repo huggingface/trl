@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import pytest
+import transformers
 from datasets import Dataset, features, load_dataset
+from packaging.version import Version
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 from transformers.testing_utils import require_peft, require_torch_accelerator, require_vision
@@ -421,6 +422,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
     @require_torch_accelerator
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_transformers_paged(self, config_name):
+        if Version(transformers.__version__) < Version("4.56.2"):
+            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.56.2")
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,

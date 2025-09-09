@@ -19,8 +19,10 @@ import warnings
 import numpy as np
 import pytest
 import torch
+import transformers
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, Features, Image, Value, load_dataset
+from packaging.version import Version
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -171,6 +173,8 @@ class GRPOTrainerSlowTester(TrlTestCase):
     @parameterized.expand(MODELS_TO_TEST)
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
+        if Version(transformers.__version__) < Version("4.56.2"):
+            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.56.2")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
