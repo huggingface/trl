@@ -104,6 +104,7 @@ if __name__ == "__main__":
         use_cache=True,
     )
     if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
