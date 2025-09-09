@@ -77,7 +77,6 @@ from trl import (
     SFTConfig,
     SFTTrainer,
     TrlParser,
-    clone_chat_template,
     get_dataset,
     get_kbit_device_map,
     get_peft_config,
@@ -120,11 +119,6 @@ def main(script_args, training_args, model_args, dataset_args):
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )
-
-    # Set default chat template if needed
-    if tokenizer.chat_template is None:
-        # TODO: source should be passed as an argument
-        model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
 
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
