@@ -461,6 +461,7 @@ class GRPOTrainer(Trainer):
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.wandb_log_extra_columns = args.wandb_log_extra_columns
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
@@ -469,6 +470,7 @@ class GRPOTrainer(Trainer):
             "completion": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
             "advantages": deque(maxlen=args.generation_batch_size),
+            "extra_columns": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
         }
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
@@ -1067,6 +1069,22 @@ class GRPOTrainer(Trainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        # Collect extra columns if configured
+        extra_columns_data = {}
+        if self.wandb_log_extra_columns is not None:
+            # Determine which columns to collect
+            if self.wandb_log_extra_columns == []:
+                # Empty list means collect all available columns except 'prompt' and 'image'
+                all_keys = set(inputs[0].keys()) if inputs else set()
+                columns_to_collect = all_keys - {"prompt", "image"}
+            else:
+                # Specific list of columns
+                columns_to_collect = set(self.wandb_log_extra_columns)
+
+            # Collect the data from each input
+            for col in columns_to_collect:
+                extra_columns_data[col] = [x.get(col) for x in inputs]
+
         # We don't yet support visual reward models/function, so we keep a copy of the original text-only prompts for
         # later use in the reward computation. If images are present, we insert {"type": "image"} as required by the
         # VLM chat template.
@@ -1512,6 +1530,11 @@ class GRPOTrainer(Trainer):
         if has_images:
             self._logs["image"].extend(gather_object(images))
 
+        # Log extra columns if configured
+        if self.wandb_log_extra_columns is not None and extra_columns_data:
+            for col, values in extra_columns_data.items():
+                self._logs["extra_columns"][col].extend(gather_object(values))
+
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
             delta = delta[completion_mask.bool()]
@@ -1800,6 +1823,13 @@ class GRPOTrainer(Trainer):
                             table["image"].append(wandb.Image(img))
                         else:
                             table["image"].append(None)
+
+                # Add extra columns to the table if configured
+                if self.wandb_log_extra_columns is not None and self._logs["extra_columns"]:
+                    for col, values in self._logs["extra_columns"].items():
+                        # Ensure the column has the same length as prompts
+                        if values:
+                            table[col] = list(values)
 
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
