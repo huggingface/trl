@@ -126,8 +126,8 @@ class TestVLLMClientServer(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.kill()
-        parent.kill()
+            child.send_signal(signal.SIGTERM)
+        cls.server_process.terminate()
         cls.server_process.wait()
 
 
@@ -205,8 +205,8 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.kill()
-        parent.kill()
+            child.send_signal(signal.SIGTERM)
+        cls.server_process.terminate()
         cls.server_process.wait()
 
 
@@ -268,8 +268,8 @@ class TestVLLMClientServerTP(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.kill()
-        parent.kill()
+            child.send_signal(signal.SIGTERM)
+        cls.server_process.terminate()
         cls.server_process.wait()
 
 
@@ -331,8 +331,8 @@ class TestVLLMClientServerDP(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.kill()
-        parent.kill()
+            child.send_signal(signal.SIGTERM)
+        cls.server_process.terminate()
         cls.server_process.wait()
 
 
@@ -406,6 +406,6 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         parent = psutil.Process(cls.server_process.pid)
         children = parent.children(recursive=True)
         for child in children:
-            child.kill()
-        parent.kill()
+            child.send_signal(signal.SIGTERM)
+        cls.server_process.terminate()
         cls.server_process.wait()
