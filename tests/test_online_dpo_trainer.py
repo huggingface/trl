@@ -424,8 +424,6 @@ class TestOnlineDPOTrainer(TrlTestCase):
     def test_training_with_transformers_paged(self, config_name):
         if Version(transformers.__version__) < Version("4.56.2"):
             pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.56.2")
-        else:
-            self.fail("Test unexpectedly marked as xfail with transformers >= 4.56.2")
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
