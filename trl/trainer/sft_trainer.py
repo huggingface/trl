@@ -846,10 +846,10 @@ class SFTTrainer(Trainer):
             pass  # use the default loss
         elif args.loss_type == "dft":
             if compute_loss_func is not None:
-                logger.warning(
-                    "You passed a `compute_loss_func` to the SFTTrainer, but you also set `loss_type='dft'` in the "
-                    "SFTConfig. The `loss_type` argument takes precedence, and your `compute_loss_func` will be "
-                    "ignored."
+                raise ValueError(
+                    "You passed a `compute_loss_func` together with `loss_type='dft'` to the `SFTTrainer`. "
+                    "When using `loss_type='dft'`, the loss function is internally set to the DFT loss, so passing a "
+                    "`compute_loss_func` is not allowed."
                 )
             compute_loss_func = dft_loss
         else:
