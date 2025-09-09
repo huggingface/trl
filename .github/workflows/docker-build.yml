@@ -1,4 +1,4 @@
-name: Build TRL Dev Docker image
+name: Build TRL Docker image
 
 on:
   push:
