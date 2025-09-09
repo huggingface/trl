@@ -277,9 +277,10 @@ Context parallelism is particularly useful when:
 
 Context Parallelism has specific requirements:
 
-1. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
-2. **SDPA attention** - Flash Attention is currently not supported with Context Parallelism
-3. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is now automatically handled using the `pad_to_multiple_of` parameter in the data collator, which works seamlessly with both standard and padding-free modes.
+1. **Accelerate 1.10 or higher** is required
+2. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
+3. **SDPA attention** - Flash Attention is currently not supported with Context Parallelism
+4. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is now automatically handled using the `pad_to_multiple_of` parameter in the data collator, which works seamlessly with both standard and padding-free modes.
 
 ### Configuration
 
