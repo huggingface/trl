@@ -124,16 +124,6 @@ class SFTConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
-    # Note: In transformers>=4.54.0, `average_tokens_across_devices` defaults to True. Overriding this setting is only
-    # needed for earlier versions. Once we require transformers>=4.54.0, this line can be safely removed.
-    # See https://github.com/huggingface/transformers/pull/39395
-    average_tokens_across_devices: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
-            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
-        },
-    )
 
     # Parameters that control the model
     model_init_kwargs: Optional[dict[str, Any]] = field(
