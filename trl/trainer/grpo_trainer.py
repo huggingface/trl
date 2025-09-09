@@ -1108,6 +1108,10 @@ class GRPOTrainer(Trainer):
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
+        if "image_grid_thw" in prompt_inputs and image_split_sizes is None:
+            # Fallback for VLMs that require image_grid_thw but don't provide _get_num_multimodal_tokens
+            image_split_sizes = prompt_inputs["image_grid_thw"].prod(dim=1).tolist()
+
         if self.max_prompt_length is not None:
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
             # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
