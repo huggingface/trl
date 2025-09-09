@@ -54,7 +54,14 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import entropy_from_logits, flush_left, generate_model_card, get_comet_experiment_url, pad
+from .utils import (
+    entropy_from_logits,
+    flush_left,
+    generate_model_card,
+    get_comet_experiment_url,
+    pad,
+    selective_log_softmax,
+)
 
 
 if is_peft_available():
@@ -472,6 +479,21 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
+def dft_loss(outputs, labels, num_items_in_batch):
+    """
+    DFT loss function, as presented in [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward
+    Rectification](https://huggingface.co/papers/2508.05629)
+    """
+    labels = nn.functional.pad(labels, (0, 1), value=-100)
+    shift_labels = labels[..., 1:].contiguous()
+    loss_mask = shift_labels != -100
+    shift_labels[~loss_mask] = 0
+    logprobs = selective_log_softmax(outputs.logits, shift_labels)
+    per_token_loss = -logprobs.exp().detach() * logprobs
+    loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
+    return loss
+
+
 class SFTTrainer(Trainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
@@ -818,6 +840,20 @@ class SFTTrainer(Trainer):
                     eval_dataset = self._prepare_dataset(
                         eval_dataset, processing_class, args, packing, formatting_func, "eval"
                     )
+
+        # Loss function
+        if args.loss_type == "nll":
+            pass  # use the default loss
+        elif args.loss_type == "dft":
+            if compute_loss_func is not None:
+                logger.warning(
+                    "You passed a `compute_loss_func` to the SFTTrainer, but you also set `loss_type='dft'` in the "
+                    "SFTConfig. The `loss_type` argument takes precedence, and your `compute_loss_func` will be "
+                    "ignored."
+                )
+            compute_loss_func = dft_loss
+        else:
+            raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}

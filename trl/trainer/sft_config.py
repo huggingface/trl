@@ -92,6 +92,9 @@ class SFTConfig(TrainingArguments):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
+        loss_type (`str`, *optional*, defaults to `"nll"`):
+            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
+            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -247,6 +250,15 @@ class SFTConfig(TrainingArguments):
                 "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
                 "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
                 "loss is computed on the entire sequence."
+            )
+        },
+    )
+    loss_type: str = field(
+        default="nll",
+        metadata={
+            "help": (
+                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
+                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
             )
         },
     )
