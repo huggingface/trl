@@ -42,7 +42,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
     heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/ As of now only Stable Diffusion based
     pipelines are supported
 
-    Attributes:
+    Args:
         config (`AlignPropConfig`):
             Configuration object for AlignPropTrainer. Check the documentation of `PPOConfig` for more details.
         reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
@@ -329,6 +329,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         Args:
             batch_size (int): Batch size to use for sampling
             with_grad (bool): Whether the generated RGBs should have gradients attached to it.
+            prompts (list[str], *optional*): If provided, use these prompts instead of generating new ones.
 
         Returns:
             prompt_image_pairs (dict[Any])
