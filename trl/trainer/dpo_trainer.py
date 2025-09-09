@@ -48,10 +48,7 @@ from transformers.integrations import (
     is_mlflow_available,
     is_wandb_available,
 )
-from transformers.models.auto.modeling_auto import (
-    MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES,
-    MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES,
-)
+from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_liger_kernel_available, is_peft_available
@@ -333,10 +330,7 @@ class DPOTrainer(Trainer):
             )
 
         self.is_encoder_decoder = model.config.is_encoder_decoder
-        self.is_vision_model = (
-            model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
-            or model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
-        )
+        self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
