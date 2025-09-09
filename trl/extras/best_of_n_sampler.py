@@ -33,11 +33,11 @@ class BestOfNSampler:
             Callable that takes a list of generated texts and returns the associated reward scores.
         length_sampler (`Any`):
             Sampler used to sample the length of the generated text.
-        sample_size (`int`, *optional*, default to `4`):
+        sample_size (`int`, *optional*, defaults to `4`):
             Number of samples to generate for each query.
         seed (`int`, *optional*):
             Random seed used to control generation.
-        n_candidates (`int`, *optional*, default to `1`):
+        n_candidates (`int`, *optional*, defaults to `1`):
             Number of candidates to return for each query.
         generation_config ([`~transformers.GenerationConfig`], *optional*):
             Generation config passed to the underlying model's `generate` method. See
