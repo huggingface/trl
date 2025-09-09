@@ -12,12 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.22.0.dev0"
-
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
 
+
+try:
+    __version__ = version("trl")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 _import_structure = {
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],

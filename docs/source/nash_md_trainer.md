@@ -81,7 +81,7 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
   trainer = NashMDTrainer(
       ...
 -     judge=judge,
-+     reward_model=reward_model,
++     reward_funcs=reward_model,
   )
 ```
 

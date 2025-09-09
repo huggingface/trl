@@ -16,8 +16,6 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
-#     "trackio",
-#     "kernels",
 # ]
 # ///
 
@@ -33,9 +31,9 @@ from datasets import load_dataset
 
 from trl import (
     DatasetMixtureConfig,
-    GRPOConfig,
-    GRPOTrainer,
     ModelConfig,
+    RLOOConfig,
+    RLOOTrainer,
     ScriptArguments,
     TrlParser,
     get_dataset,
@@ -46,31 +44,24 @@ from trl.rewards import get_soft_overlong_punishment, think_format_reward
 
 logger = logging.get_logger(__name__)
 
-# Enable logging in a Hugging Face Space
-os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
-
-
 reward_funcs_registry = {
     "think_format_reward": think_format_reward,
-    "get_soft_overlong_punishment": get_soft_overlong_punishment(max_completion_len=1280, soft_punish_cache=256),
+    "get_soft_overlong_punishment": get_soft_overlong_punishment,
 }
 
 
 @dataclass
-class GRPOScriptArguments(ScriptArguments):
+class RLOOScriptArguments(ScriptArguments):
     """
-    Script arguments for the GRPO training script.
+    Script arguments for the RLOO training script.
 
     Args:
         reward_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
             Reward model id of a pretrained model hosted inside a model repo on huggingface.co or local path to a
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
         reward_funcs (`list[str]` or `None`, *optional*, defaults to `None`):
-            Reward functions to use. Supported values are:
-
-                - `"think_format_reward"`
-                - `"get_soft_overlong_punishment"` (used value are `max_completion_len=1280`, `soft_punish_cache=256`)
-                - any dotted import path " (e.g., `'my_lib.rewards.custom_reward'`).
+            Reward functions to use. It can be either one of `"think_format_reward"`; or a dotted import path " (e.g.,
+            `'my_lib.rewards.custom_reward'`).
     """
 
     reward_model_name_or_path: Optional[str] = field(
@@ -83,9 +74,8 @@ class GRPOScriptArguments(ScriptArguments):
     reward_funcs: Optional[list[str]] = field(
         default=None,
         metadata={
-            "help": "Reward functions to use. Supported values are: `think_format_reward`, "
-            "`get_soft_overlong_punishment` (used value are `max_completion_len=1280`, `soft_punish_cache=256`), or "
-            "any dotted import path (e.g., `'my_lib.rewards.custom_reward'`)."
+            "help": "Reward functions to use. It can be either one of  'think_format_reward'; or a dotted "
+            "import path. (e.g., 'my_lib.rewards.custom_reward')."
         },
     )
 
@@ -127,8 +117,8 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    # Initialize the GRPO trainer
-    trainer = GRPOTrainer(
+    # Initialize the RLOO trainer
+    trainer = RLOOTrainer(
         model=model_args.model_name_or_path,
         reward_funcs=reward_funcs,
         args=training_args,
@@ -147,9 +137,9 @@ def main(script_args, training_args, model_args, dataset_args):
 
 
 def make_parser(subparsers: argparse._SubParsersAction = None):
-    dataclass_types = (GRPOScriptArguments, GRPOConfig, ModelConfig, DatasetMixtureConfig)
+    dataclass_types = (RLOOScriptArguments, RLOOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
-        parser = subparsers.add_parser("grpo", help="Run the GRPO training script", dataclass_types=dataclass_types)
+        parser = subparsers.add_parser("rloo", help="Run the RLL training script", dataclass_types=dataclass_types)
     else:
         parser = TrlParser(dataclass_types)
     return parser

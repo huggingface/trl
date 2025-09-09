@@ -172,12 +172,6 @@ class DPOTrainerTester(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
     def test_train(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -238,6 +232,39 @@ class DPOTrainerTester(TrlTestCase):
         )
         trainer = DPOTrainer(
             model=model_id,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
+    @require_liger_kernel
+    def test_train_encoder_decoder_liger(self):
+        model_id = "trl-internal-testing/tiny-BartModel"
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        training_args = DPOConfig(
+            output_dir="selftmp_dir",
+            per_device_train_batch_size=2,
+            learning_rate=9e-1,
+            report_to="none",
+            use_liger_loss=True,
+        )
+        trainer = DPOTrainer(
+            model=model,
             args=training_args,
             processing_class=tokenizer,
             train_dataset=dataset,
@@ -943,15 +970,15 @@ class DPOTrainerTester(TrlTestCase):
         # train the model
         trainer.train()
 
-    def test_dpo_trainer_torch_dtype(self):
+    def test_dpo_trainer_dtype(self):
         # See https://github.com/huggingface/trl/issues/1751
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            model_init_kwargs={"torch_dtype": "float16"},
-            ref_model_init_kwargs={"torch_dtype": "float16"},
+            model_init_kwargs={"dtype": "float16"},
+            ref_model_init_kwargs={"dtype": "float16"},
             report_to="none",
         )
 
@@ -962,15 +989,15 @@ class DPOTrainerTester(TrlTestCase):
             args=training_args,
             train_dataset=dummy_dataset["train"],
         )
-        self.assertEqual(trainer.model.config.torch_dtype, torch.float16)
-        self.assertEqual(trainer.ref_model.config.torch_dtype, torch.float16)
+        self.assertEqual(trainer.model.config.dtype, torch.float16)
+        self.assertEqual(trainer.ref_model.config.dtype, torch.float16)
 
-        # Now test when `torch_dtype` is provided but is wrong to either the model or the ref_model
+        # Now test when `dtype` is provided but is wrong to either the model or the ref_model
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            model_init_kwargs={"torch_dtype": -1},
+            model_init_kwargs={"dtype": -1},
             report_to="none",
         )
 
@@ -983,7 +1010,7 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 
@@ -991,7 +1018,7 @@ class DPOTrainerTester(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            ref_model_init_kwargs={"torch_dtype": -1},
+            ref_model_init_kwargs={"dtype": -1},
             report_to="none",
         )
 
@@ -1005,7 +1032,7 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 

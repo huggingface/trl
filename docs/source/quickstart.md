@@ -32,7 +32,7 @@ def reward_function(completions, **kwargs):
 trainer = GRPOTrainer(
     model="Qwen/Qwen2.5-0.5B-Instruct",  # Start from SFT model
     train_dataset=load_dataset("trl-lib/tldr", split="train"),
-    reward_function=reward_function,
+    reward_funcs=reward_function,
 )
 trainer.train()
 ```

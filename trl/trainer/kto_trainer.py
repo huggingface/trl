@@ -358,16 +358,16 @@ class KTOTrainer(Trainer):
             raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
+            dtype = model_init_kwargs.get("dtype")
+            if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                if isinstance(dtype, str) and dtype != "auto":
+                    dtype = getattr(torch, dtype)
+                if dtype != "auto" and not isinstance(dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `torch_dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
-                model_init_kwargs["torch_dtype"] = torch_dtype
+                model_init_kwargs["dtype"] = dtype
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -377,16 +377,16 @@ class KTOTrainer(Trainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            torch_dtype = ref_model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
+            dtype = ref_model_init_kwargs.get("dtype")
+            if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                if isinstance(dtype, str) and dtype != "auto":
+                    dtype = getattr(torch, dtype)
+                if dtype != "auto" and not isinstance(dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `torch_dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
-                ref_model_init_kwargs["torch_dtype"] = torch_dtype
+                ref_model_init_kwargs["dtype"] = dtype
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -1013,6 +1013,12 @@ class KTOTrainer(Trainer):
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
+            label_pad_token_id:
+                The label value to ignore when computing log probabilities.
+            is_encoder_decoder:
+                Whether the model is an encoder-decoder model. If True, the labels are not shifted and the logits are
+                assumed to already be aligned with the labels. If False, the labels are shifted to the right by one
+                position, and the logits are assumed to be aligned with the shifted labels.
 
         Returns:
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
