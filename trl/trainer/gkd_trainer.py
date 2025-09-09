@@ -194,6 +194,7 @@ class GKDTrainer(SFTTrainer):
             temperature=args.temperature,
             do_sample=True,
             top_k=0,
+            use_cache=False if args.gradient_checkpointing else True,
             pad_token_id=self.processing_class.pad_token_id,
         )
         # Set custom EOS tokens if they are specified by the model's generation

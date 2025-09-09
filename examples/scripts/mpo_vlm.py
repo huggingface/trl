@@ -71,17 +71,17 @@ if __name__ == "__main__":
     ################
     # Model & Processor
     ################
-    model_kwargs = {}
-    if model_args.revision is not None:
-        model_kwargs["revision"] = model_args.revision
-    if model_args.trust_remote_code is not None:
-        model_kwargs["trust_remote_code"] = model_args.trust_remote_code
-    if model_args.attn_implementation is not None:
-        model_kwargs["attn_implementation"] = model_args.attn_implementation
-    if model_args.dtype is not None:
-        model_kwargs["dtype"] = "auto" if model_args.dtype == "auto" else getattr(torch, model_args.dtype)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
+
+    model_kwargs = dict(
+        trust_remote_code=model_args.trust_remote_code,
+        revision=model_args.model_revision,
+        attn_implementation=model_args.attn_implementation,
+        dtype=dtype,
+    )
     quantization_config = get_quantization_config(model_args)
     if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 

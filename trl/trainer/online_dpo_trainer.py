@@ -563,6 +563,7 @@ class OnlineDPOTrainer(Trainer):
                 "top_k": self.top_k,
                 "top_p": self.top_p,
                 "repetition_penalty": self.repetition_penalty,
+                "use_cache": True if not self.args.gradient_checkpointing else False,
             }
             # Add min_p if supported
             if self.min_p is not None:

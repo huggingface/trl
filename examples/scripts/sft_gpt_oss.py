@@ -51,7 +51,6 @@ accelerate launch \
 
 import os
 
-import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
@@ -64,17 +63,15 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 def main(script_args, training_args, model_args):
     # Load model & tokenizer
-    model_kwargs = {}
-    if model_args.revision is not None:
-        model_kwargs["revision"] = model_args.revision
-    if model_args.trust_remote_code is not None:
-        model_kwargs["trust_remote_code"] = model_args.trust_remote_code
-    if model_args.attn_implementation is not None:
-        model_kwargs["attn_implementation"] = model_args.attn_implementation
-    if model_args.dtype is not None:
-        model_kwargs["dtype"] = "auto" if model_args.dtype == "auto" else getattr(torch, model_args.dtype)
-    model_kwargs["device_map"] = quantization_config = Mxfp4Config(dequantize=True)
-    model_kwargs["quantization_config"] = quantization_config
+    quantization_config = Mxfp4Config(dequantize=True)
+    model_kwargs = dict(
+        revision=model_args.model_revision,
+        trust_remote_code=model_args.trust_remote_code,
+        attn_implementation=model_args.attn_implementation,
+        dtype=model_args.dtype,
+        use_cache=False if training_args.gradient_checkpointing else True,
+        quantization_config=quantization_config,
+    )
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
