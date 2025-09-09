@@ -16,6 +16,8 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -24,29 +26,28 @@
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-7 \
     --num_train_epochs 1 \
     --per_device_train_batch_size 2 \
+    --max_steps 1000 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eval_strategy steps \
     --eval_steps 50 \
     --output_dir Qwen2-0.5B-DPO \
     --no_remove_unused_columns
-    --report_to wandb
 ```
 
 # LoRA:
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-6 \
     --num_train_epochs 1 \
     --per_device_train_batch_size 2 \
+    --max_steps 1000 \
     --gradient_accumulation_steps 8 \
     --gradient_checkpointing \
     --eval_strategy steps \
@@ -56,11 +57,11 @@ python trl/scripts/dpo.py \
     --use_peft \
     --lora_r 32 \
     --lora_alpha 16
-    --report_to wandb
 ```
 """
 
 import argparse
+import os
 
 import torch
 from accelerate import logging
@@ -84,19 +85,20 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 logger = logging.get_logger(__name__)
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
 
 def main(script_args, training_args, model_args, dataset_args):
     ################
     # Model & Tokenizer
     ###################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )

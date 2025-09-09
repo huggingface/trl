@@ -16,6 +16,8 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -61,6 +63,7 @@ python trl/scripts/sft.py \
 """
 
 import argparse
+import os
 
 from accelerate import logging
 from datasets import load_dataset
@@ -84,6 +87,9 @@ from trl import (
 
 logger = logging.get_logger(__name__)
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
 
 def main(script_args, training_args, model_args, dataset_args):
     ################
@@ -94,7 +100,7 @@ def main(script_args, training_args, model_args, dataset_args):
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=model_args.torch_dtype,
+        dtype=model_args.dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )

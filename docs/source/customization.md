@@ -1,6 +1,6 @@
 # Training customization
 
-TRL is designed with modularity in mind so that users to be able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.  Note: Although these examples use the DPOTrainer, the customization applies to most (if not all) trainers.
+TRL is designed with modularity in mind so that users are able to efficiently customize the training loop for their needs. Below are some examples on how you can apply and test different techniques.  Note: Although these examples use the DPOTrainer, the customization applies to most (if not all) trainers.
 
 
 

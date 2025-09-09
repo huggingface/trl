@@ -44,13 +44,14 @@ class DDPOTrainer(PyTorchModelHubMixin):
     inspired by the work here: https://github.com/kvablack/ddpo-pytorch As of now only Stable Diffusion based pipelines
     are supported
 
-    Attributes:
-        **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more:
-         details.
-        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used:
-        **prompt_function** (Callable[[], tuple[str, Any]]) -- Function to generate prompts to guide model
-        **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
-        **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
+    Args:
+        config ([`DDPOConfig`]):
+            Configuration object for DDPOTrainer. Check the documentation of [`PPOConfig`] for more details.
+        reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
+            Reward function to be used.
+        prompt_function (`Callable[[], tuple[str, Any]]`): Function to generate prompts to guide model
+        sd_pipeline ([`DDPOStableDiffusionPipeline`]): Stable Diffusion pipeline to be used for training.
+        image_samples_hook (`Optional[Callable[[Any, Any, Any], Any]]`): Hook to be called to log images.
     """
 
     _tag_names = ["trl", "ddpo"]
@@ -158,7 +159,7 @@ class DDPOTrainer(PyTorchModelHubMixin):
 
         # Enable TF32 for faster training on Ampere GPUs,
         # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
-        if self.config.allow_tf32:
+        if self.config.allow_tf32 and torch.cuda.is_available():
             torch.backends.cuda.matmul.allow_tf32 = True
 
         self.optimizer = self._setup_optimizer(
@@ -642,6 +643,9 @@ class DDPOTrainer(PyTorchModelHubMixin):
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
 
         tags.update(self._tag_names)
 

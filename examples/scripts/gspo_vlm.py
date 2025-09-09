@@ -15,9 +15,13 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "Pillow",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
+#     "torchvision",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -31,7 +35,7 @@ accelerate launch \
     --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
     --output_dir gspo-Qwen2.5-VL-3B-Instruct \
     --learning_rate 1e-5 \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --max_prompt_length 2048 \
     --max_completion_length 1024 \
     --use_peft \
@@ -48,6 +52,8 @@ accelerate launch \
     --steps_per_generation 8
 
 """
+
+import os
 
 import torch
 from datasets import load_dataset
@@ -67,20 +73,22 @@ from trl import (
 from trl.rewards import think_format_reward
 
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, GRPOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
     ################
     # Model & Processor
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )

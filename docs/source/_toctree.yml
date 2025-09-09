@@ -19,6 +19,8 @@
 - sections:
   - local: clis
     title: Command Line Interface (CLI)
+  - local: jobs_training
+    title: Training using Jobs
   - local: customization
     title: Customizing the Training
   - local: reducing_memory_usage
@@ -33,10 +35,14 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
+  - local: kernels_hub
+    title: Kernels Hub
   - local: liger_kernel_integration
     title: Liger Kernel
   - local: peft_integration
     title: PEFT
+  - local: trackio_integration
+    title: Trackio
   - local: unsloth_integration
     title: Unsloth
   - local: vllm_integration

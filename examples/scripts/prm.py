@@ -15,6 +15,8 @@
 # /// script
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -47,6 +49,8 @@ python examples/scripts/prm.py \
     --lora_alpha 16
 """
 
+import os
+
 import torch
 from accelerate import logging
 from datasets import load_dataset
@@ -65,6 +69,11 @@ from trl import (
 
 logger = logging.get_logger(__name__)
 
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, PRMConfig, ModelConfig))
     script_args, training_args, model_config = parser.parse_args_into_dataclasses()
@@ -73,11 +82,7 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_config.torch_dtype
-        if model_config.torch_dtype in ["auto", None]
-        else getattr(torch, model_config.torch_dtype)
-    )
+    dtype = model_config.dtype if model_config.dtype in ["auto", None] else getattr(torch, model_config.dtype)
     quantization_config = get_quantization_config(model_config)
     model_kwargs = dict(
         revision=model_config.model_revision,

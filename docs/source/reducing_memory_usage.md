@@ -88,7 +88,7 @@ Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png" alt="Packing" width="600"/>
 </div>
 
-Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` and in the [`SFTConfig`].
+Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` in the [`SFTConfig`].
 
 <Tip>
 
@@ -191,17 +191,11 @@ Activation offloading is a memory efficiency technique that reduces GPU VRAM usa
 
 To enable activation offloading in your SFT training configuration:
 
-<hfoptions>
-<hfoption id="SFT">
-
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(..., activation_offloading=True)
 ```
-
-</hfoption>
-</hfoptions>
 
 <Tip warning={true}>
 
@@ -267,3 +261,129 @@ training_args = RLOOConfig(..., ds3_gather_for_generation=False)
 </hfoptions>
 
 This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.
+
+## Context Parallelism
+
+Context Parallelism (CP) is a parallelization technique that enables training with longer sequences by splitting the sequence dimension across multiple GPUs. Each GPU processes a portion of the sequence, allowing you to train with sequences longer than what would fit on a single GPU's memory.
+
+For more details on CP, see the [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism).
+
+CP is particularly useful when:
+
+- You want to train with very long sequences (>32k tokens)
+- Single GPU memory is insufficient for your desired sequence length
+- You need to maintain sequence coherence across the full context
+
+### Requirements and Limitations
+
+CP has specific requirements:
+
+1. **Accelerate 1.10 or higher** is required
+2. **FSDP2 (PyTorch FSDP v2)** is required as the distributed training backend
+3. **SDPA attention** - Flash Attention is currently not supported with CP
+4. **Sequence length divisibility** - sequences must be divisible by `cp_size * 2`. This is now automatically handled using the `pad_to_multiple_of` parameter in the data collator, which works seamlessly with both standard and padding-free modes.
+
+### Configuration
+
+To enable CP, you need to configure both Accelerate and your training arguments:
+
+#### Accelerate Configuration
+
+Use one of the provided accelerate config files (e.g. `fsdp_context_parallel_2gpu.yaml` for 2 GPUs):
+
+```yaml
+compute_environment: LOCAL_MACHINE
+debug: false
+distributed_type: FSDP
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+fsdp_config:
+  fsdp_activation_checkpointing: false
+  fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
+  fsdp_cpu_ram_efficient_loading: true
+  fsdp_offload_params: false
+  fsdp_reshard_after_forward: true
+  fsdp_state_dict_type: FULL_STATE_DICT
+  fsdp_version: 2
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 2  # Number of GPUs
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
+parallelism_config:
+  parallelism_config_dp_replicate_size: 1
+  parallelism_config_dp_shard_size: 1
+  parallelism_config_tp_size: 1
+  parallelism_config_cp_size: 2  # Context parallel size
+```
+
+#### Training Configuration
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    # required
+    pad_to_multiple_of=4,           # ensures divisibility by cp_size * 2
+    # to get the most out of CP
+    max_length=16384,               # long sequence length
+    packing=True,                   # use packing to reduce padding
+    use_liger_kernel=True,          # compatible with CP
+    per_device_train_batch_size=1,
+    ...
+)
+```
+
+Then, launch your training script with the appropriate accelerate config file:
+
+```bash
+accelerate launch --config_file fsdp_context_parallel_2gpu.yaml train.py
+```
+
+### Best Practices
+
+1. **Use the `pad_to_multiple_of` parameter** - This is now the recommended way to ensure sequence length divisibility:
+   - For `cp_size=2`: use `pad_to_multiple_of=4` (since `cp_size * 2 = 4`)
+   - For `cp_size=4`: use `pad_to_multiple_of=8` (since `cp_size * 2 = 8`)
+   - The data collator automatically pads sequences to the required multiple, ensuring compatibility with CP
+
+2. **Use packing with padding** - The default BFD (Best Fit Decreasing) strategy works perfectly:
+   - Preserves sequence boundaries and maintains training quality
+   - Works seamlessly with both `padding_free=True` and standard padding modes
+
+3. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
+
+4. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
+
+5. **Monitor memory usage** across all GPUs to ensure balanced workload
+
+## vLLM sleep mode
+
+When using vLLM as the generation backend, you can enable _sleep mode_ to offload vLLM parameters and cache to CPU RAM during the optimization step and reload them back to GPU VRAM when needed for weight synchronization and generation.
+
+<hfoptions id="vllm_sleep">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., vllm_sleep_enabled=True)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., vllm_sleep_enabled=True)
+```
+
+</hfoption>
+</hfoptions>

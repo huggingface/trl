@@ -369,16 +369,16 @@ class BCOTrainer(Trainer):
             raise ValueError("You passed model_kwargs to the BCOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
+            dtype = model_init_kwargs.get("dtype")
+            if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                if isinstance(dtype, str) and dtype != "auto":
+                    dtype = getattr(torch, dtype)
+                if dtype != "auto" and not isinstance(dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `torch_dtype` passed to the BCOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                        f"Invalid `dtype` passed to the BCOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
-                model_init_kwargs["torch_dtype"] = torch_dtype
+                model_init_kwargs["dtype"] = dtype
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -388,16 +388,16 @@ class BCOTrainer(Trainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            torch_dtype = ref_model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
+            dtype = ref_model_init_kwargs.get("dtype")
+            if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                if isinstance(dtype, str) and dtype != "auto":
+                    dtype = getattr(torch, dtype)
+                if dtype != "auto" and not isinstance(dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `torch_dtype` passed to the BCOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                        f"Invalid `dtype` passed to the BCOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
-                ref_model_init_kwargs["torch_dtype"] = torch_dtype
+                ref_model_init_kwargs["dtype"] = dtype
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -1035,6 +1035,12 @@ class BCOTrainer(Trainer):
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
+            label_pad_token_id:
+                The label value to ignore when computing log probabilities.
+            is_encoder_decoder:
+                Whether the model is an encoder-decoder model. If True, the labels are not shifted, and the logits are
+                assumed to already be aligned with the labels. If False, the labels are shifted to the right by one
+                position, and the logits are assumed to be aligned with the shifted labels.
 
         Returns:
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
@@ -1144,6 +1150,7 @@ class BCOTrainer(Trainer):
                 batch_size,)
             chosen_embeddings: embeddings of desirable prompts
             rejected_embeddings: embeddings of undesirable prompts
+            do_train: whether to update the running delta value. Default is True.
 
         Returns:
             A tuple of four tensors: (losses, chosen_rewards, rejected_rewards, delta). The losses tensor contains the
@@ -1526,6 +1533,9 @@ class BCOTrainer(Trainer):
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
 
         tags.update(self._tag_names)
 

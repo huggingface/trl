@@ -16,6 +16,9 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "Pillow>=9.4.0",
+#     "peft",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -29,7 +32,7 @@ accelerate launch \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
     --output_dir Gemma-3-4B-SFT-MMIU \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --use_peft \
     --lora_target_modules all-linear \
     --attn_implementation eager
@@ -44,9 +47,9 @@ accelerate launch \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
     --output_dir Gemma-3-4B-SFT-MMIU \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --use_peft \
-    --lora_target_modules all-linear
+    --lora_target_modules all-linear \
     --attn_implementation eager
 """
 
@@ -70,6 +73,10 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
+
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 # For multi-image example
@@ -142,14 +149,12 @@ def main():
     ################
     # Model, Tokenizer & Processor
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
     )

@@ -124,7 +124,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             that are no in the completion.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly. The attention mask will be set to 1 for all tokens.
+            generated accordingly.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -132,7 +132,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl import DataCollatorForLanguageModeling
+    >>> from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
     >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
@@ -206,48 +206,48 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         if "assistant_masks" in examples[0]:
             assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
 
-        # Pad
+        # If padding_free, flatten everything into a single sequence
         output = {}
         if self.padding_free:
-            output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
+            input_ids = [torch.cat(input_ids, dim=0)]
             if not has_packed_position_ids:
-                output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+                attention_mask = [torch.cat(attention_mask, dim=0)]
             if self.return_position_ids:
-                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
-            output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
+                position_ids = [torch.cat(position_ids, dim=0)]
+            labels = [torch.cat(labels, dim=0)]
             if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
-                output["labels"][completion_mask == 0] = -100
+                completion_mask = [torch.cat(completion_mask, dim=0)]
             if "assistant_masks" in examples[0]:
-                assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
-                output["labels"][assistant_masks == 0] = -100
-        else:
-            output["input_ids"] = pad(
-                input_ids,
-                padding_value=self.pad_token_id,
-                padding_side="right",
-                pad_to_multiple_of=self.pad_to_multiple_of,
-            )
+                assistant_masks = [torch.cat(assistant_masks, dim=0)]
+
+        # Pad
+        output["input_ids"] = pad(
+            input_ids,
+            padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        if not has_packed_position_ids:
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-            if self.return_position_ids:
-                output["position_ids"] = pad(
-                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-            output["labels"] = pad(
-                labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        if self.return_position_ids:
+            output["position_ids"] = pad(
+                position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-            if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = pad(
-                    completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-            if "assistant_masks" in examples[0]:
-                assistant_masks = pad(
-                    assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][assistant_masks == 0] = -100
+        output["labels"] = pad(
+            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        if self.completion_only_loss and "completion_mask" in examples[0]:
+            completion_mask = pad(
+                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
+        if "assistant_masks" in examples[0]:
+            assistant_masks = pad(
+                assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"][assistant_masks == 0] = -100
         return output
 
     @staticmethod
@@ -321,7 +321,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Example:
     ```python
-    >>> from trl import DataCollatorForVisionLanguageModeling
+    >>> from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
     >>> from transformers import AutoProcessor
 
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
@@ -497,9 +497,11 @@ class SFTTrainer(Trainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
-              `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object.
+            If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
+            as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator (`DataCollator`, *optional*):
@@ -514,32 +516,40 @@ class SFTTrainer(Trainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
-        IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
+        compute_loss_func (`Callable` or `None`, *optional*, defaults to `None`):
+            A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
+            batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss
+            function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618)
+            used by [`Trainer`].
+        compute_metrics (`Callable[[EvalPrediction], dict]` or `None`, *optional*, defaults to `None`):
+            The function that will be used to compute metrics at evaluation. Must take a
+            [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
+            [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
+            `compute_result` argument. This will be triggered after the last eval batch to signal that the function
+            needs to calculate and return the global summary statistics rather than accumulating the batch-level
+            statistics.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
-        None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to
-        `None`):
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
 
             Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before
             initializing the Trainer.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to
-        `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.
@@ -586,16 +596,16 @@ class SFTTrainer(Trainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-                pass  # torch_dtype is already a torch.dtype or "auto" or None
-            elif isinstance(torch_dtype, str) and torch_dtype in ["bfloat16", "float16", "float32"]:
-                torch_dtype = getattr(torch, torch_dtype)
-                model_init_kwargs["torch_dtype"] = torch_dtype
+            dtype = model_init_kwargs.get("dtype")
+            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+                pass  # dtype is already a torch.dtype or "auto" or None
+            elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
+                dtype = getattr(torch, dtype)
+                model_init_kwargs["dtype"] = dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                    f"a valid `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                    "Invalid `dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
+                    f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
@@ -702,6 +712,7 @@ class SFTTrainer(Trainer):
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
         use_flash_attention = model.config._attn_implementation in [
             "flash_attention_2",
+            "flash_attention_3",
             "kernels-community/vllm-flash-attn3",
         ]
         if self.padding_free:
@@ -842,6 +853,16 @@ class SFTTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
+
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
+            logger.warning(
+                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
+                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
+                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
+                "loss.",
+            )
 
     def _prepare_dataset(
         self,
@@ -1041,23 +1062,29 @@ class SFTTrainer(Trainer):
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
 
+        # Add auxiliary loss if available
+        if self.aux_loss_enabled and self.aux_loss_coef:
+            aux_loss = self.aux_loss_coef * outputs.aux_loss
+            loss += aux_loss
+
         # Compute entropy
-        with torch.no_grad():
-            per_token_entropy = entropy_from_logits(outputs.logits)
-            if "attention_mask" in inputs:
-                attention_mask = inputs["attention_mask"]
-                # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
-                virtual_attention_mask = torch.ones(
-                    attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-                )
-                attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
-                entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-            elif "position_ids" in inputs:
-                entropy = torch.mean(per_token_entropy)
-            else:
-                raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
-            entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
-        self._metrics[mode]["entropy"].append(entropy)
+        if not self.args.use_liger_kernel:  # liger doesn't return logits
+            with torch.no_grad():
+                per_token_entropy = entropy_from_logits(outputs.logits)
+                if "attention_mask" in inputs:
+                    attention_mask = inputs["attention_mask"]
+                    # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
+                    virtual_attention_mask = torch.ones(
+                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
+                    )
+                    attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
+                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
+                elif "position_ids" in inputs:
+                    entropy = torch.mean(per_token_entropy)
+                else:
+                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+            self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -1101,6 +1128,9 @@ class SFTTrainer(Trainer):
                 total_sum = total_tokens.sum()
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+                if self.aux_loss_enabled:
+                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
+                    self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
 
@@ -1166,6 +1196,9 @@ class SFTTrainer(Trainer):
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
 
         tags.update(self._tag_names)
 

@@ -16,6 +16,8 @@
 # dependencies = [
 #     "trl @ git+https://github.com/huggingface/trl.git",
 #     "peft",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -50,6 +52,8 @@ python examples/scripts/gkd.py \
     --lora_alpha 16
 """
 
+import os
+
 from datasets import load_dataset
 from transformers import AutoTokenizer, GenerationConfig
 
@@ -66,6 +70,10 @@ from trl import (
 )
 
 
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 if __name__ == "__main__":
     parser = TrlParser((ScriptArguments, GKDConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
@@ -78,7 +86,7 @@ if __name__ == "__main__":
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=model_args.torch_dtype,
+        dtype=model_args.dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,
@@ -89,7 +97,7 @@ if __name__ == "__main__":
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=model_args.torch_dtype,
+        dtype=model_args.dtype,
         use_cache=True,
         device_map=get_kbit_device_map() if quantization_config is not None else None,
         quantization_config=quantization_config,

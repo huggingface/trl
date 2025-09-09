@@ -136,16 +136,16 @@ class CPOTrainer(Trainer):
             raise ValueError("You passed model_kwargs to the CPOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
+            dtype = model_init_kwargs.get("dtype")
+            if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                if isinstance(dtype, str) and dtype != "auto":
+                    dtype = getattr(torch, dtype)
+                if dtype != "auto" and not isinstance(dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `torch_dtype` passed to the CPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                        f"Invalid `dtype` passed to the CPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
-                model_init_kwargs["torch_dtype"] = torch_dtype
+                model_init_kwargs["dtype"] = dtype
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -1105,6 +1105,9 @@ class CPOTrainer(Trainer):
 
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
 
         tags.update(self._tag_names)
 
