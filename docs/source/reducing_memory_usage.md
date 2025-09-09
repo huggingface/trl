@@ -324,9 +324,6 @@ parallelism_config:
 
 #### Training Configuration
 
-<hfoptions id="context-parallel">
-<hfoption id="SFT">
-
 You can configure context parallelism training either programmatically or via command line:
 
 **Option 1: Using SFTConfig**
@@ -358,9 +355,6 @@ accelerate launch \
     --per_device_train_batch_size 1
 ```
 
-</hfoption>
-</hfoptions>
-
 ### Best Practices
 
 1. **Use the `pad_to_multiple_of` parameter** - This is now the recommended way to ensure sequence length divisibility:
@@ -371,33 +365,12 @@ accelerate launch \
 2. **Use packing with padding** - The default BFD (Best Fit Decreasing) strategy works perfectly:
    - Preserves sequence boundaries and maintains training quality
    - Works seamlessly with both `padding_free=True` and standard padding modes
-   - No need to specify `packing_strategy` as BFD is the default
 
 3. **Combine with other memory optimizations** like Liger kernels, bfloat16, and gradient checkpointing
 
 4. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
 
 5. **Monitor memory usage** across all GPUs to ensure balanced workload
-
-
-### Common Context Parallelism Configurations
-
-Here are typical configurations for different context parallel sizes:
-
-#### 2-GPU Context Parallelism (cp_size=2)
-```bash
-accelerate launch \
-    --config_file examples/accelerate_configs/fsdp_context_parallel_2gpu.yaml \
-    trl/scripts/sft.py \
-    --model_name_or_path Qwen/Qwen2-0.5B \
-    --dataset_name trl-lib/Capybara \
-    --max_seq_length 16384 \
-    --packing \
-    --pad_to_multiple_of 4 \     # cp_size * 2 = 2 * 2 = 4
-    --dtype bfloat16 \
-    --use_liger_kernel \
-    --per_device_train_batch_size 2
-```
 
 ## vLLM sleep mode
 
