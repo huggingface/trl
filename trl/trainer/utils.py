@@ -21,6 +21,8 @@ from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any, Literal, Optional, Union
+import os
+import socket
 
 import numpy as np
 import pandas as pd
@@ -166,6 +168,59 @@ class DataCollatorForChatML:
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
         }
+
+
+def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def _find_free_port() -> int:
+    candidates = (29500, 23456, 12355, 12345)
+    for p in candidates:
+        if _is_port_free(p):
+            return p
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = None) -> None:
+    """Ensure MASTER_ADDR/MASTER_PORT are set safely.
+
+    - Respects existing environment variables.
+    - Defaults MASTER_ADDR to localhost if unset.
+    - Chooses a free TCP port if MASTER_PORT is unset to avoid collisions.
+    - If MASTER_PORT is set to "0" or "auto", it is resolved to a free port.
+    """
+    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", addr or "localhost")
+
+    # Determine desired port precedence: explicit arg > env > auto
+    desired_port: Optional[int] = port
+    if desired_port is None:
+        env_port = os.environ.get("MASTER_PORT")
+        if env_port is None:
+            desired_port = None
+        else:
+            env_port_str = str(env_port).strip().lower()
+            if env_port_str in {"0", "auto", ""}:
+                desired_port = 0
+            else:
+                try:
+                    desired_port = int(env_port)
+                except ValueError:
+                    desired_port = 0  # treat invalid as auto
+
+    if desired_port in (None, 0):
+        chosen = str(_find_free_port())
+        os.environ["MASTER_PORT"] = chosen
+    else:
+        os.environ["MASTER_PORT"] = str(desired_port)
 
 
 @dataclass
