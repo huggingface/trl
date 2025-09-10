@@ -520,7 +520,7 @@ class MergeModelCallback(TrainerCallback):
     on a merge configuration.
 
     Args:
-        merge_config ([`MergeConfig`], *optional*, defaults to `None`):
+        merge_config ([`MergeConfig`], *optional*):
             Configuration used for the merging process. If not provided, the default [`MergeConfig`] is used.
         merge_at_every_checkpoint (`bool`, *optional*, defaults to `False`):
             Whether to merge the model at every checkpoint.

@@ -262,7 +262,7 @@ def pad(
             Value to use for padding. Default is 0.
         padding_side (`str`):
             Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
-        pad_to_multiple_of (`int`, *optional*, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set will pad the sequence to a multiple of the provided value.
 
     Returns:
