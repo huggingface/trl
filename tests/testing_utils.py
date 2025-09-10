@@ -18,6 +18,8 @@ import shutil
 import tempfile
 import unittest
 import warnings
+import psutil
+import signal
 
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
@@ -165,3 +167,22 @@ def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> c
         return wrapper
 
     return decorator
+
+def exit_process(process):
+    parent = psutil.Process(process.pid)
+    children = parent.children(recursive=True)
+    for child in children:
+        try:
+            child.send_signal(signal.SIGTERM)
+            child.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            child.kill()
+        except psutil.NoSuchProcess:
+            pass
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except psutil.TimeoutExpired:
+        process.kill()
+    except psutil.NoSuchProcess:
+        pass
