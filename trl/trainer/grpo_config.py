@@ -240,6 +240,9 @@ class GRPOConfig(TrainingArguments):
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
             are logged.
+        replay_buffer_size (`int`, *optional*, defaults to `0`):
+            A cache that stores the rollouts with the highest advantage scores and variance per group. If a new group
+            has 0 variance, it is replaced with a group sampled from the replay buffer.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -633,6 +636,13 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, "
             "all prompts are logged."
+        },
+    )
+    replay_buffer_size: int = field(
+        default=0,
+        metadata={
+            "help": "A cache that stores the rollouts with the highest advantage scores and variance per group. If a "
+            "new group has 0 variance, it is replaced with a group sampled from the replay buffer."
         },
     )
 

@@ -28,6 +28,7 @@ from transformers.testing_utils import require_liger_kernel, require_peft, requi
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.trainer.grpo_trainer import ReplayBuffer
 
 from .testing_utils import TrlTestCase, require_vllm
 
@@ -1637,6 +1638,72 @@ class GRPOTrainerTester(TrlTestCase):
         self.assertEqual(len(trainer.reward_processing_classes), 1)
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
 
+
+class TestReplayBuffer(unittest.TestCase):
+    def setUp(self):
+        self.replay_buffer = ReplayBuffer(max_size=5)
+
+    def test_add(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Check if the buffer contains the correct number of elements
+        self.assertEqual(len(self.replay_buffer.heap), 5)
+
+        # Check if the buffer maintains the min-heap property
+        heap_scores = [item[0] for item in self.replay_buffer.heap]
+        self.assertEqual(heap_scores[0], min(heap_scores))
+        self.assertEqual(heap_scores[0], 0.3)
+
+    def test_add_more_than_maxlen(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7, 0.6, 0.4]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+            {"id": 6},
+            {"id": 7},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Check if the buffer contains the correct number of elements
+        self.assertEqual(len(self.replay_buffer.heap), 5)
+
+        # Check if the buffer maintains the min-heap property
+        heap_scores = [item[0] for item in self.replay_buffer.heap]
+        self.assertEqual(heap_scores[0], min(heap_scores))
+        self.assertEqual(heap_scores[0], 0.5)  # 0.3 and 0.4 should be removed
+
+    def test_sample(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Sample elements from the buffer
+        sampled = self.replay_buffer.sample(num_samples=3)
+
+        # Check if the sampled elements are from the buffer
+        self.assertEqual(len(sampled), 3)
+        for item in sampled:
+            self.assertIn(item, [entry[1] for entry in self.replay_buffer.heap])
 
 if __name__ == "__main__":
     unittest.main()
