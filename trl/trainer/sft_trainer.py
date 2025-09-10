@@ -54,7 +54,14 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import entropy_from_logits, flush_left, generate_model_card, get_comet_experiment_url, pad
+from .utils import (
+    entropy_from_logits,
+    flush_left,
+    generate_model_card,
+    get_comet_experiment_url,
+    pad,
+    selective_log_softmax,
+)
 
 
 if is_peft_available():
@@ -124,7 +131,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             that are no in the completion.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly. The attention mask will be set to 1 for all tokens.
+            generated accordingly.
         pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -132,7 +139,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl import DataCollatorForLanguageModeling
+    >>> from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
     >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
@@ -206,48 +213,48 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         if "assistant_masks" in examples[0]:
             assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
 
-        # Pad
+        # If padding_free, flatten everything into a single sequence
         output = {}
         if self.padding_free:
-            output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
+            input_ids = [torch.cat(input_ids, dim=0)]
             if not has_packed_position_ids:
-                output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
+                attention_mask = [torch.cat(attention_mask, dim=0)]
             if self.return_position_ids:
-                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
-            output["labels"] = torch.cat(labels, dim=0).unsqueeze(0)
+                position_ids = [torch.cat(position_ids, dim=0)]
+            labels = [torch.cat(labels, dim=0)]
             if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = torch.cat(completion_mask, dim=0).unsqueeze(0)
-                output["labels"][completion_mask == 0] = -100
+                completion_mask = [torch.cat(completion_mask, dim=0)]
             if "assistant_masks" in examples[0]:
-                assistant_masks = torch.cat(assistant_masks, dim=0).unsqueeze(0)
-                output["labels"][assistant_masks == 0] = -100
-        else:
-            output["input_ids"] = pad(
-                input_ids,
-                padding_value=self.pad_token_id,
-                padding_side="right",
-                pad_to_multiple_of=self.pad_to_multiple_of,
-            )
+                assistant_masks = [torch.cat(assistant_masks, dim=0)]
+
+        # Pad
+        output["input_ids"] = pad(
+            input_ids,
+            padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        if not has_packed_position_ids:
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-            if self.return_position_ids:
-                output["position_ids"] = pad(
-                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-            output["labels"] = pad(
-                labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        if self.return_position_ids:
+            output["position_ids"] = pad(
+                position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
-            if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = pad(
-                    completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-            if "assistant_masks" in examples[0]:
-                assistant_masks = pad(
-                    assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-                output["labels"][assistant_masks == 0] = -100
+        output["labels"] = pad(
+            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        )
+        if self.completion_only_loss and "completion_mask" in examples[0]:
+            completion_mask = pad(
+                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
+        if "assistant_masks" in examples[0]:
+            assistant_masks = pad(
+                assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"][assistant_masks == 0] = -100
         return output
 
     @staticmethod
@@ -321,7 +328,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Example:
     ```python
-    >>> from trl import DataCollatorForVisionLanguageModeling
+    >>> from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
     >>> from transformers import AutoProcessor
 
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
@@ -472,11 +479,26 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
+def dft_loss(outputs, labels, num_items_in_batch):
+    """
+    DFT loss function, as presented in [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward
+    Rectification](https://huggingface.co/papers/2508.05629)
+    """
+    labels = nn.functional.pad(labels, (0, 1), value=-100)
+    shift_labels = labels[..., 1:].contiguous()
+    loss_mask = shift_labels != -100
+    shift_labels[~loss_mask] = 0
+    logprobs = selective_log_softmax(outputs.logits, shift_labels)
+    per_token_loss = -logprobs.exp().detach() * logprobs
+    loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
+    return loss
+
+
 class SFTTrainer(Trainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
 
-    This class is a wrapper around the [`transformers.Trainer`] class and inherits all of its attributes and methods.
+    This class is a wrapper around the [`~transformers.Trainer`] class and inherits all of its attributes and methods.
 
     Example:
 
@@ -497,14 +519,17 @@ class SFTTrainer(Trainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
-              `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object.
+            If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
+            as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
-        data_collator (`DataCollator`, *optional*):
+        data_collator ([`~transformers.DataCollator`] or `None`, *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to a custom [`DataCollatorForLanguageModeling`].
+            Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
+            and [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. SFT supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -514,40 +539,48 @@ class SFTTrainer(Trainer):
               and content).
 
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
-        IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
-        callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
+        compute_loss_func (`Callable` or `None`, *optional*, defaults to `None`):
+            A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
+            batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss
+            function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618)
+            used by [`Trainer`].
+        compute_metrics (`Callable[[EvalPrediction], dict]` or `None`, *optional*, defaults to `None`):
+            The function that will be used to compute metrics at evaluation. Must take a
+            [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
+            [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
+            `compute_result` argument. This will be triggered after the last eval batch to signal that the function
+            needs to calculate and return the global summary statistics rather than accumulating the batch-level
+            statistics.
+        callbacks (list of [`~transformers.TrainerCallback`] or `None`, *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
-        None)`):
-            A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
-            model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to
-        `None`):
+        optimizers (`tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
+            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
 
             Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before
             initializing the Trainer.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to
-        `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.
 
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
-        peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`] or `None`, *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-        formatting_func (`Optional[Callable]`):
+        formatting_func (`Callable` or `None`, *optional*, defaults to `None`):
             Formatting function applied to the dataset before tokenization. Applying the formatting function explicitly
             converts the dataset into a [language modeling](#language-modeling) type.
     """
@@ -586,16 +619,16 @@ class SFTTrainer(Trainer):
         model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-                pass  # torch_dtype is already a torch.dtype or "auto" or None
-            elif isinstance(torch_dtype, str) and torch_dtype in ["bfloat16", "float16", "float32"]:
-                torch_dtype = getattr(torch, torch_dtype)
-                model_init_kwargs["torch_dtype"] = torch_dtype
+            dtype = model_init_kwargs.get("dtype")
+            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+                pass  # dtype is already a torch.dtype or "auto" or None
+            elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
+                dtype = getattr(torch, dtype)
+                model_init_kwargs["dtype"] = dtype
             else:
                 raise ValueError(
-                    "Invalid `torch_dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                    f"a valid `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
+                    "Invalid `dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
+                    f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
@@ -809,6 +842,20 @@ class SFTTrainer(Trainer):
                         eval_dataset, processing_class, args, packing, formatting_func, "eval"
                     )
 
+        # Loss function
+        if args.loss_type == "nll":
+            pass  # use the default loss
+        elif args.loss_type == "dft":
+            if compute_loss_func is not None:
+                raise ValueError(
+                    "You passed a `compute_loss_func` together with `loss_type='dft'` to the `SFTTrainer`. "
+                    "When using `loss_type='dft'`, the loss function is internally set to the DFT loss, so passing a "
+                    "`compute_loss_func` is not allowed."
+                )
+            compute_loss_func = dft_loss
+        else:
+            raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
@@ -843,6 +890,16 @@ class SFTTrainer(Trainer):
         # Add tags for models that have been loaded with the correct transformers version
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
+
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
+        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
+            logger.warning(
+                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
+                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
+                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
+                "loss.",
+            )
 
     def _prepare_dataset(
         self,
@@ -1011,51 +1068,66 @@ class SFTTrainer(Trainer):
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
 
-                def get_trainable_tokens_for_language_modeling(dataset):
-                    return sum(len(row["input_ids"]) for row in dataset)
+                def get_trainable_tokens_for_language_modeling(batch, col_name):
+                    batch[col_name] = [len(input_ids) for input_ids in batch["input_ids"]]
+                    return batch
 
-                def get_trainable_tokens_for_conv_language_modeling(dataset):
-                    return sum(sum(row["assistant_masks"]) for row in dataset)
+                def get_trainable_tokens_for_conv_language_modeling(batch, col_name):
+                    batch[col_name] = [sum(a_m) for a_m in batch["assistant_masks"]]
+                    return batch
 
-                def get_trainable_tokens_for_non_conv_completions(dataset):
-                    return sum(sum(row["completion_mask"]) for row in dataset)
+                def get_trainable_tokens_for_non_conv_completions(batch, col_name):
+                    batch[col_name] = [sum(c_m) for c_m in batch["completion_mask"]]
+                    return batch
 
-                def get_trainable_tokens_for_conv_completions(dataset):
-                    total_trainable_tokens = 0
-                    for row in dataset:
-                        final_mask = [c_m and a_m for c_m, a_m in zip(row["completion_mask"], row["assistant_masks"])]
-                        total_trainable_tokens += sum(final_mask)
-                    return total_trainable_tokens
+                def get_trainable_tokens_for_conv_completions(batch, col_name):
+                    batch[col_name] = [
+                        sum(c & a for c, a in zip(c_row, a_row))
+                        for c_row, a_row in zip(batch["completion_mask"], batch["assistant_masks"])
+                    ]
+                    return batch
 
                 first_row = dataset[0] if isinstance(dataset, Dataset) else next(iter(dataset))
+                col_name = "trainable_tokens_before_truncation"
                 # Conversational Prompt Completions Dataset
                 if args.assistant_only_loss and "completion_mask" in first_row:
-                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_conv_completions(dataset)
+                    fn = get_trainable_tokens_for_conv_completions
                 # Prompt Completions/Instruction Tuning Dataset
                 elif "completion_mask" in first_row:
-                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_non_conv_completions(dataset)
+                    fn = get_trainable_tokens_for_non_conv_completions
                 # Conversational Language Modeling
                 elif args.assistant_only_loss:
-                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_conv_language_modeling(dataset)
+                    fn = get_trainable_tokens_for_conv_language_modeling
                 # Language Modeling
                 else:
-                    total_trainable_tokens_before_truncation = get_trainable_tokens_for_language_modeling(dataset)
+                    fn = get_trainable_tokens_for_language_modeling
 
+                dataset = dataset.map(fn, fn_kwargs={"col_name": col_name}, batched=True, **map_kwargs)
+                total_trainable_tokens_before_truncation = dataset.to_polars()[col_name].sum()
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
 
+                col_name = "trainable_tokens_after_truncation"
                 if args.assistant_only_loss and "completion_mask" in first_row:
-                    dataset = dataset.filter(lambda row: 1 in row["assistant_masks"] and 1 in row["completion_mask"])
-                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_conv_completions(dataset)
+                    dataset = dataset.filter(
+                        lambda batch: [
+                            sum(c & a for c, a in zip(a_m, c_m))
+                            for a_m, c_m in zip(batch["assistant_masks"], batch["completion_mask"])
+                        ],
+                        batched=True,
+                    )
                 elif "completion_mask" in first_row:
-                    dataset = dataset.filter(lambda row: 1 in row["completion_mask"])
-                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_non_conv_completions(dataset)
-                elif "assistant_masks" in first_row:
-                    dataset = dataset.filter(lambda row: 1 in row["assistant_masks"])
-                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_conv_language_modeling(dataset)
-                else:
-                    total_trainable_tokens_after_truncation = get_trainable_tokens_for_language_modeling(dataset)
+                    dataset = dataset.filter(
+                        lambda batch: [1 in c_m for c_m in batch["completion_mask"]], batched=True
+                    )
+                elif args.assistant_only_loss:
+                    dataset = dataset.filter(
+                        lambda batch: [1 in a_m for a_m in batch["assistant_masks"]], batched=True
+                    )
+
+                dataset = dataset.map(fn, fn_kwargs={"col_name": col_name}, batched=True, **map_kwargs)
+                total_trainable_tokens_after_truncation = dataset.to_polars()[col_name].sum()
 
                 if total_trainable_tokens_after_truncation == 0:
                     raise RuntimeError(
@@ -1094,11 +1166,21 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+
+        # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
+        # This can be removed when this issue is fixed.
+        labels = inputs["labels"]
+
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
+
+        # Add auxiliary loss if available
+        if self.aux_loss_enabled and self.aux_loss_coef:
+            aux_loss = self.aux_loss_coef * outputs.aux_loss
+            loss += aux_loss
 
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
@@ -1133,10 +1215,17 @@ class SFTTrainer(Trainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.args.use_liger_kernel:
+        if not self.args.use_liger_kernel:
             with torch.no_grad():
-                shift_logits = outputs.logits[..., :-1, :].contiguous()
-                shift_labels = inputs["labels"][..., 1:].contiguous()
+                if "shift_labels" in inputs:
+                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
+                    # - The last logits require the label from process n+1
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
 
                 # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
                 # not correspond to actual input labels.
@@ -1161,6 +1250,9 @@ class SFTTrainer(Trainer):
                 total_sum = total_tokens.sum()
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+                if self.aux_loss_enabled:
+                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
+                    self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
 

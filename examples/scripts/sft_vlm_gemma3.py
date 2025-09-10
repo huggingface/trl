@@ -18,6 +18,7 @@
 #     "Pillow>=9.4.0",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -31,7 +32,7 @@ accelerate launch \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
     --output_dir Gemma-3-4B-SFT-MMIU \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --use_peft \
     --lora_target_modules all-linear \
     --attn_implementation eager
@@ -46,7 +47,7 @@ accelerate launch \
     --model_name_or_path google/gemma-3-4b-it \
     --per_device_train_batch_size 1 \
     --output_dir Gemma-3-4B-SFT-MMIU \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --use_peft \
     --lora_target_modules all-linear \
     --attn_implementation eager
@@ -148,17 +149,18 @@ def main():
     ################
     # Model, Tokenizer & Processor
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
+        dtype=dtype,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )

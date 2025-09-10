@@ -126,6 +126,8 @@ def build_dataset(
     customize this function to train the model on its own dataset.
 
     Args:
+        tokenizer (`transformers.PreTrainedTokenizer`):
+            The tokenizer used for the model.
         dataset_name (`str`):
             The name of the dataset to be loaded.
 

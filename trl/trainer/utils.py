@@ -600,10 +600,10 @@ def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesCon
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=model_args.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
+            bnb_4bit_compute_dtype=model_args.dtype,  # For consistency with model weights, we use the same value as `dtype`
             bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_args.torch_dtype,
+            bnb_4bit_quant_storage=model_args.dtype,
         )
     elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -1002,6 +1002,10 @@ def prepare_deepspeed(
             The model to be prepared for DeepSpeed training.
         per_device_train_batch_size (`int`):
             The training batch size per device.
+        fp16 (`bool`, defaults to `False`):
+            Whether to use FP16 precision.
+        bf16 (`bool`, defaults to `False`):
+            Whether to use BF16 precision.
 
     Returns:
         `torch.nn.Module`:
@@ -1359,7 +1363,7 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor
     Args:
         mask (`torch.Tensor`):
             2D tensor (binary mask) with shape `(N, M)`.
-        *tensors (`torch.Tensor`)
+        *tensors (`torch.Tensor`):
             One or more 2D tensors with the same shape as `mask`. These tensors will be processed alongside `mask`,
             with non-zero values shifted and excess zero columns truncated in the same manner.
 
@@ -1473,31 +1477,41 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
     return per_token_logps
 
 
-def entropy_from_logits(logits, chunk_size: int = 1) -> torch.Tensor:
+def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Tensor:
     """
-    Compute the Shannon entropy (in nats) for each row of *logits* without materialising the full soft-max in memory.
-    The batch dimension is processed in chunks of size `chunk_size` so that only a subset of rows is expanded to
-    probabilities at any one time.
+    Compute the Shannon entropy (in nats) for each row of *logits* in a memory-efficient way.
+
+    Instead of materializing the full softmax for all rows at once, the logits are flattened to shape (N, num_classes),
+    where N is the product of all leading dimensions. Computation is then performed in chunks of size `chunk_size`
+    along this flattened dimension, reducing peak memory usage. The result is reshaped back to match the input's
+    leading dimensions.
 
     Args:
         logits (`torch.Tensor`):
             Logits tensor of shape `(..., num_classes)`. Entropy is taken along the last axis; all leading dimensions
-            are preserved.
-        chunk_size (`int`, *optional*, defaults to `1`):
-            Number of rows to process per iteration.
+            are preserved in the output.
+        chunk_size (`int`, *optional*, defaults to `128`):
+            Number of rows from the flattened logits to process per iteration. Smaller values reduce memory usage at
+            the cost of more iterations.
 
     Returns:
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
-    per_token_entropies = []
-    for logits_chunk in logits.split(chunk_size, dim=0):
-        logps = F.log_softmax(logits_chunk, dim=-1)
-        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
-        per_token_entropies.extend(chunk_entropy)
+    original_shape = logits.shape[:-1]  # all dims except num_classes
+    num_classes = logits.shape[-1]
 
-    per_token_entropies = torch.stack(per_token_entropies)
-    return per_token_entropies
+    # Flatten all leading dimensions into one
+    flat_logits = logits.reshape(-1, num_classes)
+
+    entropies = []
+    for chunk in flat_logits.split(chunk_size, dim=0):
+        logps = F.log_softmax(chunk, dim=-1)
+        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
+        entropies.append(chunk_entropy)
+
+    entropies = torch.cat(entropies, dim=0)
+    return entropies.reshape(original_shape)
 
 
 def print_prompt_completions_sample(

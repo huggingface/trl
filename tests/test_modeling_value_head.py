@@ -267,7 +267,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
-            trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(self.device)
+            trl_model = self.trl_model_class.from_pretrained(model_name, dtype=torch.bfloat16).to(self.device)
 
             lm_head_namings = ["lm_head", "embed_out", "output_layer"]
 
@@ -404,7 +404,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
-            trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(self.device)
+            trl_model = self.trl_model_class.from_pretrained(model_name, dtype=torch.bfloat16).to(self.device)
 
             lm_head_namings = self.trl_model_class.lm_head_namings
 
