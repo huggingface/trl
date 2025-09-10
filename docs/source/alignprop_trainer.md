@@ -91,3 +91,12 @@ for prompt, image in zip(prompts,results.images):
 
 This work is heavily influenced by the repo [here](https://github.com/mihirp1998/AlignProp/) and the associated paper [Aligning Text-to-Image Diffusion Models with Reward Backpropagation
  by Mihir Prabhudesai, Anirudh Goyal, Deepak Pathak, Katerina Fragkiadaki](https://huggingface.co/papers/2310.03739).
+
+## AlignPropTrainer
+
+[[autodoc]] AlignPropTrainer
+    - train
+
+## AlignPropConfig
+
+[[autodoc]] AlignPropConfig
