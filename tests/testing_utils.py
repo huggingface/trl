@@ -168,7 +168,7 @@ def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> c
 
     return decorator
 
-def exit_process(process):
+def kill_process(process):
     parent = psutil.Process(process.pid)
     children = parent.children(recursive=True)
     for child in children:

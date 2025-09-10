@@ -22,7 +22,7 @@ from transformers.testing_utils import require_torch_multi_accelerator, torch_de
 from trl.extras.vllm_client import VLLMClient
 from trl.scripts.vllm_serve import chunk_list
 
-from .testing_utils import TrlTestCase, require_3_accelerators, exit_process
+from .testing_utils import TrlTestCase, require_3_accelerators, kill_process
 
 
 class TestChunkList(TrlTestCase):
@@ -121,7 +121,7 @@ class TestVLLMClientServer(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        exit_process(cls.server_process)
+        kill_process(cls.server_process)
 
 
 # Same as above but using base_url to instantiate the client.
@@ -195,7 +195,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        exit_process(cls.server_process)
+        kill_process(cls.server_process)
 
 @pytest.mark.slow
 @require_3_accelerators
@@ -252,7 +252,7 @@ class TestVLLMClientServerTP(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        exit_process(cls.server_process)
+        kill_process(cls.server_process)
 
 @pytest.mark.slow
 @require_3_accelerators
@@ -309,7 +309,7 @@ class TestVLLMClientServerDP(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        exit_process(cls.server_process)
+        kill_process(cls.server_process)
 
 
 @pytest.mark.slow
@@ -379,4 +379,4 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        exit_process(cls.server_process)
+        kill_process(cls.server_process)
