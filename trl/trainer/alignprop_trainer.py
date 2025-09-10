@@ -38,9 +38,14 @@ logger = logging.get_logger(__name__)
 
 class AlignPropTrainer(PyTorchModelHubMixin):
     """
-    The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models. Note, this trainer is
-    heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/ As of now only Stable Diffusion based
-    pipelines are supported.
+    Trainer for Reward Backpropagation (AlignProp) for diffusion models.
+
+    For details, see the paper: [Aligning Text-to-Image Diffusion Models with Reward
+    Backpropagation](https://huggingface.co/papers/2310.03739).
+
+    > [!TIP] > This trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
+
+    > [!WARNING] > As of now, only Stable Diffusion based pipelines are supported.
 
     Args:
         config ([`AlignPropConfig`]):
