@@ -38,8 +38,8 @@ jobs:
           context: docker/trl
           push: true
           tags: |
-            huggingface/trl-source-gpu:${{ env.VERSION }}
-            huggingface/trl-source-gpu
+            huggingface/trl:${{ env.VERSION }}
+            huggingface/trl
 
       - name: Post to Slack
         if: always()
@@ -72,7 +72,7 @@ jobs:
           context: docker/trl-dev
           push: true
           tags: |
-            huggingface/trl-source-gpu:dev
+            huggingface/trl:dev
 
       - name: Post to Slack
         if: always()
