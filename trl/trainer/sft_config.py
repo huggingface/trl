@@ -36,7 +36,9 @@ class SFTConfig(TrainingArguments):
 
         model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string.
+            argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
+            include the load balancing/auxilliary loss as a part of the final loss, remember to set
+            `output_router_logits=True` in this dictionary.
         chat_template_path (`str` or `None`, *optional*, defaults to `None`):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
@@ -90,6 +92,9 @@ class SFTConfig(TrainingArguments):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
+        loss_type (`str`, *optional*, defaults to `"nll"`):
+            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
+            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -122,23 +127,15 @@ class SFTConfig(TrainingArguments):
             "`fp16` is not set."
         },
     )
-    # Note: In transformers>=4.54.0, `average_tokens_across_devices` defaults to True. Overriding this setting is only
-    # needed for earlier versions. Once we require transformers>=4.54.0, this line can be safely removed.
-    # See https://github.com/huggingface/transformers/pull/39395
-    average_tokens_across_devices: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
-            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
-        },
-    )
 
     # Parameters that control the model
     model_init_kwargs: Optional[dict[str, Any]] = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `SFTTrainer` is provided as a string."
+            "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
+            "load balancing/auxilliary loss as a part of the final loss, remember to set `output_router_logits=True` "
+            "in this dictionary."
         },
     )
     chat_template_path: Optional[str] = field(
@@ -243,6 +240,15 @@ class SFTConfig(TrainingArguments):
                 "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
                 "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
                 "loss is computed on the entire sequence."
+            )
+        },
+    )
+    loss_type: str = field(
+        default="nll",
+        metadata={
+            "help": (
+                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
+                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
             )
         },
     )

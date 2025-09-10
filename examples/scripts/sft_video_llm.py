@@ -20,6 +20,7 @@
 #     "torchvision",
 #     "bitsandbytes",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -46,7 +47,7 @@ accelerate launch \
     --warmup_ratio 0.1 \
     --lr_scheduler_type cosine \
     --push_to_hub False \
-    --torch_dtype bfloat16 \
+    --dtype bfloat16 \
     --gradient_checkpointing True
 """
 
@@ -187,9 +188,7 @@ if __name__ == "__main__":
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config, split="train")
 
     # Setup model
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
 
     # Quantization configuration for 4-bit training
     bnb_config = BitsAndBytesConfig(
@@ -203,7 +202,7 @@ if __name__ == "__main__":
     model_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         device_map=get_kbit_device_map(),
         quantization_config=bnb_config,
     )

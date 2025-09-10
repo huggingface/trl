@@ -198,6 +198,10 @@ pip install trl[vllm]
 
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
+<Tip>
+By default, Truncated Importance Sampling is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Truncated Importance Sampling](paper_index#truncated-importance-sampling)
+</Tip>
+
 #### 🔌 Option 1: Server mode
 
 In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
@@ -573,7 +577,7 @@ accelerate launch \
   --output_dir grpo-Qwen2.5-VL-3B-Instruct \
   --learning_rate 1e-5 \
   --gradient_checkpointing \
-  --torch_dtype bfloat16 \
+  --dtype bfloat16 \
   --max_prompt_length 2048 \
   --max_completion_length 1024 \
   --use_vllm \
