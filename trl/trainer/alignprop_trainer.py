@@ -51,7 +51,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
             Function to generate prompts to guide model.
         sd_pipeline ([`DDPOStableDiffusionPipeline`]):
             Stable Diffusion pipeline to be used for training.
-        image_samples_hook (`Optional[Callable[[Any, Any, Any], Any]]`):
+        image_samples_hook (`Callable[[Any, Any, Any], Any]]`, *optional*):
             Hook to be called to log images.
     """
 
