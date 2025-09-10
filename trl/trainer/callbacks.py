@@ -35,7 +35,7 @@ from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
 from ..data_utils import maybe_apply_chat_template
-from ..import_utils import is_mergekit_available
+from ..import_utils import is_mergekit_available, is_weave_available
 from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
 from ..models.utils import unwrap_model_for_generation
 from .judges import BasePairwiseJudge
@@ -50,6 +50,9 @@ if is_rich_available():
 
 if is_wandb_available():
     import wandb
+
+if is_weave_available():
+    import weave
 
 
 # Logger for module-level logging
@@ -509,6 +512,264 @@ class LogCompletionsCallback(TrainerCallback):
                     name="completions.csv",
                     table=table,
                 )
+
+        # Save the last logged step, so we don't log the same completions multiple times
+        self._last_logged_step = state.global_step
+
+
+class WeaveTraceCallback(TrainerCallback):
+    r"""
+    A [`~transformers.TrainerCallback`] that logs completions to W&B Weave using manual call tracking with parent-child relationships.
+
+    This callback creates hierarchical traces for model evaluation:
+    - **Parent Call**: Represents the overall evaluation batch with metadata
+    - **Child Calls**: Individual sub-traces for each prompt-completion pair
+
+    This structure provides better granularity and organization in the Weave UI, allowing you to drill down
+    from batch-level evaluation metrics to individual generation traces.
+
+    Usage:
+    ```python
+    trainer = DPOTrainer(...)
+    weave_callback = WeaveTraceCallback(trainer=trainer, project_name="my-llm-training")
+    trainer.add_callback(weave_callback)
+    ```
+
+    Args:
+        trainer (`Trainer`):
+            Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
+            column containing the prompts for generating completions.
+        project_name (`str`):
+            The name of the Weave project where traces will be logged.
+        generation_config (`GenerationConfig`, *optional*):
+            The generation config to use for generating completions.
+        num_prompts (`int` or `None`, *optional*):
+            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
+            the evaluation dataset.
+        freq (`int` or `None`, *optional*):
+            The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
+    """
+
+    def __init__(
+        self,
+        trainer: Trainer,
+        project_name: str,
+        generation_config: Optional[GenerationConfig] = None,
+        num_prompts: Optional[int] = None,
+        freq: Optional[int] = None,
+    ):
+        if not is_weave_available():
+            raise ImportError(
+                "WeaveTraceCallback requires the `weave` package. To install, run `pip install weave`."
+            )
+
+        self.trainer = trainer
+        self.project_name = project_name
+        self.generation_config = generation_config
+        self.freq = freq
+        self._last_logged_step = -1
+        self._weave_initialized = False
+        self._weave_client = None
+
+        if self.trainer.eval_dataset is None:
+            raise ValueError(
+                "Trainer must have an evaluation dataset to use the WeaveTraceCallback."
+            )
+        else:
+            self.eval_dataset = self.trainer.eval_dataset
+
+        if num_prompts is not None:
+            self.eval_dataset = self.eval_dataset.select(range(num_prompts))
+
+    def _initialize_weave(self):
+        """Initialize Weave if not already initialized."""
+        if not self._weave_initialized:
+            import weave
+
+            self._weave_client = weave.init(self.project_name)
+            self._weave_initialized = True
+            logger.info(f"Initialized Weave with project: {self.project_name}")
+
+    def _generate_traced_completions(
+        self,
+        prompts: list[str],
+        model: PreTrainedModel,
+        tokenizer: PreTrainedTokenizerBase,
+        accelerator: Accelerator,
+        generation_config: Optional[GenerationConfig],
+        batch_size: int,
+        training_step: int,
+        model_name: str,
+    ) -> dict:
+        """
+        Generate completions with manual Weave call tracking using parent-child relationships.
+
+        Creates a parent call for the evaluation batch and child calls for each prompt-completion pair.
+
+        Args:
+            prompts: List of input prompts
+            model: The model to use for generation
+            tokenizer: The tokenizer to use
+            accelerator: Accelerator for distributed training
+            generation_config: Generation configuration
+            batch_size: Batch size for generation
+            training_step: Current training step
+            model_name: Name of the model being trained
+
+        Returns:
+            Dict containing completions and metadata
+        """
+        # Prepare inputs for the parent call (batch evaluation)
+        parent_inputs = {
+            "training_step": training_step,
+            "model_name": model_name,
+            "num_prompts": len(prompts),
+            "batch_size": batch_size,
+            "generation_config": (
+                generation_config.to_dict() if generation_config else None
+            ),
+        }
+
+        # Create parent call for the evaluation batch
+        parent_call = self._weave_client.create_call(
+            op="evaluate_model_completions", inputs=parent_inputs
+        )
+
+        child_call_ids = []
+        successful_generations = 0
+
+        try:
+            # Do the actual completion generation (batch processing for efficiency)
+            completions = _generate_completions(
+                prompts=prompts,
+                model=model,
+                tokenizer=tokenizer,
+                accelerator=accelerator,
+                generation_config=generation_config,
+                batch_size=batch_size,
+            )
+
+            # Create child calls for each prompt-completion pair
+            for prompt, completion in zip(prompts, completions):
+                try:
+                    # Create child call with parent relationship
+                    child_inputs = {
+                        "prompt": prompt,
+                        "training_step": training_step,
+                        "model_name": model_name,
+                        "generation_config": (
+                            generation_config.to_dict() if generation_config else None
+                        ),
+                    }
+
+                    # Create child call with parent relationship
+                    child_call = self._weave_client.create_call(
+                        op="generate_single_completion",
+                        inputs=child_inputs,
+                        parent=parent_call,
+                    )
+
+                    # Prepare child output with completion details
+                    child_output = {
+                        "completion": completion,
+                        "prompt_length": len(prompt) if prompt else 0,
+                        "completion_length": len(completion) if completion else 0,
+                    }
+
+                    # Finish child call successfully
+                    self._weave_client.finish_call(child_call, output=child_output)
+                    child_call_ids.append(child_call.id)
+                    successful_generations += 1
+
+                except Exception as child_e:
+                    logger.warning(f"Failed to create child call for prompt: {child_e}")
+                    # Continue with other child calls even if one fails
+
+            # Prepare parent output with summary information
+            parent_output = {
+                "total_prompts": len(prompts),
+                "successful_generations": successful_generations,
+                "evaluation_step": training_step,
+                "child_call_ids": child_call_ids,
+                "model_name": model_name,
+            }
+
+            # End the parent call successfully
+            self._weave_client.finish_call(parent_call, output=parent_output)
+
+            return {
+                "completions": completions,
+                "num_prompts": len(prompts),
+                "successful_generations": successful_generations,
+                "training_step": training_step,
+                "model_name": model_name,
+                "parent_call_id": parent_call.id,
+                "child_call_ids": child_call_ids,
+            }
+
+        except Exception as e:
+            # End the parent call with exception
+            parent_output = {
+                "total_prompts": len(prompts),
+                "successful_generations": successful_generations,
+                "evaluation_step": training_step,
+                "error": str(e),
+                "child_call_ids": child_call_ids,
+            }
+            self._weave_client.finish_call(parent_call, output=parent_output)
+            logger.error(f"Error during traced completion generation: {e}")
+            raise
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        """Initialize Weave when training begins."""
+        self._initialize_weave()
+
+    def on_step_end(self, args, state, control, **kwargs):
+        # Only log once per step (this method may be called multiple times)
+        if state.global_step == self._last_logged_step:
+            return
+
+        # Only log every `freq` steps (if no `freq` is provided, log every `eval_steps` steps)
+        freq = self.freq or state.eval_steps
+        if state.global_step % freq != 0:
+            return
+
+        # Ensure Weave is initialized
+        self._initialize_weave()
+
+        tokenizer = kwargs["processing_class"]
+        tokenizer.padding_side = "left"
+        accelerator = self.trainer.accelerator
+        model = self.trainer.model_wrapped
+
+        # Get model name for tracing metadata
+        model_name = getattr(model.config, "_name_or_path", "unknown_model")
+
+        with accelerator.split_between_processes(
+            self.eval_dataset["prompt"]
+        ) as prompts:
+            prompts = [
+                maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"]
+                for prompt in prompts
+            ]
+
+            # Call the manual traced completion generator
+            result = self._generate_traced_completions(
+                prompts=prompts,
+                model=model,
+                tokenizer=tokenizer,
+                accelerator=accelerator,
+                generation_config=self.generation_config,
+                batch_size=args.per_device_eval_batch_size,
+                training_step=state.global_step,
+                model_name=model_name,
+            )
+
+            logger.info(
+                f"Logged evaluation trace to Weave at step {state.global_step}: "
+                f"{result['num_prompts']} prompts, {result['successful_generations']} successful generations, "
+                f"parent_call_id={result['parent_call_id']}, {len(result['child_call_ids'])} child traces"
+            )
 
         # Save the last logged step, so we don't log the same completions multiple times
         self._last_logged_step = state.global_step
