@@ -1705,5 +1705,146 @@ class TestReplayBuffer(unittest.TestCase):
         for item in sampled:
             self.assertIn(item, [entry[1] for entry in self.replay_buffer.heap])
 
+
+class TestUpdateWithReplayBuffer(unittest.TestCase):
+    def setUp(self, include_pixel_values=False, include_old_logprobs=False):
+        self.include_pixel_values = include_pixel_values
+        self.include_old_logprobs = include_old_logprobs
+        self.trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            train_dataset=None,
+        )
+        self.trainer.replay_buffer = ReplayBuffer(max_size=5)
+        self.trainer.num_generations = 2
+
+        # Pre-populate the replay buffer with 2 items
+        prepopulated_scores = [0.1, 0.9]
+        prepopulated_data = [
+            {
+                "prompt_ids": torch.tensor([[100, 101], [102, 103]]),
+                "prompt_mask": torch.tensor([[1, 1], [1, 1]]),
+                "completion_ids": torch.tensor([[5, 6], [7, 8]]),
+                "completion_mask": torch.tensor([[1, 1], [1, 1]]),
+                "advantages": torch.tensor([[0.5, 0.6]]),
+                **({"pixel_values": torch.randn(2, 3, 224, 224)} if self.include_pixel_values else {}),
+                **({"old_per_token_logps": torch.randn(2, 2)} if self.include_old_logprobs else {}),
+            },
+            {
+                "prompt_ids": torch.tensor([[104, 105], [106, 107]]),
+                "prompt_mask": torch.tensor([[1, 1], [1, 1]]),
+                "completion_ids": torch.tensor([[13, 14], [15, 16]]),
+                "completion_mask": torch.tensor([[1, 1], [1, 1]]),
+                "advantages": torch.tensor([[0.8, 0.85]]),
+                **({"pixel_values": torch.randn(2, 3, 224, 224)} if self.include_pixel_values else {}),
+                **({"old_per_token_logps": torch.randn(2, 2)} if self.include_old_logprobs else {}),
+            },
+        ]
+        self.trainer.replay_buffer.add(prepopulated_scores, prepopulated_data)
+
+    def test_update_with_replay_buffer_no_variance(self):
+        self.setUp(include_pixel_values=True, include_old_logprobs=True)
+        group_advantages = torch.tensor([[0.5, 0.5], [0.8, 0.8]])
+        group_stds = group_advantages.std(dim=1).expand_as(group_advantages)
+        prompt_ids = torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]])
+        prompt_mask = torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]])
+        completion_ids = torch.tensor([[9, 10], [11, 12], [13, 14], [15, 16]])
+        completion_mask = torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]])
+        prompt_inputs = {"pixel_values": torch.randn(4, 3, 224, 224)}
+        old_per_token_logps = torch.randn(4, 2)
+        original_prompt_ids = prompt_ids.clone()
+
+        outputs_after_sampling_from_buffer = self.trainer.update_with_replay_buffer(
+            group_advantages,
+            group_stds,
+            prompt_ids,
+            prompt_mask,
+            completion_ids,
+            completion_mask,
+            prompt_inputs,
+            num_items_in_batch=4,
+            device=torch.device("cpu"),
+            old_per_token_logps=old_per_token_logps,
+        )
+
+        self.assertIsNotNone(outputs_after_sampling_from_buffer)
+        self.assertIn("pixel_values", outputs_after_sampling_from_buffer)
+        self.assertIn("old_per_token_logps", outputs_after_sampling_from_buffer)
+
+        # Ensure replay buffer is not modified since there is no variance
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 2)
+
+        # Ensure that all the prompt_ids with 0 variance are excluded from the outputs
+        for pid in outputs_after_sampling_from_buffer["prompt_ids"]:
+            self.assertNotIn(pid.tolist(), original_prompt_ids.tolist())
+
+    def test_update_with_replay_buffer_with_variance(self):
+        group_advantages = torch.tensor([[0.6, 0.4], [0.7, 1.2]])  # Random advantages to ensure variance
+        group_stds = group_advantages.std(dim=1).expand_as(group_advantages)
+        prompt_ids = torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]])
+        prompt_mask = torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]])
+        completion_ids = torch.tensor([[9, 10], [11, 12], [13, 14], [15, 16]])
+        completion_mask = torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]])
+        prompt_inputs = {}
+
+        sampled = self.trainer.update_with_replay_buffer(
+            group_advantages,
+            group_stds,
+            prompt_ids,
+            prompt_mask,
+            completion_ids,
+            completion_mask,
+            prompt_inputs,
+            num_items_in_batch=4,
+            device=torch.device("cpu"),
+        )
+
+        # Ensure replay buffer is populated by new items since there was variance and max size is 5
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 4)
+        self.assertIsNone(sampled)  # No outputs since variance was present
+
+    def test_update_with_mixed_variance(self):
+        # Now test with a batch where one group has 0 variance and the other has variance
+        group_advantages = torch.tensor([[0.6, 0.6], [0.3, 0.45]])  # Random advantages to ensure variance
+        group_stds = group_advantages.std(dim=1).expand_as(group_advantages)
+        prompt_ids = torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]])
+        prompt_mask = torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]])
+        completion_ids = torch.tensor([[9, 10], [11, 12], [13, 14], [15, 16]])
+        completion_mask = torch.tensor([[1, 1], [1, 1], [1, 1], [1, 1]])
+        prompt_inputs = {}
+        original_prompt_ids = prompt_ids.clone().view(-1, self.trainer.num_generations, 2).tolist()
+
+        # Populate replay buffer
+        outputs_after_replay = self.trainer.update_with_replay_buffer(
+            group_advantages,
+            group_stds,
+            prompt_ids,
+            prompt_mask,
+            completion_ids,
+            completion_mask,
+            prompt_inputs,
+            num_items_in_batch=4,
+            device=torch.device("cpu"),
+        )
+
+        # Buffer should now have 3 items (2 original + 1 new with variance)
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 3)
+
+        # Ensure that one of the groups is from the buffer
+        found_from_buffer = False
+        found_from_original = False
+        output_prompt_ids = outputs_after_replay["prompt_ids"].view(-1, self.trainer.num_generations, 2).tolist()
+        for pid in output_prompt_ids:
+            if pid in [item[1]["prompt_ids"].tolist() for item in self.trainer.replay_buffer.heap]:
+                found_from_buffer = True
+            if pid in original_prompt_ids:
+                found_from_original = True
+
+        self.assertTrue(found_from_buffer)
+        self.assertTrue(found_from_original)
+        # Ensure that the group with 0 variance is excluded from the outputs
+        self.assertFalse([[1, 2], [3, 4]] in output_prompt_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
