@@ -439,10 +439,10 @@ class LogCompletionsCallback(TrainerCallback):
             column containing the prompts for generating completions.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int` or `None`, *optional*):
+        num_prompts (`int`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in
             the evaluation dataset.
-        freq (`int` or `None`, *optional*):
+        freq (`int`, *optional*):
             The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
 
