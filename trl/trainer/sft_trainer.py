@@ -585,9 +585,9 @@ class SFTTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[str, nn.Module, PreTrainedModel],
+        model: Union[str, PreTrainedModel],
         args: Optional[Union[SFTConfig, TrainingArguments]] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
+        data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
