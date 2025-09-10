@@ -36,7 +36,7 @@ class PRMConfig(TrainingArguments):
             Maximum length of the sequences (prompt + completion) used for truncation.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt used for truncation.
-        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+        max_completion_length (`int`, *optional*):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.

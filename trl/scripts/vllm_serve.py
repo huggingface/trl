@@ -173,7 +173,7 @@ class ScriptArguments:
     Args:
         model (`str`):
             Model name or path to load the model from.
-        revision (`str` or `None`, *optional*, defaults to `None`):
+        revision (`str`, *optional*):
             Revision to use for the model. If not specified, the default branch will be used.
         tensor_parallel_size (`int`, *optional*, defaults to `1`):
             Number of tensor parallel workers to use.
@@ -191,11 +191,11 @@ class ScriptArguments:
         dtype (`str`, *optional*, defaults to `"auto"`):
             Data type to use for vLLM generation. If set to `"auto"`, the data type will be automatically determined
             based on the model configuration. Find the supported values in the vLLM documentation.
-        max_model_len (`int` or `None`, *optional*, defaults to `None`):
+        max_model_len (`int`, *optional*):
             If set, the `max_model_len` to use for vLLM. This can be useful when running with reduced
             `vllm_gpu_memory_utilization`, leading to a reduced KV cache size. If not set, vLLM will use the model
             context size, which might be much larger than the KV cache, leading to inefficiencies.
-        enable_prefix_caching (`bool` or `None`, *optional*, defaults to `None`):
+        enable_prefix_caching (`bool`, *optional*):
             Whether to enable prefix caching in vLLM. If set to `True`, ensure that the model and the hardware support
             this feature.
         enforce_eager (`bool`, *optional*, defaults to `False`):

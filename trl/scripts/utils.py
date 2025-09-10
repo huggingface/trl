@@ -81,7 +81,7 @@ class DatasetMixtureConfig:
             List of dataset configurations to include in the mixture.
         streaming (`bool`, *optional*, defaults to `False`):
             Whether to stream the datasets. If `True`, the datasets will be loaded in streaming mode.
-        test_split_size (`float` or `None`, *optional*, defaults to `None`):
+        test_split_size (`float`, *optional*):
             Size of the test split. Refer to the `test_size` parameter in the [`~datasets.train_test_split`] function
             for more details. If `None`, the dataset will not be split into train and test sets.
 
@@ -137,9 +137,9 @@ class ScriptArguments:
     Arguments common to all scripts.
 
     Args:
-        dataset_name (`str`, or `None`, *optional*, defaults to `None`):
+        dataset_name (`str`,, *optional*):
             Path or name of the dataset to load. If `datasets` is provided, this will be ignored.
-        dataset_config (`str` or `None`, *optional*, defaults to `None`):
+        dataset_config (`str`, *optional*):
             Dataset configuration name. Corresponds to the `name` argument of the [`~datasets.load_dataset`] function.
             If `datasets` is provided, this will be ignored.
         dataset_train_split (`str`, *optional*, defaults to `"train"`):
@@ -230,7 +230,7 @@ class TrlParser(HfArgumentParser):
     configurations, while also supporting configuration file loading and environment variable management.
 
     Args:
-        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]` or `None`, *optional*, defaults to `None`):
+        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`, *optional*):
             Dataclass types to use for argument parsing.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.

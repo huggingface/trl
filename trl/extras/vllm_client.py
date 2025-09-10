@@ -51,7 +51,7 @@ class VLLMClient:
     weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
 
     Args:
-        base_url (`str` or `None`, *optional*, defaults to `None`):
+        base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `host` and `server_port` are
             ignored.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
@@ -185,7 +185,7 @@ class VLLMClient:
         Args:
             prompts (`list[str]`):
                 List of text prompts for which the model will generate completions.
-            images (`list[PIL.Image]` or `None`, *optional*, defaults to `None`):
+            images (`list[PIL.Image]`, *optional*):
                 List of PIL Images to send along with the prompts.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
@@ -201,9 +201,9 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
-            guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            guided_decoding_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
-            generation_kwargs (`dict` or `None`, *optional*, defaults to `None`):
+            generation_kwargs (`dict`, *optional*):
                 Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
                 `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
                 will override them.
