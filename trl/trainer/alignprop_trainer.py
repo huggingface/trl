@@ -40,19 +40,19 @@ class AlignPropTrainer(PyTorchModelHubMixin):
     """
     The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models. Note, this trainer is
     heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/ As of now only Stable Diffusion based
-    pipelines are supported
+    pipelines are supported.
 
     Args:
         config (`AlignPropConfig`):
             Configuration object for AlignPropTrainer. Check the documentation of `PPOConfig` for more details.
         reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
-            Reward function to be used
+            Reward function to be used.
         prompt_function (`Callable[[], tuple[str, Any]]`):
-            Function to generate prompts to guide model
+            Function to generate prompts to guide model.
         sd_pipeline (`DDPOStableDiffusionPipeline`):
             Stable Diffusion pipeline to be used for training.
         image_samples_hook (`Optional[Callable[[Any, Any, Any], Any]]`):
-            Hook to be called to log images
+            Hook to be called to log images.
     """
 
     _tag_names = ["trl", "alignprop"]
