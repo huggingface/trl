@@ -1762,7 +1762,7 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         inputs = self._make_inputs(group_advantages, with_pixels=True, with_logprobs=True)
         original_prompt_ids = inputs["prompt_ids"].clone()
 
-        outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4, device=torch.device("cpu"))
+        outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
 
         self.assertIsNotNone(outputs)
         self.assertIn("pixel_values", outputs)
@@ -1776,7 +1776,7 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         group_advantages = torch.tensor([[0.6, 0.4], [0.7, 1.2]])  # has variance
         inputs = self._make_inputs(group_advantages)
 
-        sampled = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4, device=torch.device("cpu"))
+        sampled = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
 
         self.assertEqual(len(self.trainer.replay_buffer.heap), 4)  # grew
         self.assertIsNone(sampled)
@@ -1787,7 +1787,7 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         inputs = self._make_inputs(group_advantages)
         original_prompt_ids = inputs["prompt_ids"].clone().view(-1, self.trainer.num_generations, 2).tolist()
 
-        outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4, device=torch.device("cpu"))
+        outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
 
         self.assertEqual(len(self.trainer.replay_buffer.heap), 3)  # grew by 1
         output_prompt_ids = outputs["prompt_ids"].view(-1, self.trainer.num_generations, 2).tolist()

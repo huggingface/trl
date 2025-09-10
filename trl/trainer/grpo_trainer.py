@@ -1675,10 +1675,9 @@ class GRPOTrainer(Trainer):
         completion_mask: torch.Tensor,
         prompt_inputs: dict,
         num_items_in_batch: int,
-        device: torch.device,
-        old_per_token_logps: torch.Tensor = None,
-        ref_per_token_logps: torch.Tensor = None,
-        importance_sampling_ratio: float = None,
+        old_per_token_logps: Optional[torch.Tensor] = None,
+        ref_per_token_logps: Optional[torch.Tensor] = None,
+        importance_sampling_ratio: Optional[float] = None,
     ) -> None:
         """
         Update current batch data with samples from replay buffer.
@@ -1695,7 +1694,6 @@ class GRPOTrainer(Trainer):
             completion_mask: Tensor containing completion attention masks
             prompt_inputs: Dictionary containing additional prompt inputs (vision data, etc.)
             num_items_in_batch: Number of items in the current batch
-            device: Device to place tensors on
             old_per_token_logps: Optional tensor of old per-token log probabilities
             ref_per_token_logps: Optional tensor of reference per-token log probabilities
             importance_sampling_ratio: Optional importance sampling correction ratio
@@ -1703,8 +1701,10 @@ class GRPOTrainer(Trainer):
         if self.replay_buffer.max_size <= 0:
             return
 
-        # Calculate group statistics
+        # Groups to consider for adding to the replay buffer
         groups_with_variance = group_std_rewards.max(dim=0).values > 0
+        # Groups to replace from the replay buffer
+        groups_without_variance = ~groups_with_variance
 
         # Helper function to slice group data
         def slice_group_data(data, group_idx):
@@ -1752,7 +1752,7 @@ class GRPOTrainer(Trainer):
             self.replay_buffer.add(replay_buffer_scores.tolist(), buffered_outputs)
 
         # Sample from replay buffer to replace groups with variance
-        num_groups_to_replace = groups_with_variance.logical_not().sum().item()
+        num_groups_to_replace = groups_without_variance.sum().item()
         if not num_groups_to_replace:
             return
         sampled = self.replay_buffer.sample(num_samples=num_groups_to_replace)
