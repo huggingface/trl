@@ -54,7 +54,14 @@ from ..data_utils import (
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
-from .utils import entropy_from_logits, flush_left, generate_model_card, get_comet_experiment_url, pad
+from .utils import (
+    entropy_from_logits,
+    flush_left,
+    generate_model_card,
+    get_comet_experiment_url,
+    pad,
+    selective_log_softmax,
+)
 
 
 if is_peft_available():
@@ -472,11 +479,26 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
+def dft_loss(outputs, labels, num_items_in_batch):
+    """
+    DFT loss function, as presented in [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward
+    Rectification](https://huggingface.co/papers/2508.05629)
+    """
+    labels = nn.functional.pad(labels, (0, 1), value=-100)
+    shift_labels = labels[..., 1:].contiguous()
+    loss_mask = shift_labels != -100
+    shift_labels[~loss_mask] = 0
+    logprobs = selective_log_softmax(outputs.logits, shift_labels)
+    per_token_loss = -logprobs.exp().detach() * logprobs
+    loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
+    return loss
+
+
 class SFTTrainer(Trainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
 
-    This class is a wrapper around the [`transformers.Trainer`] class and inherits all of its attributes and methods.
+    This class is a wrapper around the [`~transformers.Trainer`] class and inherits all of its attributes and methods.
 
     Example:
 
@@ -504,9 +526,10 @@ class SFTTrainer(Trainer):
             as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`SFTConfig`], *optional*, defaults to `None`):
             Configuration for this trainer. If `None`, a default configuration is used.
-        data_collator (`DataCollator`, *optional*):
+        data_collator ([`~transformers.DataCollator`] or `None`, *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to a custom [`DataCollatorForLanguageModeling`].
+            Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
+            and [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. SFT supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -534,16 +557,16 @@ class SFTTrainer(Trainer):
             `compute_result` argument. This will be triggered after the last eval batch to signal that the function
             needs to calculate and return the global summary statistics rather than accumulating the batch-level
             statistics.
-        callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
+        callbacks (list of [`~transformers.TrainerCallback`] or `None`, *optional*, defaults to `None`):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
-            A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
-            model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+        optimizers (`tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
+            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
 
@@ -555,9 +578,9 @@ class SFTTrainer(Trainer):
             by this function will be reflected in the predictions received by `compute_metrics`.
 
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
-        peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`] or `None`, *optional*, defaults to `None`):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-        formatting_func (`Optional[Callable]`):
+        formatting_func (`Callable` or `None`, *optional*, defaults to `None`):
             Formatting function applied to the dataset before tokenization. Applying the formatting function explicitly
             converts the dataset into a [language modeling](#language-modeling) type.
     """
@@ -819,6 +842,20 @@ class SFTTrainer(Trainer):
                         eval_dataset, processing_class, args, packing, formatting_func, "eval"
                     )
 
+        # Loss function
+        if args.loss_type == "nll":
+            pass  # use the default loss
+        elif args.loss_type == "dft":
+            if compute_loss_func is not None:
+                raise ValueError(
+                    "You passed a `compute_loss_func` together with `loss_type='dft'` to the `SFTTrainer`. "
+                    "When using `loss_type='dft'`, the loss function is internally set to the DFT loss, so passing a "
+                    "`compute_loss_func` is not allowed."
+                )
+            compute_loss_func = dft_loss
+        else:
+            raise ValueError(f"Invalid `loss_type` {args.loss_type} passed. Supported values are 'nll' and 'dft'.")
+
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
         self._total_train_tokens = 0
@@ -1056,6 +1093,11 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+
+        # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
+        # This can be removed when this issue is fixed.
+        labels = inputs["labels"]
+
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
@@ -1100,10 +1142,17 @@ class SFTTrainer(Trainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.args.use_liger_kernel:
+        if not self.args.use_liger_kernel:
             with torch.no_grad():
-                shift_logits = outputs.logits[..., :-1, :].contiguous()
-                shift_labels = inputs["labels"][..., 1:].contiguous()
+                if "shift_labels" in inputs:
+                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
+                    # - The last logits require the label from process n+1
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
 
                 # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
                 # not correspond to actual input labels.

@@ -31,7 +31,7 @@ accelerate launch \
     examples/scripts/sft_gpt_oss.py \
     --dtype bfloat16 \
     --model_name_or_path openai/gpt-oss-20b \
-    --packing true packing_strategy wrapped \
+    --packing \
     --run_name 20b-full-eager \
     --attn_implementation kernels-community/vllm-flash-attn3 \
     --dataset_num_proc 12 \
