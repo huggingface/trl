@@ -15,14 +15,14 @@
 import dataclasses
 import importlib.resources as pkg_resources
 import json
+import os
 import random
+import socket
 from collections import deque
 from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import Any, Literal, Optional, Union
-import os
-import socket
 
 import numpy as np
 import pandas as pd

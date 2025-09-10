@@ -60,6 +60,7 @@ from .rloo_config import RLOOConfig
 from .utils import (
     RepeatSampler,
     disable_dropout_in_model,
+    ensure_master_addr_port,
     entropy_from_logits,
     generate_model_card,
     get_comet_experiment_url,
@@ -75,7 +76,6 @@ from .utils import (
     split_tensor_dict,
     truncate_with_protected_tokens,
     unsplit_pixel_values_by_grid,
-    ensure_master_addr_port,
 )
 
 

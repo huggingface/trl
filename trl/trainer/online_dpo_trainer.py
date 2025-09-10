@@ -68,12 +68,12 @@ from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     empty_cache,
+    ensure_master_addr_port,
     generate_model_card,
     get_comet_experiment_url,
     pad,
     prepare_deepspeed,
     truncate_right,
-    ensure_master_addr_port,
 )
 
 
