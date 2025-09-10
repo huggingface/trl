@@ -27,6 +27,10 @@ from torch.autograd.graph import saved_tensors_hooks
 from transformers import is_torch_npu_available
 
 
+if is_torch_npu_available():
+    import torch_npu # noqa: F401
+
+
 logger = logging.get_logger(__name__)
 
 
@@ -302,7 +306,10 @@ class OffloadActivations(saved_tensors_hooks):
                     #    up as a view of the unpacked tensor.
                     # 3. The user abuses the system somehow and manually relies on the
                     #    unpacked tensor to exist after the backward node has executed.
-                    storage_refcount = torch._C._storage_Use_Count(maybe_accelerator_tensor.untyped_storage()._cdata)
+                    if self.accelerator_type == "npu":
+                        storage_refcount = torch_npu._C._storage_Use_Count(maybe_accelerator_tensor.untyped_storage()._cdata)
+                    else:
+                        storage_refcount = torch._C._storage_Use_Count(maybe_accelerator_tensor.untyped_storage()._cdata)
 
                 def hook(outputs, inputs):
                     # create events for the current node inputs/outputs if they were streamed in
@@ -319,7 +326,11 @@ class OffloadActivations(saved_tensors_hooks):
                         # non-deterministic (thus higher) memory usage, but this case
                         # should not happen often.
                         unpacked_tensor = self.bwd_tensor_stash[unpack_tensor_id]
-                        if torch._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata) > storage_refcount:
+                        if self.accelerator_type == "npu":
+                            storage_count = torch_npu._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
+                        else:
+                            storage_count = torch._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
+                        if storage_count > storage_refcount:
                             unpacked_tensor.record_stream(self.s0)
                             del self.bwd_tensor_stash[unpack_tensor_id]
                         else:
