@@ -197,6 +197,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         # kill the server process and its children explicitly.
         kill_process(cls.server_process)
 
+
 @pytest.mark.slow
 @require_3_accelerators
 class TestVLLMClientServerTP(TrlTestCase):
@@ -253,6 +254,7 @@ class TestVLLMClientServerTP(TrlTestCase):
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
         kill_process(cls.server_process)
+
 
 @pytest.mark.slow
 @require_3_accelerators
