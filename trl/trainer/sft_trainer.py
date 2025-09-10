@@ -1093,6 +1093,11 @@ class SFTTrainer(Trainer):
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
+
+        # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
+        # This can be removed when this issue is fixed.
+        labels = inputs["labels"]
+
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
@@ -1137,7 +1142,7 @@ class SFTTrainer(Trainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.args.use_liger_kernel:
+        if not self.args.use_liger_kernel:
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
@@ -1147,7 +1152,7 @@ class SFTTrainer(Trainer):
                     shift_labels = inputs["shift_labels"]
                 else:
                     shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = inputs["labels"][..., 1:].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
 
                 # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
                 # not correspond to actual input labels.

@@ -470,6 +470,19 @@ training_args = SFTConfig(
 )
 ```
 
+To closely match the paper’s setup, you can use the following configuration (see Sec. 4.1). Authors also mention that the hyperparameters are not very sensitive (Sec. 4.3):
+
+```python
+SFTConfig(
+    loss_type="dft",
+    learning_rate=5e-5,
+    max_length=2048,
+    # Target batch size 256; achieved via per-device batch 8 * grad accumulation 32
+    per_device_train_batch_size=8,
+    gradient_accumulation_steps=32,
+)
+```
+
 ## Reinforce Leave-One-Out
 
 Papers relating to the [`RLOOTrainer`]
