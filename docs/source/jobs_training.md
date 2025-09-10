@@ -43,6 +43,8 @@ Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you c
 hf jobs uv run --flavor a100-large --secrets HF_TOKEN --image <docker-image> trl/scripts/sft.py --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
 ```
 
+We provide an up-to-date Docker image with all dependencies needed by TRL:  [huggingface/trl](https://hub.docker.com/r/huggingface/trl). You can use the `:dev` tag for the latest commit or select a specific tag as needed.
+
 </hfoption>
 <hfoption id="python">
 
@@ -89,6 +91,8 @@ run_uv_job(
     ]
 )
 ```
+
+We provide an up-to-date Docker image with all dependencies needed by TRL:  [huggingface/trl](https://hub.docker.com/r/huggingface/trl). You can use the `:dev` tag for the latest commit or select a specific tag as needed.
 
 </hfoption>
 </hfoptions>
