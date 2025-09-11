@@ -564,7 +564,7 @@ def pipeline_step_with_grad(
 
     Args:
         pipeline (`StableDiffusionPipeline`): Pipeline to be used for image generation.
-        prompt (`str` or `list[str]`, *optional*, defaults to `None`):
+        prompt (`str` or `list[str]`, *optional*):
             The prompt or prompts to guide the image generation. If not defined, one has to pass `prompt_embeds`
             instead.
         height (`int`, *optional*, defaults to `pipeline.unet.config.sample_size * pipeline.vae_scale_factor`):

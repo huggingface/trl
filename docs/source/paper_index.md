@@ -6,8 +6,9 @@ Section under construction. Feel free to contribute!
 
 </Tip>
 
-## GRPO
-Papers relating to the GRPOTrainer
+## Group Relative Policy Optimization
+
+Papers relating to the [`GRPOTrainer`]
 
 ### Group Sequence Policy Optimization
 
@@ -152,7 +153,7 @@ training_args = GRPOConfig(
 
 Note that when using gradient accumulation, the loss is aggregated over the total number of tokens in the batch, but not over the accumulated batch. For more details, see the [GRPO Trainer - Loss types](grpo_trainer#loss_types).
 
-### Truncated Importance Sampling 
+### Truncated Importance Sampling
 
 **📰 Blog**: https://fengyao.notion.site/off-policy-rl
 
@@ -202,7 +203,8 @@ training_args = GRPOConfig(
 ```
 
 ## Direct Policy Optimization
-Papers relating to the DPOTrainer
+
+Papers relating to the [`DPOTrainer`]
 
 ### Direct Preference Optimization (DPO): Your Language Model is Secretly a Reward Model
 
@@ -426,7 +428,8 @@ training_args = DPOConfig(
 These parameters only appear in the [published version](https://aclanthology.org/2025.tacl-1.22.pdf)
 
 ## Supervised Fine-Tuning
-Papers relating to the SFTTrainer
+
+Papers relating to the [`SFTTrainer`]
 
 ### EMA Without the Lag: Bias-Corrected Iterate Averaging Schemes
 
@@ -443,8 +446,46 @@ trainer = SFTTrainer(
 )
 ```
 
+### On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification
+
+**📜 Paper**: https://huggingface.co/papers/2508.05629
+
+Dynamic Fine-Tuning (DFT) improves the generalization of Large Language Models (LLMs) by dynamically rescaling gradients, outperforming standard Supervised Fine-Tuning (SFT) and showing competitive results in offline reinforcement learning.
+
+$$
+\mathcal{L}_{\text{DFT}}(\theta) 
+= \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ - \sum_{t=1}^{|y|} 
+\textcolor{red}{\text{sg}\big(\pi_\theta(y_t \mid y_{<t}, x)\big)} 
+\; \log \pi_\theta(y_t \mid y_{<t}, x) \right]
+$$
+
+where  \\( \text{sg}(\cdot) \\) is the stop-gradient operator. To use DFT with SFT as described in the paper, you can use the `loss_type="dft"` argument:
+
+```python
+from trl import SFTConfig
+
+training_args = SFTConfig(
+    loss_type="dft",
+    ...
+)
+```
+
+To closely match the paper’s setup, you can use the following configuration (see Sec. 4.1). Authors also mention that the hyperparameters are not very sensitive (Sec. 4.3):
+
+```python
+SFTConfig(
+    loss_type="dft",
+    learning_rate=5e-5,
+    max_length=2048,
+    # Target batch size 256; achieved via per-device batch 8 * grad accumulation 32
+    per_device_train_batch_size=8,
+    gradient_accumulation_steps=32,
+)
+```
+
 ## Reinforce Leave-One-Out
-Papers relating to the RLOOTrainer
+
+Papers relating to the [`RLOOTrainer`]
 
 ### Back to Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs
 
@@ -465,7 +506,8 @@ training_args = RLOOConfig(
 ```
 
 ## Contrastive Preference Optimization
-Papers relating to the CPOTrainer
+
+Papers relating to the [`CPOTrainer`]
 
 ### AlphaPO -- Reward shape matters for LLM alignment
 
@@ -486,6 +528,3 @@ training_args = CPOConfig(
     ...
 )
 ```
-
-
-

@@ -40,13 +40,13 @@ class IterativeSFTConfig(TrainingArguments):
     Parameters:
         > Parameters that control the model
 
-        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`IterativeSFTTrainer`] is provided as a string.
 
         > Parameters that control the data preprocessing
 
-        max_length (`int` or `None`, *optional*, defaults to `None`):
+        max_length (`int`, *optional*):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated.
         truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
             The truncation mode to use, either `"keep_end"` or `"keep_start"`.
