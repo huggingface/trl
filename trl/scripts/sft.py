@@ -64,6 +64,7 @@ python trl/scripts/sft.py \
 
 import argparse
 import os
+from typing import Optional
 
 from accelerate import logging
 from datasets import load_dataset
@@ -156,7 +157,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
 
-def make_parser(subparsers: argparse._SubParsersAction = None):
+def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
     dataclass_types = (ScriptArguments, SFTConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("sft", help="Run the SFT training script", dataclass_types=dataclass_types)
