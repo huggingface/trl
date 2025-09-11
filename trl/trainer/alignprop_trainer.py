@@ -393,7 +393,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         Train the model for a given number of epochs.
 
         Args:
-            epochs (int, *optional*, defaults to `self.config.num_epochs`):
+            epochs (`int`, *optional*, defaults to `self.config.num_epochs`):
                 Number of epochs to train the model for.
         """
         global_step = 0
