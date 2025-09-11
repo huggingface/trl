@@ -151,7 +151,7 @@ def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> c
     Decorator to ignore warnings with a specific message and/or category.
 
     Args:
-        message (`str`, *optional*, defaults to `None`):
+        message (`str`, *optional*):
             Regex pattern for the warning message to ignore. If `None`, all messages are ignored.
         category (`type[Warning]`, *optional*, defaults to `Warning`):
             Warning class to ignore. Defaults to `Warning`, which ignores all warnings.

@@ -45,17 +45,17 @@ class DatasetConfig:
     Parameters:
         path (`str`):
             Path or name of the dataset.
-        name (`str`, *optional*, defaults to `None`):
+        name (`str`, *optional*):
             Defining the name of the dataset configuration.
-        data_dir (`str`, *optional*, defaults to `None`):
+        data_dir (`str`, *optional*):
             Defining the `data_dir` of the dataset configuration. If specified for the generic builders(csv, text etc.)
             or the Hub datasets and `data_files` is `None`, the behavior is equal to passing `os.path.join(data_dir,
             **)` as `data_files` to reference all the files in a directory.
-        data_files (`str` or `Sequence` or `Mapping`, *optional*, defaults to `None`):
+        data_files (`str` or `Sequence` or `Mapping`, *optional*):
             Path(s) to source data file(s).
         split (`str`, *optional*, defaults to `"train"`):
             Which split of the data to load.
-        columns (`list[str]`, *optional*, defaults to `None`):
+        columns (`list[str]`, *optional*):
             List of column names to select from the dataset. If `None`, all columns are selected.
     """
 
@@ -81,7 +81,7 @@ class DatasetMixtureConfig:
             List of dataset configurations to include in the mixture.
         streaming (`bool`, *optional*, defaults to `False`):
             Whether to stream the datasets. If `True`, the datasets will be loaded in streaming mode.
-        test_split_size (`float` or `None`, *optional*, defaults to `None`):
+        test_split_size (`float`, *optional*):
             Size of the test split. Refer to the `test_size` parameter in the [`~datasets.train_test_split`] function
             for more details. If `None`, the dataset will not be split into train and test sets.
 
@@ -137,9 +137,9 @@ class ScriptArguments:
     Arguments common to all scripts.
 
     Args:
-        dataset_name (`str`, or `None`, *optional*, defaults to `None`):
+        dataset_name (`str`,, *optional*):
             Path or name of the dataset to load. If `datasets` is provided, this will be ignored.
-        dataset_config (`str` or `None`, *optional*, defaults to `None`):
+        dataset_config (`str`, *optional*):
             Dataset configuration name. Corresponds to the `name` argument of the [`~datasets.load_dataset`] function.
             If `datasets` is provided, this will be ignored.
         dataset_train_split (`str`, *optional*, defaults to `"train"`):
@@ -230,7 +230,7 @@ class TrlParser(HfArgumentParser):
     configurations, while also supporting configuration file loading and environment variable management.
 
     Args:
-        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]` or `None`, *optional*, defaults to `None`):
+        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`, *optional*):
             Dataclass types to use for argument parsing.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.

@@ -37,9 +37,9 @@ class RewardConfig(TrainingArguments):
             limit. This argument is required if you want to use the default data collator.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
-        dataset_num_proc (`int`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        center_rewards_coefficient (`float`, *optional*, defaults to `None`):
+        center_rewards_coefficient (`float`, *optional*):
             Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
             https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
