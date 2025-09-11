@@ -38,7 +38,7 @@ class AlignPropConfig:
             Name of this run.
         seed (`int`, *optional*, defaults to `0`):
             Random seed for reproducibility.
-        log_with (`str` or `None`, *optional*, defaults to `None`):
+        log_with (`str`, *optional*):
             Log with either `"wandb"` or `"tensorboard"`. Check
             [tracking](https://huggingface.co/docs/accelerate/usage_guides/tracking) for more details.
         log_image_freq (`int`, *optional*, defaults to `1`):
@@ -89,7 +89,7 @@ class AlignPropConfig:
             Number of gradient accumulation steps.
         train_max_grad_norm (`float`, *optional*, defaults to `1.0`):
             Maximum gradient norm for gradient clipping.
-        negative_prompts (`str` or `None`, *optional*, defaults to `None`):
+        negative_prompts (`str`, *optional*):
             Comma-separated list of prompts to use as negative examples.
         truncated_backprop_rand (`bool`, *optional*, defaults to `True`):
             If `True`, randomized truncation to different diffusion timesteps is used.

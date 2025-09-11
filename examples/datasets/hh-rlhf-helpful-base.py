@@ -31,7 +31,7 @@ class ScriptArguments:
             Whether to push the dataset to the Hugging Face Hub.
         repo_id (`str`, *optional*, defaults to `"trl-lib/hh-rlhf-helpful-base"`):
             Hugging Face repository ID to push the dataset to.
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of workers to use for dataset processing.
     """
 
