@@ -6,7 +6,8 @@ In this guide, you’ll learn how to:
 
 - Run TRL training scripts using Jobs.
 - Configure hardware, timeouts, environment variables, and secrets.
-- Monitor and manage jobs from the CLI or Python.
+- Monitor and manage training jobs efficiently.
+- Leverage [`trl-jobs`](https://github.com/huggingface/trl-jobs) to simplify and optimize your TRL workflows.
 
 <Tip>
 
@@ -43,7 +44,7 @@ Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you c
 hf jobs uv run --flavor a100-large --secrets HF_TOKEN --image <docker-image> trl/scripts/sft.py --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
 ```
 
-We provide an up-to-date Docker image with all dependencies needed by TRL:  [huggingface/trl](https://hub.docker.com/r/huggingface/trl). You can use the `:dev` tag for the latest commit or select a specific tag as needed.
+We provide an up-to-date Docker image with all the dependencies required by TRL ([huggingface/trl](https://hub.docker.com/r/huggingface/trl)), which you can use directly in HF Jobs.
 
 </hfoption>
 <hfoption id="python">
@@ -92,7 +93,7 @@ run_uv_job(
 )
 ```
 
-We provide an up-to-date Docker image with all dependencies needed by TRL:  [huggingface/trl](https://hub.docker.com/r/huggingface/trl). You can use the `:dev` tag for the latest commit or select a specific tag as needed.
+We provide an up-to-date Docker image with all the dependencies required by TRL ([huggingface/trl](https://hub.docker.com/r/huggingface/trl)), which you can use directly in HF Jobs.
 
 </hfoption>
 </hfoptions>
@@ -387,6 +388,18 @@ cancel_job(job_id=job_id)
 
 </hfoption>
 </hfoptions>
+
+## Using TRL Jobs
+
+[TRL Jobs](https://github.com/huggingface/trl-jobs) is a high-level wrapper around HF Jobs and TRL that simplifies the training process. It comes with optimized default configurations for training models, making it easier to get started without manually specifying all the parameters.
+
+To run a training job with TRL Jobs, simply use:
+
+```bash
+trl-jobs sft --model_name Qwen/Qwen3-0.6B --dataset_name trl-lib/Capybara
+```
+
+TRL Jobs supports the same functionality covered in this guide, but with additional optimizations to streamline your workflows.
 
 ## Best Practices and Tips
 
