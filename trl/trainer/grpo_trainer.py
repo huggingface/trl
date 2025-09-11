@@ -1715,18 +1715,23 @@ class GRPOTrainer(Trainer):
         # Prepare buffered outputs for groups with variance
         buffered_outputs = []
         for _, group_idx in enumerate(groups_with_variance.nonzero(as_tuple=True)[0].unique().tolist()):
+            # Store unpadded data in the buffer
             buffered_output = {
-                "prompt_ids": slice_group_data(prompt_ids, group_idx),
-                "prompt_mask": slice_group_data(prompt_mask, group_idx),
-                "completion_ids": slice_group_data(completion_ids, group_idx),
-                "completion_mask": slice_group_data(completion_mask, group_idx),
+                "prompt_ids": slice_group_data(prompt_ids[prompt_mask], group_idx),
+                "prompt_mask": slice_group_data(prompt_mask[prompt_mask], group_idx),
+                "completion_ids": slice_group_data(completion_ids[completion_mask], group_idx),
+                "completion_mask": slice_group_data(completion_mask[completion_mask], group_idx),
                 "advantages": group_advantages[group_idx].tolist(),
             }
 
             # Add optional fields if they exist
             optional_fields = {
-                "old_per_token_logps": old_per_token_logps,
-                "ref_per_token_logps": ref_per_token_logps,
+                "old_per_token_logps": old_per_token_logps[completion_mask]
+                if old_per_token_logps is not None
+                else None,
+                "ref_per_token_logps": ref_per_token_logps[completion_mask]
+                if ref_per_token_logps is not None
+                else None,
             }
 
             for field_name, field_data in optional_fields.items():
@@ -1789,17 +1794,88 @@ class GRPOTrainer(Trainer):
                 if field in item:
                     sampled_data[field].append(item[field])
 
+        # --- Efficient padding & replacement logic ---
+        current_batch_prompt_seq_len = prompt_ids.size(1)
+        current_batch_completion_seq_len = completion_ids.size(1)
+
         groups_to_replace_idxs = groups_with_variance.logical_not().nonzero(as_tuple=True)[0].unique().tolist()
+
+        # Determine target (max) sequence lengths once
+        sampled_prompt_lengths = [t.size(1) for t in sampled_data["prompt_ids"]]
+        sampled_completion_lengths = [t.size(1) for t in sampled_data["completion_ids"]]
+        target_prompt_len = max([current_batch_prompt_seq_len] + sampled_prompt_lengths)
+        target_completion_len = max([current_batch_completion_seq_len] + sampled_completion_lengths)
+
+        # If any sampled prompt is longer, pad the whole batch prompt tensors once (left padding)
+        if target_prompt_len > current_batch_prompt_seq_len:
+            prompt_ids = pad(list(prompt_ids.unbind(0)), padding_value=self.pad_token_id, pad_to_multiple_of=target_prompt_len, padding_side="left")
+            prompt_mask = pad(list(prompt_mask.unbind(0)), padding_value=0, pad_to_multiple_of=target_prompt_len, padding_side="left")
+        # If any sampled completion is longer, pad the whole batch completion tensors once (right padding)
+        if target_completion_len > current_batch_completion_seq_len:
+            completion_ids = pad(list(completion_ids.unbind(0)), padding_value=self.pad_token_id, pad_to_multiple_of=target_completion_len, padding_side="right")
+            completion_mask = pad(list(completion_mask.unbind(0)), padding_value=0, pad_to_multiple_of=target_completion_len, padding_side="right")
+            if old_per_token_logps is not None:
+                old_per_token_logps = pad(list(old_per_token_logps.unbind(0)), padding_value=0.0, pad_to_multiple_of=target_completion_len, padding_side="right")
+            if ref_per_token_logps is not None:
+                ref_per_token_logps = pad(list(ref_per_token_logps.unbind(0)), padding_value=0.0, pad_to_multiple_of=target_completion_len, padding_side="right")
+
+        # Replace per-group data, padding only sampled groups that are shorter than the target
         for i, group_idx in enumerate(groups_to_replace_idxs):
             start_idx = group_idx * self.num_generations
             end_idx = (group_idx + 1) * self.num_generations
             idx_range = slice(start_idx, end_idx)
-            # Convert core fields to tensors
+
+            # Pad sampled prompt to target length if needed
+            if sampled_data["prompt_ids"][i].size(1) < target_prompt_len:
+                sampled_data["prompt_ids"][i] = pad(
+                    sampled_data["prompt_ids"][i],
+                    padding_value=self.pad_token_id,
+                    pad_to_multiple_of=target_prompt_len,
+                    padding_side="left",
+                )
+                sampled_data["prompt_mask"][i] = pad(
+                    sampled_data["prompt_mask"][i],
+                    padding_value=0,
+                    pad_to_multiple_of=target_prompt_len,
+                    padding_side="left",
+                )
+
+            # Pad sampled completion to target length if needed
+            if sampled_data["completion_ids"][i].size(1) < target_completion_len:
+                sampled_data["completion_ids"][i] = pad(
+                    sampled_data["completion_ids"][i],
+                    padding_value=self.pad_token_id,
+                    pad_to_multiple_of=target_completion_len,
+                    padding_side="right",
+                )
+                sampled_data["completion_mask"][i] = pad(
+                    sampled_data["completion_mask"][i],
+                    padding_value=0,
+                    pad_to_multiple_of=target_completion_len,
+                    padding_side="right",
+                )
+                if "old_per_token_logps" in sampled_data:
+                    sampled_data["old_per_token_logps"][i] = pad(
+                        sampled_data["old_per_token_logps"][i],
+                        padding_value=0.0,
+                        pad_to_multiple_of=target_completion_len,
+                        padding_side="right",
+                    )
+                if "ref_per_token_logps" in sampled_data:
+                    sampled_data["ref_per_token_logps"][i] = pad(
+                        sampled_data["ref_per_token_logps"][i],
+                        padding_value=0.0,
+                        pad_to_multiple_of=target_completion_len,
+                        padding_side="right",
+                    )
+
+            # Assign (replace) group slice
             prompt_ids[idx_range] = sampled_data["prompt_ids"][i]
             prompt_mask[idx_range] = sampled_data["prompt_mask"][i]
             completion_ids[idx_range] = sampled_data["completion_ids"][i]
             completion_mask[idx_range] = sampled_data["completion_mask"][i]
             group_advantages[group_idx] = sampled_data["advantages"][i]
+
             if "old_per_token_logps" in sampled_data:
                 old_per_token_logps[idx_range] = sampled_data["old_per_token_logps"][i]
             if "ref_per_token_logps" in sampled_data:
