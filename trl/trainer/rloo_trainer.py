@@ -589,10 +589,6 @@ class RLOOTrainer(Trainer):
                 "repetition_penalty": self.repetition_penalty,
                 "cache_implementation": args.cache_implementation,
             }
-            if args.use_transformers_paged:
-                generation_kwargs["max_batch_tokens"] = 512
-                generation_kwargs["num_blocks"] = 1024
-                generation_kwargs["block_size"] = 128
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs)
