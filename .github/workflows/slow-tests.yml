@@ -19,8 +19,8 @@ jobs:
       matrix:
         docker-image-name:
           [
-            "huggingface/trl-latest-gpu:latest",
-            "huggingface/trl-source-gpu:latest",
+            "huggingface/trl",
+            "huggingface/trl:dev",
           ]
     runs-on:
       group: aws-g4dn-2xlarge
@@ -59,8 +59,8 @@ jobs:
       matrix:
         docker-image-name:
           [
-            "huggingface/trl-latest-gpu:latest",
-            "huggingface/trl-source-gpu:latest",
+            "huggingface/trl",
+            "huggingface/trl:dev",
           ]
     runs-on:
       group: aws-g4dn-2xlarge
