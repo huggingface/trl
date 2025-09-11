@@ -225,6 +225,7 @@ class GRPOTrainer(Trainer):
         # Models
         # Trained model
         model_init_kwargs = args.model_init_kwargs or {}
+        config_init_kwargs = args.config_init_kwargs or {}
         if isinstance(model, str):
             model_id = model
             dtype = model_init_kwargs.get("dtype")
@@ -239,7 +240,7 @@ class GRPOTrainer(Trainer):
                     f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             # Disable caching if gradient checkpointing is enabled (not supported)
-            config = AutoConfig.from_pretrained(model_id)
+            config = AutoConfig.from_pretrained(model_id, **config_init_kwargs)
             architecture = getattr(transformers, config.architectures[0])
             model = architecture.from_pretrained(model_id, **model_init_kwargs)
         else:
@@ -427,7 +428,7 @@ class GRPOTrainer(Trainer):
             self.ref_model = None
         else:
             # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
-            config = AutoConfig.from_pretrained(model_id)
+            config = AutoConfig.from_pretrained(model_id, **config_init_kwargs)
             architecture = getattr(transformers, config.architectures[0])
             self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
 
