@@ -27,11 +27,11 @@ class ModelConfig:
     command line.
 
     Parameters:
-        model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
+        model_name_or_path (`str`, *optional*):
             Model checkpoint for weights initialization.
         model_revision (`str`, *optional*, defaults to `"main"`):
             Specific model version to use. It can be a branch name, a tag name, or a commit id.
-        dtype (`Literal["auto", "bfloat16", "float16", "float32"]` or `None`, *optional*, defaults to `None`):
+        dtype (`Literal["auto", "bfloat16", "float16", "float32"]`, *optional*):
             Override the default `torch.dtype` and load the model under this dtype. Possible values are
 
                 - `"bfloat16"`: `torch.bfloat16`
@@ -43,7 +43,7 @@ class ModelConfig:
             Whether to allow for custom models defined on the Hub in their own modeling files. This option should only
             be set to `True` for repositories you trust and in which you have read the code, as it will execute code
             present on the Hub on your local machine.
-        attn_implementation (`str` or `None`, *optional*, defaults to `None`):
+        attn_implementation (`str`, *optional*):
             Which attention implementation to use. You can run `--attn_implementation=flash_attention_2`, in which case
             you must install this manually by running `pip install flash-attn --no-build-isolation`.
         use_peft (`bool`, *optional*, defaults to `False`):
@@ -54,11 +54,11 @@ class ModelConfig:
             LoRA alpha.
         lora_dropout (`float`, *optional*, defaults to `0.05`):
             LoRA dropout.
-        lora_target_modules (`Union[str, list[str]]` or `None`, *optional*, defaults to `None`):
+        lora_target_modules (`Union[str, list[str]]`, *optional*):
             LoRA target modules.
-        lora_target_parameters (`Union[str, list[str]]` or `None`, *optional*, defaults to `None`):
+        lora_target_parameters (`Union[str, list[str]]`, *optional*):
             List of target parameters for LoRA.
-        lora_modules_to_save (`list[str]` or `None`, *optional*, defaults to `None`):
+        lora_modules_to_save (`list[str]`, *optional*):
             Model layers to unfreeze & train.
         lora_task_type (`str`, *optional*, defaults to `"CAUSAL_LM"`):
             Task type to pass for LoRA (use `"SEQ_CLS"` for reward modeling).
