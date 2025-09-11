@@ -55,7 +55,7 @@ RUN source activate trl && \
     git+https://github.com/huggingface/transformers \
     git+https://github.com/huggingface/accelerate \
     git+https://github.com/huggingface/peft \
-    trl[test]@git+https://github.com/huggingface/trl
+    trl[test,vlm]@git+https://github.com/huggingface/trl
 
 RUN source activate trl && \ 
     pip freeze | grep transformers
