@@ -40,6 +40,13 @@ class AlignPropTrainer(PyTorchModelHubMixin):
     """
     Trainer for Reward Backpropagation (AlignProp) for diffusion models.
 
+    For details, see the paper: [Aligning Text-to-Image Diffusion Models with Reward
+        Backpropagation](https://huggingface.co/papers/2310.03739).
+
+    This trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
+
+    > [!WARNING] > As of now, only Stable Diffusion based pipelines are supported.
+
     Args:
         config ([`AlignPropConfig`]):
             Configuration object for AlignPropTrainer.
@@ -51,16 +58,6 @@ class AlignPropTrainer(PyTorchModelHubMixin):
             Stable Diffusion pipeline to be used for training.
         image_samples_hook (`Callable[[Any, Any, Any], Any]`, *optional*):
             Hook to be called to log images.
-
-    Warnings:
-        - As of now, only Stable Diffusion based pipelines are supported.
-
-    Notes:
-        - This trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
-
-    References:
-        - For details, see the paper: [Aligning Text-to-Image Diffusion Models with Reward
-        Backpropagation](https://huggingface.co/papers/2310.03739).
     """
 
     _tag_names = ["trl", "alignprop"]
