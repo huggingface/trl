@@ -53,13 +53,13 @@ class AlignPropTrainer(PyTorchModelHubMixin):
             Hook to be called to log images.
 
     Warnings:
-        As of now, only Stable Diffusion based pipelines are supported.
+        - As of now, only Stable Diffusion based pipelines are supported.
 
     Notes:
-        This trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
+        - This trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
 
     References:
-        For details, see the paper: [Aligning Text-to-Image Diffusion Models with Reward
+        - For details, see the paper: [Aligning Text-to-Image Diffusion Models with Reward
         Backpropagation](https://huggingface.co/papers/2310.03739).
     """
 
