@@ -42,7 +42,7 @@ class AlignPropTrainer(PyTorchModelHubMixin):
 
     Args:
         config ([`AlignPropConfig`]):
-            Configuration object for AlignPropTrainer. Check the documentation of [`PPOConfig`] for more details.
+            Configuration object for AlignPropTrainer.
         reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
             Reward function to be used.
         prompt_function (`Callable[[], tuple[str, Any]]`):
