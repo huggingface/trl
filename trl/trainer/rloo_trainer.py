@@ -1189,10 +1189,6 @@ class RLOOTrainer(Trainer):
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
-                    all_logprobs = all_logprobs[tp_slice]
-
-                if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
 
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
