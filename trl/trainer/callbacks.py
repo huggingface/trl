@@ -18,6 +18,7 @@ from typing import Optional, Union
 
 import pandas as pd
 import torch
+import wandb
 from accelerate import Accelerator
 from accelerate.state import AcceleratorState
 from accelerate.utils import gather_object, is_wandb_available
@@ -33,8 +34,6 @@ from transformers import (
 )
 from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
-
-import wandb
 
 from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_mergekit_available
