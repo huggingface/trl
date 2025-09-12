@@ -190,6 +190,20 @@ cd trl/
 pip install -e .[dev]
 ```
 
+## Experimental
+A minimal incubation area is available under `trl.experimental` for unstable / fast-evolving features. Anything there may change or be removed in any release without notice.
+
+Example:
+```python
+from trl.experimental.NewTrainer import NewTrainer  # when available
+```
+
+Silence the import notice:
+```bash
+export TRL_EXPERIMENTAL_SILENCE=1
+```
+Read more in the [Experimental docs](https://huggingface.co/docs/trl/main/en/experimental).
+
 ## Citation
 
 ```bibtex
