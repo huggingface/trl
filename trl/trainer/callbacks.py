@@ -34,6 +34,8 @@ from transformers import (
 from transformers.trainer_utils import has_length
 from transformers.utils import is_rich_available
 
+import wandb
+
 from ..data_utils import maybe_apply_chat_template
 from ..import_utils import is_mergekit_available
 from ..mergekit_utils import MergeConfig, merge_models, upload_model_to_hf
