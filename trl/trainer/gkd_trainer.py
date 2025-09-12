@@ -60,6 +60,45 @@ if is_liger_kernel_available():
 
 
 class GKDTrainer(SFTTrainer):
+    """Trainer for Generalized Knowledge Distillation (GKD) of language models.
+
+    For details on GKD, see the paper: [On-Policy Distillation of Language Models: Learning from Self-Generated
+    Mistakes](https://huggingface.co/papers/2306.13649).
+
+    Args:
+        model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
+            Model to be trained, or the string identifier of the model to be instantiated from a pretrained model.
+        teacher_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
+            Teacher model for knowledge distillation, or the string identifier of the model to be instantiated from a
+            pretrained model.
+        args ([`GKDConfig`], *optional*):
+            Training arguments.
+        data_collator ([`~transformers.DataCollator`], *optional*):
+            Data collator to batch samples from the dataset. It defaults to a [`DataCollatorForChatML`] using the
+            `processing_class`.
+        train_dataset ([`~datasets.Dataset`], *optional*):
+            Dataset for training.
+        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
+            Dataset for evaluation.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
+           Class to process the data.
+        compute_metrics (`Callable`, *optional*):
+            Function to compute metrics at evaluation. Must take in an [`~transformers.EvalPrediction`] and return a
+            dictionary string to float.
+        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
+            Callbacks to use during training.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable`, *optional*):
+            Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
+            return the logits to be used for metrics computation.
+        peft_config ([`~peft.config.PeftConfig`], *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
+            wrapped with the specified PEFT adapter.
+        formatting_func (`Callable`, *optional*):
+            Function to format the dataset. Must take in an example and return an example.
+    """
+
     _tag_names = ["trl", "gkd"]
 
     def __init__(
@@ -396,11 +435,11 @@ class GKDTrainer(SFTTrainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():

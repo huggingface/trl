@@ -34,12 +34,12 @@ class SFTConfig(TrainingArguments):
     Parameters:
         > Parameters that control the model
 
-        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
             include the load balancing/auxilliary loss as a part of the final loss, remember to set
             `output_router_logits=True` in this dictionary.
-        chat_template_path (`str` or `None`, *optional*, defaults to `None`):
+        chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
             ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
@@ -49,16 +49,16 @@ class SFTConfig(TrainingArguments):
 
         dataset_text_field (`str`, *optional*, defaults to `"text"`):
             Name of the column that contains text data in the dataset.
-        dataset_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        dataset_kwargs (`dict[str, Any]`, *optional*):
             Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
             `skip_prepare_dataset`. When the model is a VLM, `skip_prepare_dataset` is automatically treated as `True`
             regardless of the provided value, since preprocessing is done on the fly.
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        eos_token (`str` or `None`, *optional*, defaults to `None`):
+        eos_token (`str`, *optional*):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
-        pad_token (`int` or `None`, *optional*, defaults to `None`):
+        pad_token (`int`, *optional*):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
@@ -75,14 +75,14 @@ class SFTConfig(TrainingArguments):
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
             packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
             parameter.
-        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
-        eval_packing (`bool` or `None`, *optional*, defaults to `None`):
+        eval_packing (`bool`, *optional*):
             Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
         > Parameters that control the training
 
-        completion_only_loss (`bool` or `None`, *optional*, defaults to `None`):
+        completion_only_loss (`bool`, *optional*):
             Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
             only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
             `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
@@ -92,6 +92,9 @@ class SFTConfig(TrainingArguments):
             Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
             on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
             `False`, loss is computed on the entire sequence.
+        loss_type (`str`, *optional*, defaults to `"nll"`):
+            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
+            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -122,16 +125,6 @@ class SFTConfig(TrainingArguments):
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
             "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
             "`fp16` is not set."
-        },
-    )
-    # Note: In transformers>=4.54.0, `average_tokens_across_devices` defaults to True. Overriding this setting is only
-    # needed for earlier versions. Once we require transformers>=4.54.0, this line can be safely removed.
-    # See https://github.com/huggingface/transformers/pull/39395
-    average_tokens_across_devices: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
-            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
         },
     )
 
@@ -247,6 +240,15 @@ class SFTConfig(TrainingArguments):
                 "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
                 "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
                 "loss is computed on the entire sequence."
+            )
+        },
+    )
+    loss_type: str = field(
+        default="nll",
+        metadata={
+            "help": (
+                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
+                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
             )
         },
     )

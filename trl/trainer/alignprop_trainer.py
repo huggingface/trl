@@ -38,21 +38,26 @@ logger = logging.get_logger(__name__)
 
 class AlignPropTrainer(PyTorchModelHubMixin):
     """
-    The AlignPropTrainer uses Deep Diffusion Policy Optimization to optimise diffusion models. Note, this trainer is
-    heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/ As of now only Stable Diffusion based
-    pipelines are supported
+    Trainer for Reward Backpropagation (AlignProp) for diffusion models.
 
-    Attributes:
-        config (`AlignPropConfig`):
-            Configuration object for AlignPropTrainer. Check the documentation of `PPOConfig` for more details.
+    For details, see the paper: [Aligning Text-to-Image Diffusion Models with Reward
+        Backpropagation](https://huggingface.co/papers/2310.03739).
+
+    This trainer is heavily inspired by the work here: https://github.com/mihirp1998/AlignProp/
+
+    > [!WARNING] > As of now, only Stable Diffusion based pipelines are supported.
+
+    Args:
+        config ([`AlignPropConfig`]):
+            Configuration object for AlignPropTrainer.
         reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
-            Reward function to be used
+            Reward function to be used.
         prompt_function (`Callable[[], tuple[str, Any]]`):
-            Function to generate prompts to guide model
-        sd_pipeline (`DDPOStableDiffusionPipeline`):
+            Function to generate prompts to guide model.
+        sd_pipeline ([`DDPOStableDiffusionPipeline`]):
             Stable Diffusion pipeline to be used for training.
-        image_samples_hook (`Optional[Callable[[Any, Any, Any], Any]]`):
-            Hook to be called to log images
+        image_samples_hook (`Callable[[Any, Any, Any], Any]`, *optional*):
+            Hook to be called to log images.
     """
 
     _tag_names = ["trl", "alignprop"]
@@ -385,7 +390,11 @@ class AlignPropTrainer(PyTorchModelHubMixin):
 
     def train(self, epochs: Optional[int] = None):
         """
-        Train the model for a given number of epochs
+        Train the model for a given number of epochs.
+
+        Args:
+            epochs (`int`, *optional*, defaults to `self.config.num_epochs`):
+                Number of epochs to train the model for.
         """
         global_step = 0
         if epochs is None:
@@ -416,11 +425,11 @@ class AlignPropTrainer(PyTorchModelHubMixin):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():

@@ -38,7 +38,7 @@ class DDPOConfig:
             Name of this run.
         seed (`int`, *optional*, defaults to `0`):
             Random seed.
-        log_with (`Literal["wandb", "tensorboard"]]` or `None`, *optional*, defaults to `None`):
+        log_with (`Literal["wandb", "tensorboard"]]`, *optional*):
             Log with either 'wandb' or 'tensorboard', check
             https://huggingface.co/docs/accelerate/usage_guides/tracking for more details.
         tracker_kwargs (`Dict`, *optional*, defaults to `{}`):
