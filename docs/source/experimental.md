@@ -20,7 +20,7 @@ This list is not exhaustive and may change at any time.
 ## Usage
 
 ```python
-from trl.experimental.newtrainer import NewTrainer
+from trl.experimental.new_trainer import NewTrainer
 ```
 
 To silence the runtime notice:

@@ -197,7 +197,7 @@ A minimal incubation area is available under `trl.experimental` for unstable / f
 Example:
 
 ```python
-from trl.experimental.NewTrainer import NewTrainer
+from trl.experimental.new_trainer import NewTrainer
 ```
 
 Read more in the [Experimental docs](https://huggingface.co/docs/trl/main/en/experimental).
