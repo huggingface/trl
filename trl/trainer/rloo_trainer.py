@@ -420,6 +420,7 @@ class RLOOTrainer(Trainer):
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
         self.mask_truncated_completions = args.mask_truncated_completions
         self.reward_clip_range = args.reward_clip_range
+        self.normalize_advantages = args.normalize_advantages
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -1389,7 +1390,7 @@ class RLOOTrainer(Trainer):
             # When using vLLM, we always compute old_per_token_logps for importance sampling, it was shown that the
             # distribution mismatch between vLLM and the training model can be large and harm the training.
             generate_every = self.args.steps_per_generation * self.num_iterations  # generation frequency
-            if self.args.gradient_accumulation_steps % generate_every != 0:
+            if self.args.gradient_accumulation_steps % generate_every != 0 or self.beta != 0.0:
                 old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
                     self.model,
                     prompt_completion_ids,
