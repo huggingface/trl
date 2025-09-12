@@ -10,7 +10,7 @@ The `trl.experimental` namespace provides a minimal, clearly separated space for
 
 ## Current Experimental Features
 
-The following modules are currently available under `trl.experimental`.  
+The following modules are currently available under [`trl.experimental`](https://github.com/huggingface/trl/tree/main/trl/experimental).
 This list is not exhaustive and may change at any time.
 
 ### Nothing here yet
