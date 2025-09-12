@@ -757,25 +757,23 @@ class GRPOTrainer(Trainer):
                 Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold
                 and `False` otherwise.
         """
-        non_pad_entropies = entropies[mask.bool()].float()
-        if non_pad_entropies.numel() == 0:
+        local = entropies[mask.bool()].float()
+
+        # Use a negative pad_value as a sentinel because entropy values are always >= 0.
+        # This guarantees that the sentinel cannot collide with any real entropy value.
+        pad_value = -1e9
+
+        # Pad across processes so that every rank has the same tensor length
+        padded = self.accelerator.pad_across_processes(local, dim=0, pad_index=pad_value)
+        gathered = self.accelerator.gather(padded)
+
+        # Drop sentinel values (safe because no entropy can be negative)
+        gathered = gathered[gathered != pad_value]
+
+        if gathered.numel() == 0:
             return torch.zeros_like(entropies, dtype=torch.bool)
 
-        # The shape of non_pad_entropies can be different on each gpu/device.
-        # this can cause the gather operation to hang. So we first gather the lengths
-        # of non_pad_entropies and pad them to the max length before doing a gather.
-        non_pad_entropies_seq_length = torch.tensor([non_pad_entropies.numel()], device=entropies.device)
-        max_non_pad_entropies_seq_length = self.accelerator.gather(non_pad_entropies_seq_length).max().item()
-        padding = torch.zeros(
-            max_non_pad_entropies_seq_length - non_pad_entropies.numel(), device=non_pad_entropies.device
-        )
-        padded_entropies = torch.cat([non_pad_entropies, padding])
-        padded_entropies_mask = torch.cat([torch.ones_like(non_pad_entropies), padding])
-        all_padded_entropies = self.accelerator.gather(padded_entropies)
-        all_padded_entropies_mask = self.accelerator.gather(padded_entropies_mask)
-        # Filter out entropies corresponding to padding.
-        all_non_padded_entropies = all_padded_entropies[all_padded_entropies_mask.bool()]
-        entropy_threshold = torch.quantile(all_non_padded_entropies, threshold)
+        entropy_threshold = torch.quantile(gathered, threshold)
         masked_entropies = entropies * mask.float()
         entropy_mask = masked_entropies >= entropy_threshold
         return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
