@@ -464,4 +464,10 @@ class DPOConfig(TrainingArguments):
                     f"Length of loss_weights list ({self.loss_weights}) must match number of loss types "
                     f"({loss_types})."
                 )
+
+        # If Liger loss is enabled, precomputing ref log probs is not used.
+        # Force-disable it at config time and warn the user to avoid wasted work upstream.
+        if self.use_liger_loss and self.precompute_ref_log_probs:
+            self.precompute_ref_log_probs = False
+            
         super().__post_init__()
