@@ -1544,6 +1544,7 @@ class RLOOTrainer(Trainer):
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
+            output["old_logps"] = (old_per_token_logps * completion_mask).sum(1)
         if ref_per_token_logps is not None:
             output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in prompt_inputs:
