@@ -28,6 +28,7 @@ from transformers.testing_utils import require_liger_kernel, require_peft, requi
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.trainer.grpo_trainer import ReplayBuffer
 
 from .testing_utils import TrlTestCase, require_vllm
 
@@ -1637,6 +1638,168 @@ class GRPOTrainerTester(TrlTestCase):
 
         self.assertEqual(len(trainer.reward_processing_classes), 1)
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
+
+
+class TestReplayBuffer(unittest.TestCase):
+    def setUp(self):
+        self.replay_buffer = ReplayBuffer(max_size=5)
+
+    def test_add(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Check if the buffer contains the correct number of elements
+        self.assertEqual(len(self.replay_buffer.heap), 5)
+
+        # Check if the buffer maintains the min-heap property
+        heap_scores = [item[0] for item in self.replay_buffer.heap]
+        self.assertEqual(heap_scores[0], min(heap_scores))
+        self.assertEqual(heap_scores[0], 0.3)
+
+    def test_add_more_than_maxlen(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7, 0.6, 0.4]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+            {"id": 6},
+            {"id": 7},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Check if the buffer contains the correct number of elements
+        self.assertEqual(len(self.replay_buffer.heap), 5)
+
+        # Check if the buffer maintains the min-heap property
+        heap_scores = [item[0] for item in self.replay_buffer.heap]
+        self.assertEqual(heap_scores[0], min(heap_scores))
+        self.assertEqual(heap_scores[0], 0.5)  # 0.3 and 0.4 should be removed
+
+    def test_sample(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Sample elements from the buffer
+        sampled = self.replay_buffer.sample(num_samples=3)
+
+        # Check if the sampled elements are from the buffer
+        self.assertEqual(len(sampled), 3)
+        for item in sampled:
+            self.assertIn(item, [entry[1] for entry in self.replay_buffer.heap])
+
+
+class TestUpdateWithReplayBuffer(unittest.TestCase):
+    def setUp(self):
+        self.trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            train_dataset=None,
+        )
+        self.trainer.replay_buffer = ReplayBuffer(max_size=5)
+        self.trainer.num_generations = 2
+
+    def _make_batch(self, with_pixels=False, with_logprobs=False):
+        return {
+            "prompt_ids": torch.tensor([[100, 101], [102, 103]]),
+            "prompt_mask": torch.ones(2, 2, dtype=torch.long),
+            "completion_ids": torch.tensor([[5, 6], [7, 8]]),
+            "completion_mask": torch.ones(2, 2, dtype=torch.long),
+            "advantages": torch.tensor([[0.5, 0.6]]),
+            **({"pixel_values": torch.randn(2, 3, 224, 224)} if with_pixels else {}),
+            **({"old_per_token_logps": torch.randn(2, 2)} if with_logprobs else {}),
+        }
+
+    def _prepopulate_buffer(self, with_pixels=False, with_logprobs=False):
+        scores = [0.1, 0.9]
+        data = [
+            self._make_batch(with_pixels, with_logprobs),
+            {
+                "prompt_ids": torch.tensor([[104, 105], [106, 107]]),
+                "prompt_mask": torch.ones(2, 2, dtype=torch.long),
+                "completion_ids": torch.tensor([[13, 14], [15, 16]]),
+                "completion_mask": torch.ones(2, 2, dtype=torch.long),
+                "advantages": torch.tensor([[0.8, 0.85]]),
+                **({"pixel_values": torch.randn(2, 3, 224, 224)} if with_pixels else {}),
+                **({"old_per_token_logps": torch.randn(2, 2)} if with_logprobs else {}),
+            },
+        ]
+        self.trainer.replay_buffer.add(scores, data)
+
+    def _make_inputs(self, group_advantages, with_pixels=False, with_logprobs=False):
+        inputs = {
+            "group_advantages": group_advantages,
+            "prompt_ids": torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]]),
+            "prompt_mask": torch.ones(4, 2, dtype=torch.long),
+            "completion_ids": torch.tensor([[9, 10], [11, 12], [13, 14], [15, 16]]),
+            "completion_mask": torch.ones(4, 2, dtype=torch.long),
+            "prompt_inputs": {"pixel_values": torch.randn(4, 3, 224, 224)} if with_pixels else {},
+            "old_per_token_logps": torch.randn(4, 2) if with_logprobs else None,
+        }
+        inputs["group_std_rewards"] = group_advantages.std(dim=1).expand_as(group_advantages)
+        return inputs
+
+    def test_update_with_replay_buffer_no_variance(self):
+        self._prepopulate_buffer(with_pixels=True, with_logprobs=True)
+        group_advantages = torch.tensor([[0.5, 0.5], [0.8, 0.8]])  # no variance
+        inputs = self._make_inputs(group_advantages, with_pixels=True, with_logprobs=True)
+        original_prompt_ids = inputs["prompt_ids"].clone()
+
+        outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
+
+        self.assertIsNotNone(outputs)
+        self.assertIn("pixel_values", outputs)
+        self.assertIn("old_per_token_logps", outputs)
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 2)
+        for pid in outputs["prompt_ids"]:
+            self.assertNotIn(pid.tolist(), original_prompt_ids.tolist())
+
+    def test_update_with_replay_buffer_with_variance(self):
+        self._prepopulate_buffer()
+        group_advantages = torch.tensor([[0.6, 0.4], [0.7, 1.2]])  # has variance
+        inputs = self._make_inputs(group_advantages)
+
+        sampled = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
+
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 4)  # grew
+        self.assertIsNone(sampled)
+
+    def test_update_with_mixed_variance(self):
+        self._prepopulate_buffer()
+        group_advantages = torch.tensor([[0.6, 0.6], [0.3, 0.45]])  # one no-variance, one variance
+        inputs = self._make_inputs(group_advantages)
+        original_prompt_ids = inputs["prompt_ids"].clone().view(-1, self.trainer.num_generations, 2).tolist()
+
+        outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
+
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 3)  # grew by 1
+        output_prompt_ids = outputs["prompt_ids"].view(-1, self.trainer.num_generations, 2).tolist()
+
+        buffer_ids = [item[1]["prompt_ids"].tolist() for item in self.trainer.replay_buffer.heap]
+        found_from_buffer = any(pid in buffer_ids for pid in output_prompt_ids)
+        found_from_original = any(pid in original_prompt_ids for pid in output_prompt_ids)
+
+        self.assertTrue(found_from_buffer)
+        self.assertTrue(found_from_original)
+        self.assertNotIn([[1, 2], [3, 4]], output_prompt_ids)  # excluded no-variance group
 
 
 if __name__ == "__main__":
