@@ -418,9 +418,9 @@ class RLOOTrainer(Trainer):
         self.vllm_mode = args.vllm_mode
         self.vllm_gpu_memory_utilization = args.vllm_gpu_memory_utilization  # only applies to colocation mode
         self.vllm_tensor_parallel_size = args.vllm_tensor_parallel_size  # only applies to colocation mode
+        self.normalize_advantages = args.normalize_advantages
         self.mask_truncated_completions = args.mask_truncated_completions
         self.reward_clip_range = args.reward_clip_range
-        self.normalize_advantages = args.normalize_advantages
 
         # Datasets
         self.shuffle_dataset = args.shuffle_dataset
@@ -567,10 +567,7 @@ class RLOOTrainer(Trainer):
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
-                    enable_sleep_mode=self.args.vllm_enable_sleep_mode,
-                )
-                if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
+                   )
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
@@ -725,91 +722,6 @@ class RLOOTrainer(Trainer):
             mini_repeat_count=self.num_generations,
             seed=self.args.seed,
         )
-
-    @profiling_decorator
-    def _get_last_hidden_state(
-        self,
-        unwrapped_model,
-        input_ids,
-        attention_mask,
-        logits_to_keep,
-        pixel_values=None,
-        image_grid_thw=None,
-        pixel_attention_mask=None,
-        image_sizes=None,
-    ):
-        if is_peft_model(unwrapped_model):
-            unwrapped_model = unwrapped_model.base_model.model
-
-        # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
-        model_inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
-
-        # For Qwen models:
-        if image_grid_thw is not None and pixel_values is not None:
-            model_inputs["image_grid_thw"] = image_grid_thw
-        # For Gemma, SmolVLM2, LLaVa-Next etc.:
-        if pixel_values is not None:
-            model_inputs["pixel_values"] = pixel_values
-        # For SmolVLM2
-        if pixel_attention_mask is not None:
-            model_inputs["pixel_attention_mask"] = pixel_attention_mask
-        # For LLaVa-Next
-        if image_sizes is not None:
-            model_inputs["image_sizes"] = image_sizes
-
-        # Only add logits_to_keep if the model supports it
-        if "logits_to_keep" in self.model_kwarg_keys:
-            # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded
-            model_inputs["logits_to_keep"] = logits_to_keep + 1
-
-        model_inputs["use_cache"] = False  # only used in generation; set False to suppress warnings
-
-        last_hidden_state = unwrapped_model.model(**model_inputs).last_hidden_state
-        # Exclude the last value: it corresponds to the next token pred
-        last_hidden_state = last_hidden_state[:, :-1, :]  # (B, L-1, H)
-        # Only keep the last logits_to_keep. For model that support logits_to_keep, this is a no-op.
-        last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]  # (B, logits_to_keep, H)
-        return last_hidden_state
-
-    def get_high_entropy_mask(self, entropies: torch.Tensor, mask: torch.Tensor, threshold: float) -> torch.Tensor:
-        """
-        Returns a binary mask identifying tokens whose entropy exceeds a given quantile threshold.
-
-        Args:
-            entropies (`torch.Tensor`):
-                Tensor of shape (batch_size, seq_len) with per-token entropy values.
-            mask (`torch.Tensor`):
-                Binary mask of the same shape as `entropies`, where `1` indicates valid tokens and `0` padding.
-            threshold (`float`):
-                Quantile threshold between `0.0` and `1.0` to select high-entropy tokens.
-
-        Returns:
-            `torch.Tensor`:
-                Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold
-                and `False` otherwise.
-        """
-        non_pad_entropies = entropies[mask.bool()].float()
-        if non_pad_entropies.numel() == 0:
-            return torch.zeros_like(entropies, dtype=torch.bool)
-
-        # The shape of non_pad_entropies can be different on each gpu/device.
-        # this can cause the gather operation to hang. So we first gather the lengths
-        # of non_pad_entropies and pad them to the max length before doing a gather.
-        non_pad_entropies_seq_length = torch.tensor([non_pad_entropies.numel()], device=entropies.device)
-        max_non_pad_entropies_seq_length = self.accelerator.gather(non_pad_entropies_seq_length).max().item()
-        padding = torch.zeros(
-            max_non_pad_entropies_seq_length - non_pad_entropies.numel(), device=non_pad_entropies.device
-        )
-        padded_entropies = torch.cat([non_pad_entropies, padding])
-        padded_entropies_mask = torch.cat([torch.ones_like(non_pad_entropies), padding])
-        all_padded_entropies = self.accelerator.gather(padded_entropies)
-        all_padded_entropies_mask = self.accelerator.gather(padded_entropies_mask)
-        # Filter out entropies corresponding to padding.
-        all_non_padded_entropies = all_padded_entropies[all_padded_entropies_mask.bool()]
-        entropy_threshold = torch.quantile(all_non_padded_entropies, threshold)
-        masked_entropies = entropies * mask.float()
-        entropy_mask = masked_entropies >= entropy_threshold
-        return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
 
     @profiling_decorator
     def _get_per_token_logps_and_entropies(
@@ -1172,11 +1084,6 @@ class RLOOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
-            if self.vllm_mode == "colocate" and self.args.vllm_enable_sleep_mode:
-                # wake up colocated vLLM instances if needed
-                torch.cuda.empty_cache()  # required to avoid OOM in some cases
-                self.llm.wake_up()
-
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
@@ -1297,10 +1204,6 @@ class RLOOTrainer(Trainer):
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
             prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-            sampling_per_token_logps = [
-                torch.tensor(logprobs, device=device, dtype=torch.float32) for logprobs in all_logprobs
-            ]
-            sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0)
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
@@ -1542,11 +1445,6 @@ class RLOOTrainer(Trainer):
             "completion_mask": completion_mask,
             "advantages": advantages,
         }
-        if old_per_token_logps is not None:
-            output["old_per_token_logps"] = old_per_token_logps
-            output["old_logps"] = (old_per_token_logps * completion_mask).sum(1)
-        if ref_per_token_logps is not None:
-            output["ref_per_token_logps"] = ref_per_token_logps
         if "pixel_values" in prompt_inputs:
             output["pixel_values"] = prompt_inputs["pixel_values"]
         if "image_grid_thw" in prompt_inputs:
