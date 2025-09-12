@@ -900,7 +900,7 @@ class SplitPixelValuesByGridTester(TrlTestCase):
 
     def test_mismatched_length(self):
         batch = {
-            "image_grid_thw": torch.tensor([[2, 1, 1], [2, 1, 1]]),  # Total = 4
+            "image_split_sizes": torch.tensor([2, 2]),  # Total = 4
             "pixel_values": torch.randn(3, 5),  # Only 3 rows
         }
         with self.assertRaises(ValueError):
