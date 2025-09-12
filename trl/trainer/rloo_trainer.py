@@ -1443,11 +1443,9 @@ class RLOOTrainer(Trainer):
             "prompt_mask": prompt_mask,
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
+            "old_logps": old_logps,
             "advantages": advantages,
         }
-        if old_per_token_logps is not None:
-            old_logps = (old_per_token_logps * completion_mask).sum(1)
-            output["old_logps"] = old_logps
         if "pixel_values" in prompt_inputs:
             output["pixel_values"] = prompt_inputs["pixel_values"]
         if "image_grid_thw" in prompt_inputs:
