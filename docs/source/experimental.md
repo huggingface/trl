@@ -47,5 +47,5 @@ Yes. Anything inside `trl.experimental` can change or disappear in *any* release
 **Should I use this in production?**
 Only if you are fine with updating your code quickly when things change.
 
-**Will maintainers promptly fix issues in `trl.experimental`?**  
+**Will maintainers promptly fix issues in `trl.experimental`?**
 Not necessarily. The experimental module is a playground for new ideas, and maintainers may not prioritize bug fixes or feature requests there. Issues may remain unresolved until (or unless) the feature graduates to the stable API.
