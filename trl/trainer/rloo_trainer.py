@@ -1557,7 +1557,7 @@ class RLOOTrainer(Trainer):
         return output
 
     @profiling_decorator
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
             raise ValueError("The RLOOTrainer does not support returning outputs")
         return self._compute_loss(model, inputs)
