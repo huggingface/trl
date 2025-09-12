@@ -1,6 +1,7 @@
 [tool.ruff]
 target-version = "py39"
 line-length = 119
+src = ["trl"]
 
 [tool.ruff.lint]
 ignore = [
