@@ -1183,11 +1183,6 @@ class RLOOTrainer(Trainer):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
                 completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-                all_logprobs = [
-                    [next(iter(lp.values())).logprob for lp in output.logprobs]
-                    for outputs in all_outputs
-                    for output in outputs.outputs
-                ]
 
                 if self.vllm_tensor_parallel_size > 1:
                     # Slice completions for this rank within its TP group.
