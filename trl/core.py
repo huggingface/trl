@@ -12,15 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import gc
-from collections.abc import Mapping
-from contextlib import contextmanager
-from typing import Optional, Union
+from typing import Optional
 
 import numpy as np
 import torch
 from accelerate import logging
-from transformers import is_torch_npu_available, is_torch_xpu_available
 
 
 logger = logging.get_logger(__name__)
@@ -72,4 +68,3 @@ class LengthSampler:
 
     def __call__(self) -> int:
         return np.random.choice(self.values)
-

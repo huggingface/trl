@@ -25,12 +25,7 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_rich_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
-from trl.import_utils import (
-    is_joblib_available,
-    is_llm_blender_available,
-    is_mergekit_available,
-    is_vllm_available
-)
+from trl.import_utils import is_joblib_available, is_llm_blender_available, is_mergekit_available, is_vllm_available
 
 
 # transformers.testing_utils contains a require_bitsandbytes function, but relies on pytest markers which we don't use

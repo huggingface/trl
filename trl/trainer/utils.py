@@ -16,7 +16,6 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
-from collections import deque
 from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
