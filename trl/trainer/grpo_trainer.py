@@ -765,7 +765,6 @@ class GRPOTrainer(Trainer):
 
         # Pad across processes so that every rank has the same tensor length
         padded = self.accelerator.pad_across_processes(local, dim=0, pad_index=pad_value)
-
         gathered = self.accelerator.gather(padded)
 
         # Drop sentinel values (safe because no entropy can be negative)
