@@ -34,7 +34,7 @@ export TRL_EXPERIMENTAL_SILENCE=1
 1. **Prototype outside the main repo:** Start development in your own fork or a separate repository to iterate quickly.
 2. **Experimental inclusion:** Once it’s ready for early users, move the idea into `trl.experimental.<feature>`.
 3. **Improve:** Add tests, a short doc/example, and demonstrate the usage.
-4. **Promote:** Once the API proves stable and there is clear interest or adoption from the community, move it into `trl.<Feature>` (stable module).
+4. **Promote:** Once the API proves stable and there is clear interest or adoption from the community, move it into `trl.<feature>` (stable module).
 
 ## FAQ
 
