@@ -24,6 +24,7 @@ from urllib.parse import urlparse
 import torch
 from torch import nn
 import torch.distributed.distributed_c10d as c10d
+from transformers import is_torch_xpu_available
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -272,7 +273,7 @@ class VLLMClient:
         # Initialize weight update group
         url = f"{self.base_url}/init_communicator/"
         # Will simplify it after torch xpu 2.9 support get uuid.
-        if hasattr(torch, "xpu") and torch.xpu.is_available():
+        if is_torch_xpu_available():
             if hasattr(torch.xpu.get_device_properties(device), "uuid"):
                 client_device_uuid = str(torch.xpu.get_device_properties(device).uuid)
             else:
@@ -299,7 +300,7 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
-        if (hasattr(torch, "xpu") and torch.xpu.is_available()):
+        if is_torch_xpu_available():
             store = torch.distributed.TCPStore(
                 host_name=self.host,
                 port=self.group_port,
@@ -336,7 +337,7 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        if hasattr(torch, "xpu") and torch.xpu.is_available():
+        if is_torch_xpu_available():
             # Use XCCL to broadcast the updated weights from the client (src) to all workers.
             self.communicator.broadcast(weights, root=self.rank)
             self.communicator.barrier()
@@ -386,7 +387,7 @@ class VLLMClient:
 if __name__ == "__main__":
     from vllm import SamplingParams
 
-    device = "xpu" if hasattr(torch, "xpu") and torch.xpu.is_available() else "cuda"
+    device = "xpu" if is_torch_xpu_available() else "cuda"
     client = VLLMClient()
     client.init_communicator(device=device)
 

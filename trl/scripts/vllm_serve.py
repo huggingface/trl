@@ -28,7 +28,7 @@ from typing import Optional
 import torch
 import torch.distributed.distributed_c10d as c10d
 
-from transformers import is_vision_available
+from transformers import is_vision_available, is_torch_xpu_available
 
 from trl import TrlParser
 from trl.import_utils import (
@@ -111,8 +111,8 @@ class WeightSyncWorkerExtension:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
         # TODO: will remove after torch xpu 2.9 support uuid in get_device_properties
-        if torch.cuda.is_available() or (hasattr(torch, "xpu") and torch.xpu.is_available() and hasattr(torch.xpu.get_device_properties(self.device), "uuid")):
-            accelerator_module = torch.xpu if hasattr(torch, "xpu") and torch.xpu.is_available() else torch.cuda
+        if torch.cuda.is_available() or (is_torch_xpu_available() and hasattr(torch.xpu.get_device_properties(self.device), "uuid")):
+            accelerator_module = torch.xpu if is_torch_xpu_available() else torch.cuda
             if client_device_uuid == str(accelerator_module.get_device_properties(self.device).uuid):
                 raise RuntimeError(
                     f"Attempting to use the same CUDA device (UUID: {client_device_uuid}) for multiple distinct "
@@ -122,7 +122,7 @@ class WeightSyncWorkerExtension:
         # Get the rank of the current worker in the global world group.
         rank = get_world_group().rank
 
-        if (hasattr(torch, "xpu") and torch.xpu.is_available()):
+        if is_torch_xpu_available():
             store = torch.distributed.TCPStore(
                 host_name=host,
                 port=port,
@@ -164,7 +164,7 @@ class WeightSyncWorkerExtension:
         # Allocate memory for the incoming weight tensor on the correct device.
         weight = torch.empty(shape, dtype=dtype, device=self.device)
 
-        if hasattr(torch, "xpu") and torch.xpu.is_available():
+        if is_torch_xpu_available():
             # Use XCCL to broadcast the updated weights from the client (src) to all workers.
             self.communicator.broadcast(weight, root=self.client_rank)
             self.communicator.barrier()
