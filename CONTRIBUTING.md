@@ -331,7 +331,7 @@ def replicate_str(string: str, n: int, sep: str = " ") -> str:
     for arguments that can be `None` and aren't required:
 
     ```python
-    foo (`Optional[int]`, *optional*, defaults to `None`):
+    foo (`Optional[int]`, *optional*):
     ```
 
 * **String Defaults:**

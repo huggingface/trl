@@ -36,7 +36,7 @@ class PRMConfig(TrainingArguments):
             Maximum length of the sequences (prompt + completion) used for truncation.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt used for truncation.
-        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+        max_completion_length (`int`, *optional*):
             Maximum length of the completion used for truncation. The completion is the concatenation of the steps.
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model.
@@ -44,7 +44,7 @@ class PRMConfig(TrainingArguments):
             Separator used to separate each step of the reasoning process.
         train_on_last_step_only (`bool`, *optional*, defaults to `False`):
             Whether to train only on the last step.
-        dataset_num_proc (`int`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
     """
 
@@ -72,16 +72,6 @@ class PRMConfig(TrainingArguments):
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
             "architecture or Intel XPU or using CPU (use_cpu) or Ascend NPU. If not set, it defaults to `True` if "
             "`fp16` is not set."
-        },
-    )
-    # Note: In transformers>=4.54.0, `average_tokens_across_devices` defaults to True. Overriding this setting is only
-    # needed for earlier versions. Once we require transformers>=4.54.0, this line can be safely removed.
-    # See https://github.com/huggingface/transformers/pull/39395
-    average_tokens_across_devices: bool = field(
-        default=True,
-        metadata={
-            "help": "Whether or not to average tokens across devices. If enabled, will use all_reduce to synchronize "
-            "num_tokens_in_batch for precise loss calculation. Reference: https://github.com/huggingface/transformers/issues/34242 "
         },
     )
 
