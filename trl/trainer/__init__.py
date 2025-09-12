@@ -76,7 +76,6 @@ _import_structure = {
     "xpo_trainer": ["XPOTrainer"],
 }
 
-
 if TYPE_CHECKING:
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
