@@ -1586,7 +1586,6 @@ class RLOOTrainer(Trainer):
             "completion_ids": completion_ids,
             "completion_mask": completion_mask,
             "advantages": advantages,
-
         }
         if old_per_token_logps is not None:
             output["old_per_token_logps"] = old_per_token_logps
