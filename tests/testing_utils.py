@@ -26,11 +26,10 @@ from transformers.utils import is_rich_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import (
-    is_diffusers_available,
     is_joblib_available,
     is_llm_blender_available,
     is_mergekit_available,
-    is_vllm_available,
+    is_vllm_available
 )
 
 
@@ -48,13 +47,6 @@ def require_comet(test_case):
     Decorator marking a test that requires Comet. Skips the test if Comet is not available.
     """
     return unittest.skipUnless(is_comet_available(), "test requires comet_ml")(test_case)
-
-
-def require_diffusers(test_case):
-    """
-    Decorator marking a test that requires diffusers. Skips the test if diffusers is not available.
-    """
-    return unittest.skipUnless(is_diffusers_available(), "test requires diffusers")(test_case)
 
 
 def require_llm_blender(test_case):

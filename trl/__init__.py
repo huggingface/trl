@@ -51,8 +51,6 @@ _import_structure = {
         "setup_chat_format",
     ],
     "trainer": [
-        "AlignPropConfig",
-        "AlignPropTrainer",
         "AllTrueJudge",
         "BaseBinaryJudge",
         "BaseJudge",
@@ -71,8 +69,6 @@ _import_structure = {
         "GRPOConfig",
         "GRPOTrainer",
         "HfPairwiseJudge",
-        "IterativeSFTConfig",
-        "IterativeSFTTrainer",
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
@@ -103,22 +99,6 @@ _import_structure = {
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
 
-try:
-    if not is_diffusers_available():
-        raise OptionalDependencyNotAvailable()
-except OptionalDependencyNotAvailable:
-    pass
-else:
-    _import_structure["models"].extend(
-        [
-            "DDPOPipelineOutput",
-            "DDPOSchedulerOutput",
-            "DDPOStableDiffusionPipeline",
-            "DefaultDDPOStableDiffusionPipeline",
-        ]
-    )
-    _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
-
 if TYPE_CHECKING:
     from .data_utils import (
         apply_chat_template,
@@ -146,8 +126,6 @@ if TYPE_CHECKING:
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
-        AlignPropConfig,
-        AlignPropTrainer,
         AllTrueJudge,
         BaseBinaryJudge,
         BaseJudge,
@@ -166,8 +144,6 @@ if TYPE_CHECKING:
         GRPOConfig,
         GRPOTrainer,
         HfPairwiseJudge,
-        IterativeSFTConfig,
-        IterativeSFTTrainer,
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
@@ -196,20 +172,6 @@ if TYPE_CHECKING:
     )
     from .trainer.callbacks import BEMACallback, MergeModelCallback, RichProgressCallback, SyncRefModelCallback
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
-
-    try:
-        if not is_diffusers_available():
-            raise OptionalDependencyNotAvailable()
-    except OptionalDependencyNotAvailable:
-        pass
-    else:
-        from .models import (
-            DDPOPipelineOutput,
-            DDPOSchedulerOutput,
-            DDPOStableDiffusionPipeline,
-            DefaultDDPOStableDiffusionPipeline,
-        )
-        from .trainer import DDPOConfig, DDPOTrainer
 
 else:
     import sys
