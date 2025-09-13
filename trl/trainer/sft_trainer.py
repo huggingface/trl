@@ -39,7 +39,6 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.data.data_collator import DataCollatorMixin
-from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
@@ -892,6 +891,8 @@ class SFTTrainer(Trainer):
         if hasattr(self.model, "add_model_tags"):
             self.model.add_model_tags(self._tag_names)
 
+        self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
+
     def _prepare_dataset(
         self,
         dataset: Union[Dataset, IterableDataset],
@@ -1162,9 +1163,8 @@ class SFTTrainer(Trainer):
                 # Compute the mean token accuracy and log it
                 total_sum = total_tokens.sum()
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-                if isinstance(outputs, MoeCausalLMOutputWithPast):
+                if self.aux_loss_enabled:
                     aux_loss = outputs.aux_loss
-                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
                     self._metrics[mode]["aux_loss"].append(aux_loss)
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
