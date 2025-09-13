@@ -31,6 +31,26 @@ from transformers.hf_argparser import DataClass, DataClassType
 from transformers.utils import is_rich_available
 
 
+def _ensure_transformers_parallelism_config() -> None:
+    """
+    Ensure that ``transformers.training_args`` always defines the symbol `ParallelismConfig` so that Python's
+    `typing.get_type_hints` can resolve annotations on `transformers.TrainingArguments` without raising a `NameError`.
+
+    This is needed when running with ``accelerate<1.10.1``, where the module ``accelerate.parallelism_config`` did not
+    exist and therefore the type alias is not imported by Transformers.
+
+    See upstream fix PR in transformers#40818.
+    """
+    from typing import Any
+
+    import transformers.training_args
+
+    if not hasattr(transformers.training_args, "ParallelismConfig"):
+        transformers.training_args.ParallelismConfig = Any
+
+
+_ensure_transformers_parallelism_config()  # before creating HfArgumentParser
+
 logger = logging.getLogger(__name__)
 
 
