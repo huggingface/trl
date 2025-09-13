@@ -63,6 +63,11 @@ class ORPOConfig(TrainingArguments):
             string.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
+        use_liger_loss (`bool`, *optional*, defaults to `False`):
+            Whether to use Liger loss.
+        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
+            Name of the attribute in the model that contains the base model. This is used to get the base model from
+            the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -161,6 +166,18 @@ class ORPOConfig(TrainingArguments):
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    use_liger_loss: bool = field(
+        default=False,
+        metadata={"help": "Whether to use Liger loss."},
+    )
+    base_model_attribute_name: str = field(
+        default="model",
+        metadata={
+            "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
+            "model from the model when the model does not have a `get_decoder` method in the case when "
+            "`use_liger_loss` is `True`."
+        },
     )
 
     def __post_init__(self):
