@@ -349,7 +349,7 @@ class SFTTrainerTester(TrlTestCase):
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
-    
+
     def test_train_moe_model_with_aux_loss(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
