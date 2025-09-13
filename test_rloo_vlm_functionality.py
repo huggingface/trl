@@ -275,7 +275,12 @@ def test_vlm_peft() -> tuple[bool, str]:
             )
 
             peft_config = LoraConfig(
-                r=16, lora_alpha=32, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM"
+                r=16,
+                lora_alpha=32,
+                lora_dropout=0.05,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
             )
 
             trainer = RLOOTrainer(
