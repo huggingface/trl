@@ -1,5 +1,7 @@
 # Training using Jobs
 
+[![](https://img.shields.io/badge/All_models-HF_Jobs-blue)](https://huggingface.co/models?other=hf_jobs,trl)
+
 [Jobs](https://huggingface.co/docs/huggingface_hub/guides/jobs) lets you run training scripts on fully managed infrastructure (no need to handle GPUs, dependencies, or environment setup locally). This makes it easy to scale and monitor your experiments directly from the Hub.
 
 In this guide, you’ll learn how to:
@@ -9,42 +11,86 @@ In this guide, you’ll learn how to:
 - Monitor and manage training jobs efficiently.
 - Leverage [`trl-jobs`](https://github.com/huggingface/trl-jobs) to simplify and optimize your TRL workflows.
 
-<Tip>
-
-When a model is trained using **TRL + Jobs**, a tag is automatically added to the model card.  
-You can explore models trained with this method [Hugging Face model hub](https://huggingface.co/models?other=hf_jobs).
-
-</Tip>
-
 ## Requirements
 
 - [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan.
 - Logged into the Hugging Face Hub (`hf auth login`).
 
-## Preparing your Script
+## Using TRL Jobs
 
-You can launch Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli#hf-jobs) or the Python API. A convenient option is to use [UV scripts](https://docs.astral.sh/uv/guides/scripts/), which packages all dependencies directly into a single Python file. You can run them like this:
+[TRL Jobs](https://github.com/huggingface/trl-jobs) is a high-level wrapper around HF Jobs and TRL that simplifies the training process. It comes with optimized default configurations for training models, making it easier to get started without manually specifying all the parameters.
+
+To run a training job with TRL Jobs, simply use:
+
+```bash
+pip install trl-jobs
+trl-jobs sft --model_name Qwen/Qwen3-0.6B --dataset_name trl-lib/Capybara
+```
+
+TRL Jobs supports the same functionality covered in this guide, but with additional optimizations to streamline your workflows.
+
+## Using uv Scripts
+
+If you need more control over your training process, you can use Hugging Face Jobs directly with your own scripts. A convenient way to do this is with [uv scripts](https://docs.astral.sh/uv/guides/scripts/).
+
+You can launch Jobs using either the [`hf jobs` CLI](https://huggingface.co/docs/huggingface_hub/guides/cli#hf-jobs) or the Python API:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
 
 ```bash
-hf jobs uv run --flavor a100-large --secrets HF_TOKEN "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
+hf jobs uv run --flavor a100-large train.py
 ```
 
-The script can also be a local file:
+</hfoption>
+<hfoption id="python">
+
+```python
+from huggingface_hub import run_uv_job
+
+run_uv_job("train.py", flavor="a100-large")
+```
+
+</hfoption>
+</hfoptions>
+
+<Tip warning={true}>
+
+Depending on your workflow, your script may need to access private datasets or upload a trained model to the Hub. Such operations require authentication, so make sure to include a valid authentication token.
+
+<hfoptions id="script_type">
+<hfoption id="bash">
 
 ```bash
-hf jobs uv run --flavor a100-large --secrets HF_TOKEN trl/scripts/sft.py --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
+hf jobs uv run --flavor a100-large --secrets HF_TOKEN=hf_... train.py
 ```
 
-Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you can also specify it:
+</hfoption>
+<hfoption id="python">
+
+```python
+from huggingface_hub import run_uv_job
+
+run_uv_job(
+    "train.py",
+    flavor="a100-large",
+    secrets={"HF_TOKEN": "hf_..."}
+)
+```
+
+</hfoption>
+</hfoptions>
+
+</Tip>
+
+You can also run scripts directly from a URL and even pass script arguments.
+
+<hfoptions id="script_type">
+<hfoption id="bash">
 
 ```bash
-hf jobs uv run --flavor a100-large --secrets HF_TOKEN --image <docker-image> trl/scripts/sft.py --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
+hf jobs uv run --flavor a100-large "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" --model_name_or_path Qwen/Qwen2-0.5B --dataset_name trl-lib/Capybara
 ```
-
-We provide an up-to-date Docker image with all the dependencies required by TRL ([huggingface/trl](https://hub.docker.com/r/huggingface/trl)), which you can use directly in HF Jobs.
 
 </hfoption>
 <hfoption id="python">
@@ -52,23 +98,7 @@ We provide an up-to-date Docker image with all the dependencies required by TRL 
 ```python
 from huggingface_hub import run_uv_job
 run_uv_job(
-    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py",
-    token="hf...",
-    flavor="a100-large",
-    script_args=[
-        "--model_name_or_path", "Qwen/Qwen2-0.5B",
-        "--dataset_name", "trl-lib/Capybara",
-    ]
-)
-```
-
-The script can also be a local file:
-
-```python
-from huggingface_hub import run_uv_job
-run_uv_job(
     "trl/scripts/sft.py",
-    token="hf...",
     flavor="a100-large",
     script_args=[
         "--model_name_or_path", "Qwen/Qwen2-0.5B",
@@ -76,28 +106,61 @@ run_uv_job(
     ]
 )
 ```
-
-Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you can also specify it:
-
-```python
-from huggingface_hub import run_uv_job
-run_uv_job(
-    "sft.py",
-    token="hf...",
-    flavor="a100-large",
-    image="<docker-image>",
-    script_args=[
-        "--model_name_or_path", "Qwen/Qwen2-0.5B",
-        "--dataset_name", "trl-lib/Capybara",
-    ]
-)
-```
-
-We provide an up-to-date Docker image with all the dependencies required by TRL ([huggingface/trl](https://hub.docker.com/r/huggingface/trl)), which you can use directly in HF Jobs.
 
 </hfoption>
 </hfoptions>
 
+Since it runs using a Docker Image from Hugging Face Spaces or Docker Hub, you can also specify it:
+
+<hfoptions id="script_type">
+<hfoption id="bash">
+
+```bash
+hf jobs uv run --flavor a100-large --image <docker-image> train.py
+```
+
+</hfoption>
+<hfoption id="python">
+
+```python
+from huggingface_hub import run_uv_job
+run_uv_job(
+    "train.py",
+    flavor="a100-large",
+    image="<docker-image>",
+)
+```
+
+</hfoption>
+</hfoptions>
+
+We provide an up-to-date Docker image with all the dependencies required by TRL ([huggingface/trl](https://hub.docker.com/r/huggingface/trl)), which you can use directly in HF Jobs.
+
+<hfoptions id="script_type">
+<hfoption id="bash">
+
+```bash
+hf jobs uv run --flavor a100-large --image huggingface/trl train.py
+```
+
+</hfoption>
+<hfoption id="python">
+
+```python
+from huggingface_hub import run_uv_job
+run_uv_job(
+    "train.py",
+    flavor="a100-large",
+    image="huggingface/trl",
+)
+```
+
+</hfoption>
+</hfoptions>
+
+
+
+## Rest ---
 You can also run jobs without UV:
 
 <hfoptions id="script_type">
@@ -125,21 +188,6 @@ run_job(
 </hfoptions>
 
 ### Adding Dependencies with UV
-
-All example scripts in TRL are compatible with `uv`, allowing seamless execution with Jobs. You can check the full list of examples in [Maintained examples](example_overview#maintained-examples).  
-
-Dependencies are specified at the top of the script using this structure:
-
-```python
-# /// script
-# dependencies = [
-#     "trl",
-#     "peft",
-# ]
-# ///
-```
-
-When you run the UV script, these dependencies are automatically installed. In the example above, `trl` and `peft` would be installed before the script runs.
 
 You can also provide dependencies directly in the `uv run` command:
 
@@ -238,6 +286,52 @@ run_uv_job(
 
 </hfoption>
 </hfoptions>
+
+
+
+
+
+
+
+### 
+
+To make your training scripts compatible with uv scripts, ensure they include a `dependencies` list at the top. Dependencies are specified at the top of the script using this structure:
+
+```python
+# /// script
+# dependencies = [
+#     "trl",
+#     "peft",
+# ]
+# ///
+
+from trl import SFTTrainer
+from datasets import load_dataset
+from peft import LoraConfig
+
+dataset = load_dataset("trl-lib/Capybara", split="train")
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-0.5B",
+    train_dataset=dataset,
+    peft_config=LoraConfig(),
+)
+trainer.train()
+```
+
+When you run the UV script, these dependencies are automatically installed. In the above example, `trl` and `peft` would be installed before the script runs.
+
+<Tip>
+
+All examples and scripts in TRL are compatible with `uv`, allowing seamless execution with Jobs. You can check the full list of examples in [Maintained examples](example_overview#maintained-examples).
+
+</Tip>
+
+
+
+
+
+
 
 ### Environment Variables, Secrets, and Token
 
@@ -388,18 +482,6 @@ cancel_job(job_id=job_id)
 
 </hfoption>
 </hfoptions>
-
-## Using TRL Jobs
-
-[TRL Jobs](https://github.com/huggingface/trl-jobs) is a high-level wrapper around HF Jobs and TRL that simplifies the training process. It comes with optimized default configurations for training models, making it easier to get started without manually specifying all the parameters.
-
-To run a training job with TRL Jobs, simply use:
-
-```bash
-trl-jobs sft --model_name Qwen/Qwen3-0.6B --dataset_name trl-lib/Capybara
-```
-
-TRL Jobs supports the same functionality covered in this guide, but with additional optimizations to streamline your workflows.
 
 ## Best Practices and Tips
 
