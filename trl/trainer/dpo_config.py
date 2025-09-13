@@ -47,15 +47,15 @@ class DPOConfig(TrainingArguments):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of the
             [`DPOTrainer`] is provided as a string.
-        ref_model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        ref_model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument of the
             [`DPOTrainer`] is provided as a string.
-        model_adapter_name (`str` or `None`, *optional*, defaults to `None`):
+        model_adapter_name (`str`, *optional*):
             Name of the train target PEFT adapter, when using LoRA with multiple adapters.
-        ref_adapter_name (`str` or `None`, *optional*, defaults to `None`):
+        ref_adapter_name (`str`, *optional*):
             Name of the reference PEFT adapter, when using LoRA with multiple adapters.
         force_use_ref_model (`bool`, *optional*, defaults to `False`):
             If you provide a PEFT model as the active model and wish to use a different model for the `ref_model`, set
@@ -69,16 +69,16 @@ class DPOConfig(TrainingArguments):
 
         > Parameters that control the data preprocessing
 
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        pad_token (`str` or `None`, *optional*, defaults to `None`):
+        pad_token (`str`, *optional*):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Padding value to use for labels.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
             Maximum length of the prompt.
-        max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+        max_completion_length (`int`, *optional*):
             Maximum length of the completion.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the full sequence (prompt + completion).
@@ -95,11 +95,11 @@ class DPOConfig(TrainingArguments):
             training without needing the reference model during training, which can help reduce GPU memory usage. If
             set to `False` (default), the reference model will be used during training to compute log probabilities
             on-the-fly.
-        precompute_ref_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        precompute_ref_batch_size (`int`, *optional*):
             Batch size to use when precomputing reference model log probabilities. This can be set higher than the
             training batch size to speed up preprocessing. If `None`, defaults to `per_device_train_batch_size` for
             training and `per_device_eval_batch_size` for evaluation.
-        tools (`Optional[list[Union[dict, Callable]]]`, *optional*, defaults to `None`):
+        tools (`Optional[list[Union[dict, Callable]]]`, *optional*):
             List of tools (callable functions) that will be accessible to the model. If the template does not support
             function calling, this argument will have no effect.
 
@@ -153,11 +153,11 @@ class DPOConfig(TrainingArguments):
             DPO](https://huggingface.co/papers/2403.00409) paper that should be between `0.0` and `0.5`.
         use_weighting (`bool`, *optional*, defaults to `False`):
             Whether to weight the loss as done in the [WPO paper](https://huggingface.co/papers/2406.11827).
-        rpo_alpha (`float`, *optional*, defaults to `None`):
+        rpo_alpha (`float`, *optional*):
             α parameter from the [RPO paper](https://huggingface.co/papers/2404.19733) (v3), which controls the
             weighting of the NLL term in the loss. If `None`, no weighting is applied and the loss is the same as the
             DPO loss. The paper recommends `rpo_alpha=1.0`.
-        ld_alpha (`float` or `None`, *optional*, defaults to `None`):
+        ld_alpha (`float`, *optional*):
             α parameter from the [LD-DPO paper](https://huggingface.co/papers/2409.06411), which controls the weighting
             of the verbose token log-probabilities in responses. If `None`, no weighting is applied to the verbose
             part, and the loss is equivalent to the standard DPO loss. The paper recommends setting `ld_alpha` between
@@ -165,7 +165,7 @@ class DPOConfig(TrainingArguments):
         discopop_tau (`float`, *optional*, defaults to `0.05`):
             τ/temperature parameter from the [DiscoPOP](https://huggingface.co/papers/2406.08414) paper, which controls
             the shape of log ratio modulated loss. The paper recommends the default value `discopop_tau=0.05`.
-        loss_weights (`list[float]` or `None`, *optional*, defaults to `None`):
+        loss_weights (`list[float]`, *optional*):
             List of loss weights for multi-loss combinations. Used when combining multiple loss types. Example: `[0.8,
             0.2, 1.0]` for [MPO](https://huggingface.co/papers/2411.10442). If not provided, defaults to equal weights
             (`1.0`) for all loss types.
