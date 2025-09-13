@@ -570,10 +570,6 @@ class OnlineDPOTrainer(Trainer):
                 generation_kwargs["min_p"] = self.min_p
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
-            if self.use_transformers_paged:
-                generation_kwargs["max_batch_tokens"] = 512
-                generation_kwargs["num_blocks"] = 1024
-                generation_kwargs["block_size"] = 128
             # Remove None values
             generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
             self.generation_config = GenerationConfig(**generation_kwargs)
