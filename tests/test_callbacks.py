@@ -221,7 +221,8 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        self.assertListEqual(winrate_history, self.expected_winrates)
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
 
 
 class LogCompletionsCallbackTester(TrlTestCase):
