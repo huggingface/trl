@@ -289,7 +289,7 @@ To enable CP, you need to configure both Accelerate and your training arguments:
 
 #### Accelerate Configuration
 
-Use one of the provided accelerate config files (e.g. `fsdp_context_parallel_2gpu.yaml` for 2 GPUs):
+Use one of the provided accelerate config files (e.g. [`context_parallel_2gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/context_parallel_2gpu.yaml) for 2 GPUs):
 
 ```yaml
 compute_environment: LOCAL_MACHINE
@@ -298,13 +298,14 @@ distributed_type: FSDP
 downcast_bf16: 'no'
 enable_cpu_affinity: false
 fsdp_config:
-  fsdp_activation_checkpointing: false
+  fsdp_activation_checkpointing: true  # Enable activation checkpointing for memory efficiency
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
   fsdp_cpu_ram_efficient_loading: true
   fsdp_offload_params: false
   fsdp_reshard_after_forward: true
   fsdp_state_dict_type: FULL_STATE_DICT
   fsdp_version: 2
+  fsdp_use_orig_params: true  # Important for 8-bit optimizers
 machine_rank: 0
 main_training_function: main
 mixed_precision: bf16
@@ -335,6 +336,8 @@ training_args = SFTConfig(
     max_length=16384,               # long sequence length
     packing=True,                   # use packing to reduce padding
     use_liger_kernel=True,          # compatible with CP
+    gradient_checkpointing=False,    # If True in accelerate config, it needs to be False here
+    attn_implementation='sdpa',
     per_device_train_batch_size=1,
     ...
 )
@@ -343,7 +346,7 @@ training_args = SFTConfig(
 Then, launch your training script with the appropriate accelerate config file:
 
 ```bash
-accelerate launch --config_file fsdp_context_parallel_2gpu.yaml train.py
+accelerate launch --config_file context_parallel_2gpu.yaml train.py
 ```
 
 ### Best Practices
@@ -362,6 +365,35 @@ accelerate launch --config_file fsdp_context_parallel_2gpu.yaml train.py
 4. **Start with smaller context parallel sizes** (2-4 GPUs) before scaling up
 
 5. **Monitor memory usage** across all GPUs to ensure balanced workload
+
+### Benchmarking Context Parallelism (CP)
+
+We benchmarked Context Parallelism (CP) to highlight its potential improvements in training efficiency.  
+Our experiments were conducted using **1, 2, 4, and 8 H100 GPUs**, though the results can be extended to larger clusters with more nodes and GPUs.
+
+For the setup, we fine-tuned an **8B model** ([Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)) using the provided accelerate configuration  
+([`context_parallel_2gpu.yaml`](https://github.com/huggingface/trl/blob/main/examples/accelerate_configs/context_parallel_2gpu.yaml)).  
+We adjusted `num_processes` and `parallelism_config_cp_size` based on the number of GPUs for each run.  
+Training was performed with the [sft.py](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) example script, combined with the parameters described above.
+
+The results below summarize **memory consumption** and **time per iteration**.  
+As shown, CP enables training with increasingly longer sequences and contexts, provided the scale requirements are met.
+
+[PLOT 1]
+
+[PLOT 2]
+
+
+[Benchmark ND Parallelism accelerate launch --config-file configs/cp.yaml nd_parallel_trainer.py --sequence-length=128000]
+
+
+**Further reading on Context Parallelism**:  
+
+- [Context Parallelism Guid in Accelerate](https://github.com/huggingface/accelerate/blob/main/docs/source/concept_guides/context_parallelism.md)  
+- [Example: 128k Sequence Length](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#context-parallelism-128k-sequence-length)
+- https://huggingface.co/blog/axolotl-ai-co/long-context-with-sequence-parallelism-in-axolotl
+- https://www.snowflake.com/en/engineering-blog/arctic-long-sequence-training-multi-million-token-ai/
+
 
 ## vLLM sleep mode
 
