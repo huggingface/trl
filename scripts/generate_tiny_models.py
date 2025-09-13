@@ -261,18 +261,8 @@ for model_id, config_class, model_class, suffix in [
     ("google/flan-t5-small", T5Config, T5ForConditionalGeneration, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    config = config_class(
-        vocab_size=len(tokenizer.vocab),
-        d_model=16,
-        encoder_layers=2,
-        decoder_layers=2,
-        d_kv=2,
-        d_ff=64,
-        num_layers=6,
-        num_heads=8,
-        decoder_start_token_id=0,
-        is_encoder_decoder=True,
-    )
+    config = AutoConfig.from_pretrained(model_id)
+    config.d_model = 24
     model = model_class(config)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
