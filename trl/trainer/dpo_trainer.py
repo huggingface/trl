@@ -317,7 +317,7 @@ class DPOTrainer(Trainer):
         # if the processing class does not have a pad token.
         if (
             args.padding_value is not None
-        ):  # deprecated, will be removed in 0.25.0. Warning already issued in DPOConfig
+        ):  # deprecated, will be removed in 0.26.0. Warning already issued in DPOConfig
             self.pad_token_id = args.padding_value
         else:
             pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
@@ -532,7 +532,7 @@ class DPOTrainer(Trainer):
     @property
     def padding_value(self):
         warnings.warn(
-            "The `padding_value` property is deprecated and will be removed in version 0.25.0. Please use "
+            "The `padding_value` property is deprecated and will be removed in version 0.26.0. Please use "
             "`pad_token_id` instead.",
         )
         return self.pad_token_id
@@ -540,7 +540,7 @@ class DPOTrainer(Trainer):
     @padding_value.setter
     def padding_value(self, value):
         warnings.warn(
-            "The `padding_value` property is deprecated and will be removed in version 0.25.0. Please use "
+            "The `padding_value` property is deprecated and will be removed in version 0.26.0. Please use "
             "`pad_token_id` instead.",
         )
         self.pad_token_id = value

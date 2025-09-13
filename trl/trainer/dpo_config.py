@@ -479,7 +479,7 @@ class DPOConfig(TrainingArguments):
 
         if self.padding_value is not None:
             warnings.warn(
-                "The `padding_value` argument is deprecated and will be removed in version 0.25.0. Please use "
+                "The `padding_value` argument is deprecated and will be removed in version 0.26.0. Please use "
                 "`pad_token` (str) instead."
             )
             if self.pad_token is None:
