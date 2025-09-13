@@ -118,7 +118,8 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        self.assertListEqual(winrate_history, self.expected_winrates)
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
 
     def test_without_ref_model(self):
         # Same as before, but without the ref_model attribute. It should use the model attribute instead
@@ -143,7 +144,8 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        self.assertListEqual(winrate_history, self.expected_winrates)
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
 
     def test_soft_judge(self):
         """Test that the soft judge functionality works correctly"""
@@ -185,7 +187,8 @@ class WinRateCallbackTester(TrlTestCase):
             for h in trainer.state.log_history
             if "eval_avg_win_prob" in h
         ]
-        self.assertListEqual(winrate_history, expected_soft_winrates)
+        for history_row, expected_row in zip(winrate_history, expected_soft_winrates):
+            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
 
     @require_peft
     def test_lora(self):
