@@ -18,13 +18,18 @@ from unittest.mock import patch
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
-from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoModelForImageTextToText, AutoTokenizer
+from transformers import (
+    AutoModelForCausalLM,
+    AutoModelForImageTextToText,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
 from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_vllm, require_vision
+from .testing_utils import TrlTestCase, require_vision, require_vllm
 
 
 if is_peft_available():
@@ -1070,7 +1075,6 @@ class RLOOTrainerTester(TrlTestCase):
                 assert mock_prepare.call_args_list[i].args[1] == expected_first_generation_batch
             for i in range(8, 16):
                 assert mock_prepare.call_args_list[i].args[1] == expected_second_generation_batch
-
 
     @parameterized.expand(
         [
