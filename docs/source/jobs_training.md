@@ -133,7 +133,7 @@ Dependencies are specified at the top of the script using this structure:
 ```python
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 # ]
 # ///
