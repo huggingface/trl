@@ -30,7 +30,6 @@ from transformers.utils import is_openai_available, is_peft_available
 from .. import __version__
 from ..import_utils import (
     is_deepspeed_available,
-    is_diffusers_available,
     is_liger_kernel_available,
     is_llm_blender_available,
     is_vllm_available,
@@ -74,7 +73,6 @@ def print_env():
         "HF Hub version": version("huggingface_hub"),
         "bitsandbytes version": version("bitsandbytes") if is_bitsandbytes_available() else "not installed",
         "DeepSpeed version": version("deepspeed") if is_deepspeed_available() else "not installed",
-        "Diffusers version": version("diffusers") if is_diffusers_available() else "not installed",
         "Liger-Kernel version": version("liger_kernel") if is_liger_kernel_available() else "not installed",
         "LLM-Blender version": version("llm_blender") if is_llm_blender_available() else "not installed",
         "OpenAI version": version("openai") if is_openai_available() else "not installed",
