@@ -49,20 +49,23 @@ def test_vlm_dataset_loading() -> tuple[bool, str]:
         from datasets import load_dataset
 
         # Test basic dataset
-        dataset = load_dataset('trl-internal-testing/zen', 'standard_prompt_only', split='train', streaming=True)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train", streaming=True)
         sample = next(iter(dataset.take(1)))
-        assert 'prompt' in sample
+        assert "prompt" in sample
 
         # Test VLM image dataset
-        vlm_dataset = load_dataset('trl-internal-testing/zen-image', 'conversational_prompt_only', split='train', streaming=True)
+        vlm_dataset = load_dataset(
+            "trl-internal-testing/zen-image", "conversational_prompt_only", split="train", streaming=True
+        )
         vlm_sample = next(iter(vlm_dataset.take(1)))
-        assert 'prompt' in vlm_sample
+        assert "prompt" in vlm_sample
 
         # Test data processing if image data is available
-        if 'images' in vlm_sample and 'prompt' in vlm_sample:
+        if "images" in vlm_sample and "prompt" in vlm_sample:
             from trl.data_utils import prepare_multimodal_messages
+
             try:
-                result = prepare_multimodal_messages(vlm_sample['prompt'], vlm_sample['images'])
+                result = prepare_multimodal_messages(vlm_sample["prompt"], vlm_sample["images"])
                 assert result is not None
             except Exception:
                 pass  # Not critical for basic test
@@ -85,12 +88,12 @@ def test_rloo_config_import() -> tuple[bool, str]:
             num_generations=2,
             max_completion_length=4,
             max_steps=1,
-            report_to="none"
+            report_to="none",
         )
         assert config is not None
 
         # Check some VLM-related attributes
-        vlm_attrs = ['max_prompt_length', 'max_completion_length', 'generation_batch_size']
+        vlm_attrs = ["max_prompt_length", "max_completion_length", "generation_batch_size"]
         for attr in vlm_attrs:
             hasattr(config, attr)  # Just check existence
 
@@ -107,9 +110,9 @@ def test_model_configs() -> tuple[bool, str]:
 
         # Test access to VLM models used in tests
         model_ids = [
-            'trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration',
-            'trl-internal-testing/tiny-LlavaNextForConditionalGeneration',
-            'trl-internal-testing/tiny-Qwen2VLForConditionalGeneration',
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            "trl-internal-testing/tiny-LlavaNextForConditionalGeneration",
+            "trl-internal-testing/tiny-Qwen2VLForConditionalGeneration",
         ]
 
         successful_models = []
@@ -138,10 +141,10 @@ def test_vlm_training() -> tuple[bool, str]:
         from trl import RLOOConfig, RLOOTrainer
 
         # Test model
-        model_id = 'trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration'
+        model_id = "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
 
         # Load VLM dataset
-        dataset = load_dataset('trl-internal-testing/zen-image', 'conversational_prompt_only', split='train')
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             # Configure training arguments
@@ -152,7 +155,7 @@ def test_vlm_training() -> tuple[bool, str]:
                 num_generations=2,  # At least 2 required for RLOO
                 max_completion_length=4,  # Short completions for testing
                 max_prompt_length=None,  # Disable prompt truncation for VLM
-                report_to='none',
+                report_to="none",
                 max_steps=1,  # Just one step for testing
                 logging_steps=1,
             )
@@ -160,7 +163,7 @@ def test_vlm_training() -> tuple[bool, str]:
             # Initialize trainer
             trainer = RLOOTrainer(
                 model=model_id,
-                reward_funcs='trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5',
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
                 args=training_args,
                 train_dataset=dataset,
             )
@@ -170,7 +173,7 @@ def test_vlm_training() -> tuple[bool, str]:
 
             # Check training results
             if trainer.state.log_history:
-                train_loss = trainer.state.log_history[-1].get('train_loss', 'N/A')
+                train_loss = trainer.state.log_history[-1].get("train_loss", "N/A")
                 return True, f"VLM training successful with loss: {train_loss}"
             else:
                 return False, "No training logs available"
@@ -280,7 +283,7 @@ def test_vlm_peft() -> tuple[bool, str]:
                 lora_dropout=0.05,
                 bias="none",
                 task_type="CAUSAL_LM",
-                target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+                target_modules=["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
             )
 
             trainer = RLOOTrainer(
@@ -323,6 +326,68 @@ def test_vlm_peft() -> tuple[bool, str]:
         return False, error_msg
 
 
+def test_vlm_prompt_truncation() -> tuple[bool, str]:
+    """Test VLM training with prompt truncation handling."""
+    try:
+        import torch
+        from datasets import load_dataset
+
+        from trl import RLOOConfig, RLOOTrainer
+
+        # If not handled properly, prompt truncation may truncate image token
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            training_args = RLOOConfig(
+                output_dir=tmp_dir,
+                learning_rate=0.1,  # increase the learning rate to speed up the test
+                per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+                num_generations=3,  # reduce the number of generations to reduce memory usage
+                max_completion_length=8,  # reduce the completion length to reduce memory usage
+                max_prompt_length=18,  # Test prompt truncation
+                max_steps=1,
+                report_to="none",
+            )
+
+            trainer = RLOOTrainer(
+                model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+                reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+                args=training_args,
+                train_dataset=dataset,
+            )
+
+            previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+            trainer.train()
+
+            # Check training results
+            if not trainer.state.log_history:
+                return False, "No training logs available"
+
+            train_loss = trainer.state.log_history[-1].get("train_loss")
+            if train_loss is None:
+                return False, "No train_loss in logs"
+
+            # Check that the params have changed
+            # Because of the way the tiny models are initialized, the gradient does not flow properly through the
+            # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
+            params_changed = 0
+            params_to_skip = ("model.visual.",)
+            for n, param in previous_trainable_params.items():
+                if n.startswith(params_to_skip):
+                    continue
+                new_param = trainer.model.get_parameter(n)
+                if not torch.equal(param, new_param):
+                    params_changed += 1
+
+            return True, f"VLM prompt truncation training successful, {params_changed} params changed"
+
+    except Exception as e:
+        error_msg = f"VLM prompt truncation training failed: {e}"
+        traceback.print_exc()
+        return False, error_msg
+
+
 def test_package_versions() -> tuple[bool, str]:
     """Test that all required packages are properly installed."""
     try:
@@ -336,7 +401,7 @@ def test_package_versions() -> tuple[bool, str]:
             "Torchvision": torchvision.__version__,
             "Transformers": transformers.__version__,
             "vLLM": vllm.__version__,
-            "CUDA": torch.cuda.is_available()
+            "CUDA": torch.cuda.is_available(),
         }
 
         return True, f"All packages installed: {versions}"
@@ -356,6 +421,7 @@ def run_all_tests() -> dict[str, tuple[bool, str]]:
         ("VLM Training", test_vlm_training),
         ("VLM Beta Non-Zero", test_vlm_beta_non_zero),
         ("VLM PEFT", test_vlm_peft),
+        ("VLM Prompt Truncation", test_vlm_prompt_truncation),
         ("Package Versions", test_package_versions),
     ]
 

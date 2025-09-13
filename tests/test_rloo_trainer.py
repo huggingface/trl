@@ -1204,7 +1204,8 @@ class RLOOTrainerTester(TrlTestCase):
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
 
     @require_vision
-    def test_training_vlm_and_importance_sampling(self):
+    def test_training_vlm_and_prompt_truncation(self):
+        # If not handled properly, prompt truncation may truncate image token
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         training_args = RLOOConfig(
@@ -1213,7 +1214,7 @@ class RLOOTrainerTester(TrlTestCase):
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
-            steps_per_generation=2,  # increase the steps per generation to trigger IS
+            max_prompt_length=18,
             report_to="none",
         )
         trainer = RLOOTrainer(
@@ -1236,6 +1237,46 @@ class RLOOTrainerTester(TrlTestCase):
         for n, param in previous_trainable_params.items():
             if n.startswith(params_to_skip):
                 continue
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_vision
+    @require_vllm
+    @parameterized.expand(
+        [
+            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
+        ]
+    )
+    @unittest.skip("We should add a mock for the vLLM server.")
+    def test_training_vlm_and_vllm(self, model_id) -> None:
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        training_args = RLOOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            max_prompt_length=18,
+            report_to="none",
+            use_vllm=True,
+            vllm_mode="server",
+        )
+        trainer = RLOOTrainer(
+            model=model_id,
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
