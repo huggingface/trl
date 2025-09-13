@@ -23,7 +23,6 @@ from transformers import (
     AutoConfig,
     AutoProcessor,
     AutoTokenizer,
-    BartConfig,
     BartModel,
     BloomConfig,
     BloomForCausalLM,
@@ -75,7 +74,6 @@ from transformers import (
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
     SmolVLMForConditionalGeneration,
-    T5Config,
     T5ForConditionalGeneration,
 )
 
@@ -256,9 +254,9 @@ for model_id, config_class, model_class, suffix in [
 
 
 # Encoder-decoder models
-for model_id, config_class, model_class, suffix in [
-    ("facebook/bart-base", BartConfig, BartModel, None),
-    ("google/flan-t5-small", T5Config, T5ForConditionalGeneration, None),
+for model_id, model_class, suffix in [
+    ("facebook/bart-base", BartModel, None),
+    ("google/flan-t5-small", T5ForConditionalGeneration, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = AutoConfig.from_pretrained(model_id)
