@@ -17,7 +17,7 @@ def test_collator():
     collator(examples)
     assert "images" in processor.call_args.kwargs
 
-    # Test without images (failed before)
+    # Test without images (failed before the fix)
     processor.reset_mock()
     processor.return_value = {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
     examples = [{"messages": [{"role": "user", "content": "test"}]}]
