@@ -892,14 +892,6 @@ class SFTTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
-        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
-                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
-                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
-                "loss.",
-            )
 
     def _prepare_dataset(
         self,
@@ -1104,11 +1096,6 @@ class SFTTrainer(Trainer):
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
 
-        # Add auxiliary loss if available
-        if self.aux_loss_enabled and self.aux_loss_coef:
-            aux_loss = self.aux_loss_coef * outputs.aux_loss
-            loss += aux_loss
-
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
@@ -1178,6 +1165,7 @@ class SFTTrainer(Trainer):
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
                 if self.aux_loss_enabled:
+                    aux_loss = outputs.aux_loss
                     aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
                     self._metrics[mode]["aux_loss"].append(aux_loss)
 
