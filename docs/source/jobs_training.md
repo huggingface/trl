@@ -6,7 +6,7 @@
 
 In this guide, you'll learn how to:
 
-* Use [TRL Jobs](https://github.com/huggingface/trl-jobs) to simplify and optimize TRL workflows
+* Use [TRL Jobs](https://github.com/huggingface/trl-jobs) to easily run pre-optimized TRL training
 * Run any TRL training script with uv scripts
 
 For general details about Hugging Face Jobs (hardware selection, job monitoring, etc.), see the [Jobs documentation](https://huggingface.co/docs/huggingface_hub/guides/jobs).
@@ -87,7 +87,7 @@ To run successfully, the script needs:
 
 When training with Jobs, be sure to:
 
-* **Set a sufficient timeout**. Jobs time out after 30 minutes by default. If your job exceeds this without a custom timeout, it will fail and all progress will be lost. See [Setting a custom timeout](https://huggingface.co/docs/huggingface_hub/guides/jobs#setting-a-custom-timeout).
+* **Set a sufficient timeout**. Jobs time out after 30 minutes by default. If your job exceeds the without, it will fail and all progress will be lost. See [Setting a custom timeout](https://huggingface.co/docs/huggingface_hub/guides/jobs#setting-a-custom-timeout).
 * **Push the model to the Hub**. The Jobs environment is ephemeral—files are deleted when the job ends. If you don’t push the model, it will be lost.
 
 </Tip>
@@ -102,7 +102,7 @@ hf jobs uv run \
     --flavor a100-large \
     --with trl \
     --secrets HF_TOKEN \
-    "https://gist.githubusercontent.com/qgallouedec/.../train.py"
+    "https://gist.githubusercontent.com/qgallouedec/eb6a7d20bd7d56f9c440c3c8c56d2307/raw/69fd78a179e19af115e4a54a1cdedd2a6c237f2f/train.py"
 ```
 
 </hfoption>
@@ -112,7 +112,7 @@ hf jobs uv run \
 from huggingface_hub import run_uv_job
 
 run_uv_job(
-    "https://gist.githubusercontent.com/qgallouedec/.../train.py",
+    "https://gist.githubusercontent.com/qgallouedec/eb6a7d20bd7d56f9c440c3c8c56d2307/raw/69fd78a179e19af115e4a54a1cdedd2a6c237f2f/train.py",
     flavor="a100-large",
     dependencies=["trl"],
     secrets={"HF_TOKEN": "hf_..."},
@@ -146,6 +146,8 @@ trainer = SFTTrainer(
 trainer.train()
 trainer.push_to_hub("Qwen2.5-0.5B-SFT")
 ```
+
+You can then run the script without specifying dependencies:
 
 <hfoptions id="script_type">
 <hfoption id="bash">
