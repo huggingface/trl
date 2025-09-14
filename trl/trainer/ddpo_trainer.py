@@ -44,13 +44,14 @@ class DDPOTrainer(PyTorchModelHubMixin):
     inspired by the work here: https://github.com/kvablack/ddpo-pytorch As of now only Stable Diffusion based pipelines
     are supported
 
-    Attributes:
-        **config** (`DDPOConfig`) -- Configuration object for DDPOTrainer. Check the documentation of `PPOConfig` for more:
-         details.
-        **reward_function** (Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]) -- Reward function to be used:
-        **prompt_function** (Callable[[], tuple[str, Any]]) -- Function to generate prompts to guide model
-        **sd_pipeline** (`DDPOStableDiffusionPipeline`) -- Stable Diffusion pipeline to be used for training.
-        **image_samples_hook** (Optional[Callable[[Any, Any, Any], Any]]) -- Hook to be called to log images
+    Args:
+        config ([`DDPOConfig`]):
+            Configuration object for DDPOTrainer. Check the documentation of [`PPOConfig`] for more details.
+        reward_function (`Callable[[torch.Tensor, tuple[str], tuple[Any]], torch.Tensor]`):
+            Reward function to be used.
+        prompt_function (`Callable[[], tuple[str, Any]]`): Function to generate prompts to guide model
+        sd_pipeline ([`DDPOStableDiffusionPipeline`]): Stable Diffusion pipeline to be used for training.
+        image_samples_hook (`Optional[Callable[[Any, Any, Any], Any]]`): Hook to be called to log images.
     """
 
     _tag_names = ["trl", "ddpo"]
@@ -617,11 +618,11 @@ class DDPOTrainer(PyTorchModelHubMixin):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():

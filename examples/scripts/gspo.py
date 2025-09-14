@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
@@ -83,14 +83,16 @@ if __name__ == "__main__":
     # Model & Processor
     ################
     dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
-    quantization_config = get_quantization_config(model_args)
     training_args.model_init_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        training_args.model_init_kwargs["device_map"] = get_kbit_device_map()
+        training_args.model_init_kwargs["quantization_config"] = quantization_config
 
     ################
     # Dataset
