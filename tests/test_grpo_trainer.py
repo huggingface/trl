@@ -1803,13 +1803,14 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         Test with inputs where the sequence lengths are different from the prepopulated buffer.
         """
         self._prepopulate_buffer()
+        pad_token_id = self.trainer.tokenizer.pad_token_id
         group_advantages = torch.tensor([[0.6, 0.6], [0.3, 0.45]])  # one no-variance, one variance
         inputs = {
             "group_advantages": group_advantages,
             "prompt_ids": torch.tensor(
                 [
-                    [1, 2, self.trainer.tokenizer.pad_token_id],
-                    [1, 2, self.trainer.tokenizer.pad_token_id],
+                    [1, 2, pad_token_id],
+                    [1, 2, pad_token_id],
                     [3, 4, 5],
                     [3, 4, 5],
                 ]
@@ -1817,9 +1818,9 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
             "prompt_mask": torch.tensor([[1, 1, 0], [1, 1, 0], [1, 1, 1], [1, 1, 1]], dtype=torch.long),
             "completion_ids": torch.tensor(
                 [
-                    [1009, 1010, self.trainer.tokenizer.pad_token_id],
+                    [1009, 1010, pad_token_id],
                     [1011, 1012, 1013],
-                    [1013, 1014, self.trainer.tokenizer.pad_token_id],
+                    [1013, 1014, pad_token_id],
                     [1015, 1016, 1017],
                 ]
             ),
@@ -1843,19 +1844,19 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         # Check for new entry with seq len 3 in buffer
         self.assertIn([[3, 4, 5], [3, 4, 5]], buffered_prompt_ids)  # excluded no-variance group
         self.assertIn(
-            [[1013, 1014, self.trainer.tokenizer.pad_token_id], [1015, 1016, 1017]], buffered_completion_ids
+            [[1013, 1014, pad_token_id], [1015, 1016, 1017]], buffered_completion_ids
         )  # excluded no-variance group
 
         # Check that sampled outputs contain one group with prompt_ids starting with a pad token
         self.assertTrue(
             [
-                [self.trainer.tokenizer.pad_token_id, 101, 102],
-                [self.trainer.tokenizer.pad_token_id, 102, 103],
+                [pad_token_id, 101, 102],
+                [pad_token_id, 102, 103],
             ]
             in output_prompt_ids
             or [
-                [self.trainer.tokenizer.pad_token_id, 104, 105],
-                [self.trainer.tokenizer.pad_token_id, 106, 107],
+                [pad_token_id, 104, 105],
+                [pad_token_id, 106, 107],
             ]
             in output_prompt_ids
         )
