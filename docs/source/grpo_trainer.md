@@ -156,45 +156,6 @@ $$
 
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
-## Filter completions in GRPO
-
-GFPO proposed in the paper [Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning](https://www.arxiv.org/abs/2508.09726) is aimed to train a LLM that demonstrates efficient COT (Chain of Thought) without significant performance degradation.  
-To activate GFPO in GRPOTrainer:
-- set `num_remains_in_group` in [`GRPOConfig`]
--  define a group filter function and set it to `group_filter_func` in [`GRPOTrainer`]. `group_filter_func` will score the `num_generations` completions and  filter the group to get top `num_remains_in_group` completions as a new group. Model will be trained on the filtered group.  
-
-
-```python
-# train_grpo.py
-from trl import GRPOConfig, GRPOTrainer
-
-class GroupFilter:
-    """
-    dummy group filter to scores the completions based on its indice in group
-    """
-    def __call__(self, group_completions, group_rewards, **kwargs):
-        group_scores = []
-        for completions, rewards in zip(group_completions, group_rewards):
-            scores = [float(i) for i in range(len(completions))]
-            group_scores.append(scores)
-        return group_scores
-
-training_args = GRPOConfig(
-    output_dir="Qwen3-0.6B-GFPO"
-    per_device_train_batch_size=4,
-    num_remains_in_group=2,
-    bf16=True, 
-)
-trainer = GRPOTrainer(
-    model="Qwen/Qwen3-0.6B",
-    reward_funcs=...,
-    train_dataset=...,
-    args=training_args,
-    group_filter_func=GroupFilter(),
-)
-trainer.train()
-``` 
-
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
@@ -241,7 +202,7 @@ We support two ways of using vLLM during training: **server mode** and **colocat
 By default, Truncated Importance Sampling is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Truncated Importance Sampling](paper_index#truncated-importance-sampling)
 </Tip>
 
-#### 🔌 Option 1: Server mode
+#### ?? Option 1: Server mode
 
 In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
 
@@ -267,7 +228,7 @@ Make sure that the server is using different GPUs than the trainer, otherwise yo
 
 </Tip>
 
-#### 🧩 Option 2: Colocate mode
+#### ?? Option 2: Colocate mode
 
 In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
 

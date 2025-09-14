@@ -169,10 +169,6 @@ class GRPOConfig(TrainingArguments):
         reward_weights (`list[float]`, *optional*):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
-        num_remains_in_group (`int` *optional* defaults to `None`):
-            number of generations to keep after filtering (GFPO) and it should more than one for scale rewards need,
-            group filter is activated when `num_remains_in_group` is not None. In GFPO, `num_generations` is the outer
-            group generated before filtering, `num_remains_in_group` is the actual group trained by model.
         scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
             Specifies the scaling strategy for rewards. Supported values are:
 
@@ -539,12 +535,6 @@ class GRPOConfig(TrainingArguments):
             "scaling by the standard deviation introduces a question-level difficulty bias."
         },
     )
-    num_remains_in_group: Optional[int] = field(
-        default=None,
-        metadata={
-            "help": "number inputs remains after group filter function, `'num_remains_in_group'` must be >=2 if given."
-        },
-    )
     loss_type: str = field(
         default="dapo",
         metadata={
@@ -699,12 +689,3 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
-
-        if self.num_remains_in_group is not None and self.num_remains_in_group < 2:
-            raise ValueError(
-                    f"Number remains in Group {self.num_remains_in_group} must be greater than 2."
-                )
-        if self.num_remains_in_group is not None and self.num_remains_in_group >= self.num_generations:
-            raise ValueError(
-                    f"Number remains in Group {self.num_remains_in_group} must be less than num_generations : {self.num_generations}."
-                )
