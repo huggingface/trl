@@ -202,7 +202,7 @@ We support two ways of using vLLM during training: **server mode** and **colocat
 By default, Truncated Importance Sampling is activated for vLLM generation to address the generation-training mismatch that occurs when using different frameworks. This can be turned off by setting `vllm_importance_sampling_correction=False`. For more information, see [Truncated Importance Sampling](paper_index#truncated-importance-sampling)
 </Tip>
 
-#### ?? Option 1: Server mode
+#### 🔌 Option 1: Server mode
 
 In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
 
@@ -228,7 +228,7 @@ Make sure that the server is using different GPUs than the trainer, otherwise yo
 
 </Tip>
 
-#### ?? Option 2: Colocate mode
+#### 🧩 Option 2: Colocate mode
 
 In this mode, vLLM runs inside the trainer process and shares GPU memory with the training model. This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
 
