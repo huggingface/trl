@@ -33,52 +33,6 @@ if is_vllm_available():
 
 
 class GFPOTrainer(_GRPOTrainer):
-    """
-    GFPO proposed in the paper [Sample More to Think Less: Group Filtered Policy Optimization for Concise
-    Reasoning](https://www.arxiv.org/abs/2508.09726) is aimed to train a LLM that demonstrates efficient COT (Chain of
-    Thought) without significant performance degradation. To activate GFPO in GRPOTrainer:
-    - set `num_remains_in_group` in [`GRPOConfig`]
-    -  define a group filter function and set it to `group_filter_func` in [`GRPOTrainer`]. `group_filter_func` will
-       score the `num_generations` completions and filter the group to get top `num_remains_in_group` completions as a
-       new group. Model will be trained on the filtered group.
-
-    Example:
-
-    ```python
-    # train_grpo.py
-    from trl.experimental.gfpo import GFPOConfig, GFPOTrainer
-
-    # dummy group filter to scores the completions based on its indice in group
-    class GroupFilter:
-        def __call__(self, group_completions, group_rewards, **kwargs):
-            group_scores = []
-            for completions, rewards in zip(group_completions, group_rewards):
-                scores = [float(i) for i in range(len(completions))]
-                group_scores.append(scores)
-            return group_scores
-
-    training_args = GFPOConfig(
-        output_dir="Qwen3-0.6B-GFPO"
-        per_device_train_batch_size=4,
-        num_remains_in_group=2,
-        bf16=True,
-    )
-    trainer = GFPOTrainer(
-        model="Qwen/Qwen3-0.6B",
-        reward_funcs=...,
-        train_dataset=...,
-        args=training_args,
-        group_filter_func=GroupFilter(),
-    )
-    trainer.train()
-    ```
-
-    Args:
-        group_filter_func (`GroupFilterFunc`, *optional*, defaults to `None`):
-            Group filter function to filter the group before GRPO, group_filter_func should be not None when
-            `num_remains_in_group` is given.
-    """
-
     def __init__(
         self,
         model,
