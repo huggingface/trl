@@ -1717,21 +1717,18 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         self.trainer.replay_buffer = ReplayBuffer(max_size=5)
         self.trainer.num_generations = 2
 
-    def _make_batch(self, with_pixels=False, with_logprobs=False):
-        return {
-            "prompt_ids": torch.tensor([[100, 101], [102, 103]]),
-            "prompt_mask": torch.ones(2, 2, dtype=torch.long),
-            "completion_ids": torch.tensor([[5, 6], [7, 8]]),
-            "completion_mask": torch.ones(2, 2, dtype=torch.long),
-            "advantages": torch.tensor([[0.5, 0.6]]),
-            **({"pixel_values": torch.randn(2, 3, 224, 224)} if with_pixels else {}),
-            **({"old_per_token_logps": torch.randn(2, 2)} if with_logprobs else {}),
-        }
-
     def _prepopulate_buffer(self, with_pixels=False, with_logprobs=False):
         scores = [0.1, 0.9]
         data = [
-            self._make_batch(with_pixels, with_logprobs),
+            {
+                "prompt_ids": torch.tensor([[100, 101], [102, 103]]),
+                "prompt_mask": torch.ones(2, 2, dtype=torch.long),
+                "completion_ids": torch.tensor([[5, 6], [7, 8]]),
+                "completion_mask": torch.ones(2, 2, dtype=torch.long),
+                "advantages": torch.tensor([[0.5, 0.6]]),
+                **({"pixel_values": torch.randn(2, 3, 224, 224)} if with_pixels else {}),
+                **({"old_per_token_logps": torch.randn(2, 2)} if with_logprobs else {}),
+            },
             {
                 "prompt_ids": torch.tensor([[104, 105], [106, 107]]),
                 "prompt_mask": torch.ones(2, 2, dtype=torch.long),
@@ -1800,6 +1797,68 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         self.assertTrue(found_from_buffer)
         self.assertTrue(found_from_original)
         self.assertNotIn([[1, 2], [3, 4]], output_prompt_ids)  # excluded no-variance group
+
+    def test_update_with_inputs_different_seq_len(self):
+        """
+        Test with inputs where the sequence lengths are different from the prepopulated buffer.
+        """
+        self._prepopulate_buffer()
+        group_advantages = torch.tensor([[0.6, 0.6], [0.3, 0.45]])  # one no-variance, one variance
+        inputs = {
+            "group_advantages": group_advantages,
+            "prompt_ids": torch.tensor(
+                [
+                    [1, 2, self.trainer.tokenizer.pad_token_id],
+                    [1, 2, self.trainer.tokenizer.pad_token_id],
+                    [3, 4, 5],
+                    [3, 4, 5],
+                ]
+            ),
+            "prompt_mask": torch.tensor([[1, 1, 0], [1, 1, 0], [1, 1, 1], [1, 1, 1]], dtype=torch.long),
+            "completion_ids": torch.tensor(
+                [
+                    [1009, 1010, self.trainer.tokenizer.pad_token_id],
+                    [1011, 1012, 1013],
+                    [1013, 1014, self.trainer.tokenizer.pad_token_id],
+                    [1015, 1016, 1017],
+                ]
+            ),
+            "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1], [1, 1, 0], [1, 1, 1]], dtype=torch.long),
+            "prompt_inputs": {},
+        }
+        inputs["group_std_rewards"] = group_advantages.std(dim=1).expand_as(group_advantages)
+
+        outputs_after_sampling = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
+        # Seq length of current batch should be preserved
+        self.assertEqual(outputs_after_sampling["prompt_ids"].shape[-1], 3)
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 3)
+        output_prompt_ids = outputs_after_sampling["prompt_ids"].view(-1, self.trainer.num_generations, 3).tolist()
+
+        buffered_prompt_completion_ids = [
+            (item[1]["prompt_ids"].tolist(), item[1]["completion_ids"].tolist())
+            for item in self.trainer.replay_buffer.heap
+        ]
+        buffered_prompt_ids, buffered_completion_ids = zip(*buffered_prompt_completion_ids)
+
+        # Check for new entry with seq len 3 in buffer
+        self.assertIn([[3, 4, 5], [3, 4, 5]], buffered_prompt_ids)  # excluded no-variance group
+        self.assertIn(
+            [[1013, 1014, self.trainer.tokenizer.pad_token_id], [1015, 1016, 1017]], buffered_completion_ids
+        )  # excluded no-variance group
+
+        # Check that sampled outputs contain one group with prompt_ids starting with a pad token
+        self.assertTrue(
+            [
+                [self.trainer.tokenizer.pad_token_id, 101, 102],
+                [self.trainer.tokenizer.pad_token_id, 102, 103],
+            ]
+            in output_prompt_ids
+            or [
+                [self.trainer.tokenizer.pad_token_id, 104, 105],
+                [self.trainer.tokenizer.pad_token_id, 106, 107],
+            ]
+            in output_prompt_ids
+        )
 
 
 if __name__ == "__main__":

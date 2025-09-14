@@ -1721,36 +1721,42 @@ class GRPOTrainer(Trainer):
         groups_without_variance = ~groups_with_variance
 
         # Helper function to slice group data
-        def slice_group_data(data, group_idx):
+        def slice_group_data(data, mask, group_idx):
+            """
+            Slices the input data and mask tensors for a specific group index. Also trims the sequence length to the
+            maximum length in the group based on the mask.
+            """
             start_idx = group_idx * self.num_generations
             end_idx = (group_idx + 1) * self.num_generations
-            return data[start_idx:end_idx]
+            group_data = data[start_idx:end_idx]
+            group_mask = mask[start_idx:end_idx]
+            group_max_len = group_mask.sum(dim=1).max().item()
+            return group_data[:, :group_max_len], group_mask[:, :group_max_len]
 
         # Prepare buffered outputs for groups with variance
         buffered_outputs = []
         for _, group_idx in enumerate(groups_with_variance.nonzero(as_tuple=True)[0].unique().tolist()):
+            group_prompt_ids, group_prompt_mask = slice_group_data(prompt_ids, prompt_mask, group_idx)
+            group_completion_ids, group_completion_mask = slice_group_data(completion_ids, completion_mask, group_idx)
+
             # Store unpadded data in the buffer
             buffered_output = {
-                "prompt_ids": slice_group_data(prompt_ids[prompt_mask], group_idx),
-                "prompt_mask": slice_group_data(prompt_mask[prompt_mask], group_idx),
-                "completion_ids": slice_group_data(completion_ids[completion_mask], group_idx),
-                "completion_mask": slice_group_data(completion_mask[completion_mask], group_idx),
+                "prompt_ids": group_prompt_ids,
+                "completion_ids": group_completion_ids,
                 "advantages": group_advantages[group_idx].tolist(),
+                "prompt_mask": group_prompt_mask,
+                "completion_mask": group_completion_mask,
             }
 
             # Add optional fields if they exist
             optional_fields = {
-                "old_per_token_logps": old_per_token_logps[completion_mask]
-                if old_per_token_logps is not None
-                else None,
-                "ref_per_token_logps": ref_per_token_logps[completion_mask]
-                if ref_per_token_logps is not None
-                else None,
+                "old_per_token_logps": old_per_token_logps if old_per_token_logps is not None else None,
+                "ref_per_token_logps": ref_per_token_logps if ref_per_token_logps is not None else None,
             }
 
             for field_name, field_data in optional_fields.items():
                 if field_data is not None:
-                    buffered_output[field_name] = slice_group_data(field_data, group_idx)
+                    buffered_output[field_name] = slice_group_data(field_data, completion_mask, group_idx)[0]
 
             # Add importance sampling if needed
             if self.use_vllm and self.vllm_importance_sampling_correction:
@@ -1760,7 +1766,9 @@ class GRPOTrainer(Trainer):
             vision_fields = ["pixel_values", "image_grid_thw", "pixel_attention_mask", "image_sizes"]
             for field_name in vision_fields:
                 if field_name in prompt_inputs:
-                    buffered_output[field_name] = slice_group_data(prompt_inputs[field_name], group_idx)
+                    buffered_output[field_name] = slice_group_data(prompt_inputs[field_name], prompt_mask, group_idx)[
+                        0
+                    ]
 
             buffered_outputs.append(buffered_output)
 
@@ -1822,16 +1830,43 @@ class GRPOTrainer(Trainer):
 
         # If any sampled prompt is longer, pad the whole batch prompt tensors once (left padding)
         if target_prompt_len > current_batch_prompt_seq_len:
-            prompt_ids = pad(list(prompt_ids.unbind(0)), padding_value=self.pad_token_id, pad_to_multiple_of=target_prompt_len, padding_side="left")
-            prompt_mask = pad(list(prompt_mask.unbind(0)), padding_value=0, pad_to_multiple_of=target_prompt_len, padding_side="left")
+            prompt_ids = pad(
+                list(prompt_ids.unbind(0)),
+                padding_value=self.pad_token_id,
+                pad_to_multiple_of=target_prompt_len,
+                padding_side="left",
+            )
+            prompt_mask = pad(
+                list(prompt_mask.unbind(0)), padding_value=0, pad_to_multiple_of=target_prompt_len, padding_side="left"
+            )
         # If any sampled completion is longer, pad the whole batch completion tensors once (right padding)
         if target_completion_len > current_batch_completion_seq_len:
-            completion_ids = pad(list(completion_ids.unbind(0)), padding_value=self.pad_token_id, pad_to_multiple_of=target_completion_len, padding_side="right")
-            completion_mask = pad(list(completion_mask.unbind(0)), padding_value=0, pad_to_multiple_of=target_completion_len, padding_side="right")
+            completion_ids = pad(
+                list(completion_ids.unbind(0)),
+                padding_value=self.pad_token_id,
+                pad_to_multiple_of=target_completion_len,
+                padding_side="right",
+            )
+            completion_mask = pad(
+                list(completion_mask.unbind(0)),
+                padding_value=0,
+                pad_to_multiple_of=target_completion_len,
+                padding_side="right",
+            )
             if old_per_token_logps is not None:
-                old_per_token_logps = pad(list(old_per_token_logps.unbind(0)), padding_value=0.0, pad_to_multiple_of=target_completion_len, padding_side="right")
+                old_per_token_logps = pad(
+                    list(old_per_token_logps.unbind(0)),
+                    padding_value=0.0,
+                    pad_to_multiple_of=target_completion_len,
+                    padding_side="right",
+                )
             if ref_per_token_logps is not None:
-                ref_per_token_logps = pad(list(ref_per_token_logps.unbind(0)), padding_value=0.0, pad_to_multiple_of=target_completion_len, padding_side="right")
+                ref_per_token_logps = pad(
+                    list(ref_per_token_logps.unbind(0)),
+                    padding_value=0.0,
+                    pad_to_multiple_of=target_completion_len,
+                    padding_side="right",
+                )
 
         # Replace per-group data, padding only sampled groups that are shorter than the target
         for i, group_idx in enumerate(groups_to_replace_idxs):
