@@ -195,7 +195,7 @@ class GRPOTrainer(Trainer):
                   reward function's signature.
             - A list of reward functions, where each item can independently be any of the above types. Mixing different
             types within the list (e.g., a string model ID and a custom reward function) is allowed.
-        args ([`GRPOConfig`], *optional*, defaults to `None`):
+        args ([`GRPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. It must include a column `"prompt"`. Any additional columns in the dataset is
@@ -206,12 +206,12 @@ class GRPOTrainer(Trainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
-        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*, defaults to `None`):
+        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
             - A single processing class: Used when `reward_funcs` contains only one reward function.
@@ -221,7 +221,7 @@ class GRPOTrainer(Trainer):
             [`~transformers.AutoTokenizer.from_pretrained`]. For elements in `reward_funcs` that are custom reward
             functions (not [`~transformers.PreTrainedModel`]), the corresponding entries in `reward_processing_classes`
             are ignored.
-        callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
@@ -230,7 +230,7 @@ class GRPOTrainer(Trainer):
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
@@ -791,25 +791,23 @@ class GRPOTrainer(Trainer):
                 Boolean mask of shape (batch_size, seq_len), where `True` indicates tokens with entropy >= threshold
                 and `False` otherwise.
         """
-        non_pad_entropies = entropies[mask.bool()].float()
-        if non_pad_entropies.numel() == 0:
+        local = entropies[mask.bool()].float()
+
+        # Use a negative pad_value as a sentinel because entropy values are always >= 0.
+        # This guarantees that the sentinel cannot collide with any real entropy value.
+        pad_value = -1e9
+
+        # Pad across processes so that every rank has the same tensor length
+        padded = self.accelerator.pad_across_processes(local, dim=0, pad_index=pad_value)
+        gathered = self.accelerator.gather(padded)
+
+        # Drop sentinel values (safe because no entropy can be negative)
+        gathered = gathered[gathered != pad_value]
+
+        if gathered.numel() == 0:
             return torch.zeros_like(entropies, dtype=torch.bool)
 
-        # The shape of non_pad_entropies can be different on each gpu/device.
-        # this can cause the gather operation to hang. So we first gather the lengths
-        # of non_pad_entropies and pad them to the max length before doing a gather.
-        non_pad_entropies_seq_length = torch.tensor([non_pad_entropies.numel()], device=entropies.device)
-        max_non_pad_entropies_seq_length = self.accelerator.gather(non_pad_entropies_seq_length).max().item()
-        padding = torch.zeros(
-            max_non_pad_entropies_seq_length - non_pad_entropies.numel(), device=non_pad_entropies.device
-        )
-        padded_entropies = torch.cat([non_pad_entropies, padding])
-        padded_entropies_mask = torch.cat([torch.ones_like(non_pad_entropies), padding])
-        all_padded_entropies = self.accelerator.gather(padded_entropies)
-        all_padded_entropies_mask = self.accelerator.gather(padded_entropies_mask)
-        # Filter out entropies corresponding to padding.
-        all_non_padded_entropies = all_padded_entropies[all_padded_entropies_mask.bool()]
-        entropy_threshold = torch.quantile(all_non_padded_entropies, threshold)
+        entropy_threshold = torch.quantile(gathered, threshold)
         masked_entropies = entropies * mask.float()
         entropy_mask = masked_entropies >= entropy_threshold
         return entropy_mask & mask.bool()  # ensure padding tokens are always masked out
@@ -827,6 +825,7 @@ class GRPOTrainer(Trainer):
         image_grid_thw=None,
         pixel_attention_mask=None,
         image_sizes=None,
+        image_split_sizes=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -839,13 +838,15 @@ class GRPOTrainer(Trainer):
             # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
 
-            if image_grid_thw is not None and pixel_values is not None:
+            if image_grid_thw is not None:
                 model_inputs["image_grid_thw"] = image_grid_thw[start : start + batch_size]
-                start_pixel_idx = image_grid_thw[:start].prod(-1).sum().item()
-                end_pixel_idx = image_grid_thw[: start + batch_size].prod(-1).sum().item()
-                model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
-            elif pixel_values is not None:
-                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+            if pixel_values is not None:
+                if image_split_sizes is not None:
+                    start_pixel_idx = sum(image_split_sizes[:start])
+                    end_pixel_idx = sum(image_split_sizes[: start + batch_size])
+                    model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
+                else:
+                    model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
@@ -1111,12 +1112,18 @@ class GRPOTrainer(Trainer):
         # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
         kwargs = {}
         has_images = "image" in inputs[0]
+        image_split_sizes = None
         if has_images:
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
                 if isinstance(prompt, list):  # i.e., when using conversational data
                     prepare_multimodal_messages(prompt, num_images=1)
+
+            if hasattr(self.processing_class, "_get_num_multimodal_tokens"):
+                image_sizes = [(image.height, image.width) for image in images]
+                multimodal_extra_data = self.processing_class._get_num_multimodal_tokens(image_sizes)
+                image_split_sizes = multimodal_extra_data.num_image_patches
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1130,6 +1137,10 @@ class GRPOTrainer(Trainer):
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+        if "image_grid_thw" in prompt_inputs and image_split_sizes is None:
+            # Fallback for VLMs that require image_grid_thw but don't provide _get_num_multimodal_tokens
+            image_split_sizes = prompt_inputs["image_grid_thw"].prod(dim=1).tolist()
 
         if self.max_prompt_length is not None:
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
@@ -1415,6 +1426,7 @@ class GRPOTrainer(Trainer):
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
+                    image_split_sizes=image_split_sizes,
                 )
             else:
                 old_per_token_logps = None
@@ -1439,6 +1451,7 @@ class GRPOTrainer(Trainer):
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         image_sizes=prompt_inputs.get("image_sizes"),
+                        image_split_sizes=image_split_sizes,
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -1452,6 +1465,7 @@ class GRPOTrainer(Trainer):
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                             image_sizes=prompt_inputs.get("image_sizes"),
+                            image_split_sizes=image_split_sizes,
                         )
             else:
                 ref_per_token_logps = None
@@ -1941,6 +1955,7 @@ class GRPOTrainer(Trainer):
             image_grid_thw=inputs.get("image_grid_thw"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
+            image_split_sizes=inputs.get("image_split_sizes"),
         )
 
         if self.top_entropy_quantile < 1.0:
@@ -2126,11 +2141,11 @@ class GRPOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():

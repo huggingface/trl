@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "trackio",
 #     "kernels",
@@ -62,6 +62,7 @@ python trl/scripts/dpo.py \
 
 import argparse
 import os
+from typing import Optional
 
 import torch
 from accelerate import logging
@@ -168,7 +169,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
 
-def make_parser(subparsers: argparse._SubParsersAction = None):
+def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
     dataclass_types = (ScriptArguments, DPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)
