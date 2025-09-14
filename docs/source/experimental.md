@@ -50,7 +50,7 @@ This feature implements the GFPO algorithm to enforce concise reasoning in the m
 To activate GFPO in GFPOTrainer:
 - set `num_remains_in_group` in [`GFPOConfig`]
 - define a group filter function and set it to `group_filter_func` in [`GFPOTrainer`]. `group_filter_func` will
-  score the `num_generations` completions and filter the group to get top `num_remains_in_group` completions as a
+  score the `num_generations` completions and The GFPOTrainer filters groups according to their scores to get top `num_remains_in_group` completions as a
   new group. Model will be trained on the filtered group.
 
 ```python
