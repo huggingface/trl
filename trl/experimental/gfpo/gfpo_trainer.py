@@ -1,5 +1,19 @@
-import logging
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import copy
+import logging
 import re
 from contextlib import nullcontext
 from typing import Any, Callable
@@ -12,7 +26,9 @@ from transformers.utils import is_flash_attn_2_available
 
 from ...data_utils import is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from ...extras.profiling import profiling_context
+from ...import_utils import is_vllm_available
 from ...models import unwrap_model_for_generation
+from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import (
     nanmax,
     nanmin,
@@ -20,8 +36,7 @@ from ...trainer.utils import (
     pad,
     truncate_with_protected_tokens,
 )
-from ...import_utils import is_vllm_available
-from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
+
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +52,15 @@ class GFPOTrainer(_GRPOTrainer):
         self,
         model,
         reward_funcs,
-        args= None,
-        train_dataset = None,
-        eval_dataset = None,
-        processing_class = None,
-        reward_processing_classes = None,
-        group_filter_func = None,
-        callbacks = None,
-        optimizers = (None, None),
-        peft_config = None,
+        args=None,
+        train_dataset=None,
+        eval_dataset=None,
+        processing_class=None,
+        reward_processing_classes=None,
+        group_filter_func=None,
+        callbacks=None,
+        optimizers=(None, None),
+        peft_config=None,
     ):
         super().__init__(
             model=model,
@@ -60,15 +75,13 @@ class GFPOTrainer(_GRPOTrainer):
             peft_config=peft_config,
         )
         self.group_filter_func = group_filter_func
-        self.num_remains_in_group=  args.num_remains_in_group
+        self.num_remains_in_group = args.num_remains_in_group
         if self.group_filter_func is None and self.num_remains_in_group is not None:
             raise ValueError(
-                    f"Group filter function must not be None when num_remains_in_group ({self.num_remains_in_group}) is given."
-                )
-        if self.group_filter_func is not None and self.num_remains_in_group is None:
-            logger.warning(
-                "Group filter function is not activated since num_remains_in_group is not set"
+                f"Group filter function must not be None when num_remains_in_group ({self.num_remains_in_group}) is given."
             )
+        if self.group_filter_func is not None and self.num_remains_in_group is None:
+            logger.warning("Group filter function is not activated since num_remains_in_group is not set")
 
     def _generate_and_score_completions(self, inputs):
         device = self.accelerator.device
@@ -477,27 +490,17 @@ class GFPOTrainer(_GRPOTrainer):
                 ],
                 group_rewards=rewards.view(-1, self.num_generations).tolist(),
             )
-            group_filter_scores = torch.tensor(
-                group_filter_scores, device=device
-            )
+            group_filter_scores = torch.tensor(group_filter_scores, device=device)
 
-            _, group_local_indices = torch.topk(
-                group_filter_scores, self.num_remains_in_group, dim=-1
-            )
-            group_row_offsets = torch.arange(
-                0, len(all_completions), self.num_generations, device=device
-            ).unsqueeze(1)
+            _, group_local_indices = torch.topk(group_filter_scores, self.num_remains_in_group, dim=-1)
+            group_row_offsets = torch.arange(0, len(all_completions), self.num_generations, device=device).unsqueeze(1)
             group_global_indices = group_row_offsets + group_local_indices
             group_global_indices = group_global_indices.flatten()
 
             rewards = rewards[group_global_indices].contiguous()
-            rewards_per_func = rewards_per_func[
-                group_global_indices, :
-            ].contiguous()
+            rewards_per_func = rewards_per_func[group_global_indices, :].contiguous()
 
-            num_inputs_in_device = int(
-                len(prompts) / self.num_generations * self.num_remains_in_group
-            )
+            num_inputs_in_device = int(len(prompts) / self.num_generations * self.num_remains_in_group)
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, num_in_group).mean(dim=1)
@@ -531,9 +534,7 @@ class GFPOTrainer(_GRPOTrainer):
         advantages = advantages[process_slice]
 
         if self.num_remains_in_group is not None and mode == "train":
-            local_input_indices_to_keep = group_global_indices[
-                process_slice
-            ] - self.accelerator.process_index * len(
+            local_input_indices_to_keep = group_global_indices[process_slice] - self.accelerator.process_index * len(
                 prompts
             )  # step is length of prompts
 
@@ -584,12 +585,8 @@ class GFPOTrainer(_GRPOTrainer):
         all_images = gather_object(images) if has_images else None
         if self.num_remains_in_group is not None and mode == "train":
             group_global_indices_list = group_global_indices.tolist()
-            all_prompts_text = [
-                all_prompts_text[i] for i in group_global_indices_list
-            ]
-            all_completions_text = [
-                all_completions_text[i] for i in group_global_indices_list
-            ]
+            all_prompts_text = [all_prompts_text[i] for i in group_global_indices_list]
+            all_completions_text = [all_completions_text[i] for i in group_global_indices_list]
             if has_images:
                 all_images = [all_images[i] for i in group_global_indices_list]
 

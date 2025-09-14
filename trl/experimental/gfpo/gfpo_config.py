@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
 from dataclasses import dataclass, field
+from typing import Optional
 
 from ...trainer.grpo_config import GRPOConfig as _GRPOConfig
 
@@ -32,5 +32,5 @@ class GFPOConfig(_GRPOConfig):
 
         if self.num_remains_in_group is not None and self.num_remains_in_group >= self.num_generations:
             raise ValueError(
-                    f"Number remains in Group {self.num_remains_in_group} must be less than num_generations : {self.num_generations}."
-                )
+                f"Number remains in Group {self.num_remains_in_group} must be less than num_generations : {self.num_generations}."
+            )
