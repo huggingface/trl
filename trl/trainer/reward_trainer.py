@@ -13,9 +13,12 @@
 # limitations under the License.
 
 import contextlib
+import logging
 import os
+import re
 from collections import defaultdict
 from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar, Union
@@ -23,16 +26,16 @@ from typing import Any, Callable, Optional, TypeVar, Union
 import torch
 import torch.nn as nn
 import transformers
-from accelerate import PartialState, logging
+from accelerate import PartialState
+from accelerate.logging import get_logger
 from datasets import Dataset, IterableDataset
 from transformers import (
-    AutoConfig,
+    AutoModelForSequenceClassification,
     AutoTokenizer,
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
     Trainer,
-    TrainingArguments,
     is_wandb_available,
 )
 from transformers.data.data_collator import DataCollatorMixin
@@ -63,7 +66,31 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
-logger = logging.get_logger(__name__)
+logger = get_logger(__name__)
+
+
+# AutoModelForSequenceClassification adds a new classification head when loading a CausalLM. That head is randomly
+# initialized and triggers a harmless warning about uninitialized weights. We suppress just that specific warning to
+# avoid confusing users.
+@contextmanager
+def suppress_from_pretrained_warning(logger: logging.Logger):
+    pattern = re.compile(
+        r"^Some weights of \S+ were not initialized from the model checkpoint at \S+ and are newly initialized: "
+        r"\[.*\]\nYou should probably TRAIN this model on a down-stream task to be able to use it for predictions and "
+        r"inference\.$"
+    )
+
+    class _Filter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            return not pattern.search(record.getMessage())
+
+    f = _Filter()
+    logger.addFilter(f)
+    try:
+        yield
+    finally:
+        logger.removeFilter(f)
+
 
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
@@ -409,9 +436,8 @@ class RewardTrainer(Trainer):
                     "Invalid `dtype` passed to `RewardConfig`. Expected either 'auto' or a string representing "
                     f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            with suppress_from_pretrained_warning(transformers.modeling_utils.logger):
+                model = AutoModelForSequenceClassification.from_pretrained(model_id, **model_init_kwargs)
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
