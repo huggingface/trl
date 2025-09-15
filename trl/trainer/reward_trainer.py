@@ -46,7 +46,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import is_conversational, is_conversational_from_value, maybe_convert_to_chatml, truncate_dataset
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .reward_config import RewardConfig
-from .utils import entropy_from_logits, generate_model_card, get_comet_experiment_url, pad
+from .utils import generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
@@ -119,13 +119,14 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
 @dataclass
 class DataCollatorForPreference(DataCollatorMixin):
     """
-    Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
+    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch.
 
-    This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
-    The collator returns a dictionary containing the following keys:
-    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
+    This collator expects each example in the input list to be a dictionary containing at least the
+    `"chosen_input_ids"` and `"rejected_input_ids"` keys. The collator returns a dictionary containing the following
+    keys:
+    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. The first half of the batch
+        corresponds to the `"chosen_input_ids"` and the second half to the `"rejected_input_ids"`.
     - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
-    - `"labels"`: Tensor of labels, padded to the maximum length of the batch.
 
     Args:
         pad_token_id (`int`):
@@ -140,14 +141,19 @@ class DataCollatorForPreference(DataCollatorMixin):
     >>> from trl.trainer.reward_trainer import DataCollatorForPreference
 
     >>> collator = DataCollatorForPreference(pad_token_id=0)
-    >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+    >>> examples = [
+    ...     {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5]},
+    ...     {"chosen_input_ids": [6, 7], "rejected_input_ids": [8]},
+    ... ]
     >>> collator(examples)
-    {'input_ids': tensor([[  1,  2,  3],
-                          [  4,  5,  0]]),
-     'attention_mask': tensor([[  1,  1,  1],
-                               [  1,  1,  0]]),
-     'labels': tensor([[   1,    2,    3],
-                       [   4,    5, -100]])}
+    {'input_ids': tensor([[1, 2, 3],
+                          [6, 7, 0],
+                          [4, 5, 0],
+                          [8, 0, 0]]),
+     'attention_mask': tensor([[1, 1, 1],
+                               [1, 1, 0],
+                               [1, 1, 0],
+                               [1, 0, 0]])}
     ```
     """
 
@@ -157,13 +163,10 @@ class DataCollatorForPreference(DataCollatorMixin):
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
-        input_ids = [torch.tensor(example["input_ids"]) for example in examples]
-        attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
-
-        if "labels" in examples[0]:
-            labels = [torch.tensor(example["labels"]) for example in examples]
-        else:
-            labels = [torch.tensor(example["input_ids"]) for example in examples]
+        chosen_input_ids = [torch.tensor(example["chosen_input_ids"]) for example in examples]
+        rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
+        input_ids = chosen_input_ids + rejected_input_ids
+        attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         output = {}
 
@@ -175,10 +178,10 @@ class DataCollatorForPreference(DataCollatorMixin):
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
         output["attention_mask"] = pad(
-            attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-        )
-        output["labels"] = pad(
-            labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            attention_mask,
+            padding_value=0,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
         )
         return output
 
@@ -311,7 +314,7 @@ class RewardTrainer(Trainer):
                     f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             with suppress_from_pretrained_warning(transformers.modeling_utils.logger):
-                model = AutoModelForSequenceClassification.from_pretrained(model_id, **model_init_kwargs)
+                model = AutoModelForSequenceClassification.from_pretrained(model_id, num_labels=1, **model_init_kwargs)
         else:
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
@@ -401,20 +404,15 @@ class RewardTrainer(Trainer):
             )
 
         # Dataset
-        # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`.
-        skip_prepare_dataset = args.dataset_kwargs is not None and args.dataset_kwargs.get(
-            "skip_prepare_dataset", False
-        )
-        if not skip_prepare_dataset:
-            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
-            if eval_dataset is not None:
-                if isinstance(eval_dataset, dict):
-                    eval_dataset = {
-                        key: self._prepare_dataset(dataset, processing_class, args, key)
-                        for key, dataset in eval_dataset.items()
-                    }
-                else:
-                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
+        train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
+        if eval_dataset is not None:
+            if isinstance(eval_dataset, dict):
+                eval_dataset = {
+                    key: self._prepare_dataset(dataset, processing_class, args, key)
+                    for key, dataset in eval_dataset.items()
+                }
+            else:
+                eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -545,7 +543,7 @@ class RewardTrainer(Trainer):
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
         # and "attention_mask").
         if self._signature_columns is None:
-            self._signature_columns = ["chosen_input_ids", "rejected_input_ids", "labels"]
+            self._signature_columns = ["chosen_input_ids", "rejected_input_ids"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -553,73 +551,41 @@ class RewardTrainer(Trainer):
         """
         mode = "train" if self.model.training else "eval"
 
-        # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
-        # This can be removed when this issue is fixed.
-        labels = inputs["labels"]
-
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
-        (loss, outputs) = super().compute_loss(
-            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-        )
+        outputs = model(**inputs)
 
-        # Compute entropy
-        with torch.no_grad():
-            per_token_entropy = entropy_from_logits(outputs.logits)
-            attention_mask = inputs["attention_mask"]
-            # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
-            virtual_attention_mask = torch.ones(
-                attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-            )
-            attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
-            entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-            entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
-        self._metrics[mode]["entropy"].append(entropy)
+        # Split the rewards into chosen and rejected
+        rewards_chosen, rewards_rejected = torch.chunk(outputs.logits.squeeze(-1), chunks=2)
+
+        # Calculate loss, optionally modulate with margin
+        if "margin" in inputs:
+            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected - inputs["margin"]).mean()
+        else:
+            loss = -nn.functional.logsigmoid(rewards_chosen - rewards_rejected).mean()
+
+        if self.args.center_rewards_coefficient is not None:
+            loss += self.args.center_rewards_coefficient * torch.mean((rewards_chosen + rewards_rejected) ** 2)
 
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        # Compute token accuracy if we have labels
+        # Compute min, mean, max, accuracy and margin
         with torch.no_grad():
-            if "shift_labels" in inputs:
-                # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
-                # - The first discarded token from inputs["labels"] actually belongs to process n-1
-                # - The last logits require the label from process n+1
-                shift_logits = outputs.logits.contiguous()
-                shift_labels = inputs["shift_labels"]
-            else:
-                shift_logits = outputs.logits[..., :-1, :].contiguous()
-                shift_labels = labels[..., 1:].contiguous()
+            all_rewards = self.accelerator.gather(outputs.logits)
+            self._metrics[mode]["min_reward"].append(all_rewards.min())
+            self._metrics[mode]["mean_reward"].append(all_rewards.mean())
+            self._metrics[mode]["max_reward"].append(all_rewards.max())
 
-            # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
-            # not correspond to actual input labels.
-            shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+            mean_accuracy = (rewards_chosen > rewards_rejected).float().mean()
+            mean_accuracy = self.accelerator.gather_for_metrics(mean_accuracy).mean()
+            self._metrics[mode]["accuracy"].append(mean_accuracy)
 
-            # Get predictions
-            predictions = shift_logits.argmax(dim=-1)
-
-            # Create mask for non-padding tokens (assuming ignore_index is -100)
-            mask = shift_labels != -100
-
-            # Calculate accuracy only on non-padding tokens
-            correct_predictions = (predictions == shift_labels) & mask
-            total_tokens = mask.sum()
-            correct_tokens = correct_predictions.sum()
-
-            # Gather the correct_tokens and total_tokens across all processes
-            correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-            total_tokens = self.accelerator.gather_for_metrics(total_tokens)
-
-            # Compute the mean token accuracy and log it
-            total_sum = total_tokens.sum()
-            accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-            if self.aux_loss_enabled:
-                aux_loss = outputs.aux_loss
-                aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
-                self._metrics[mode]["aux_loss"].append(aux_loss)
+            mean_margin = (rewards_chosen - rewards_rejected).mean()
+            mean_margin = self.accelerator.gather_for_metrics(mean_margin).mean()
+            self._metrics[mode]["margin"].append(mean_margin)
 
         return (loss, outputs) if return_outputs else loss
 
