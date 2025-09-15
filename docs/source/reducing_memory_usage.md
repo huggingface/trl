@@ -268,7 +268,7 @@ Context Parallelism (CP) is a parallelization technique that enables training wi
 
 For more details on CP, see the [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism).
 
-<Tip warning={true}>
+<Tip>
 
 For a full overview of multi-GPU and multi-node training setups, see our [Distributing Training guide](distributing_training#multi-gpu-training-with-trl).
 
