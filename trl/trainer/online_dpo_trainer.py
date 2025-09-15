@@ -170,7 +170,7 @@ class OnlineDPOTrainer(Trainer):
 
         > Deprecated parameters
 
-        reward_model: Description.
+        reward_model (`type`): Description.
 
             <Deprecated version="0.22.0">
 
