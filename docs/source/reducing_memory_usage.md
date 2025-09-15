@@ -342,7 +342,7 @@ training_args = SFTConfig(
     max_length=16384,               # long sequence length
     packing=True,                   # use packing to reduce padding
     use_liger_kernel=True,          # compatible with CP
-    gradient_checkpointing=False,   # If True in accelerate config, it needs to be False here
+    gradient_checkpointing=False,   # The activation_checkpointing in FSDP config and the gradient_checkpointing in training arg can't be set to True simultaneously
     per_device_train_batch_size=1,
     ...
 )
