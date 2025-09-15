@@ -16,7 +16,6 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
-from collections import deque
 from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -545,48 +544,6 @@ def exact_div(a, b, custom_error_message=""):
     if a != q * b:
         raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
     return q
-
-
-# copied from https://github.com/kvablack/ddpo-pytorch/blob/main/ddpo_pytorch/stat_tracking.py#L5
-class PerPromptStatTracker:
-    r"""
-    Class for tracking statistics per prompt. Mainly used to calculate advantage for the DPPO algorithm
-
-    Args:
-        buffer_size (`int`):
-            Size of the buffer to keep for each prompt.
-        min_count (`int`):
-            Minimum number of samples to keep in the buffer before calculating the mean and std.
-    """
-
-    def __init__(self, buffer_size, min_count):
-        self.buffer_size = buffer_size
-        self.min_count = min_count
-        self.stats = {}
-
-    def update(self, prompts, rewards):
-        prompts = np.array(prompts)
-        rewards = np.array(rewards)
-        unique = np.unique(prompts)
-        advantages = np.empty_like(rewards)
-        for prompt in unique:
-            prompt_rewards = rewards[prompts == prompt]
-            if prompt not in self.stats:
-                self.stats[prompt] = deque(maxlen=self.buffer_size)
-            self.stats[prompt].extend(prompt_rewards)
-
-            if len(self.stats[prompt]) < self.min_count:
-                mean = np.mean(rewards)
-                std = np.std(rewards) + 1e-6
-            else:
-                mean = np.mean(self.stats[prompt])
-                std = np.std(self.stats[prompt]) + 1e-6
-            advantages[prompts == prompt] = (prompt_rewards - mean) / std
-
-        return advantages
-
-    def get_stats(self):
-        return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
 
 
 def peft_module_casting_to_bf16(model):
