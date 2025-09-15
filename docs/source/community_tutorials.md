@@ -2,7 +2,7 @@
 
 Community tutorials are made by active members of the Hugging Face community who want to share their knowledge and expertise with others. They are a great way to learn about the library and its features, and to get started with core classes and modalities.
 
-# Language Models
+## Language Models
 
 | Task | Class | Description | Author | Tutorial | Colab |
 | --- | --- | --- | --- | --- | --- |
@@ -27,7 +27,7 @@ The tutorial above uses two deprecated features:
 
 </Tip>
 
-# Vision Language Models
+## Vision Language Models
 
 | Task | Class | Description | Author | Tutorial | Colab |
 | --- | --- | --- | --- | --- | --- |
