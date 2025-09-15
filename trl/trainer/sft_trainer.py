@@ -107,6 +107,10 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         raise TypeError("Input must be a list or a dictionary.")
 
 
+def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
+
+
 @dataclass
 class DataCollatorForLanguageModeling(DataCollatorMixin):
     """
@@ -908,7 +912,7 @@ class SFTTrainer(Trainer):
             dataset = dataset.with_transform(remove_none_values)
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
-        column_names = list(next(iter(dataset)).keys())
+        column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names
 
         # Build the kwargs for the `map` function
@@ -940,7 +944,7 @@ class SFTTrainer(Trainer):
                 if is_conversational_from_value(first_example):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-                    column_names = next(iter(dataset)).keys()
+                    column_names = get_dataset_column_names(dataset)
                     dataset = dataset.map(
                         maybe_convert_to_chatml,
                         remove_columns="conversations" if "conversations" in column_names else None,
@@ -1065,7 +1069,8 @@ class SFTTrainer(Trainer):
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
-                dataset = dataset.select_columns(collator_expected_keys.intersection(dataset.column_names))
+                column_names = get_dataset_column_names(dataset)
+                dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
 
         return dataset
 
