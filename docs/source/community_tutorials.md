@@ -17,6 +17,16 @@ Community tutorials are made by active members of the Hugging Face community who
 
 <Youtube id="cnGyyM0vOes" />
 
+<Youtube id="jKdXv3BiLu0" />
+
+<Tip warning={true}>
+
+The tutorial above uses two deprecated features:
+- `SFTTrainer(..., tokenizer=tokenizer)`: Use `SFTTrainer(..., processing_class=tokenizer)` instead, or simply omit it (it will be inferred from the model).
+- `setup_chat_format(model, tokenizer)`: Use `SFTConfig(..., chat_template_path="Qwen/Qwen3-0.6B")`, where `chat_template_path` specifies the model whose chat template you want to copy.
+
+</Tip>
+
 # Vision Language Models
 
 | Task | Class | Description | Author | Tutorial | Colab |
