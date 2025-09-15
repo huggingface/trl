@@ -1598,7 +1598,6 @@ class GRPOTrainer(Trainer):
         outputs_after_sampling_buffer = self.update_with_replay_buffer(
             advantages,
             std_rewards,
-            std_rewards if std_rewards is not None else torch.zeros_like(advantages),
             prompt_ids,
             prompt_mask,
             completion_ids,
@@ -1679,6 +1678,153 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather(clip_ratio).mean().item())
         return loss / self.current_gradient_accumulation_steps
 
+    def slice_group_data(
+        self, data: torch.Tensor, mask: torch.Tensor, group_idx: int
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Slices the input data and mask tensors for a specific group index. Also trims the sequence length to the
+        maximum length in the group based on the mask.
+
+        Args:
+            data: Tensor of shape (num_groups * num_generations, seq_length)
+            mask: Tensor of shape (num_groups * num_generations, seq_length)
+            group_idx: Index of the group to slice
+        Returns:
+            Tuple of (sliced_data, sliced_mask) for the specified group, with sequence length trimmed to the maximum
+            length in the group.
+        """
+        start_idx = group_idx * self.num_generations
+        end_idx = (group_idx + 1) * self.num_generations
+        group_data = data[start_idx:end_idx]
+        group_mask = mask[start_idx:end_idx]
+        group_max_len = group_mask.sum(dim=1).max().item()
+        return group_data[:, :group_max_len], group_mask[:, :group_max_len]
+
+    def update_replay_buffer(
+        self,
+        groups_with_variance: torch.Tensor,
+        group_advantages: torch.Tensor,
+        group_std_rewards: torch.Tensor,
+        prompt_ids: torch.Tensor,
+        prompt_mask: torch.Tensor,
+        completion_ids: torch.Tensor,
+        completion_mask: torch.Tensor,
+        prompt_inputs: dict,
+        optional_vision_fields: list[str] = None,
+        old_per_token_logps: Optional[torch.Tensor] = None,
+        ref_per_token_logps: Optional[torch.Tensor] = None,
+        importance_sampling_ratio: Optional[float] = None,
+    ) -> None:
+        """
+        Update the replay buffer with groups that have reward variance (std > 0).
+
+        Args:
+            groups_with_variance: Boolean tensor indicating which groups have reward variance
+            group_advantages: Tensor of shape (num_groups, num_generations) containing advantage values
+            std_rewards: Tensor of shape (num_groups, num_generations) containing std of rewards per group
+            prompt_ids: Tensor containing prompt token IDs
+            prompt_mask: Tensor containing prompt attention masks
+            completion_ids: Tensor containing completion token IDs
+            completion_mask: Tensor containing completion attention masks
+            prompt_inputs: Dictionary containing additional prompt inputs (vision data, etc.)
+            optional_vision_fields: List of optional vision-related fields to include if present in prompt_inputs
+            old_per_token_logps: Optional tensor of old per-token log probabilities
+            ref_per_token_logps: Optional tensor of reference per-token log probabilities
+            importance_sampling_ratio: Optional importance sampling correction ratio
+        """
+        # Prepare buffered outputs for groups with variance
+        buffered_outputs = []
+        for _, group_idx in enumerate(groups_with_variance.nonzero(as_tuple=True)[0].unique().tolist()):
+            group_prompt_ids, group_prompt_mask = self.slice_group_data(prompt_ids, prompt_mask, group_idx)
+            group_completion_ids, group_completion_mask = self.slice_group_data(
+                completion_ids, completion_mask, group_idx
+            )
+
+            # Store unpadded data in the buffer
+            buffered_output = {
+                "prompt_ids": group_prompt_ids,
+                "completion_ids": group_completion_ids,
+                "advantages": group_advantages[group_idx].tolist(),
+                "prompt_mask": group_prompt_mask,
+                "completion_mask": group_completion_mask,
+            }
+
+            # Add optional fields if they exist
+            optional_fields = {
+                "old_per_token_logps": old_per_token_logps if old_per_token_logps is not None else None,
+                "ref_per_token_logps": ref_per_token_logps if ref_per_token_logps is not None else None,
+            }
+
+            for field_name, field_data in optional_fields.items():
+                if field_data is not None:
+                    buffered_output[field_name] = self.slice_group_data(field_data, completion_mask, group_idx)[0]
+
+            # Add importance sampling if needed
+            if self.use_vllm and self.vllm_importance_sampling_correction:
+                buffered_output["importance_sampling_ratio"] = importance_sampling_ratio
+
+            if optional_vision_fields:
+                # Add vision-related fields if they exist
+                for field_name in optional_vision_fields:
+                    if field_name in prompt_inputs:
+                        buffered_output[field_name] = self.slice_group_data(
+                            prompt_inputs[field_name], prompt_mask, group_idx
+                        )[0]
+
+            buffered_outputs.append(buffered_output)
+
+        if groups_with_variance.any():
+            # Calculate replay buffer scores for groups with variance
+            replay_buffer_scores = (group_advantages.abs() * group_std_rewards).sum(dim=-1)[groups_with_variance]
+            # Add all groups to replay buffer at once (batch operation)
+            self.replay_buffer.add(replay_buffer_scores.tolist(), buffered_outputs)
+
+    def sample_from_replay_buffer(
+        self, num_samples: int, optional_vision_fields: list[str] = None, optional_tensor_fields: list[str] = None
+    ) -> list[dict]:
+        """
+        Sample groups from the replay buffer.
+
+        Args:
+            num_samples: Number of samples to draw from the replay buffer
+            optional_vision_fields: List of optional vision-related fields to include if present in sampled data
+            optional_tensor_fields: List of optional tensor fields to include if present in sampled data
+        Returns:
+            List of sampled data dictionaries from the replay buffer
+        """
+        sampled = self.replay_buffer.sample(num_samples=num_samples)
+
+        # Extract and concatenate sampled data
+        sampled_data = {
+            "prompt_ids": [],
+            "prompt_mask": [],
+            "completion_ids": [],
+            "completion_mask": [],
+            "advantages": [],
+        }
+
+        all_optional_fields = (optional_tensor_fields or []) + (optional_vision_fields or [])
+        # Initialize containers for optional fields if they exist in sampled data
+        for field in all_optional_fields:
+            if sampled and field in sampled[0]:
+                sampled_data[field] = []
+
+        # Extract data from each sampled item
+        for item in sampled:
+            # Handle core fields
+            for key in ["prompt_ids", "prompt_mask", "completion_ids", "completion_mask"]:
+                sampled_data[key].append(item[key])
+
+            # Handle advantages (list, not tensor)
+            sampled_data["advantages"].append(item["advantages"])
+
+            # Handle optional fields
+            for field in all_optional_fields:
+                if field in item:
+                    sampled_data[field].append(item[field])
+
+        return sampled_data
+
     def update_with_replay_buffer(
         self,
         group_advantages: torch.Tensor,
@@ -1720,103 +1866,38 @@ class GRPOTrainer(Trainer):
         # Groups to replace from the replay buffer
         groups_without_variance = ~groups_with_variance
 
-        # Helper function to slice group data
-        def slice_group_data(data, mask, group_idx):
-            """
-            Slices the input data and mask tensors for a specific group index. Also trims the sequence length to the
-            maximum length in the group based on the mask.
-            """
-            start_idx = group_idx * self.num_generations
-            end_idx = (group_idx + 1) * self.num_generations
-            group_data = data[start_idx:end_idx]
-            group_mask = mask[start_idx:end_idx]
-            group_max_len = group_mask.sum(dim=1).max().item()
-            return group_data[:, :group_max_len], group_mask[:, :group_max_len]
+        # Track which optional fields are present in sampled data
+        optional_tensor_fields = ["old_per_token_logps", "ref_per_token_logps"]
+        vision_fields = ["pixel_values", "image_grid_thw", "pixel_attention_mask", "image_sizes"]
 
-        # Prepare buffered outputs for groups with variance
-        buffered_outputs = []
-        for _, group_idx in enumerate(groups_with_variance.nonzero(as_tuple=True)[0].unique().tolist()):
-            group_prompt_ids, group_prompt_mask = slice_group_data(prompt_ids, prompt_mask, group_idx)
-            group_completion_ids, group_completion_mask = slice_group_data(completion_ids, completion_mask, group_idx)
-
-            # Store unpadded data in the buffer
-            buffered_output = {
-                "prompt_ids": group_prompt_ids,
-                "completion_ids": group_completion_ids,
-                "advantages": group_advantages[group_idx].tolist(),
-                "prompt_mask": group_prompt_mask,
-                "completion_mask": group_completion_mask,
-            }
-
-            # Add optional fields if they exist
-            optional_fields = {
-                "old_per_token_logps": old_per_token_logps if old_per_token_logps is not None else None,
-                "ref_per_token_logps": ref_per_token_logps if ref_per_token_logps is not None else None,
-            }
-
-            for field_name, field_data in optional_fields.items():
-                if field_data is not None:
-                    buffered_output[field_name] = slice_group_data(field_data, completion_mask, group_idx)[0]
-
-            # Add importance sampling if needed
-            if self.use_vllm and self.vllm_importance_sampling_correction:
-                buffered_output["importance_sampling_ratio"] = importance_sampling_ratio
-
-            # Add vision-related fields if they exist
-            vision_fields = ["pixel_values", "image_grid_thw", "pixel_attention_mask", "image_sizes"]
-            for field_name in vision_fields:
-                if field_name in prompt_inputs:
-                    buffered_output[field_name] = slice_group_data(prompt_inputs[field_name], prompt_mask, group_idx)[
-                        0
-                    ]
-
-            buffered_outputs.append(buffered_output)
-
-        if groups_with_variance.any():
-            # Calculate replay buffer scores for groups with variance
-            replay_buffer_scores = (group_advantages.abs() * group_std_rewards).sum(dim=1)[groups_with_variance]
-            # Add all groups to replay buffer at once (batch operation)
-            self.replay_buffer.add(replay_buffer_scores.tolist(), buffered_outputs)
+        self.update_replay_buffer(
+            groups_with_variance,
+            group_advantages,
+            group_std_rewards,
+            prompt_ids,
+            prompt_mask,
+            completion_ids,
+            completion_mask,
+            prompt_inputs,
+            vision_fields,
+            old_per_token_logps,
+            ref_per_token_logps,
+            importance_sampling_ratio,
+        )
 
         # Sample from replay buffer to replace groups with variance
         num_groups_to_replace = groups_without_variance.sum().item()
         if not num_groups_to_replace:
             return
-        sampled = self.replay_buffer.sample(num_samples=num_groups_to_replace)
 
-        # Extract and concatenate sampled data
-        sampled_data = {
-            "prompt_ids": [],
-            "prompt_mask": [],
-            "completion_ids": [],
-            "completion_mask": [],
-            "advantages": [],
-        }
+        sampled_data = self.sample_from_replay_buffer(
+            num_samples=num_groups_to_replace,
+            optional_vision_fields=vision_fields,
+            optional_tensor_fields=optional_tensor_fields,
+        )
 
-        # Track which optional fields are present in sampled data
-        optional_tensor_fields = ["old_per_token_logps", "ref_per_token_logps"]
-        vision_fields = ["pixel_values", "image_grid_thw", "pixel_attention_mask", "image_sizes"]
-
-        # Initialize containers for optional fields if they exist in sampled data
-        for field in optional_tensor_fields + vision_fields:
-            if sampled and field in sampled[0]:
-                sampled_data[field] = []
-
-        # Extract data from each sampled item
-        for item in sampled:
-            # Handle core fields
-            for key in ["prompt_ids", "prompt_mask", "completion_ids", "completion_mask"]:
-                sampled_data[key].append(item[key])
-
-            # Handle advantages (list, not tensor)
-            sampled_data["advantages"].append(item["advantages"])
-
-            # Handle optional fields
-            for field in optional_tensor_fields + vision_fields:
-                if field in item:
-                    sampled_data[field].append(item[field])
-
-        # --- Efficient padding & replacement logic ---
+        # Pad sampled data if they are shorter than the current batch sequences
+        # Or pad the current batch if sampled are longer
         current_batch_prompt_seq_len = prompt_ids.size(1)
         current_batch_completion_seq_len = completion_ids.size(1)
 
@@ -1934,6 +2015,7 @@ class GRPOTrainer(Trainer):
                 if field in sampled_data and field in prompt_inputs:
                     prompt_inputs[field][idx_range] = sampled_data[field][i]
 
+        # Prepare final outputs after sampling and replacement
         outputs_after_sampling_buffer = {
             "prompt_ids": prompt_ids,
             "prompt_mask": prompt_mask,
