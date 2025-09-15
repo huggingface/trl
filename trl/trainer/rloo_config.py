@@ -190,6 +190,51 @@ class RLOOConfig(TrainingArguments):
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
             are logged.
+
+        rloo_k:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `num_generations` instead. </Deprecated>
+
+        cliprange:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `epsilon` instead. </Deprecated>
+
+        kl_coef:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `beta` instead. </Deprecated>
+
+        exp_name:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `run_name` instead. </Deprecated>
+
+        normalize_reward:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `normalize_advantages` instead. </Deprecated>
+
+        num_ppo_epochs:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `num_iterations` instead. </Deprecated>
+
+        num_mini_batches:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `steps_per_generation` instead. </Deprecated>
+
+        total_episodes:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `max_steps` instead. </Deprecated>
+
+        response_length:
+
+            <Deprecated version="0.22.0"> This parameter is deprecated and will be removed in version 0.25.0. Use
+            `max_completion_length` instead. </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]

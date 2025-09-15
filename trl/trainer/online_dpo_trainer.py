@@ -168,7 +168,7 @@ class OnlineDPOTrainer(Trainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
 
-        reward_model
+        reward_model:
 
             <Deprecated version="0.22.0">
 
@@ -176,7 +176,7 @@ class OnlineDPOTrainer(Trainer):
 
             </Deprecated>
 
-        reward_processing_class
+        reward_processing_class:
 
             <Deprecated version="0.22.0">
 
