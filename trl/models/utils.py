@@ -535,7 +535,7 @@ def prepare_peft_model(
                 break
 
     # Prepare model for kbit training if needed
-    if is_qlora and not is_sharded_qlora:
+    if is_qlora and not is_sharded_qlora and not isinstance(model, PeftModel):
         model = prepare_model_for_kbit_training(
             model,
             use_gradient_checkpointing=args.gradient_checkpointing,
