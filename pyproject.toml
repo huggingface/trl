@@ -27,5 +27,5 @@ known-first-party = ["trl"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 addopts = [
-    "-k", "not experimental",
+    "-k", "not experimental"
 ]
