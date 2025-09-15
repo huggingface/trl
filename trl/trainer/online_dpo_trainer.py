@@ -168,6 +168,8 @@ class OnlineDPOTrainer(Trainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
 
+        > Deprecated parameters
+
         <Deprecated version="0.22.0">
 
         The following parameters are deprecated and will be removed in version 0.25.0:
