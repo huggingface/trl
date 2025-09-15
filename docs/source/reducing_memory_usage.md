@@ -22,7 +22,7 @@ To reduce memory usage, it's important to truncate sequences to a reasonable len
 DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
 
 <div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="Truncation prompt-completion" width="600"/>
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="DPO truncation" width="600"/>
 </div>
 
 To set the truncation parameters, use the following code snippet:
@@ -268,6 +268,13 @@ Context Parallelism (CP) is a parallelization technique that enables training wi
 
 For more details on CP, see the [Ultrascale Playbook - Context Parallelism](https://huggingface.co/spaces/nanotron/ultrascale-playbook?section=context_parallelism).
 
+<Tip warning={true}>
+
+For a full overview of multi-GPU and multi-node training setups, see our [Distributing Training guide](distributing_training#multi-gpu-training-with-trl).
+
+</Tip>
+
+
 CP is particularly useful when:
 
 - You want to train with very long sequences (>32k tokens)
@@ -375,9 +382,9 @@ For the setup, we fine-tuned an **8B model** ([Qwen/Qwen3-8B](https://huggingfac
 We adjusted `num_processes` and `parallelism_config_cp_size` based on the number of GPUs for each run.  
 Training was performed with the [sft.py](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) example script, combined with the parameters described above.
 
-The results below summarize **memory consumption** and **seconds per iteration**.  
-They show that CP scales effectively with more GPUs, enabling training on much longer sequences. With **8 GPUs**, context lengths of over **300k tokens** become feasible, unlocking training with extremely long contexts.
+The results below summarize the **maximum trainable sequence length** and **iterations per second** for different numbers of GPUs. A value marked as `OOM` indicates that the configuration ran out of memory and could not be trained.  
 
+These results show that **Context Parallelism (CP) scales effectively with more GPUs**, enabling training on much longer sequences. With **8 GPUs**, context lengths of over **300k tokens** become feasible, unlocking training with extremely long contexts while maintaining reasonable throughput.  
 
 <div class="flex justify-center">
   <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/context_parallelism_max_length_plot.png" alt="CP Max content length" width="45%"/>
