@@ -262,7 +262,7 @@ def pad(
             Value to use for padding. Default is 0.
         padding_side (`str`):
             Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
-        pad_to_multiple_of (`int`, *optional*, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set will pad the sequence to a multiple of the provided value.
 
     Returns:
@@ -709,13 +709,13 @@ class OnPolicyConfig(TrainingArguments):
     command line.
 
     Parameters:
-        run_name (`str` or `None`, *optional*, defaults to `None`):
+        run_name (`str`, *optional*):
             Name of the run.
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
             Number of minibatches to split a batch into.
-        total_episodes (`int` or `None`, *optional*, defaults to `None`):
+        total_episodes (`int`, *optional*):
             Total number of episodes in the dataset.
         local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
             Per rank no grad forward pass in the rollout phase.
@@ -723,38 +723,38 @@ class OnPolicyConfig(TrainingArguments):
             Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
-        stop_token (`str` or `None`, *optional*, defaults to `None`):
+        stop_token (`str`, *optional*):
             Specifies the stop token to use for text generation. This parameter is mutually exclusive with
             `stop_token_id`.
 
             - `None`: No stop token is applied, unless `stop_token_id` is specified.
             - `'eos'`: Uses the tokenizer's `eos_token`.
 
-        stop_token_id (`int` or `None`, *optional*, defaults to `None`):
+        stop_token_id (`int`, *optional*):
             Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
             unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
-        missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
+        missing_eos_penalty (`float`, *optional*):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
             generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
-        world_size (`int` or `None`, *optional*, defaults to `None`):
+        world_size (`int`, *optional*):
             Number of processes (GPUs) to use for the training.
-        num_total_batches (`int` or `None`, *optional*, defaults to `None`):
+        num_total_batches (`int`, *optional*):
             Number of total batches to train.
-        micro_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        micro_batch_size (`int`, *optional*):
             Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
-        local_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        local_batch_size (`int`, *optional*):
             Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
-        batch_size (`int` or `None`, *optional*, defaults to `None`):
+        batch_size (`int`, *optional*):
             Batch size across devices (HF's `per_device_train_batch_size` * `world_size` *
             `gradient_accumulation_steps`).
-        local_mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        local_mini_batch_size (`int`, *optional*):
             Mini batch size per GPU.
-        mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        mini_batch_size (`int`, *optional*):
             Mini batch size across GPUs.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
@@ -1539,7 +1539,7 @@ def print_prompt_completions_sample(
             List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
-        num_samples (`int` or `None`, *optional*, defaults to `None`):
+        num_samples (`int`, *optional*):
             Number of random samples to display. If `None` (default), all items will be displayed.
 
     Example:
@@ -1616,7 +1616,7 @@ class RepeatSampler(Sampler):
             Number of times to repeat the full sampling process.
         shuffle (`bool`, *optional*, defaults to `True`):
             Whether to shuffle the dataset.
-        seed (`int` or `None`, *optional*, defaults to `None`):
+        seed (`int`, *optional*):
             Random seed for reproducibility (only affects this sampler).
 
     Example:
@@ -1823,10 +1823,10 @@ def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Unio
     Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
     `batch["image_grid_thw"]`, while keeping other entries unchanged.
     """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch:
+    if "image_split_sizes" not in batch or "pixel_values" not in batch:
         return batch
 
-    lengths = batch["image_grid_thw"].prod(dim=1).tolist()  # [batch_size]
+    lengths = batch["image_split_sizes"]  # [batch_size]
     pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
     if sum(lengths) != pixel_values.size(0):

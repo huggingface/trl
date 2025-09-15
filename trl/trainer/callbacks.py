@@ -259,7 +259,7 @@ class WinRateCallback(TrainerCallback):
             otherwise, it defaults to using the initial model.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int` or `None`, *optional*, defaults to `None`):
+        num_prompts (`int`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in
             the evaluation dataset.
         shuffle_order (`bool`, *optional*, defaults to `True`):
@@ -444,10 +444,10 @@ class LogCompletionsCallback(TrainerCallback):
             column containing the prompts for generating completions.
         generation_config (`GenerationConfig`, *optional*):
             The generation config to use for generating completions.
-        num_prompts (`int` or `None`, *optional*):
+        num_prompts (`int`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in
             the evaluation dataset.
-        freq (`int` or `None`, *optional*):
+        freq (`int`, *optional*):
             The frequency at which to log completions. If not provided, defaults to the trainer's `eval_steps`.
     """
 
@@ -783,7 +783,7 @@ class MergeModelCallback(TrainerCallback):
     on a merge configuration.
 
     Args:
-        merge_config ([`MergeConfig`], *optional*, defaults to `None`):
+        merge_config ([`MergeConfig`], *optional*):
             Configuration used for the merging process. If not provided, the default [`MergeConfig`] is used.
         merge_at_every_checkpoint (`bool`, *optional*, defaults to `False`):
             Whether to merge the model at every checkpoint.
