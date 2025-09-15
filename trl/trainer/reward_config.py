@@ -47,12 +47,6 @@ class RewardConfig(TrainingArguments):
 
         > Parameters that control the data preprocessing
 
-        dataset_text_field (`str`, *optional*, defaults to `"text"`):
-            Name of the column that contains text data in the dataset.
-        dataset_kwargs (`dict[str, Any]`, *optional*):
-            Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
-            `skip_prepare_dataset`. When the model is a VLM, `skip_prepare_dataset` is automatically treated as `True`
-            regardless of the provided value, since preprocessing is done on the fly.
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         eos_token (`str`, *optional*):
@@ -69,19 +63,9 @@ class RewardConfig(TrainingArguments):
 
         > Parameters that control the training
 
-        completion_only_loss (`bool`, *optional*):
-            Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is computed
-            only on the completion, which is supported only for [prompt-completion](#prompt-completion) datasets. If
-            `False`, loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset:
-            loss is computed on the completion for [prompt-completion](#prompt-completion) datasets, and on the full
-            sequence for [language modeling](#language-modeling) datasets.
-        assistant_only_loss (`bool`, *optional*, defaults to `False`):
-            Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is computed only
-            on the assistant responses, which is supported only for [conversational](#conversational) datasets. If
-            `False`, loss is computed on the entire sequence.
-        loss_type (`str`, *optional*, defaults to `"nll"`):
-            Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` (Dynamic
-            Fine-Tuning, as described in [this paper](https://huggingface.co/papers/2508.05629)).
+        center_rewards_coefficient (`float`, *optional*):
+            Coefficient to incentivize the reward model to output mean-zero rewards (proposed by
+            https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -90,7 +74,7 @@ class RewardConfig(TrainingArguments):
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
-        default=2e-5,
+        default=1e-4,
         metadata={"help": "The initial learning rate for AdamW."},
     )
     logging_steps: float = field(
@@ -136,19 +120,6 @@ class RewardConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    dataset_text_field: str = field(
-        default="text",
-        metadata={"help": "Name of the column that contains text data in the dataset."},
-    )
-    dataset_kwargs: Optional[dict[str, Any]] = field(
-        default=None,
-        metadata={
-            "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
-            "`skip_prepare_dataset`. If the model is a VLM, `skip_prepare_dataset` value is ignored. When the model "
-            "is a VLM, `skip_prepare_dataset` is automatically treated as `True` regardless of the provided value, "
-            "since preprocessing is done on the fly."
-        },
-    )
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
@@ -179,35 +150,11 @@ class RewardConfig(TrainingArguments):
     )
 
     # Parameters that control the training
-    completion_only_loss: Optional[bool] = field(
+    center_rewards_coefficient: Optional[float] = field(
         default=None,
         metadata={
-            "help": (
-                "Whether to compute loss only on the completion part of the sequence. If set to `True`, loss is "
-                "computed only on the completion, which is supported only for prompt-completion datasets. If `False`, "
-                "loss is computed on the entire sequence. If `None` (default), the behavior depends on the dataset: "
-                "loss is computed on the completion for prompt-completion datasets, and on the full sequence for "
-                "language modeling datasets."
-            )
-        },
-    )
-    assistant_only_loss: bool = field(
-        default=False,
-        metadata={
-            "help": (
-                "Whether to compute loss only on the assistant part of the sequence. If set to `True`, loss is "
-                "computed only on the assistant responses, which is supported only for conversational datasets. If `False`, "
-                "loss is computed on the entire sequence."
-            )
-        },
-    )
-    loss_type: str = field(
-        default="nll",
-        metadata={
-            "help": (
-                'Type of loss to use. Possible values are `"nll"` (negative log-likelihood, default) and `"dft"` '
-                "(Dynamic Fine-Tuning, as described in https://huggingface.co/papers/2508.05629)."
-            )
+            "help": "Coefficient to incentivize the reward model to output mean-zero rewards (proposed by "
+            "https://huggingface.co/papers/2312.09244, Eq. 2). Recommended value: `0.01`."
         },
     )
     activation_offloading: bool = field(
