@@ -12,7 +12,6 @@ fsdp_config:
   fsdp_reshard_after_forward: true
   fsdp_state_dict_type: FULL_STATE_DICT
   fsdp_version: 2
-  fsdp_use_orig_params: true  # Important for 8-bit optimizers
 machine_rank: 0
 main_training_function: main
 mixed_precision: bf16
