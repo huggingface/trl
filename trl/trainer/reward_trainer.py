@@ -374,7 +374,7 @@ class RewardTrainer(Trainer):
     def __init__(
         self,
         model: Union[str, nn.Module, PreTrainedModel],
-        args: Optional[Union[RewardConfig, TrainingArguments]] = None,
+        args: Optional[RewardConfig] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
@@ -393,11 +393,6 @@ class RewardTrainer(Trainer):
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
             args = RewardConfig(f"{model_name}-Reward")
-        elif isinstance(args, TrainingArguments) and not isinstance(args, RewardConfig):
-            dict_args = args.to_dict()
-            dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            dict_args.pop("push_to_hub_token")
-            args = RewardConfig(**dict_args)
 
         # Model
         model_init_kwargs = args.model_init_kwargs or {}
