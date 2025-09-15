@@ -46,12 +46,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import is_conversational, is_conversational_from_value, maybe_convert_to_chatml, truncate_dataset
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .reward_config import RewardConfig
-from .utils import (
-    entropy_from_logits,
-    generate_model_card,
-    get_comet_experiment_url,
-    pad,
-)
+from .utils import entropy_from_logits, generate_model_card, get_comet_experiment_url, pad
 
 
 if is_peft_available():
@@ -127,21 +122,14 @@ class DataCollatorForPreference(DataCollatorMixin):
     Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
 
     This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
-    If the input contains a `"completion_mask"`, it is used to set the labels to `-100` for tokens that are not in the
-    completion. If `"assistant_masks"` are present, they are used to set the labels to `-100` for tokens that are not
-    in the assistant part of the sequence. The collator returns a dictionary containing the following keys:
+    The collator returns a dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
     - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
-    - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `completion_only_loss` is set to
-    `True`, tokens that are not in the completion are set to -100. If `assistant_masks` are present, tokens that are
-    not in the assistant part of the sequence are set to -100.
+    - `"labels"`: Tensor of labels, padded to the maximum length of the batch.
 
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
-        completion_only_loss (`bool`, *optional*, defaults to `True`):
-            When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
-            that are no in the completion.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -160,24 +148,10 @@ class DataCollatorForPreference(DataCollatorMixin):
                                [  1,  1,  0]]),
      'labels': tensor([[   1,    2,    3],
                        [   4,    5, -100]])}
-
-    >>> # With completion mask
-    >>> examples = [
-    ...     {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
-    ...     {"input_ids": [4, 5], "completion_mask": [0, 1]},
-    ... ]
-    >>> collator(examples)
-    {'input_ids': tensor([[  1,  2,  3],
-                          [  4,  5,  0]]),
-     'attention_mask': tensor([[  1,  1,  1],
-                               [  1,  1,  0]]),
-     'labels': tensor([[-100,    2,    3],
-                       [-100,    5, -100]])}
     ```
     """
 
     pad_token_id: int
-    completion_only_loss: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
@@ -190,10 +164,6 @@ class DataCollatorForPreference(DataCollatorMixin):
             labels = [torch.tensor(example["labels"]) for example in examples]
         else:
             labels = [torch.tensor(example["input_ids"]) for example in examples]
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
-        if "assistant_masks" in examples[0]:
-            assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
 
         output = {}
 
@@ -210,16 +180,6 @@ class DataCollatorForPreference(DataCollatorMixin):
         output["labels"] = pad(
             labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         )
-        if self.completion_only_loss and "completion_mask" in examples[0]:
-            completion_mask = pad(
-                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-            output["labels"][completion_mask == 0] = -100  # mask everything that is not in the completion
-        if "assistant_masks" in examples[0]:
-            assistant_masks = pad(
-                assistant_masks, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-            output["labels"][assistant_masks == 0] = -100
         return output
 
 
@@ -309,9 +269,6 @@ class RewardTrainer(Trainer):
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-        formatting_func (`Callable`, *optional*):
-            Formatting function applied to the dataset before tokenization. Applying the formatting function explicitly
-            converts the dataset into a [language modeling](#language-modeling) type.
     """
 
     _tag_names = ["trl", "reward"]
@@ -331,7 +288,6 @@ class RewardTrainer(Trainer):
         optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional["PeftConfig"] = None,
-        formatting_func: Optional[Callable[[dict], str]] = None,
     ):
         # Args
         if args is None:
@@ -428,14 +384,6 @@ class RewardTrainer(Trainer):
                 self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
 
         # Data collator
-        # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
-        # is prompt-completion, and False if the dataset format is language modeling.
-        dataset_sample = next(iter(train_dataset))
-        if args.completion_only_loss is None:
-            self.completion_only_loss = "prompt" in dataset_sample and "completion" in dataset_sample
-        else:
-            self.completion_only_loss = args.completion_only_loss
-
         if data_collator is None:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
@@ -449,14 +397,7 @@ class RewardTrainer(Trainer):
                 )
             data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
-                completion_only_loss=self.completion_only_loss,
                 pad_to_multiple_of=args.pad_to_multiple_of,
-            )
-
-        if args.assistant_only_loss and not is_conversational(dataset_sample):
-            raise ValueError(
-                "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
-                "supported for conversational datasets."
             )
 
         # Dataset
@@ -465,22 +406,15 @@ class RewardTrainer(Trainer):
             "skip_prepare_dataset", False
         )
         if not skip_prepare_dataset:
-            if self.completion_only_loss and formatting_func:
-                raise ValueError(
-                    "A formatting function was provided while `completion_only_loss=True`, which is incompatible. "
-                    "Using a formatter converts the dataset to a language modeling type, conflicting with "
-                    "completion-only loss. To resolve this, apply your formatting function before passing the "
-                    "dataset, or disable `completion_only_loss` in `RewardConfig`."
-                )
-            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, formatting_func, "train")
+            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
             if eval_dataset is not None:
                 if isinstance(eval_dataset, dict):
                     eval_dataset = {
-                        key: self._prepare_dataset(dataset, processing_class, args, formatting_func, key)
+                        key: self._prepare_dataset(dataset, processing_class, args, key)
                         for key, dataset in eval_dataset.items()
                     }
                 else:
-                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, formatting_func, "eval")
+                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, "eval")
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -524,7 +458,6 @@ class RewardTrainer(Trainer):
         dataset: Union[Dataset, IterableDataset],
         processing_class: PreTrainedTokenizerBase,
         args: RewardConfig,
-        formatting_func: Optional[Callable[[dict], str]],
         dataset_name: str,
     ) -> Union[Dataset, IterableDataset]:
         # Tabular backends like Arrow/Parquet insert `None` for mismatched keys in nested structures. Clean them from
@@ -532,159 +465,87 @@ class RewardTrainer(Trainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
             dataset = dataset.with_transform(remove_none_values)
 
-        # If the dataset is already preprocessed (tokenized), skip the processing steps.
-        column_names = list(next(iter(dataset)).keys())
-        is_processed = "input_ids" in column_names
-
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().main_process_first():
-            # Apply the formatting function if any
-            if formatting_func is not None and is_processed:
-                logger.warning(
-                    "You passed a dataset that is already processed (contains an `input_ids` field) together with a "
-                    "formatting function. Therefore `formatting_func` will be ignored. Either remove the "
-                    "`formatting_func` or pass a dataset that is not already processed.",
-                )
-
-            if formatting_func is not None and not is_processed:
+            # Convert the dataset to ChatML if needed
+            first_example = next(iter(dataset))
+            if is_conversational_from_value(first_example):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Applying formatting function to {dataset_name} dataset"
-
-                def _func(example):
-                    return {"text": formatting_func(example)}
-
-                dataset = dataset.map(_func, batched=False, **map_kwargs)
-
-            if not is_processed:
-                # Convert the dataset to ChatML if needed
-                first_example = next(iter(dataset))
-                if is_conversational_from_value(first_example):
-                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                        map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-                    column_names = next(iter(dataset)).keys()
-                    dataset = dataset.map(
-                        maybe_convert_to_chatml,
-                        remove_columns="conversations" if "conversations" in column_names else None,
-                        **map_kwargs,
-                    )
-
-                # Apply the chat template if needed
-                first_example = next(iter(dataset))
-                if not is_conversational(first_example):
-                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                        map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
-
-                    def add_eos(example, eos_token):
-                        if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
-                            example["text"] = example["text"] + eos_token
-                        elif "completion" in example and not example["completion"].endswith(eos_token):
-                            example["completion"] = example["completion"] + eos_token
-                        return example
-
-                    dataset = dataset.map(
-                        add_eos,
-                        fn_kwargs={"eos_token": processing_class.eos_token},
-                        remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
-                        **map_kwargs,
-                    )
-
-                # Tokenize the dataset
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-
-                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
-                    if "prompt" in example:  # prompt-completion case
-                        output = {}
-                        if is_conversational(example):
-                            prompt_ids = processing_class.apply_chat_template(
-                                example["prompt"],
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
-                            )
-                            prompt_completion_processed = processing_class.apply_chat_template(
-                                example["prompt"] + example["completion"],
-                                return_dict=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
-                            )
-                            prompt_completion_ids = prompt_completion_processed["input_ids"]
-                            if "assistant_masks" in prompt_completion_processed:
-                                output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
-                        else:
-                            prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                            prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
-                                "input_ids"
-                            ]
-
-                        # Check if the tokenized prompt starts with the tokenized prompt+completion
-                        if not prompt_completion_ids[: len(prompt_ids)] == prompt_ids:
-                            logger.warning(
-                                "Mismatch between tokenized prompt and the start of tokenized prompt+completion. "
-                                "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
-                                "token handling. Verify that the tokenizer is processing text consistently."
-                            )
-
-                        # Create a completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
-                        output["input_ids"] = prompt_completion_ids
-                        output["completion_mask"] = completion_mask
-
-                    else:  # language modeling case
-                        if is_conversational(example):
-                            processed = processing_class.apply_chat_template(
-                                example["messages"],
-                                return_dict=True,
-                                return_assistant_tokens_mask=assistant_only_loss,
-                                tools=example.get("tools"),
-                                **example.get("chat_template_kwargs", {}),
-                            )
-                            if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
-                                raise RuntimeError(
-                                    "You're using `assistant_only_loss=True`, but at least one example has no "
-                                    "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                    "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
-                                    "check the template and ensure it's correctly configured to support assistant "
-                                    "masking."
-                                )
-                            output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
-                        else:
-                            output = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
-                    return output
-
+                    map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
+                column_names = next(iter(dataset)).keys()
                 dataset = dataset.map(
-                    tokenize,
-                    fn_kwargs={
-                        "processing_class": processing_class,
-                        "dataset_text_field": args.dataset_text_field,
-                        "assistant_only_loss": args.assistant_only_loss,
-                    },
+                    maybe_convert_to_chatml,
+                    remove_columns="conversations" if "conversations" in column_names else None,
                     **map_kwargs,
                 )
+
+            # Add EOS token to the end of the sequences if needed
+            first_example = next(iter(dataset))
+            if not is_conversational(first_example):
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+
+                def add_eos(example, eos_token):
+                    if not example["chosen"].endswith(eos_token):
+                        example["chosen"] = example["chosen"] + eos_token
+                    if "rejected" in example and not example["rejected"].endswith(eos_token):
+                        example["rejected"] = example["rejected"] + eos_token
+                    return example
+
+                dataset = dataset.map(
+                    add_eos,
+                    fn_kwargs={"eos_token": processing_class.eos_token},
+                    **map_kwargs,
+                )
+
+            # Tokenize the dataset
+            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
+
+            def tokenize(example, processing_class):
+                if "prompt" in example:  # explicit prompt case
+                    example["chosen"] = example["prompt"] + example["chosen"]
+                    example["rejected"] = example["prompt"] + example["rejected"]
+
+                if is_conversational(example):
+                    chosen_input_ids = processing_class.apply_chat_template(
+                        example["chosen"],
+                        tools=example.get("tools"),
+                        **example.get("chat_template_kwargs", {}),
+                    )
+                    rejected_input_ids = processing_class.apply_chat_template(
+                        example["chosen"],
+                        tools=example.get("tools"),
+                        **example.get("chat_template_kwargs", {}),
+                    )
+                    output = {"chosen_input_ids": chosen_input_ids, "rejected_input_ids": rejected_input_ids}
+                else:
+                    output = {
+                        "chosen_input_ids": processing_class(text=example["chosen"])["input_ids"],
+                        "rejected_input_ids": processing_class(text=example["rejected"])["input_ids"],
+                    }
+                return output
+
+            dataset = dataset.map(tokenize, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
             # Truncate
             if args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
-            # For Liger kernel, ensure only the essential columns
-            if args.use_liger_kernel:
-                collator_expected_keys = {"input_ids", "completion_mask", "assistant_masks"}
-                dataset = dataset.select_columns(collator_expected_keys.intersection(dataset.column_names))
 
         return dataset
 
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
-        # dataset. So we need to override the default signature columns to include "completion_mask" as well.
+        # and "attention_mask").
         if self._signature_columns is None:
-            self._signature_columns = ["input_ids", "labels", "completion_mask", "assistant_masks"]
+            self._signature_columns = ["chosen_input_ids", "rejected_input_ids", "labels"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -703,64 +564,62 @@ class RewardTrainer(Trainer):
         )
 
         # Compute entropy
-        if not self.args.use_liger_kernel:  # liger doesn't return logits
-            with torch.no_grad():
-                per_token_entropy = entropy_from_logits(outputs.logits)
-                attention_mask = inputs["attention_mask"]
-                # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
-                virtual_attention_mask = torch.ones(
-                    attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-                )
-                attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
-                entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
-            self._metrics[mode]["entropy"].append(entropy)
+        with torch.no_grad():
+            per_token_entropy = entropy_from_logits(outputs.logits)
+            attention_mask = inputs["attention_mask"]
+            # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
+            virtual_attention_mask = torch.ones(
+                attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
+            )
+            attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
+            entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
+            entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+        self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if not self.args.use_liger_kernel:
-            with torch.no_grad():
-                if "shift_labels" in inputs:
-                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
-                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
-                    # - The last logits require the label from process n+1
-                    shift_logits = outputs.logits.contiguous()
-                    shift_labels = inputs["shift_labels"]
-                else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
+        # Compute token accuracy if we have labels
+        with torch.no_grad():
+            if "shift_labels" in inputs:
+                # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                # - The first discarded token from inputs["labels"] actually belongs to process n-1
+                # - The last logits require the label from process n+1
+                shift_logits = outputs.logits.contiguous()
+                shift_labels = inputs["shift_labels"]
+            else:
+                shift_logits = outputs.logits[..., :-1, :].contiguous()
+                shift_labels = labels[..., 1:].contiguous()
 
-                # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
-                # not correspond to actual input labels.
-                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+            # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
+            # not correspond to actual input labels.
+            shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
-                # Get predictions
-                predictions = shift_logits.argmax(dim=-1)
+            # Get predictions
+            predictions = shift_logits.argmax(dim=-1)
 
-                # Create mask for non-padding tokens (assuming ignore_index is -100)
-                mask = shift_labels != -100
+            # Create mask for non-padding tokens (assuming ignore_index is -100)
+            mask = shift_labels != -100
 
-                # Calculate accuracy only on non-padding tokens
-                correct_predictions = (predictions == shift_labels) & mask
-                total_tokens = mask.sum()
-                correct_tokens = correct_predictions.sum()
+            # Calculate accuracy only on non-padding tokens
+            correct_predictions = (predictions == shift_labels) & mask
+            total_tokens = mask.sum()
+            correct_tokens = correct_predictions.sum()
 
-                # Gather the correct_tokens and total_tokens across all processes
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+            # Gather the correct_tokens and total_tokens across all processes
+            correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
+            total_tokens = self.accelerator.gather_for_metrics(total_tokens)
 
-                # Compute the mean token accuracy and log it
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-                if self.aux_loss_enabled:
-                    aux_loss = outputs.aux_loss
-                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
-                    self._metrics[mode]["aux_loss"].append(aux_loss)
+            # Compute the mean token accuracy and log it
+            total_sum = total_tokens.sum()
+            accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
+            self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+            if self.aux_loss_enabled:
+                aux_loss = outputs.aux_loss
+                aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
+                self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
 
