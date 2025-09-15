@@ -1466,8 +1466,6 @@ class SFTTrainerTester(TrlTestCase):
         self.assertEqual(len(base_params_before), 0, "Base model parameters should already be frozen in PeftModel")
 
         # Initialize the trainer with the already configured PeftModel
-        # This is where the bug occurred: SFTTrainer would call prepare_model_for_kbit_training
-        # on the PeftModel, freezing even the LoRA adapters
         training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", max_steps=1)
         trainer = SFTTrainer(model=peft_model, args=training_args, train_dataset=dataset)
 
@@ -1481,7 +1479,7 @@ class SFTTrainerTester(TrlTestCase):
                 if "lora" in name.lower():
                     lora_params_after.append(name)
 
-        # Verify the fix: LoRA parameters should remain trainable
+        # LoRA parameters should remain trainable
         self.assertTrue(
             len(trainable_params_after) > 0,
             f"PeftModel should still have trainable parameters after SFTTrainer initialization. "
