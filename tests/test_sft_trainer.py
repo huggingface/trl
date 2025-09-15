@@ -1409,7 +1409,7 @@ class SFTTrainerTester(TrlTestCase):
     @require_peft
     @require_bitsandbytes
     def test_peft_model_with_quantization(self):
-        """Test for issue #3926: SFTTrainer should not freeze layers of existing PeftModel.
+        """SFTTrainer should not freeze layers of existing PeftModel.
 
         This test simulates a realistic QLoRA scenario where a quantized base model
         is first converted to a PeftModel, then passed to SFTTrainer. The issue was
