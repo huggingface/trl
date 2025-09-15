@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "Pillow>=9.4.0",
 #     "peft",
 #     "trackio",
