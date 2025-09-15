@@ -54,6 +54,7 @@ if is_wandb_available():
 if is_weave_available():
     import weave
     from weave.trace.context import weave_client_context
+    from weave import EvaluationLogger
 
 
 # Logger for module-level logging
@@ -518,7 +519,7 @@ class LogCompletionsCallback(TrainerCallback):
         self._last_logged_step = state.global_step
 
 
-class WeaveTraceCallback(TrainerCallback):
+class WeaveCallback(TrainerCallback):
     r"""
     A [`~transformers.TrainerCallback`] that logs traces and evaluations to W&B Weave.
     The callback uses https://weave-docs.wandb.ai/guides/evaluation/evaluation_logger/ to log traces and evaluations at each evaluation step.
@@ -538,7 +539,11 @@ class WeaveTraceCallback(TrainerCallback):
     ```python
     # Tracing mode (just log predictions)
     trainer = DPOTrainer(...)
-    weave_callback = WeaveCallback(trainer=trainer, project_name="my-llm-training")
+    weave_callback = WeaveTraceCallback(trainer=trainer)  # project_name optional
+    trainer.add_callback(weave_callback)
+
+    # Or specify a project name
+    weave_callback = WeaveTraceCallback(trainer=trainer, project_name="my-llm-training")
     trainer.add_callback(weave_callback)
 
     # Evaluation mode (log predictions + scores + summary)
@@ -546,9 +551,9 @@ class WeaveTraceCallback(TrainerCallback):
         # Your scoring logic here (metadata available via eval_attributes)
         return score
 
-    weave_callback = WeaveCallback(
+    weave_callback = WeaveTraceCallback(
         trainer=trainer,
-        project_name="my-llm-training",
+        project_name="my-llm-training",  # optional and needed only if weave client is not initialized
         scorers={"accuracy": accuracy_scorer}
     )
     trainer.add_callback(weave_callback)
@@ -558,8 +563,9 @@ class WeaveTraceCallback(TrainerCallback):
         trainer (`Trainer`):
             Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
             column containing the prompts for generating completions.
-        project_name (`str`):
-            The name of the Weave project where data will be logged. We default to using the wandb/weave project if not specified.
+        project_name (`str`, *optional*):
+            The name of the Weave project where data will be logged. If not provided, will try to use existing weave client
+            or fall back to the active wandb run's project name. Raises an error if none of these are available.
         scorers (`Dict[str, Callable]`, *optional*):
             Dictionary mapping scorer names to scorer functions. If None, operates in tracing mode (predictions only).
             If provided, operates in evaluation mode (predictions + scores + summary).
@@ -578,7 +584,7 @@ class WeaveTraceCallback(TrainerCallback):
     def __init__(
         self,
         trainer: Trainer,
-        project_name: str,
+        project_name: Optional[str] = None,
         scorers: Optional[dict[str, callable]] = None,
         generation_config: Optional[GenerationConfig] = None,
         num_prompts: Optional[int] = None,
@@ -615,18 +621,32 @@ class WeaveTraceCallback(TrainerCallback):
                 )
                 return
 
-            # Check if weave client is already initialized
             if wc := weave_client_context.get_weave_client():
                 self._weave_client = wc
-                logger.info("Using existing Weave client")
             else:
-                # Initialize new weave client
-                import weave
+                if self.project_name is None:
+                    if is_wandb_available():
+                        import wandb
+
+                        if wandb.run is not None:
+                            self.project_name = (
+                                wandb.run.entity + "/" + wandb.run.project
+                            )
+                            logger.info(
+                                f"Using project name from active wandb run: {self.project_name}"
+                            )
+
+                    if self.project_name is None:
+                        raise ValueError(
+                            "No existing Weave client found and no project_name provided. "
+                            "Please either initialize weave with `weave.init('project-name')`, "
+                            "provide a project_name to the `WeaveTraceCallback`, "
+                            "or ensure an active wandb run exists."
+                        )
 
                 self._weave_client = weave.init(self.project_name)
                 logger.info(f"Initialized Weave with project: {self.project_name}")
 
-            # Get model name for metadata
             if self.model_name is None:
                 try:
                     self.model_name = getattr(
@@ -636,10 +656,6 @@ class WeaveTraceCallback(TrainerCallback):
                     )
                 except:
                     self.model_name = "unknown_model"
-
-            # EvaluationLogger will be created per evaluation step
-            # Store weave module for later use
-            from weave import EvaluationLogger
 
             self._EvaluationLogger = EvaluationLogger
 
@@ -655,14 +671,11 @@ class WeaveTraceCallback(TrainerCallback):
         self._initialize_weave()
 
     def on_evaluate(self, args, state, control, **kwargs):
-        # Only log once per evaluation (this method may be called multiple times)
         if state.global_step == self._last_logged_step:
             return
 
-        # Ensure Weave is initialized
         self._initialize_weave()
 
-        # If weave initialization failed, skip logging
         if not self._weave_initialized:
             logger.debug("Weave not initialized, skipping logging")
             return
@@ -672,7 +685,6 @@ class WeaveTraceCallback(TrainerCallback):
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
 
-        # All processes generate completions for their subset
         with accelerator.split_between_processes(
             self.eval_dataset["prompt"]
         ) as prompts:
@@ -681,7 +693,6 @@ class WeaveTraceCallback(TrainerCallback):
                 for prompt in prompts
             ]
 
-            # Generate completions using existing utility
             completions = _generate_completions(
                 prompts=prompts,
                 model=model,
@@ -691,13 +702,10 @@ class WeaveTraceCallback(TrainerCallback):
                 batch_size=args.per_device_eval_batch_size,
             )
 
-            # Gather all prompts and completions from all processes
             all_prompts = gather_object(prompts)
             all_completions = gather_object(completions)
 
-        # Only the main process does the logging
         if self.trainer.accelerator.is_main_process:
-            # Create a new EvaluationLogger for this evaluation step with metadata
             eval_attributes = {
                 "training_step": state.global_step,
                 "model_name": self.model_name,
@@ -712,26 +720,21 @@ class WeaveTraceCallback(TrainerCallback):
                 eval_attributes=eval_attributes,
             )
 
-            # Log all gathered predictions using EvaluationLogger
             successful_predictions = 0
             total_score_values = {}  # For summary statistics
 
             for prompt, completion in zip(all_prompts, all_completions):
                 try:
-                    # Log prediction to Weave
                     pred_logger = eval_logger.log_prediction(
                         inputs={"prompt": prompt}, output=completion
                     )
 
-                    # Apply scorers if in evaluation mode
                     if self.is_evaluation_mode:
                         for scorer_name, scorer_func in self.scorers.items():
                             try:
-                                # Scorer context no longer needs metadata (it's in eval_attributes)
                                 score = scorer_func(prompt, completion)
                                 pred_logger.log_score(scorer=scorer_name, score=score)
 
-                                # Collect scores for summary
                                 if scorer_name not in total_score_values:
                                     total_score_values[scorer_name] = []
                                 total_score_values[scorer_name].append(score)
@@ -741,7 +744,6 @@ class WeaveTraceCallback(TrainerCallback):
                                     f"Failed to apply scorer '{scorer_name}': {scorer_e}"
                                 )
 
-                    # Finish prediction logging
                     pred_logger.finish()
                     successful_predictions += 1
 
@@ -749,16 +751,13 @@ class WeaveTraceCallback(TrainerCallback):
                     logger.warning(f"Failed to log prediction for prompt: {pred_e}")
                     # Continue with other predictions even if one fails
 
-            # Log summary if in evaluation mode, otherwise finish the logger
             if self.is_evaluation_mode and total_score_values:
                 try:
-                    # Calculate summary statistics
                     summary_stats = {
                         "total_predictions": len(all_prompts),
                         "successful_predictions": successful_predictions,
                     }
 
-                    # Add average scores for each scorer
                     for scorer_name, scores in total_score_values.items():
                         if scores:  # Only if we have valid scores
                             summary_stats[f"avg_{scorer_name}"] = sum(scores) / len(
@@ -770,24 +769,11 @@ class WeaveTraceCallback(TrainerCallback):
                 except Exception as summary_e:
                     logger.warning(f"Failed to log summary: {summary_e}")
             else:
-                # In tracing mode (no scorers), we need to properly finish the evaluation logger
                 try:
                     eval_logger.finish()
                 except Exception as finish_e:
                     logger.warning(f"Failed to finish evaluation logger: {finish_e}")
 
-            # Log success message
-            mode = "evaluation" if self.is_evaluation_mode else "tracing"
-            scorer_info = (
-                f" with {len(self.scorers)} scorers" if self.is_evaluation_mode else ""
-            )
-
-            logger.info(
-                f"Logged {mode} data to Weave at step {state.global_step}: "
-                f"{len(all_prompts)} prompts, {successful_predictions} successful predictions{scorer_info}"
-            )
-
-        # Save the last logged step, so we don't log the same completions multiple times
         self._last_logged_step = state.global_step
 
 
