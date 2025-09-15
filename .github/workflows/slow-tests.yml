@@ -20,7 +20,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0"
       TEST_TYPE: "single_gpu"
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all --shm-size "16gb"
     defaults:
       run:
