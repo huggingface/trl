@@ -269,7 +269,8 @@ class RLOOConfig(TrainingArguments):
 
             <Deprecated version="0.22.0">
 
-            This parameter is deprecated and will be removed in version 0.25.0. KL is now computed only at the sequence level.
+            This parameter is deprecated and will be removed in version 0.25.0. KL is now computed only at the sequence
+            level.
 
             </Deprecated>
 
@@ -277,7 +278,8 @@ class RLOOConfig(TrainingArguments):
 
             <Deprecated version="0.22.0">
 
-            This parameter is deprecated and will be removed in version 0.25.0. This parameter was unused, you can safely remove it from your scripts.
+            This parameter is deprecated and will be removed in version 0.25.0. This parameter was unused, you can
+            safely remove it from your scripts.
 
             </Deprecated>
 
@@ -285,7 +287,8 @@ class RLOOConfig(TrainingArguments):
 
             <Deprecated version="0.22.0">
 
-            This parameter is deprecated and will be removed in version 0.25.0. Now it is automatically set to `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation).
+            This parameter is deprecated and will be removed in version 0.25.0. Now it is automatically set to
+            `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation).
 
             </Deprecated>
 
@@ -293,7 +296,8 @@ class RLOOConfig(TrainingArguments):
 
             <Deprecated version="0.22.0">
 
-            This parameter is deprecated and will be removed in version 0.25.0. Use `logging_steps` to control generation logging frequency.
+            This parameter is deprecated and will be removed in version 0.25.0. Use `logging_steps` to control
+            generation logging frequency.
 
             </Deprecated>
 
@@ -309,7 +313,8 @@ class RLOOConfig(TrainingArguments):
 
             <Deprecated version="0.22.0">
 
-            This parameter is deprecated and will be removed in version 0.25.0. Use `processing_class.eos_token_id` instead.
+            This parameter is deprecated and will be removed in version 0.25.0. Use `processing_class.eos_token_id`
+            instead.
 
             </Deprecated>
 
@@ -317,7 +322,8 @@ class RLOOConfig(TrainingArguments):
 
             <Deprecated version="0.22.0">
 
-            This parameter is deprecated and will be removed in version 0.25.0. Replicate with a custom reward function checking if `eos_token_id` is in `completion_ids`.
+            This parameter is deprecated and will be removed in version 0.25.0. Replicate with a custom reward function
+            checking if `eos_token_id` is in `completion_ids`.
 
             </Deprecated>
     """
