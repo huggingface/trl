@@ -264,6 +264,62 @@ class RLOOConfig(TrainingArguments):
             This parameter is deprecated and will be removed in version 0.25.0. Use `max_completion_length` instead.
 
             </Deprecated>
+
+        token_level_kl:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. KL is now computed only at the sequence level.
+
+            </Deprecated>
+
+        dataset_num_proc:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. This parameter was unused, you can safely remove it from your scripts.
+
+            </Deprecated>
+
+        local_rollout_forward_batch_size:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Now it is automatically set to `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation).
+
+            </Deprecated>
+
+        num_sample_generations:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `logging_steps` to control generation logging frequency.
+
+            </Deprecated>
+
+        stop_token:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0.
+
+            </Deprecated>
+
+        stop_token_id:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `processing_class.eos_token_id` instead.
+
+            </Deprecated>
+
+        missing_eos_penalty:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Replicate with a custom reward function checking if `eos_token_id` is in `completion_ids`.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
