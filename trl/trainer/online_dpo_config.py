@@ -62,6 +62,14 @@ class OnlineDPOConfig(TrainingArguments):
 
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
+
+            <Tip warning="true">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Since OnlineDPO does not involve
+            dataset preparation, you can safely remove it.
+
+            </Tip>
+
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
