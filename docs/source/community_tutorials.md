@@ -19,6 +19,9 @@ Community tutorials are made by active members of the Hugging Face community who
 
 <Youtube id="jKdXv3BiLu0" />
 
+<details>
+<summary>⚠️ Deprecated features notice (click to expand)</summary>
+
 <Tip warning={true}>
 
 The tutorial above uses two deprecated features:
@@ -26,6 +29,8 @@ The tutorial above uses two deprecated features:
 - `setup_chat_format(model, tokenizer)`: Use `SFTConfig(..., chat_template_path="Qwen/Qwen3-0.6B")`, where `chat_template_path` specifies the model whose chat template you want to copy.
 
 </Tip>
+
+</details>
 
 ## Vision Language Models
 
