@@ -43,13 +43,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import (
-    is_conversational,
-    is_conversational_from_value,
-    maybe_convert_to_chatml,
-    pack_dataset,
-    truncate_dataset,
-)
+from ..data_utils import is_conversational, is_conversational_from_value, maybe_convert_to_chatml, truncate_dataset
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .reward_config import RewardConfig
 from .utils import (
@@ -138,7 +132,6 @@ class DataCollatorForPreference(DataCollatorMixin):
     in the assistant part of the sequence. The collator returns a dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
     - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
-    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
     - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `completion_only_loss` is set to
     `True`, tokens that are not in the completion are set to -100. If `assistant_masks` are present, tokens that are
     not in the assistant part of the sequence are set to -100.
@@ -149,9 +142,6 @@ class DataCollatorForPreference(DataCollatorMixin):
         completion_only_loss (`bool`, *optional*, defaults to `True`):
             When the input contains a completion mask (`completion_mask`), the labels are set to -100 for the tokens
             that are no in the completion.
-        padding_free (`bool`, *optional*, defaults to `False`):
-            If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -168,8 +158,6 @@ class DataCollatorForPreference(DataCollatorMixin):
                           [  4,  5,  0]]),
      'attention_mask': tensor([[  1,  1,  1],
                                [  1,  1,  0]]),
-     'position_ids': tensor([[0, 1, 2],
-                             [0, 1, 0]]),
      'labels': tensor([[   1,    2,    3],
                        [   4,    5, -100]])}
 
@@ -183,47 +171,21 @@ class DataCollatorForPreference(DataCollatorMixin):
                           [  4,  5,  0]]),
      'attention_mask': tensor([[  1,  1,  1],
                                [  1,  1,  0]]),
-     'position_ids': tensor([[0, 1, 2],
-                             [0, 1, 0]]),
      'labels': tensor([[-100,    2,    3],
                        [-100,    5, -100]])}
-
-    >>> # With padding_free
-    >>> collator = DataCollatorForPreference(pad_token_id=0, padding_free=True)
-    >>> collator(examples)
-    {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
-     'attention_mask': tensor([[1, 1, 1, 1, 1]]),
-     'position_ids': tensor([[0, 1, 2, 0, 1]]),
-     'labels': tensor([[1, 2, 3, 4, 5]])}
     ```
     """
 
     pad_token_id: int
     completion_only_loss: bool = True
-    padding_free: bool = False
-    return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
+        attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
 
-        # Check if we have meaningful seq_lengths from packing (restarting sequences)
-        has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
-
-        # For packing with position_ids, we should NOT create attention_mask as it causes
-        # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
-        if not has_packed_position_ids:
-            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
-
-        if self.return_position_ids:
-            if "seq_lengths" in examples[0]:
-                position_ids = self.get_position_ids_from_packed_seq_lengths(
-                    [example["seq_lengths"] for example in examples]
-                )
-            else:
-                position_ids = [torch.arange(len(ids)) for ids in input_ids]
         if "labels" in examples[0]:
             labels = [torch.tensor(example["labels"]) for example in examples]
         else:
@@ -233,19 +195,7 @@ class DataCollatorForPreference(DataCollatorMixin):
         if "assistant_masks" in examples[0]:
             assistant_masks = [torch.tensor(example["assistant_masks"]) for example in examples]
 
-        # If padding_free, flatten everything into a single sequence
         output = {}
-        if self.padding_free:
-            input_ids = [torch.cat(input_ids, dim=0)]
-            if not has_packed_position_ids:
-                attention_mask = [torch.cat(attention_mask, dim=0)]
-            if self.return_position_ids:
-                position_ids = [torch.cat(position_ids, dim=0)]
-            labels = [torch.cat(labels, dim=0)]
-            if self.completion_only_loss and "completion_mask" in examples[0]:
-                completion_mask = [torch.cat(completion_mask, dim=0)]
-            if "assistant_masks" in examples[0]:
-                assistant_masks = [torch.cat(assistant_masks, dim=0)]
 
         # Pad
         output["input_ids"] = pad(
@@ -254,14 +204,9 @@ class DataCollatorForPreference(DataCollatorMixin):
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
-        if not has_packed_position_ids:
-            output["attention_mask"] = pad(
-                attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-        if self.return_position_ids:
-            output["position_ids"] = pad(
-                position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
+        output["attention_mask"] = pad(
+            attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+        )
         output["labels"] = pad(
             labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         )
@@ -276,33 +221,6 @@ class DataCollatorForPreference(DataCollatorMixin):
             )
             output["labels"][assistant_masks == 0] = -100
         return output
-
-    @staticmethod
-    def get_position_ids_from_packed_seq_lengths(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
-        """
-        Get position IDs for packed sequences.
-
-        Args:
-            batch_seq_lengths (`list[list[int]]`):
-                A list of lists containing the lengths of each individual document in the packed batch.
-
-        Return:
-            `list[torch.Tensor]`:
-                A list of tensors containing the position IDs for each packed sequence.
-        """
-        # Get lengths per row
-        example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
-        # Flat list of lengths
-        batch_seq_lengths = torch.tensor(
-            [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
-        )
-        position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
-        position_ids[0] = 0
-        # Reset position ids to 0 at the start of each sequence
-        position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
-        position_ids = position_ids.cumsum(0)
-        # Split back into one tensor per example
-        return list(position_ids.split(example_lengths))
 
 
 class RewardTrainer(Trainer):
@@ -510,38 +428,6 @@ class RewardTrainer(Trainer):
                 self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
 
         # Data collator
-        # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
-        # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
-        self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
-        use_flash_attention = model.config._attn_implementation in [
-            "flash_attention_2",
-            "flash_attention_3",
-            "kernels-community/vllm-flash-attn3",
-        ]
-        if self.padding_free:
-            if data_collator is not None:
-                raise ValueError("Passing a custom data collator is not supported when using padding-free.")
-            if args.packing and args.packing_strategy == "wrapped":
-                logger.warning(
-                    "You are passing `padding_free=True` with the 'wrapped' packing strategy, which is not "
-                    "recommended. Please refer to the documentation to understand why this is not recommended."
-                )
-            if not use_flash_attention:
-                logger.warning(
-                    "Padding-free training is enabled, but the attention implementation is not set to "
-                    "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
-                    "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
-                    "other implementations may lead to unexpected behavior. To ensure compatibility, set "
-                    "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
-                    "attention mechanism can handle flattened sequences."
-                )
-            if args.per_device_train_batch_size == 1 and not args.packing:
-                logger.warning(
-                    "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
-                    "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
-                    "to at least 2."
-                )
-
         # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
         # is prompt-completion, and False if the dataset format is language modeling.
         dataset_sample = next(iter(train_dataset))
@@ -564,21 +450,9 @@ class RewardTrainer(Trainer):
             data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
                 completion_only_loss=self.completion_only_loss,
-                padding_free=self.padding_free,
-                # Using position_ids without flash_attn hurts the training
-                return_position_ids=use_flash_attention,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
 
-        if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
-            logger.warning(
-                "You are using packing, but the attention implementation is not set to 'flash_attention_2' or "
-                "'kernels-community/vllm-flash-attn3'. Packing flattens batches into a single sequence, and Flash "
-                "Attention is the only known attention mechanisms that reliably support this. Using other "
-                "implementations may lead to cross-contamination between batches. To avoid this, either disable "
-                "packing by setting `packing=False`, or set `attn_implementation='flash_attention_2'` or "
-                "`attn_implementation='kernels-community/vllm-flash-attn3'` in the model configuration."
-            )
         if args.assistant_only_loss and not is_conversational(dataset_sample):
             raise ValueError(
                 "You set `assistant_only_loss=True`, but the dataset is not conversational. This option is only "
@@ -598,20 +472,15 @@ class RewardTrainer(Trainer):
                     "completion-only loss. To resolve this, apply your formatting function before passing the "
                     "dataset, or disable `completion_only_loss` in `RewardConfig`."
                 )
-            train_dataset = self._prepare_dataset(
-                train_dataset, processing_class, args, args.packing, formatting_func, "train"
-            )
+            train_dataset = self._prepare_dataset(train_dataset, processing_class, args, formatting_func, "train")
             if eval_dataset is not None:
-                packing = args.packing if args.eval_packing is None else args.eval_packing
                 if isinstance(eval_dataset, dict):
                     eval_dataset = {
-                        key: self._prepare_dataset(dataset, processing_class, args, packing, formatting_func, key)
+                        key: self._prepare_dataset(dataset, processing_class, args, formatting_func, key)
                         for key, dataset in eval_dataset.items()
                     }
                 else:
-                    eval_dataset = self._prepare_dataset(
-                        eval_dataset, processing_class, args, packing, formatting_func, "eval"
-                    )
+                    eval_dataset = self._prepare_dataset(eval_dataset, processing_class, args, formatting_func, "eval")
 
         # Initialize the metrics
         self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
@@ -655,7 +524,6 @@ class RewardTrainer(Trainer):
         dataset: Union[Dataset, IterableDataset],
         processing_class: PreTrainedTokenizerBase,
         args: RewardConfig,
-        packing: bool,
         formatting_func: Optional[Callable[[dict], str]],
         dataset_name: str,
     ) -> Union[Dataset, IterableDataset]:
@@ -798,30 +666,14 @@ class RewardTrainer(Trainer):
                     **map_kwargs,
                 )
 
-            # Pack or truncate
-            if packing:
-                if args.max_length is None:
-                    raise ValueError("When packing is enabled, `max_length` can't be `None`.")
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Packing {dataset_name} dataset"
-
-                columns = ["input_ids"]
-                if "completion_mask" in dataset.column_names:
-                    columns.append("completion_mask")
-                if "assistant_masks" in dataset.column_names:
-                    columns.append("assistant_masks")
-
-                dataset = dataset.select_columns(columns)
-
-                # Packing adds new column "seq_lengths" needed for document aware FlashAttention
-                dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
-            elif args.max_length is not None:
+            # Truncate
+            if args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
+                collator_expected_keys = {"input_ids", "completion_mask", "assistant_masks"}
                 dataset = dataset.select_columns(collator_expected_keys.intersection(dataset.column_names))
 
         return dataset
@@ -832,7 +684,7 @@ class RewardTrainer(Trainer):
         # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
-            self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
+            self._signature_columns = ["input_ids", "labels", "completion_mask", "assistant_masks"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
@@ -854,31 +706,18 @@ class RewardTrainer(Trainer):
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 per_token_entropy = entropy_from_logits(outputs.logits)
-                if "attention_mask" in inputs:
-                    attention_mask = inputs["attention_mask"]
-                    # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
-                    virtual_attention_mask = torch.ones(
-                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-                    )
-                    attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
-                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-                elif "position_ids" in inputs:
-                    entropy = torch.mean(per_token_entropy)
-                else:
-                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                attention_mask = inputs["attention_mask"]
+                # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
+                virtual_attention_mask = torch.ones(
+                    attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
+                )
+                attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
+                entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
                 entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
             self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":
-            # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
-            # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
-            if "attention_mask" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            elif "position_ids" in inputs:
-                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
-            else:
-                raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 

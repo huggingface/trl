@@ -63,22 +63,9 @@ class RewardConfig(TrainingArguments):
             it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
-            If `None`, no truncation is applied. When packing is enabled, this value sets the sequence length.
-        packing (`bool`, *optional*, defaults to `False`):
-            Whether to group multiple sequences into fixed-length blocks to improve computational efficiency and reduce
-            padding. Uses `max_length` to define sequence length.
-        packing_strategy (`str`, *optional*, defaults to `"bfd"`):
-            Strategy for packing sequences. Can be either `"bfd"` (best-fit decreasing, default), or `"wrapped"`.
-        padding_free (`bool`, *optional*, defaults to `False`):
-            Whether to perform forward passes without padding by flattening all sequences in the batch into a single
-            continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
-            supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure. When
-            packing is enabled with strategy `"bfd"`, padding-free is enabled, regardless of the value of this
-            parameter.
+            If `None`, no truncation is applied.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
-        eval_packing (`bool`, *optional*):
-            Whether to pack the eval dataset. If `None`, uses the same value as `packing`.
 
         > Parameters that control the training
 
@@ -183,41 +170,12 @@ class RewardConfig(TrainingArguments):
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
-            "the right. If `None`, no truncation is applied. When packing is enabled, this value sets the "
-            "sequence length."
-        },
-    )
-    packing: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to group multiple sequences into fixed-length blocks to improve computational efficiency "
-            "and reduce padding. Uses `max_length` to define sequence length."
-        },
-    )
-    packing_strategy: str = field(
-        default="bfd",
-        metadata={
-            "help": "Strategy for packing sequences. Can be either `'bfd'` (best-fit decreasing, default), or "
-            "`'wrapped'`."
-        },
-    )
-    padding_free: bool = field(
-        default=False,
-        metadata={
-            "help": "Whether to perform forward passes without padding by flattening all sequences in the batch into "
-            "a single continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this "
-            "is only supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch "
-            "structure. When packing is enabled with strategy `'bfd'`, padding-free is enabled, regardless of the "
-            "value of this parameter."
+            "the right. If `None`, no truncation is applied."
         },
     )
     pad_to_multiple_of: Optional[int] = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
-    )
-    eval_packing: Optional[bool] = field(
-        default=None,
-        metadata={"help": "Whether to pack the eval dataset. If `None`, uses the same value as `packing`."},
     )
 
     # Parameters that control the training
