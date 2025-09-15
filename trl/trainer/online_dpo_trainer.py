@@ -170,6 +170,16 @@ class OnlineDPOTrainer(Trainer):
 
         > Deprecated parameters
 
+        reward_model:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
+
+            </Deprecated>
+
+        > Deprecated parameters
+
         <Deprecated version="0.22.0">
 
         The following parameters are deprecated and will be removed in version 0.25.0:
