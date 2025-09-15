@@ -343,7 +343,6 @@ training_args = SFTConfig(
     packing=True,                   # use packing to reduce padding
     use_liger_kernel=True,          # compatible with CP
     gradient_checkpointing=False,   # If True in accelerate config, it needs to be False here
-    attn_implementation='sdpa',
     per_device_train_batch_size=1,
     ...
 )
