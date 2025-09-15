@@ -48,7 +48,7 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
-from .sft_config import SFTConfig
+from .reward_config import RewardConfig
 from .utils import (
     entropy_from_logits,
     generate_model_card,
@@ -132,7 +132,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
+    >>> from trl.trainer.reward_trainer import DataCollatorForLanguageModeling
 
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
     >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
@@ -278,9 +278,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         return list(position_ids.split(example_lengths))
 
 
-class SFTTrainer(Trainer):
+class RewardTrainer(Trainer):
     """
-    Trainer for Supervised Fine-Tuning (SFT) method.
+    Trainer for Outcome-supervised Reward Models (ORM).
 
     This class is a wrapper around the [`~transformers.Trainer`] class and inherits all of its attributes and methods.
 
@@ -288,11 +288,11 @@ class SFTTrainer(Trainer):
 
     ```python
     from datasets import load_dataset
-    from trl import SFTTrainer
+    from trl import RewardTrainer
 
     dataset = load_dataset("roneneldan/TinyStories", split="train[:1%]")
 
-    trainer = SFTTrainer(model="Qwen/Qwen2-0.5B-Instruct", train_dataset=dataset)
+    trainer = RewardTrainer(model="Qwen/Qwen2-0.5B-Instruct", train_dataset=dataset)
     trainer.train()
     ```
 
@@ -308,13 +308,13 @@ class SFTTrainer(Trainer):
             - A [`~transformers.PreTrainedModel`] object.
             If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
             as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
-        args ([`SFTConfig`], *optional*):
+        args ([`RewardConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`].
+            Will default to [`~trainer.reward_trainer.DataCollatorForLanguageModeling`].
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
-            Dataset to use for training. SFT supports both [language modeling](#language-modeling) type and
+            Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
@@ -337,10 +337,10 @@ class SFTTrainer(Trainer):
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function that will be used to compute metrics at evaluation. Must take a
             [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
-            [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
-            `compute_result` argument. This will be triggered after the last eval batch to signal that the function
-            needs to calculate and return the global summary statistics rather than accumulating the batch-level
-            statistics.
+            [`RewardConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a
+            boolean `compute_result` argument. This will be triggered after the last eval batch to signal that the
+            function needs to calculate and return the global summary statistics rather than accumulating the
+            batch-level statistics.
         callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
@@ -369,12 +369,12 @@ class SFTTrainer(Trainer):
             converts the dataset into a [language modeling](#language-modeling) type.
     """
 
-    _tag_names = ["trl", "sft"]
+    _tag_names = ["trl", "reward"]
 
     def __init__(
         self,
         model: Union[str, nn.Module, PreTrainedModel],
-        args: Optional[Union[SFTConfig, TrainingArguments]] = None,
+        args: Optional[Union[RewardConfig, TrainingArguments]] = None,
         data_collator: Optional[DataCollator] = None,  # type: ignore
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
@@ -392,12 +392,12 @@ class SFTTrainer(Trainer):
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
-            args = SFTConfig(f"{model_name}-SFT")
-        elif isinstance(args, TrainingArguments) and not isinstance(args, SFTConfig):
+            args = RewardConfig(f"{model_name}-Reward")
+        elif isinstance(args, TrainingArguments) and not isinstance(args, RewardConfig):
             dict_args = args.to_dict()
             dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
             dict_args.pop("push_to_hub_token")
-            args = SFTConfig(**dict_args)
+            args = RewardConfig(**dict_args)
 
         # Model
         model_init_kwargs = args.model_init_kwargs or {}
@@ -411,7 +411,7 @@ class SFTTrainer(Trainer):
                 model_init_kwargs["dtype"] = dtype
             else:
                 raise ValueError(
-                    "Invalid `dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
+                    "Invalid `dtype` passed to `RewardConfig`. Expected either 'auto' or a string representing "
                     f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
                 )
             config = AutoConfig.from_pretrained(model_id)
@@ -421,7 +421,7 @@ class SFTTrainer(Trainer):
             model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `RewardConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
 
@@ -575,7 +575,7 @@ class SFTTrainer(Trainer):
                     "A formatting function was provided while `completion_only_loss=True`, which is incompatible. "
                     "Using a formatter converts the dataset to a language modeling type, conflicting with "
                     "completion-only loss. To resolve this, apply your formatting function before passing the "
-                    "dataset, or disable `completion_only_loss` in `SFTConfig`."
+                    "dataset, or disable `completion_only_loss` in `RewardConfig`."
                 )
             train_dataset = self._prepare_dataset(
                 train_dataset, processing_class, args, args.packing, formatting_func, "train"
@@ -633,7 +633,7 @@ class SFTTrainer(Trainer):
         self,
         dataset: Union[Dataset, IterableDataset],
         processing_class: PreTrainedTokenizerBase,
-        args: SFTConfig,
+        args: RewardConfig,
         packing: bool,
         formatting_func: Optional[Callable[[dict], str]],
         dataset_name: str,
@@ -980,7 +980,7 @@ class SFTTrainer(Trainer):
             tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
-            trainer_name="SFT",
+            trainer_name="Reward",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))

@@ -19,13 +19,13 @@ from transformers import TrainingArguments
 
 
 @dataclass
-class SFTConfig(TrainingArguments):
+class RewardConfig(TrainingArguments):
     r"""
-    Configuration class for the [`SFTTrainer`].
+    Configuration class for the [`RewardTrainer`].
 
-    This class includes only the parameters that are specific to SFT training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
-    differ from those in [`~transformers.TrainingArguments`].
+    This class includes only the parameters that are specific to Reward training. For a full list of training
+    arguments, please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this
+    class may differ from those in [`~transformers.TrainingArguments`].
 
     Using [`~transformers.HfArgumentParser`] we can turn this class into
     [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
@@ -36,8 +36,8 @@ class SFTConfig(TrainingArguments):
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`SFTTrainer`] is provided as a string. If you're training a MoE architecture and want to
-            include the load balancing/auxilliary loss as a part of the final loss, remember to set
+            argument of the [`RewardTrainer`] is provided as a string. If you're training a MoE architecture and want
+            to include the load balancing/auxilliary loss as a part of the final loss, remember to set
             `output_router_logits=True` in this dictionary.
         chat_template_path (`str`, *optional*):
             If specified, sets the model's chat template. This can either be the path to a tokenizer (local directory
@@ -133,9 +133,9 @@ class SFTConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `SFTTrainer` is provided as a string. If you're training a MoE architecture and want to include the "
-            "load balancing/auxilliary loss as a part of the final loss, remember to set `output_router_logits=True` "
-            "in this dictionary."
+            "the `RewardTrainer` is provided as a string. If you're training a MoE architecture and want to include "
+            "the load balancing/auxilliary loss as a part of the final loss, remember to set "
+            "`output_router_logits=True` in this dictionary."
         },
     )
     chat_template_path: Optional[str] = field(
