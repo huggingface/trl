@@ -384,9 +384,13 @@ They show that CP scales effectively with more GPUs, enabling training on much l
   <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/context_parallelism_s_it_plot.png" alt="CP seconds/iteration" width="45%"/>
 </div>
 
-Accelerate also supports **N-Dimensional Parallelism (ND-parallelism)**, which enables you to combine different parallelization strategies (such as data, tensor, and pipeline parallelism) to efficiently distribute model training across multiple GPUs.  
+<Tip>
+
+Accelerate also supports **N-Dimensional Parallelism (ND-parallelism)**, which enables you to combine different parallelization strategies to efficiently distribute model training across multiple GPUs.  
 
 You can learn more and explore configuration examples in the [Accelerate ND-parallelism guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism).
+
+</Tip>
 
 
 **Further Reading on Context Parallelism**  
