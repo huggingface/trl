@@ -101,7 +101,7 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
 
 
 @dataclass
-class DataCollatorForLanguageModeling(DataCollatorMixin):
+class DataCollatorForPreference(DataCollatorMixin):
     """
     Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
 
@@ -132,9 +132,9 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl.trainer.reward_trainer import DataCollatorForLanguageModeling
+    >>> from trl.trainer.reward_trainer import DataCollatorForPreference
 
-    >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
+    >>> collator = DataCollatorForPreference(pad_token_id=0)
     >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
     >>> collator(examples)
     {'input_ids': tensor([[  1,  2,  3],
@@ -162,7 +162,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                        [-100,    5, -100]])}
 
     >>> # With padding_free
-    >>> collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
+    >>> collator = DataCollatorForPreference(pad_token_id=0, padding_free=True)
     >>> collator(examples)
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
      'attention_mask': tensor([[1, 1, 1, 1, 1]]),
@@ -312,7 +312,7 @@ class RewardTrainer(Trainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to [`~trainer.reward_trainer.DataCollatorForLanguageModeling`].
+            Will default to [`~trainer.reward_trainer.DataCollatorForPreference`].
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -540,7 +540,7 @@ class RewardTrainer(Trainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-            data_collator = DataCollatorForLanguageModeling(
+            data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
