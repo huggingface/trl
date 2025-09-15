@@ -176,6 +176,8 @@ class DataCollatorForPreference(DataCollatorMixin):
             output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
         if "image_sizes" in examples[0]:
             output["image_sizes"] = torch.tensor([example["image_sizes"] for example in examples])
+        if "image_grid_thw" in examples[0]:
+            output["image_grid_thw"] = torch.tensor([example["image_grid_thw"] for example in examples])
         if "ref_chosen_logps" in examples[0] and "ref_rejected_logps" in examples[0]:
             output["ref_chosen_logps"] = ref_chosen_logps
             output["ref_rejected_logps"] = ref_rejected_logps
@@ -771,6 +773,8 @@ class DPOTrainer(Trainer):
             output["pixel_attention_mask"] = processed_features["pixel_attention_mask"][0]
         if "image_sizes" in processed_features:
             output["image_sizes"] = processed_features["image_sizes"][0]
+        if "image_grid_thw" in processed_features:
+            output["image_grid_thw"] = processed_features["image_grid_thw"][0]
 
         return output
 
@@ -951,6 +955,7 @@ class DPOTrainer(Trainer):
                 - `"pixel_values"` (optional): Concatenated pixel values if `"prompt_pixel_values"` are present.
                 - `"pixel_attention_mask"` (optional): Concatenated pixel attention masks if
                   `"prompt_pixel_attention_mask"` are present.
+                - `"image_grid_thw"` (optional): Concatenated image grid THW if `"prompt_image_grid_thw"` are present.
 
         Notes:
             The completion input IDs and attention masks are padded to the maximum completion length of the chosen or
@@ -972,6 +977,8 @@ class DPOTrainer(Trainer):
             )
         if "image_sizes" in batch:
             output["image_sizes"] = torch.cat([batch["image_sizes"], batch["image_sizes"]], dim=0)
+        if "image_grid_thw" in batch:
+            output["image_grid_thw"] = torch.cat([batch["image_grid_thw"], batch["image_grid_thw"]], dim=0)
 
         # Concatenate the chosen and rejected completions
         max_completion_length = max(batch["chosen_input_ids"].shape[1], batch["rejected_input_ids"].shape[1])
@@ -1230,6 +1237,8 @@ class DPOTrainer(Trainer):
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
         if "image_sizes" in concatenated_batch:
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
+        if "image_grid_thw" in concatenated_batch:
+            model_kwargs["image_grid_thw"] = concatenated_batch["image_grid_thw"]
 
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
         completion_attention_mask = concatenated_batch["completion_attention_mask"]
@@ -1477,6 +1486,8 @@ class DPOTrainer(Trainer):
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
         if "image_sizes" in concatenated_batch:
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
+        if "image_grid_thw" in concatenated_batch:
+            model_kwargs["image_grid_thw"] = concatenated_batch["image_grid_thw"]
 
         prompt_input_ids = concatenated_batch["prompt_input_ids"]
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
