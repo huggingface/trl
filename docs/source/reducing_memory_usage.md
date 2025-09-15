@@ -335,7 +335,7 @@ training_args = SFTConfig(
     max_length=16384,               # long sequence length
     packing=True,                   # use packing to reduce padding
     use_liger_kernel=True,          # compatible with CP
-    gradient_checkpointing=False,    # If True in accelerate config, it needs to be False here
+    gradient_checkpointing=False,   # If True in accelerate config, it needs to be False here
     attn_implementation='sdpa',
     per_device_train_batch_size=1,
     ...
@@ -365,9 +365,9 @@ accelerate launch --config_file context_parallel_2gpu.yaml train.py
 
 5. **Monitor memory usage** across all GPUs to ensure balanced workload
 
-### Benchmarking Context Parallelism (CP)
+### Benchmarking Context Parallelism
 
-We benchmarked Context Parallelism (CP) to highlight its potential improvements in training efficiency.  
+We benchmarked CP to highlight its potential improvements in training efficiency.  
 Our experiments were conducted using **1, 2, 4, and 8 H100 GPUs**, though the results can be extended to larger clusters with more nodes and GPUs.
 
 For the setup, we fine-tuned an **8B model** ([Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)) using the provided accelerate configuration  
@@ -375,23 +375,26 @@ For the setup, we fine-tuned an **8B model** ([Qwen/Qwen3-8B](https://huggingfac
 We adjusted `num_processes` and `parallelism_config_cp_size` based on the number of GPUs for each run.  
 Training was performed with the [sft.py](https://github.com/huggingface/trl/blob/main/trl/scripts/sft.py) example script, combined with the parameters described above.
 
-The results below summarize **memory consumption** and **time per iteration**.  
-As shown, CP enables training with increasingly longer sequences and contexts, provided the scale requirements are met.
-
-[PLOT 1]
-
-[PLOT 2]
+The results below summarize **memory consumption** and **seconds per iteration**.  
+They show that CP scales effectively with more GPUs, enabling training on much longer sequences. With **8 GPUs**, context lengths of over **300k tokens** become feasible, unlocking training with extremely long contexts.
 
 
-[Benchmark ND Parallelism accelerate launch --config-file configs/cp.yaml nd_parallel_trainer.py --sequence-length=128000]
+<div class="flex justify-center">
+  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/context_parallelism_max_length_plot.png" alt="CP Max content length" width="600"/>
+  <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/context_parallelism_s_it_plot.png" alt="CP seconds/iteration" width="600"/>
+</div>
+
+Accelerate also supports **N-Dimensional Parallelism (ND-parallelism)**, which enables you to combine different parallelization strategies (such as data, tensor, and pipeline parallelism) to efficiently distribute model training across multiple GPUs.  
+
+You can learn more and explore configuration examples in the [Accelerate ND-parallelism guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism).
 
 
-**Further reading on Context Parallelism**:  
+**Further Reading on Context Parallelism**  
 
-- [Context Parallelism Guid in Accelerate](https://github.com/huggingface/accelerate/blob/main/docs/source/concept_guides/context_parallelism.md)  
-- [Example: 128k Sequence Length](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#context-parallelism-128k-sequence-length)
-- https://huggingface.co/blog/axolotl-ai-co/long-context-with-sequence-parallelism-in-axolotl
-- https://www.snowflake.com/en/engineering-blog/arctic-long-sequence-training-multi-million-token-ai/
+- [Accelerate: Context Parallelism Guide](https://github.com/huggingface/accelerate/blob/main/docs/source/concept_guides/context_parallelism.md)  
+- [Accelerate Example: 128k Sequence Length](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#context-parallelism-128k-sequence-length)  
+- [Hugging Face Blog: Enabling Long-Context Training with Sequence Parallelism in Axolotl](https://huggingface.co/blog/axolotl-ai-co/long-context-with-sequence-parallelism-in-axolotl)  
+- [Snowflake Engineering Blog: Arctic Long Sequence Training (ALST) — Scalable and Efficient Training for Multi-Million Token Sequences](https://www.snowflake.com/en/engineering-blog/arctic-long-sequence-training-multi-million-token-ai/)
 
 
 ## vLLM sleep mode
