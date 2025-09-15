@@ -26,7 +26,6 @@ LIGER_KERNEL_MIN_VERSION = "0.5.8"
 
 # Use same as transformers.utils.import_utils
 _deepspeed_available = _is_package_available("deepspeed")
-_diffusers_available = _is_package_available("diffusers")
 _fastapi_available = _is_package_available("fastapi")
 _is_liger_kernel_available, _liger_kernel_version = _is_package_available("liger_kernel", return_version=True)
 _llm_blender_available = _is_package_available("llm_blender")
@@ -42,10 +41,6 @@ _joblib_available = _is_package_available("joblib")
 
 def is_deepspeed_available() -> bool:
     return _deepspeed_available
-
-
-def is_diffusers_available() -> bool:
-    return _diffusers_available
 
 
 def is_fastapi_available() -> bool:
@@ -150,7 +145,3 @@ class _LazyModule(ModuleType):
 
     def __reduce__(self):
         return (self.__class__, (self._name, self.__file__, self._import_structure))
-
-
-class OptionalDependencyNotAvailable(BaseException):
-    """Internally used error class for signalling an optional dependency was not found."""
