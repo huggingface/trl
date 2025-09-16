@@ -271,7 +271,9 @@ class RewardTrainer(Trainer):
 
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
         peft_config ([`~peft.PeftConfig`], *optional*):
-            PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+            PEFT configuration used to wrap the model. If `None`, the model is not wrapped. Note that if the loaded
+            model is a causal LM, it's highly recommended to set `modules_to_save=["score"]` in the PEFT configuration
+            to ensure that the reward head is properly trained.
     """
 
     _tag_names = ["trl", "reward-trainer"]
