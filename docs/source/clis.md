@@ -303,7 +303,7 @@ trl reward --config reward_config.yaml
 
 You can use dataset mixtures to combine multiple datasets into a single training dataset. This is useful for training on diverse data sources or when you want to mix different types of data.
 
-<hfoptions id="accelerate_config">
+<hfoptions id="dataset_mixtures">
 <hfoption id="SFT">
 
 ```yaml
