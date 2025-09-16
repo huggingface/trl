@@ -242,6 +242,6 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 
 [[autodoc]] RewardConfig
 
-## DataCollatorPreference
+## DataCollatoForPreference
 
-[[autodoc]] trainer.sft_trainer.DataCollatorPreference
+[[autodoc]] trainer.sft_trainer.DataCollatorForPreference
