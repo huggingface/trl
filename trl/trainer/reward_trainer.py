@@ -436,6 +436,10 @@ class RewardTrainer(Trainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # During evaluation, Trainer calls compute_loss() only if can_return_loss is True and label_names is empty.
+        self.can_return_loss = True
+        self.label_names = []
+
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
