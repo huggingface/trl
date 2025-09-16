@@ -235,10 +235,10 @@ model = Qwen3ForCausalLM(config)
 push_to_hub(model, tokenizer, "small")
 
 # Reward models
-for model_id, config_class, model_class, suffix in [
-    ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForSequenceClassification, "3.2"),
-    ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForSequenceClassification, "2.5"),
-    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForSequenceClassification, None),
+for model_id, model_class, suffix in [
+    ("meta-llama/Llama-3.2-1B-Instruct", LlamaForSequenceClassification, "3.2"),
+    ("Qwen/Qwen2.5-32B-Instruct", Qwen2ForSequenceClassification, "2.5"),
+    ("Qwen/Qwen3-4B", Qwen3ForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = AutoConfig.from_pretrained(model_id)
@@ -251,8 +251,8 @@ for model_id, config_class, model_class, suffix in [
     push_to_hub(model, tokenizer, "tiny", suffix)
 
 # MoE Reward models
-for model_id, config_class, model_class, suffix in [
-    ("Qwen/Qwen3-30B-A3B", Qwen3MoeConfig, Qwen3MoeForSequenceClassification, None),
+for model_id, model_class, suffix in [
+    ("Qwen/Qwen3-30B-A3B", Qwen3MoeForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     config = AutoConfig.from_pretrained(model_id)
