@@ -571,7 +571,7 @@ def add_margin(example):
     preference_to_margin = {
         "significantly better": 1.0,
         "better": 2.0/3.0,
-        "slightly better", 1.0/3.0,
+        "slightly better": 1.0/3.0,
         "negligibly better / unsure": 0.0,
     }
     return {"margin": preference_to_margin[example["preference_label"]]}

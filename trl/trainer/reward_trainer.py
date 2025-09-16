@@ -86,11 +86,13 @@ class DataCollatorForPreference(DataCollatorMixin):
     Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch.
 
     This collator expects each example in the input list to be a dictionary containing the `"chosen_input_ids"` and
-    `"rejected_input_ids"` keys. The collator returns a dictionary containing the following
-    keys:
+    `"rejected_input_ids"` keys. The collator returns a dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. The first half of the batch
         corresponds to the `"chosen_input_ids"` and the second half to the `"rejected_input_ids"`.
     - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
+
+    Optionally, the examples can contain a `"margin"` key, in which case the returned dictionary will also contain a
+    `"margin"` key with a tensor of margins.
 
     Args:
         pad_token_id (`int`):
@@ -118,6 +120,21 @@ class DataCollatorForPreference(DataCollatorMixin):
                                [1, 1, 0],
                                [1, 1, 0],
                                [1, 0, 0]])}
+
+    >>> examples = [
+    ...     {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5], "margin": 0.5},
+    ...     {"chosen_input_ids": [6, 7], "rejected_input_ids": [8], "margin": 0.0},
+    ... ]
+    >>> collator(examples)
+    {'input_ids': tensor([[1, 2, 3],
+                          [6, 7, 0],
+                          [4, 5, 0],
+                          [8, 0, 0]]),
+     'attention_mask': tensor([[1, 1, 1],
+                               [1, 1, 0],
+                               [1, 1, 0],
+                               [1, 0, 0]]),
+     'margin': tensor([0.5, 0.0])}
     ```
     """
 
@@ -129,6 +146,8 @@ class DataCollatorForPreference(DataCollatorMixin):
         # Convert to tensor
         chosen_input_ids = [torch.tensor(example["chosen_input_ids"]) for example in examples]
         rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
+        if "margin" in examples[0]:
+            margins = torch.tensor([example["margin"] for example in examples], dtype=torch.float)
         input_ids = chosen_input_ids + rejected_input_ids
         attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
@@ -147,6 +166,8 @@ class DataCollatorForPreference(DataCollatorMixin):
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
+        if "margin" in examples[0]:
+            output["margin"] = margins
         return output
 
 
@@ -495,7 +516,7 @@ class RewardTrainer(Trainer):
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
         # and "attention_mask").
         if self._signature_columns is None:
-            self._signature_columns = ["chosen_input_ids", "rejected_input_ids"]
+            self._signature_columns = ["chosen_input_ids", "rejected_input_ids", "margin"]
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """

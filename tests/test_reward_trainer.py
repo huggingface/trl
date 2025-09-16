@@ -92,6 +92,21 @@ class TestDataCollatorForPreference(TrlTestCase):
             result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0], [1, 1, 0], [1, 0, 0]])
         )
 
+    def test_collate_with_margin(self):
+        self.collator = DataCollatorForPreference(pad_token_id=0)
+        examples = [
+            {"chosen_input_ids": [1, 2, 3], "rejected_input_ids": [4, 5], "margin": 0.1},
+            {"chosen_input_ids": [6, 7], "rejected_input_ids": [8], "margin": 0.2},
+        ]
+
+        result = self.collator(examples)
+
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [6, 7, 0], [4, 5, 0], [8, 0, 0]]))
+        torch.testing.assert_close(
+            result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0], [1, 1, 0], [1, 0, 0]])
+        )
+        torch.testing.assert_close(result["margin"], torch.tensor([0.1, 0.2]))
+
 
 class RewardTrainerTester(TrlTestCase):
     @parameterized.expand(
@@ -759,3 +774,61 @@ class RewardTrainerTester(TrlTestCase):
 
         for tag in ["reward-trainer", "trl"]:
             self.assertIn(tag, trainer.model.model_tags)
+
+    def test_train_with_margin(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        def add_margin(example):
+            # dummy margin based on the length of the chosen summary
+            return {"margin": len(example["chosen"])}
+
+        dataset = dataset.map(add_margin)
+
+        # Initialize the trainer
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_with_center_rewards_coefficient(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        # Initialize the trainer
+        training_args = RewardConfig(output_dir=self.tmp_dir, center_rewards_coefficient=0.01, report_to="none")
+        trainer = RewardTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
