@@ -1,4 +1,4 @@
-.PHONY: test precommit common_tests slow_tests test_examples tests_gpu
+.PHONY: test precommit common_tests slow_tests test_examples tests_gpu test_experimental
 
 check_dirs := examples tests trl
 
@@ -28,3 +28,6 @@ test_examples:
 		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_dpo.sh; \
 		echo $$?','$${file} >> temp_results_dpo_tests.txt; \
 	done
+
+test_experimental:
+	pytest -k "experimental"

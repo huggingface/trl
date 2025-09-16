@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "Pillow>=9.4.0",
 #     "peft",
 #     "trackio",
@@ -35,10 +35,10 @@ accelerate launch \
     --output_dir LLaVA-1.5-7B-SFT \
     --dtype bfloat16
 
-For LLaVA-NeXT, use: (requires transformers>=4.45)
+For LLaVA-NeXT, use:
     --model_name_or_path llava-hf/llava-v1.6-mistral-7b-hf
 
-For meta-llama/Llama-3.2-11B-Vision-Instruct, use: (requires transformers>=4.45.1)
+For meta-llama/Llama-3.2-11B-Vision-Instruct, use:
     --model_name_or_path meta-llama/Llama-3.2-11B-Vision-Instruct
 
 accelerate launch \
@@ -85,14 +85,16 @@ if __name__ == "__main__":
     # Model, Tokenizer & Processor
     ################
     dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
-    quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
         dtype=dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
 
     model = AutoModelForImageTextToText.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
