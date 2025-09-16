@@ -244,4 +244,4 @@ For details on the expected dataset structure, see the [Dataset Format — Tool 
 
 ## DataCollatoForPreference
 
-[[autodoc]] trainer.sft_trainer.DataCollatorForPreference
+[[autodoc]] trainer.reward_trainer.DataCollatorForPreference
