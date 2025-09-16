@@ -1603,7 +1603,7 @@ class GRPOTrainer(Trainer):
             completion_ids,
             completion_mask,
             prompt_inputs,
-            device,
+            num_items_in_batch,
             old_per_token_logps,
             ref_per_token_logps,
             importance_sampling_ratio if self.use_vllm and self.vllm_importance_sampling_correction else None,
