@@ -9,6 +9,7 @@ Currently supported commands are:
 - `trl dpo`: fine-tune a LLM with DPO
 - `trl grpo`: fine-tune a LLM with GRPO
 - `trl kto`: fine-tune a LLM with KTO
+- `trl reward`: train a Reward Model
 - `trl rloo`: fine-tune a LLM with RLOO
 - `trl sft`: fine-tune a LLM with SFT
 
@@ -39,6 +40,15 @@ trl sft \
 trl dpo \
   --model_name_or_path Qwen/Qwen2.5-0.5B \
   --dataset_name anthropic/hh-rlhf
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized
 ```
 
 </hfoption>
@@ -76,6 +86,21 @@ Launch with:
 
 ```bash
 trl dpo --config dpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
 ```
 
 </hfoption>
@@ -138,6 +163,33 @@ Launch with:
 ```bash
 trl dpo --config dpo_config.yaml
 ```
+
+</hfoption>
+<hfoption id="Reward inline">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --num_processes 4
+```
+
+</hfoption>
+<hfoption id="Reward w/ config file">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+num_processes: 4
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
 </hfoption>
 </hfoptions>
 
@@ -217,6 +269,33 @@ Launch with:
 ```bash
 trl dpo --config dpo_config.yaml
 ```
+
+</hfoption>
+<hfoption id="Reward inline">
+
+```bash
+trl reward \
+  --model_name_or_path Qwen/Qwen2.5-0.5B \
+  --dataset_name trl-lib/ultrafeedback_binarized \
+  --accelerate_config zero2  # or path/to/my/accelerate/config.yaml
+```
+
+</hfoption>
+<hfoption id="Reward w/ config file">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+dataset_name: trl-lib/ultrafeedback_binarized
+accelerate_config: zero2  # or path/to/my/accelerate/config.yaml
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
+```
+
 </hfoption>
 </hfoptions>
 
@@ -256,6 +335,23 @@ Launch with:
 
 ```bash
 trl dpo --config dpo_config.yaml
+```
+
+</hfoption>
+<hfoption id="Reward">
+
+```yaml
+# reward_config.yaml
+model_name_or_path: Qwen/Qwen2.5-0.5B
+datasets:
+  - path: trl-lib/tldr-preference
+  - path: trl-lib/lm-human-preferences-sentiment
+```
+
+Launch with:
+
+```bash
+trl reward --config reward_config.yaml
 ```
 
 </hfoption>
