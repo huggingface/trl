@@ -586,6 +586,11 @@ class RewardTrainerTester(TrlTestCase):
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            # RewardTrainer uses a mean-free loss that cancels uniform shifts in output scores. Since GPT-NeoX models
+            # include a final LayerNorm, its bias consistently receives zero gradient and remains unchanged, so we skip
+            # this parameter.
+            if n == "gpt_neox.final_layer_norm.bias":
+                continue
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     def test_train_with_set_chat_template_from_path(self):
@@ -617,6 +622,11 @@ class RewardTrainerTester(TrlTestCase):
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
+            # RewardTrainer uses a mean-free loss that cancels uniform shifts in output scores. Since GPT-NeoX models
+            # include a final LayerNorm, its bias consistently receives zero gradient and remains unchanged, so we skip
+            # this parameter.
+            if n == "gpt_neox.final_layer_norm.bias":
+                continue
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
         # Check that the template saved in the output directory is the same as the one used for training
