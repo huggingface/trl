@@ -159,12 +159,12 @@ class RewardTrainer(Trainer):
     Example:
 
     ```python
-    from datasets import load_dataset
     from trl import RewardTrainer
+    from datasets import load_dataset
 
-    dataset = load_dataset("trl-lib/tldr-preference", split="train[:1%]")
+    dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 
-    trainer = RewardTrainer(model="Qwen/Qwen2-0.5B-Instruct", train_dataset=dataset)
+    trainer = RewardTrainer(model="Qwen/Qwen2.5-0.5B-Instruct", train_dataset=dataset)
     trainer.train()
     ```
 

@@ -52,7 +52,7 @@ class RewardConfig(TrainingArguments):
         eos_token (`str`, *optional*):
             Token used to indicate the end of a turn or sequence. If `None`, it defaults to
             `processing_class.eos_token`.
-        pad_token (`int`, *optional*):
+        pad_token (`str`, *optional*):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
@@ -104,9 +104,7 @@ class RewardConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
-            "the `RewardTrainer` is provided as a string. If you're training a MoE architecture and want to include "
-            "the load balancing/auxilliary loss as a part of the final loss, remember to set "
-            "`output_router_logits=True` in this dictionary."
+            "the `RewardTrainer` is provided as a string."
         },
     )
     chat_template_path: Optional[str] = field(
