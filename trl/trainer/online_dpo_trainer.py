@@ -175,15 +175,6 @@ class OnlineDPOTrainer(Trainer):
             This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
 
             </Deprecated>
-
-        reward_processing_class:
-
-            <Deprecated version="0.22.0">
-
-            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_processing_classes`
-            instead.
-
-            </Deprecated>
     """
 
     _tag_names = ["trl", "online-dpo"]
