@@ -466,6 +466,39 @@ class RewardTrainerTester(TrlTestCase):
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
+    def test_train_with_pretokenized_data(self):
+        # Get the dataset
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_implicit_prompt_preference", split="train")
+
+        def tokenize_example(example):
+            return {
+                "chosen_input_ids": tokenizer(example["chosen"]).input_ids,
+                "rejected_input_ids": tokenizer(example["rejected"]).input_ids,
+            }
+
+        # Apply tokenization
+        tokenized_dataset = dataset.map(tokenize_example, remove_columns=["chosen", "rejected"])
+
+        # Initialize the trainer
+        training_args = RewardConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = RewardTrainer(model=model_id, args=training_args, train_dataset=tokenized_dataset)
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
     def test_train_with_iterable_dataset(self):
         # Get the dataset
         dataset = load_dataset(

@@ -85,8 +85,8 @@ class DataCollatorForPreference(DataCollatorMixin):
     """
     Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch.
 
-    This collator expects each example in the input list to be a dictionary containing at least the
-    `"chosen_input_ids"` and `"rejected_input_ids"` keys. The collator returns a dictionary containing the following
+    This collator expects each example in the input list to be a dictionary containing the `"chosen_input_ids"` and
+    `"rejected_input_ids"` keys. The collator returns a dictionary containing the following
     keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. The first half of the batch
         corresponds to the `"chosen_input_ids"` and the second half to the `"rejected_input_ids"`.
@@ -162,7 +162,7 @@ class RewardTrainer(Trainer):
     from datasets import load_dataset
     from trl import RewardTrainer
 
-    dataset = load_dataset("roneneldan/TinyStories", split="train[:1%]")
+    dataset = load_dataset("trl-lib/tldr-preference", split="train[:1%]")
 
     trainer = RewardTrainer(model="Qwen/Qwen2-0.5B-Instruct", train_dataset=dataset)
     trainer.train()
@@ -175,25 +175,24 @@ class RewardTrainer(Trainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
-              config) with the keyword arguments in `args.model_init_kwargs`.
+              using `AutoModelForSequenceClassification.from_pretrained` with the keyword arguments in
+              `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object.
-            If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
-            as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
         args ([`RewardConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.reward_trainer.DataCollatorForPreference`].
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
-            Dataset to use for training. This trainer supports both [language modeling](#language-modeling) type and
-            [prompt-completion](#prompt-completion) type. The format of the samples can be either:
+            Dataset to use for training. This trainer supports [preference](#preference) type (both implicit and
+            explicit prompt). The format of the samples can be either:
 
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
 
-            The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
+            The trainer also supports processed datasets (tokenized) as long as they contain an `chosen_input_ids` and
+            `rejected_input_ids` fields.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], *optional*):
@@ -201,11 +200,6 @@ class RewardTrainer(Trainer):
             [`~transformers.AutoTokenizer.from_pretrained`]. A padding token, `processing_class.pad_token`, must be
             set. If the processing class has not set a padding token, `processing_class.eos_token` will be used as the
             default.
-        compute_loss_func (`Callable`, *optional*):
-            A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
-            batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss
-            function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618)
-            used by [`Trainer`].
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function that will be used to compute metrics at evaluation. Must take a
             [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
@@ -250,7 +244,6 @@ class RewardTrainer(Trainer):
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
-        compute_loss_func: Optional[Callable] = None,
         compute_metrics: Optional[Callable[[EvalPrediction], dict]] = None,
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
@@ -394,7 +387,6 @@ class RewardTrainer(Trainer):
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             processing_class=processing_class,
-            compute_loss_func=compute_loss_func,
             compute_metrics=compute_metrics,
             callbacks=callbacks,
             optimizers=optimizers,
@@ -430,60 +422,65 @@ class RewardTrainer(Trainer):
         if isinstance(dataset, Dataset):  # IterableDataset does not support `with_transform`
             dataset = dataset.with_transform(remove_none_values)
 
+        # If the dataset is already preprocessed (tokenized), skip the processing steps.
+        column_names = list(next(iter(dataset)).keys())
+        is_processed = "chosen_input_ids" in column_names and "rejected_input_ids" in column_names
+
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().main_process_first():
-            # Add EOS token to the end of the sequences if needed
-            first_example = next(iter(dataset))
-            if not is_conversational(first_example):
+            if not is_processed:
+                # Add EOS token to the end of the sequences if needed
+                first_example = next(iter(dataset))
+                if not is_conversational(first_example):
+                    if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                        map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+
+                    def add_eos(example, eos_token):
+                        if not example["chosen"].endswith(eos_token):
+                            example["chosen"] = example["chosen"] + eos_token
+                        if "rejected" in example and not example["rejected"].endswith(eos_token):
+                            example["rejected"] = example["rejected"] + eos_token
+                        return example
+
+                    dataset = dataset.map(
+                        add_eos,
+                        fn_kwargs={"eos_token": processing_class.eos_token},
+                        **map_kwargs,
+                    )
+
+                # Tokenize the dataset
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
+                    map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def add_eos(example, eos_token):
-                    if not example["chosen"].endswith(eos_token):
-                        example["chosen"] = example["chosen"] + eos_token
-                    if "rejected" in example and not example["rejected"].endswith(eos_token):
-                        example["rejected"] = example["rejected"] + eos_token
-                    return example
+                def tokenize(example, processing_class):
+                    if "prompt" in example:  # explicit prompt case
+                        example["chosen"] = example["prompt"] + example["chosen"]
+                        example["rejected"] = example["prompt"] + example["rejected"]
 
-                dataset = dataset.map(
-                    add_eos,
-                    fn_kwargs={"eos_token": processing_class.eos_token},
-                    **map_kwargs,
-                )
+                    if is_conversational(example):
+                        chosen_input_ids = processing_class.apply_chat_template(
+                            example["chosen"],
+                            tools=example.get("tools"),
+                            **example.get("chat_template_kwargs", {}),
+                        )
+                        rejected_input_ids = processing_class.apply_chat_template(
+                            example["rejected"],
+                            tools=example.get("tools"),
+                            **example.get("chat_template_kwargs", {}),
+                        )
+                        output = {"chosen_input_ids": chosen_input_ids, "rejected_input_ids": rejected_input_ids}
+                    else:
+                        output = {
+                            "chosen_input_ids": processing_class(text=example["chosen"])["input_ids"],
+                            "rejected_input_ids": processing_class(text=example["rejected"])["input_ids"],
+                        }
+                    return output
 
-            # Tokenize the dataset
-            if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
-
-            def tokenize(example, processing_class):
-                if "prompt" in example:  # explicit prompt case
-                    example["chosen"] = example["prompt"] + example["chosen"]
-                    example["rejected"] = example["prompt"] + example["rejected"]
-
-                if is_conversational(example):
-                    chosen_input_ids = processing_class.apply_chat_template(
-                        example["chosen"],
-                        tools=example.get("tools"),
-                        **example.get("chat_template_kwargs", {}),
-                    )
-                    rejected_input_ids = processing_class.apply_chat_template(
-                        example["rejected"],
-                        tools=example.get("tools"),
-                        **example.get("chat_template_kwargs", {}),
-                    )
-                    output = {"chosen_input_ids": chosen_input_ids, "rejected_input_ids": rejected_input_ids}
-                else:
-                    output = {
-                        "chosen_input_ids": processing_class(text=example["chosen"])["input_ids"],
-                        "rejected_input_ids": processing_class(text=example["rejected"])["input_ids"],
-                    }
-                return output
-
-            dataset = dataset.map(tokenize, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+                dataset = dataset.map(tokenize, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
             # Truncate
             if args.max_length is not None:
