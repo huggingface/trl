@@ -43,7 +43,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import is_conversational, is_conversational_from_value, maybe_convert_to_chatml, truncate_dataset
+from ..data_utils import is_conversational, truncate_dataset
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .reward_config import RewardConfig
 from .utils import generate_model_card, get_comet_experiment_url, pad
@@ -274,7 +274,7 @@ class RewardTrainer(Trainer):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
-    _tag_names = ["trl", "reward"]
+    _tag_names = ["trl", "reward-trainer"]
 
     def __init__(
         self,
@@ -376,28 +376,25 @@ class RewardTrainer(Trainer):
                     else:
                         peft_config.modules_to_save.append("lm_head")
 
-        # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
-        # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
-        self.num_virtual_tokens = 0
-
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
-            if model.active_adapter in model.peft_config:
-                peft_model_config = model.peft_config[model.active_adapter]
-                self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
+
+        # Pad token (needed for SequenceClassification models)
+        # If not provided, use the one from the processing class or the eos token if the processing class does not have
+        # a pad token.
+        pad_token = args.pad_token or processing_class.pad_token or processing_class.eos_token
+        pad_token_id = processing_class.convert_tokens_to_ids(pad_token)
+        if pad_token_id is None:
+            raise ValueError(
+                f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
+                f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
+                "in the vocabulary before using it as a padding token."
+            )
+        model.config.pad_token_id = pad_token_id
+        processing_class.pad_token_id = pad_token_id
 
         # Data collator
         if data_collator is None:
-            # Get the pad token: if not provided, use the one from the processing class or the eos token
-            # if the processing class does not have a pad token.
-            pad_token = args.pad_token or processing_class.pad_token or processing_class.eos_token
-            pad_token_id = processing_class.convert_tokens_to_ids(pad_token)
-            if pad_token_id is None:
-                raise ValueError(
-                    f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
-                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
-                    "in the vocabulary before using it as a padding token."
-                )
             data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
                 pad_to_multiple_of=args.pad_to_multiple_of,
@@ -469,18 +466,6 @@ class RewardTrainer(Trainer):
             map_kwargs["num_proc"] = args.dataset_num_proc
 
         with PartialState().main_process_first():
-            # Convert the dataset to ChatML if needed
-            first_example = next(iter(dataset))
-            if is_conversational_from_value(first_example):
-                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-                column_names = next(iter(dataset)).keys()
-                dataset = dataset.map(
-                    maybe_convert_to_chatml,
-                    remove_columns="conversations" if "conversations" in column_names else None,
-                    **map_kwargs,
-                )
-
             # Add EOS token to the end of the sequences if needed
             first_example = next(iter(dataset))
             if not is_conversational(first_example):
@@ -516,7 +501,7 @@ class RewardTrainer(Trainer):
                         **example.get("chat_template_kwargs", {}),
                     )
                     rejected_input_ids = processing_class.apply_chat_template(
-                        example["chosen"],
+                        example["rejected"],
                         tools=example.get("tools"),
                         **example.get("chat_template_kwargs", {}),
                     )
@@ -575,17 +560,17 @@ class RewardTrainer(Trainer):
         # Compute min, mean, max, accuracy and margin
         with torch.no_grad():
             all_rewards = self.accelerator.gather(outputs.logits)
-            self._metrics[mode]["min_reward"].append(all_rewards.min())
-            self._metrics[mode]["mean_reward"].append(all_rewards.mean())
-            self._metrics[mode]["max_reward"].append(all_rewards.max())
+            self._metrics[mode]["min_reward"].append(all_rewards.min().item())
+            self._metrics[mode]["mean_reward"].append(all_rewards.mean().item())
+            self._metrics[mode]["max_reward"].append(all_rewards.max().item())
 
             mean_accuracy = (rewards_chosen > rewards_rejected).float().mean()
-            mean_accuracy = self.accelerator.gather_for_metrics(mean_accuracy).mean()
+            mean_accuracy = self.accelerator.gather_for_metrics(mean_accuracy).mean().item()
             self._metrics[mode]["accuracy"].append(mean_accuracy)
 
             mean_margin = (rewards_chosen - rewards_rejected).mean()
             mean_margin = self.accelerator.gather_for_metrics(mean_margin).mean()
-            self._metrics[mode]["margin"].append(mean_margin)
+            self._metrics[mode]["margin"].append(mean_margin.item())
 
         return (loss, outputs) if return_outputs else loss
 
