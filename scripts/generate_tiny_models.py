@@ -249,6 +249,8 @@ for model_id, model_class, suffix in [
     config.num_key_value_heads = 2
     config.num_hidden_layers = 2
     config.num_labels = 1
+    if model_id in ("Qwen/Qwen2.5-32B-Instruct", "Qwen/Qwen3-4B"):
+        config.layer_types = config.layer_types[:2]
     model = model_class(config)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
