@@ -185,7 +185,7 @@ dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
 trainer = RewardTrainer(
     "Qwen/Qwen3-4B",
     train_dataset=dataset,
-    peft_config=LoraConfig(modules_to_save=["score"]). # important to include the score head when base model is not a sequence classification model
+    peft_config=LoraConfig(modules_to_save=["score"])  # important to include the score head when base model is not a sequence classification model
 )
 
 trainer.train()
