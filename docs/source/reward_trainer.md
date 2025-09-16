@@ -62,7 +62,6 @@ dataset = load_dataset("lmarena-ai/arena-human-preference-55k")
 # Filter out ties
 dataset = dataset.filter(lambda example: example["winner_tie"] == 0)
 
-
 # Create 'chosen' and 'rejected' fields based on the winner column
 def response_a_b_to_chosen_rejected(example):
     if example["winner_model_a"] == 1:
@@ -73,9 +72,7 @@ def response_a_b_to_chosen_rejected(example):
         example["rejected"] = example["response_a"]
     return example
 
-
 dataset = dataset.map(response_a_b_to_chosen_rejected)
-
 
 # Convert to conversational format
 def make_conversation(example):
