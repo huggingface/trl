@@ -17,11 +17,10 @@ import logging
 import os
 import re
 from collections import defaultdict
-from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -46,7 +45,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import is_conversational, truncate_dataset
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .reward_config import RewardConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad
+from .utils import generate_model_card, get_comet_experiment_url, pad, remove_none_values
 
 
 if is_peft_available():
@@ -79,41 +78,6 @@ def suppress_from_pretrained_warning(logger: logging.Logger):
         yield
     finally:
         logger.removeFilter(f)
-
-
-TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
-
-
-def remove_none_values(example: TListOrMapping) -> TListOrMapping:
-    """
-    Recursively removes entries with `None` values from a nested structure (list or dictionary).
-
-    Args:
-        example (`list` or `Mapping`):
-            Input nested structure (list or dictionary) from which to remove `None`.
-
-    Example:
-    ```python
-    >>> [
-    ...     {
-    ...         "a": {"aa": None, "ab": 1},
-    ...         "b": "my_string",
-    ...     }
-    ... ]
-    >>> remove_none_values(example)
-    [{'a': {'ab': 1}, 'b': 'my_string'}]
-    ```
-    """
-    if isinstance(example, list):
-        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
-    elif isinstance(example, Mapping):
-        return {
-            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
-            for key, value in example.items()
-            if value is not None
-        }
-    else:
-        raise TypeError("Input must be a list or a dictionary.")
 
 
 @dataclass

@@ -16,10 +16,10 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
-from collections.abc import Sequence, Sized
+from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, TypeVar, Union
 
 import numpy as np
 import pandas as pd
@@ -1868,3 +1868,38 @@ def truncate_with_protected_tokens(
         truncated_mask.append(new_mask)
 
     return torch.stack(truncated_seq), torch.stack(truncated_mask)
+
+
+TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
+
+
+def remove_none_values(example: TListOrMapping) -> TListOrMapping:
+    """
+    Recursively removes entries with `None` values from a nested structure (list or dictionary).
+
+    Args:
+        example (`list` or `Mapping`):
+            Input nested structure (list or dictionary) from which to remove `None`.
+
+    Example:
+    ```python
+    >>> [
+    ...     {
+    ...         "a": {"aa": None, "ab": 1},
+    ...         "b": "my_string",
+    ...     }
+    ... ]
+    >>> remove_none_values(example)
+    [{'a': {'ab': 1}, 'b': 'my_string'}]
+    ```
+    """
+    if isinstance(example, list):
+        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
+    elif isinstance(example, Mapping):
+        return {
+            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
+            for key, value in example.items()
+            if value is not None
+        }
+    else:
+        raise TypeError("Input must be a list or a dictionary.")
