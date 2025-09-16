@@ -1208,6 +1208,7 @@ def generate_model_card(
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
+    template_file: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
     comet_url: Optional[str] = None,
@@ -1234,6 +1235,8 @@ def generate_model_card(
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
             Trainer citation as a BibTeX entry.
+        template_file (`str` *optional*):
+            Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
         paper_title (`str` or `None`, defaults to `None`):
             Paper title.
         paper_id (`str` or `None`, defaults to `None`):
@@ -1251,9 +1254,10 @@ def generate_model_card(
         model_name=model_name,
         tags=["generated_from_trainer", *tags],
     )
+    template_file = template_file or "lm_model_card.md"
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath("templates/lm_model_card.md")),
+        template_path=str(pkg_resources.files("trl").joinpath(f"templates/{template_file}")),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,

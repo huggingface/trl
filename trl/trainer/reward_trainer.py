@@ -666,6 +666,7 @@ class RewardTrainer(Trainer):
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="Reward",
+            template_file="rm_model_card.md",
         )
 
         model_card.save(os.path.join(self.args.output_dir, "README.md"))
