@@ -236,6 +236,7 @@ push_to_hub(model, tokenizer, "small")
 
 # Reward models
 for model_id, model_class, suffix in [
+    ("EleutherAI/pythia-14m", GPTNeoXConfig, GPTNeoXForCausalLM, None),
     ("meta-llama/Llama-3.2-1B-Instruct", LlamaForSequenceClassification, "3.2"),
     ("Qwen/Qwen2.5-32B-Instruct", Qwen2ForSequenceClassification, "2.5"),
     ("Qwen/Qwen3-4B", Qwen3ForSequenceClassification, None),
