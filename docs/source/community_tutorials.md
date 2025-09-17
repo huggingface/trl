@@ -4,6 +4,8 @@ Community tutorials are made by active members of the Hugging Face community who
 
 ## Language Models
 
+### Tutorials
+
 | Task | Class | Description | Author | Tutorial | Colab |
 | --- | --- | --- | --- | --- | --- |
 | Reinforcement Learning | [`GRPOTrainer`] | Post training an LLM for reasoning with GRPO in TRL | [Sergio Paniego](https://huggingface.co/sergiopaniego) | [Link](https://huggingface.co/learn/cookbook/fine_tuning_llm_grpo_trl) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/huggingface/cookbook/blob/main/notebooks/en/fine_tuning_llm_grpo_trl.ipynb) |
@@ -15,16 +17,21 @@ Community tutorials are made by active members of the Hugging Face community who
 | Preference Optimization | [`ORPOTrainer`] | Fine-tuning Llama 3 with ORPO combining instruction tuning and preference alignment | [Maxime Labonne](https://huggingface.co/mlabonne) | [Link](https://mlabonne.github.io/blog/posts/2024-04-19_Fine_tune_Llama_3_with_ORPO.html) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1eHNWg9gnaXErdAa8_mcvjMupbSS6rDvi) |
 | Instruction tuning | [`SFTTrainer`] | How to fine-tune open LLMs in 2025 with Hugging Face | [Philipp Schmid](https://huggingface.co/philschmid) | [Link](https://www.philschmid.de/fine-tune-llms-in-2025) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/philschmid/deep-learning-pytorch-huggingface/blob/main/training/fine-tune-llms-in-2025.ipynb) |
 
-<Youtube id="cnGyyM0vOes" />
 
-<Youtube id="jKdXv3BiLu0" />
+### Videos
+
+| Task | Title | Author | Video |
+| --- | --- | --- | --- |
+| Instruction tuning | Fine-tuning open AI models using Hugging Face TRL | [Wietse Venema](https://huggingface.co/wietsevenema) | [<img src="https://img.youtube.com/vi/cnGyyM0vOes/0.jpg">](https://youtu.be/cnGyyM0vOes) |
+| Instruction tuning | How to fine-tune a smol-LM with Hugging Face, TRL, and the smoltalk Dataset | [Mayurji](https://huggingface.co/iammayur) | [<img src="https://img.youtube.com/vi/jKdXv3BiLu0/0.jpg">](https://youtu.be/jKdXv3BiLu0) |
+
 
 <details>
-<summary>⚠️ Deprecated features notice (click to expand)</summary>
+<summary>⚠️ Deprecated features notice for "How to fine-tune a smol-LM with Hugging Face, TRL, and the smoltalk Dataset" (click to expand)</summary>
 
 <Tip warning={true}>
 
-The tutorial above uses two deprecated features:
+The tutorial uses two deprecated features:
 - `SFTTrainer(..., tokenizer=tokenizer)`: Use `SFTTrainer(..., processing_class=tokenizer)` instead, or simply omit it (it will be inferred from the model).
 - `setup_chat_format(model, tokenizer)`: Use `SFTConfig(..., chat_template_path="Qwen/Qwen3-0.6B")`, where `chat_template_path` specifies the model whose chat template you want to copy.
 
@@ -33,6 +40,8 @@ The tutorial above uses two deprecated features:
 </details>
 
 ## Vision Language Models
+
+### Tutorials
 
 | Task | Class | Description | Author | Tutorial | Colab |
 | --- | --- | --- | --- | --- | --- |
