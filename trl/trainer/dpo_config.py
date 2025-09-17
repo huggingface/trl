@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional, Union
@@ -476,11 +475,3 @@ class DPOConfig(TrainingArguments):
                     f"({loss_types})."
                 )
         super().__post_init__()
-
-        if self.padding_value is not None:
-            warnings.warn(
-                "The `padding_value` argument is deprecated and will be removed in version 0.26.0. Please use "
-                "`pad_token` (str) instead."
-            )
-            if self.pad_token is None:
-                self.pad_token = self.padding_value
