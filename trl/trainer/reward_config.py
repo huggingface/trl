@@ -44,6 +44,8 @@ class RewardConfig(TrainingArguments):
             or Hugging Face Hub model) or a direct path to a Jinja template file. When using a Jinja file, you must
             ensure that any special tokens referenced in the template are added to the tokenizer and that the model's
             embedding layer is resized accordingly.
+        disable_dropout (`bool`, *optional*, defaults to `True`):
+            Whether to disable dropout in the model.
 
         > Parameters that control the data preprocessing
 
@@ -115,6 +117,10 @@ class RewardConfig(TrainingArguments):
             "you must ensure that any special tokens referenced in the template are added to the tokenizer and "
             "that the model's embedding layer is resized accordingly."
         },
+    )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Whether to disable dropout in the model."},
     )
 
     # Parameters that control the data preprocessing

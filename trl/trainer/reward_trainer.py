@@ -45,7 +45,7 @@ from transformers.utils import is_peft_available
 from ..data_utils import is_conversational, truncate_dataset
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .reward_config import RewardConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad, remove_none_values
+from .utils import disable_dropout_in_model, generate_model_card, get_comet_experiment_url, pad, remove_none_values
 
 
 if is_peft_available():
@@ -358,6 +358,10 @@ class RewardTrainer(Trainer):
 
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
+
+        # Disable dropout in the model
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
 
         # Pad token (needed for SequenceClassification models)
         # If not provided, use the one from the processing class or the eos token if the processing class does not have
