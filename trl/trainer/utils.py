@@ -16,6 +16,7 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
+import warnings
 from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -172,6 +173,13 @@ class RewardDataCollatorWithPadding:
     r"""
     Reward DataCollator class that pads the inputs to the maximum length of the batch.
 
+    <Tip warning={true}>
+
+    This class is deprecated and will be removed in version 0.27.0. Please use
+    `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
+
+    </Tip>
+
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
@@ -187,6 +195,14 @@ class RewardDataCollatorWithPadding:
     padding: Union[bool, str] = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
+
+    def __init__(self, *args, **kwargs) -> None:
+        warnings.warn(
+            "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
+            "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
+            DeprecationWarning,
+        )
+        super().__init__(*args, **kwargs)
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_chosen = []
@@ -1185,6 +1201,13 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     """
     Decodes the input tensor and strips the padding tokens.
 
+    <Tip warning={true}>
+
+    This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy the
+    code into your codebase and use it from there.
+
+    </Tip>
+
     Args:
         inputs (`torch.Tensor`):
             The input tensor to be decoded.
@@ -1195,6 +1218,11 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
         `list[str]`:
             The list of decoded strings with padding tokens stripped.
     """
+    warnings.warn(
+        "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
+        "to keep using it, please copy the code into your codebase and use it from there.",
+        DeprecationWarning,
+    )
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
     return [d.replace(tokenizer.pad_token, "") for d in decoded]
 
