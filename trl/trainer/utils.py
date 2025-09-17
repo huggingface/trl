@@ -1882,7 +1882,7 @@ def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
             or `'auto'`.
 
     Returns:
-        `transformers.PreTrainedModel`:
+        [`~transformers.PreTrainedModel`]:
             The instantiated model.
     """
     dtype = kwargs.get("dtype")
