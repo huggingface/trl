@@ -616,7 +616,7 @@ class SFTTrainer(Trainer):
 
         # Model
         if isinstance(model, str):
-            model = create_model_from_path(model, args.model_init_kwargs)
+            model = create_model_from_path(model, args.model_init_kwargs or {})
         else:
             if args.model_init_kwargs is not None:
                 logger.warning(

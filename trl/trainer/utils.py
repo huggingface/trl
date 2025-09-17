@@ -1869,14 +1869,14 @@ def truncate_with_protected_tokens(
     return torch.stack(truncated_seq), torch.stack(truncated_mask)
 
 
-def create_model_from_path(model_id: str, init_kwargs: Optional[dict]) -> PreTrainedModel:
+def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
     """
     Create a model from a given path using the specified initialization arguments.
 
     Args:
         model_id (`str`):
             Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
-        init_kwargs (`dict` or `None`):
+        kwargs (`dict`):
             Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
             specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
             or `'auto'`.
@@ -1885,12 +1885,11 @@ def create_model_from_path(model_id: str, init_kwargs: Optional[dict]) -> PreTra
         `transformers.PreTrainedModel`:
             The instantiated model.
     """
-    init_kwargs = init_kwargs or {}
-    dtype = init_kwargs.get("dtype")
+    dtype = kwargs.get("dtype")
     if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
         pass  # dtype is already a torch.dtype or "auto" or None
     elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
-        init_kwargs["dtype"] = getattr(torch, dtype)
+        kwargs["dtype"] = getattr(torch, dtype)
     else:
         raise ValueError(
             "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
@@ -1898,5 +1897,5 @@ def create_model_from_path(model_id: str, init_kwargs: Optional[dict]) -> PreTra
         )
     config = AutoConfig.from_pretrained(model_id)
     architecture = getattr(transformers, config.architectures[0])
-    model = architecture.from_pretrained(model_id, **init_kwargs)
+    model = architecture.from_pretrained(model_id, **kwargs)
     return model
