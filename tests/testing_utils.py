@@ -27,13 +27,7 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_rich_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
-from trl.import_utils import (
-    is_diffusers_available,
-    is_joblib_available,
-    is_llm_blender_available,
-    is_mergekit_available,
-    is_vllm_available,
-)
+from trl.import_utils import is_joblib_available, is_llm_blender_available, is_mergekit_available, is_vllm_available
 
 
 # transformers.testing_utils contains a require_bitsandbytes function, but relies on pytest markers which we don't use
@@ -50,13 +44,6 @@ def require_comet(test_case):
     Decorator marking a test that requires Comet. Skips the test if Comet is not available.
     """
     return unittest.skipUnless(is_comet_available(), "test requires comet_ml")(test_case)
-
-
-def require_diffusers(test_case):
-    """
-    Decorator marking a test that requires diffusers. Skips the test if diffusers is not available.
-    """
-    return unittest.skipUnless(is_diffusers_available(), "test requires diffusers")(test_case)
 
 
 def require_llm_blender(test_case):
