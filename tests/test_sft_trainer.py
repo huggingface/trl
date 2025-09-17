@@ -23,7 +23,7 @@ from transformers.testing_utils import require_flash_attn, require_liger_kernel,
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, DataCollatorForVisionLanguageModeling
 
 from .testing_utils import TrlTestCase, ignore_warnings
 
@@ -244,6 +244,31 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         self.assertEqual(len(result), 2)
         self.assertTrue(torch.equal(result[0], torch.tensor([0, 1, 0, 1])))
         self.assertTrue(torch.equal(result[1], torch.arange(3)))
+
+
+class TestDataCollatorForVisionLanguageModeling(TrlTestCase):
+    def test_vlm_text_only_data(self):
+        """Test VLM collator with text-only data (no images)"""
+        from unittest.mock import MagicMock
+
+        # Setup mock processor
+        processor = MagicMock()
+        processor.apply_chat_template = MagicMock(return_value=["test"])
+        processor.return_value = {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
+
+        collator = DataCollatorForVisionLanguageModeling(processor=processor)
+
+        # Test with images
+        examples = [{"images": ["img"], "messages": [{"role": "user", "content": "test"}]}]
+        collator(examples)
+        self.assertIn("images", processor.call_args.kwargs)
+
+        # Test without images (failed before the fix in #4080)
+        processor.reset_mock()
+        processor.return_value = {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
+        examples = [{"messages": [{"role": "user", "content": "test"}]}]
+        collator(examples)
+        self.assertNotIn("images", processor.call_args.kwargs)
 
 
 class SFTTrainerTester(TrlTestCase):
