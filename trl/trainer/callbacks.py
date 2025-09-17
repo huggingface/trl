@@ -53,8 +53,8 @@ if is_wandb_available():
 
 if is_weave_available():
     import weave
-    from weave.trace.context import weave_client_context
     from weave import EvaluationLogger
+    from weave.trace.context import weave_client_context
 
 
 # Logger for module-level logging
@@ -340,8 +340,6 @@ class WinRateCallback(TrainerCallback):
                 self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
-                import wandb
-
                 if wandb.run is not None:
                     df = _win_rate_completions_df(
                         state=state,
@@ -403,8 +401,6 @@ class WinRateCallback(TrainerCallback):
                 self.trainer.log({"eval_win_rate": win_rate})
 
             if "wandb" in args.report_to:
-                import wandb
-
                 if wandb.run is not None:
                     df = _win_rate_completions_df(
                         state=state,
@@ -521,8 +517,9 @@ class LogCompletionsCallback(TrainerCallback):
 
 class WeaveCallback(TrainerCallback):
     r"""
-    A [`~transformers.TrainerCallback`] that logs traces and evaluations to W&B Weave.
-    The callback uses https://weave-docs.wandb.ai/guides/evaluation/evaluation_logger/ to log traces and evaluations at each evaluation step.
+    A [`~transformers.TrainerCallback`] that logs traces and evaluations to W&B Weave. The callback uses
+    https://weave-docs.wandb.ai/guides/evaluation/evaluation_logger/ to log traces and evaluations at each evaluation
+    step.
 
     Supports two modes based on the `scorers` parameter:
     - **Tracing Mode** (when scorers=None): Logs predictions for data exploration and analysis
@@ -530,10 +527,9 @@ class WeaveCallback(TrainerCallback):
 
     Both modes use Weave's EvaluationLogger for structured, consistent data logging.
 
-    The callback logs data during evaluation phases (`on_evaluate`) rather than training steps,
-    making it more efficient and semantically correct. It gracefully handles missing weave
-    installation by logging warnings and skipping weave-specific functionality. It also checks
-    for existing weave clients before initializing new ones.
+    The callback logs data during evaluation phases (`on_evaluate`) rather than training steps, making it more
+    efficient and semantically correct. It gracefully handles missing weave installation by logging warnings and
+    skipping weave-specific functionality. It also checks for existing weave clients before initializing new ones.
 
     Usage:
     ```python
@@ -546,15 +542,17 @@ class WeaveCallback(TrainerCallback):
     weave_callback = WeaveTraceCallback(trainer=trainer, project_name="my-llm-training")
     trainer.add_callback(weave_callback)
 
+
     # Evaluation mode (log predictions + scores + summary)
     def accuracy_scorer(prompt: str, completion: str) -> float:
         # Your scoring logic here (metadata available via eval_attributes)
         return score
 
+
     weave_callback = WeaveTraceCallback(
         trainer=trainer,
         project_name="my-llm-training",  # optional and needed only if weave client is not initialized
-        scorers={"accuracy": accuracy_scorer}
+        scorers={"accuracy": accuracy_scorer},
     )
     trainer.add_callback(weave_callback)
     ```
@@ -564,19 +562,19 @@ class WeaveCallback(TrainerCallback):
             Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
             column containing the prompts for generating completions.
         project_name (`str`, *optional*):
-            The name of the Weave project where data will be logged. If not provided, will try to use existing weave client
+            Name of the Weave project where data will be logged. If not provided, will try to use existing weave client
             or fall back to the active wandb run's project name. Raises an error if none of these are available.
-        scorers (`Dict[str, Callable]`, *optional*):
-            Dictionary mapping scorer names to scorer functions. If None, operates in tracing mode (predictions only).
-            If provided, operates in evaluation mode (predictions + scores + summary).
-            Scorer functions should have signature: `scorer(prompt: str, completion: str) -> Union[float, int]`
+        scorers (`dict[str, Callable]`, *optional*):
+            Dictionary mapping scorer names to scorer functions. If `None`, operates in tracing mode (predictions
+            only). If provided, operates in evaluation mode (predictions + scores + summary). Scorer functions should
+            have signature: `scorer(prompt: str, completion: str) -> Union[float, int]`
         generation_config (`GenerationConfig`, *optional*):
-            The generation config to use for generating completions.
+            Generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*):
-            The number of prompts to generate completions for. If not provided, defaults to the number of examples in
-            the evaluation dataset.
-        dataset_name (`str`, *optional*):
-            Name for the dataset metadata in Weave. Defaults to "eval_dataset".
+            Number of prompts to generate completions for. If not provided, defaults to the number of examples in the
+            evaluation dataset.
+        dataset_name (`str`, *optional*, defaults to `"eval_dataset"`):
+            Name for the dataset metadata in Weave.
         model_name (`str`, *optional*):
             Name for the model metadata in Weave. If not provided, attempts to extract from model config.
     """
@@ -588,24 +586,21 @@ class WeaveCallback(TrainerCallback):
         scorers: Optional[dict[str, callable]] = None,
         generation_config: Optional[GenerationConfig] = None,
         num_prompts: Optional[int] = None,
-        dataset_name: Optional[str] = None,
+        dataset_name: str = "eval_dataset",
         model_name: Optional[str] = None,
     ):
-
         self.trainer = trainer
         self.project_name = project_name
         self.scorers = scorers or {}
         self.generation_config = generation_config
-        self.dataset_name = dataset_name or "eval_dataset"
+        self.dataset_name = dataset_name
         self.model_name = model_name
         self._last_logged_step = -1
         self._weave_initialized = False
         self._eval_logger = None
 
         if self.trainer.eval_dataset is None:
-            raise ValueError(
-                "Trainer must have an evaluation dataset to use the WeaveCallback."
-            )
+            raise ValueError("Trainer must have an evaluation dataset to use the WeaveCallback.")
         else:
             self.eval_dataset = self.trainer.eval_dataset
 
@@ -616,9 +611,7 @@ class WeaveCallback(TrainerCallback):
         """Initialize Weave and EvaluationLogger if not already initialized."""
         if not self._weave_initialized:
             if not is_weave_available():
-                logger.warning(
-                    "Weave is not available. Please install weave to enable logging: `pip install weave`"
-                )
+                logger.warning("Weave is not available. Please install weave to enable logging: `pip install weave`")
                 return
 
             if wc := weave_client_context.get_weave_client():
@@ -626,15 +619,9 @@ class WeaveCallback(TrainerCallback):
             else:
                 if self.project_name is None:
                     if is_wandb_available():
-                        import wandb
-
                         if wandb.run is not None:
-                            self.project_name = (
-                                wandb.run.entity + "/" + wandb.run.project
-                            )
-                            logger.info(
-                                f"Using project name from active wandb run: {self.project_name}"
-                            )
+                            self.project_name = wandb.run.entity + "/" + wandb.run.project
+                            logger.info(f"Using project name from active wandb run: {self.project_name}")
 
                     if self.project_name is None:
                         raise ValueError(
@@ -648,14 +635,7 @@ class WeaveCallback(TrainerCallback):
                 logger.info(f"Initialized Weave with project: {self.project_name}")
 
             if self.model_name is None:
-                try:
-                    self.model_name = getattr(
-                        self.trainer.model_wrapped.config,
-                        "_name_or_path",
-                        "unknown_model",
-                    )
-                except:
-                    self.model_name = "unknown_model"
+                self.model_name = getattr(self.trainer.model_wrapped.config, "_name_or_path", "unknown_model")
 
             self._EvaluationLogger = EvaluationLogger
 
@@ -685,13 +665,8 @@ class WeaveCallback(TrainerCallback):
         accelerator = self.trainer.accelerator
         model = self.trainer.model_wrapped
 
-        with accelerator.split_between_processes(
-            self.eval_dataset["prompt"]
-        ) as prompts:
-            prompts = [
-                maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"]
-                for prompt in prompts
-            ]
+        with accelerator.split_between_processes(self.eval_dataset["prompt"]) as prompts:
+            prompts = [maybe_apply_chat_template({"prompt": prompt}, tokenizer)["prompt"] for prompt in prompts]
 
             completions = _generate_completions(
                 prompts=prompts,
@@ -709,9 +684,7 @@ class WeaveCallback(TrainerCallback):
             eval_attributes = {
                 "training_step": state.global_step,
                 "model_name": self.model_name,
-                "generation_config": (
-                    self.generation_config.to_dict() if self.generation_config else None
-                ),
+                "generation_config": (self.generation_config.to_dict() if self.generation_config else None),
             }
 
             eval_logger = self._EvaluationLogger(
@@ -725,9 +698,7 @@ class WeaveCallback(TrainerCallback):
 
             for prompt, completion in zip(all_prompts, all_completions):
                 try:
-                    pred_logger = eval_logger.log_prediction(
-                        inputs={"prompt": prompt}, output=completion
-                    )
+                    pred_logger = eval_logger.log_prediction(inputs={"prompt": prompt}, output=completion)
 
                     if self.is_evaluation_mode:
                         for scorer_name, scorer_func in self.scorers.items():
@@ -740,9 +711,7 @@ class WeaveCallback(TrainerCallback):
                                 total_score_values[scorer_name].append(score)
 
                             except Exception as scorer_e:
-                                logger.warning(
-                                    f"Failed to apply scorer '{scorer_name}': {scorer_e}"
-                                )
+                                logger.warning(f"Failed to apply scorer '{scorer_name}': {scorer_e}")
 
                     pred_logger.finish()
                     successful_predictions += 1
@@ -760,9 +729,7 @@ class WeaveCallback(TrainerCallback):
 
                     for scorer_name, scores in total_score_values.items():
                         if scores:  # Only if we have valid scores
-                            summary_stats[f"avg_{scorer_name}"] = sum(scores) / len(
-                                scores
-                            )
+                            summary_stats[f"avg_{scorer_name}"] = sum(scores) / len(scores)
 
                     eval_logger.log_summary(summary_stats)
 
