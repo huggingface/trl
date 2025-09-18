@@ -15,12 +15,12 @@
 import functools
 import random
 import shutil
+import signal
 import tempfile
 import unittest
 import warnings
-import psutil
-import signal
 
+import psutil
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import torch_device
@@ -154,6 +154,7 @@ def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> c
         return wrapper
 
     return decorator
+
 
 def kill_process(process):
     parent = psutil.Process(process.pid)

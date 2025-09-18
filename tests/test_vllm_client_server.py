@@ -22,7 +22,7 @@ from transformers.testing_utils import require_torch_multi_accelerator, torch_de
 from trl.extras.vllm_client import VLLMClient
 from trl.scripts.vllm_serve import chunk_list
 
-from .testing_utils import TrlTestCase, require_3_accelerators, kill_process
+from .testing_utils import TrlTestCase, kill_process, require_3_accelerators
 
 
 class TestChunkList(TrlTestCase):
@@ -88,7 +88,9 @@ class TestVLLMClientServer(TrlTestCase):
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)["completion_ids"]
+        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+            "completion_ids"
+        ]
 
         # Check that the output is a list
         self.assertIsInstance(outputs, list)
@@ -162,7 +164,9 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)["completion_ids"]
+        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+            "completion_ids"
+        ]
 
         # Check that the output is a list
         self.assertIsInstance(outputs, list)

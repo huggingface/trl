@@ -15,8 +15,8 @@
 import importlib.resources as resources
 import os
 import sys
-import torch
 
+import torch
 from accelerate import logging
 from accelerate.commands.launch import launch_command, launch_command_parser
 

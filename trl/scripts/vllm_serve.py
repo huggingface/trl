@@ -27,8 +27,7 @@ from typing import Optional
 
 import torch
 import torch.distributed.distributed_c10d as c10d
-
-from transformers import is_vision_available, is_torch_xpu_available
+from transformers import is_torch_xpu_available, is_vision_available
 
 from trl import TrlParser
 from trl.import_utils import (
@@ -111,7 +110,9 @@ class WeightSyncWorkerExtension:
             raise RuntimeError("Weight update group already initialized. Call close_communicator first.")
 
         # TODO: will remove after torch xpu 2.9 support uuid in get_device_properties
-        if torch.cuda.is_available() or (is_torch_xpu_available() and hasattr(torch.xpu.get_device_properties(self.device), "uuid")):
+        if torch.cuda.is_available() or (
+            is_torch_xpu_available() and hasattr(torch.xpu.get_device_properties(self.device), "uuid")
+        ):
             accelerator_module = torch.xpu if is_torch_xpu_available() else torch.cuda
             if client_device_uuid == str(accelerator_module.get_device_properties(self.device).uuid):
                 raise RuntimeError(
@@ -123,12 +124,7 @@ class WeightSyncWorkerExtension:
         rank = get_world_group().rank
 
         if is_torch_xpu_available():
-            store = torch.distributed.TCPStore(
-                host_name=host,
-                port=port,
-                world_size=world_size,
-                is_master=(rank == 0)
-            )
+            store = torch.distributed.TCPStore(host_name=host, port=port, world_size=world_size, is_master=(rank == 0))
             prefixed_store = c10d.PrefixStore("client2server", store)
             pg = c10d.ProcessGroupXCCL(
                 store=prefixed_store,

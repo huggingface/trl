@@ -22,8 +22,8 @@ from typing import Optional, Union
 from urllib.parse import urlparse
 
 import torch
-from torch import nn
 import torch.distributed.distributed_c10d as c10d
+from torch import nn
 from transformers import is_torch_xpu_available
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
@@ -302,10 +302,7 @@ class VLLMClient:
         # Set up the communication group for weight broadcasting
         if is_torch_xpu_available():
             store = torch.distributed.TCPStore(
-                host_name=self.host,
-                port=self.group_port,
-                world_size=world_size,
-                is_master=(self.rank == 0)
+                host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
             )
             prefixed_store = c10d.PrefixStore("client2server", store)
             pg = c10d.ProcessGroupXCCL(
@@ -315,7 +312,9 @@ class VLLMClient:
             )
             self.communicator = pg
         else:
-            pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
+            pg = StatelessProcessGroup.create(
+                host=self.host, port=self.group_port, rank=self.rank, world_size=world_size
+            )
             self.communicator = PyNcclCommunicator(pg, device=device)
 
         # When the client object is deleted, close the weight update group
