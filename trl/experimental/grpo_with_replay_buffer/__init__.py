@@ -12,4 +12,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .grpo_trainer_with_replay_buffer import GRPOTrainerWithReplayBuffer
+from .grpo_with_replay_buffer_trainer import GRPOWithReplayBufferTrainer, ReplayBuffer
+from .grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig

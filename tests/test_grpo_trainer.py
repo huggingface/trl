@@ -28,7 +28,8 @@ from transformers.testing_utils import require_liger_kernel, require_peft, requi
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.grpo_trainer import ReplayBuffer
+from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
+from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_trainer import GRPOWithReplayBufferTrainer, ReplayBuffer
 
 from .testing_utils import TrlTestCase, require_vllm
 
@@ -1639,45 +1640,8 @@ class GRPOTrainerTester(TrlTestCase):
         self.assertEqual(len(trainer.reward_processing_classes), 1)
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
     
-    def test_training_with_replay_buffer(self):
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
-        # Guarantee that some rewards have 0 std
-        def custom_reward_func(completions, **kwargs):
-            if torch.rand(1).item() < 0.25:
-                return [0] * len(completions)  # simulate some None rewards
-            else:
-                return torch.rand(len(completions)).tolist()
-
-        training_args = GRPOConfig(
-            output_dir=self.tmp_dir,
-            learning_rate=0.1,  # increase the learning rate to speed up the test
-            per_device_train_batch_size=4,  # reduce the batch size to reduce memory usage
-            num_generations=4,  # reduce the number of generations to reduce memory usage
-            max_completion_length=8,  # reduce the completion length to reduce memory usage
-            replay_buffer_size=8,
-            report_to="none",
-        )
-        trainer = GRPOTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            reward_funcs=[custom_reward_func],
-            args=training_args,
-            train_dataset=dataset,
-        )
-
-        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
-
-        trainer.train()
-
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-
-        # Check that the params have changed
-        for n, param in previous_trainable_params.items():
-            new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
-
-class TestReplayBuffer(unittest.TestCase):
+class TestReplayBuffer(TrlTestCase):
     def setUp(self):
         self.replay_buffer = ReplayBuffer(max_size=5)
 
@@ -1746,9 +1710,13 @@ class TestReplayBuffer(unittest.TestCase):
 
 class TestUpdateWithReplayBuffer(unittest.TestCase):
     def setUp(self):
-        self.trainer = GRPOTrainer(
+        config = GRPOWithReplayBufferConfig(
+            replay_buffer_size=5,
+        )
+        self.trainer = GRPOWithReplayBufferTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=config,
             train_dataset=None,
         )
         self.trainer.replay_buffer = ReplayBuffer(max_size=5)
@@ -1897,6 +1865,45 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
             ]
             in output_prompt_ids
         )
+
+class TestGRPOWithReplayBufferTrainer(TrlTestCase):
+    
+    def test_training_with_replay_buffer(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        # Guarantee that some rewards have 0 std
+        def custom_reward_func(completions, **kwargs):
+            if torch.rand(1).item() < 0.25:
+                return [0] * len(completions)  # simulate some None rewards
+            else:
+                return torch.rand(len(completions)).tolist()
+
+        training_args = GRPOWithReplayBufferConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=4,  # reduce the batch size to reduce memory usage
+            num_generations=4,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            replay_buffer_size=8,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[custom_reward_func],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
 
 if __name__ == "__main__":
