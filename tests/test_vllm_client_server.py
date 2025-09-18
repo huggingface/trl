@@ -13,10 +13,8 @@
 # limitations under the License.
 
 import os
-import signal
 import subprocess
 
-import psutil
 import pytest
 from transformers import AutoModelForCausalLM
 from transformers.testing_utils import require_torch_multi_accelerator, torch_device
@@ -24,7 +22,7 @@ from transformers.testing_utils import require_torch_multi_accelerator, torch_de
 from trl.extras.vllm_client import VLLMClient
 from trl.scripts.vllm_serve import chunk_list
 
-from .testing_utils import TrlTestCase, require_3_accelerators
+from .testing_utils import TrlTestCase, kill_process, require_3_accelerators
 
 
 class TestChunkList(TrlTestCase):
@@ -71,12 +69,12 @@ class TestVLLMClientServer(TrlTestCase):
         )
 
         # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240)
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
         cls.client.init_communicator()
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)
+        outputs = self.client.generate(prompts)["completion_ids"]
 
         # Check that the output is a list
         self.assertIsInstance(outputs, list)
@@ -90,7 +88,9 @@ class TestVLLMClientServer(TrlTestCase):
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)
+        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+            "completion_ids"
+        ]
 
         # Check that the output is a list
         self.assertIsInstance(outputs, list)
@@ -123,12 +123,7 @@ class TestVLLMClientServer(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        parent = psutil.Process(cls.server_process.pid)
-        children = parent.children(recursive=True)
-        for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+        kill_process(cls.server_process)
 
 
 # Same as above but using base_url to instantiate the client.
@@ -155,7 +150,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)
+        outputs = self.client.generate(prompts)["completion_ids"]
 
         # Check that the output is a list
         self.assertIsInstance(outputs, list)
@@ -169,7 +164,9 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)
+        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+            "completion_ids"
+        ]
 
         # Check that the output is a list
         self.assertIsInstance(outputs, list)
@@ -202,12 +199,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        parent = psutil.Process(cls.server_process.pid)
-        children = parent.children(recursive=True)
-        for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+        kill_process(cls.server_process)
 
 
 @pytest.mark.slow
@@ -231,12 +223,12 @@ class TestVLLMClientServerTP(TrlTestCase):
         )
 
         # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240)
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
         cls.client.init_communicator()
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)
+        outputs = self.client.generate(prompts)["completion_ids"]
 
         # Check that the output is a list
         self.assertIsInstance(outputs, list)
@@ -265,12 +257,7 @@ class TestVLLMClientServerTP(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        parent = psutil.Process(cls.server_process.pid)
-        children = parent.children(recursive=True)
-        for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+        kill_process(cls.server_process)
 
 
 @pytest.mark.slow
@@ -294,12 +281,12 @@ class TestVLLMClientServerDP(TrlTestCase):
         )
 
         # Initialize the client
-        cls.client = VLLMClient(connection_timeout=240)
+        cls.client = VLLMClient(connection_timeout=240, host="localhost")
         cls.client.init_communicator()
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)
+        outputs = self.client.generate(prompts)["completion_ids"]
 
         # Check that the output is a list
         self.assertIsInstance(outputs, list)
@@ -328,12 +315,7 @@ class TestVLLMClientServerDP(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        parent = psutil.Process(cls.server_process.pid)
-        children = parent.children(recursive=True)
-        for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+        kill_process(cls.server_process)
 
 
 @pytest.mark.slow
@@ -357,12 +339,12 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
 
     def test_init_communicator_with_device_int(self):
         """Test init_communicator with integer device parameter."""
-        client = VLLMClient(connection_timeout=240)
+        client = VLLMClient(connection_timeout=240, host="localhost")
         client.init_communicator(device=0)  # Explicitly specify device 0
 
         # Test basic functionality
         prompts = ["Hello, AI!"]
-        outputs = client.generate(prompts)
+        outputs = client.generate(prompts)["completion_ids"]
         self.assertIsInstance(outputs, list)
         self.assertEqual(len(outputs), len(prompts))
 
@@ -370,12 +352,12 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
 
     def test_init_communicator_with_device_string(self):
         """Test init_communicator with string device parameter."""
-        client = VLLMClient(connection_timeout=240)
-        client.init_communicator(device="cuda:0")  # Explicitly specify device as string
+        client = VLLMClient(connection_timeout=240, host="localhost")
+        client.init_communicator(device=0)  # Explicitly specify device as string
 
         # Test basic functionality
         prompts = ["Hello, AI!"]
-        outputs = client.generate(prompts)
+        outputs = client.generate(prompts)["completion_ids"]
         self.assertIsInstance(outputs, list)
         self.assertEqual(len(outputs), len(prompts))
 
@@ -385,13 +367,13 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         """Test init_communicator with torch.device object."""
         import torch
 
-        client = VLLMClient(connection_timeout=240)
-        device = torch.device("cuda:0")
+        client = VLLMClient(connection_timeout=240, host="localhost")
+        device = torch.device(0)
         client.init_communicator(device=device)  # Explicitly specify torch.device object
 
         # Test basic functionality
         prompts = ["Hello, AI!"]
-        outputs = client.generate(prompts)
+        outputs = client.generate(prompts)["completion_ids"]
         self.assertIsInstance(outputs, list)
         self.assertEqual(len(outputs), len(prompts))
 
@@ -403,9 +385,4 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
 
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
-        parent = psutil.Process(cls.server_process.pid)
-        children = parent.children(recursive=True)
-        for child in children:
-            child.send_signal(signal.SIGTERM)
-        cls.server_process.terminate()
-        cls.server_process.wait()
+        kill_process(cls.server_process)

@@ -27,7 +27,7 @@
 pip install math_verify
 
 # For Qwen/Qwen3-0.6B
-pip install num2words
+pip install num2words==0.5.14
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
