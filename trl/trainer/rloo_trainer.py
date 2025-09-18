@@ -197,6 +197,47 @@ class RLOOTrainer(Trainer):
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
         peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
+
+        config:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `args` instead.
+
+            </Deprecated>
+
+        reward_model:
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
+
+            </Deprecated>
+
+        policy:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `model` instead.
+
+            </Deprecated>
+
+        ref_policy:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. To use the initial model as the
+            reference model, simply omit this parameter. The parameter is ignored.
+
+            </Deprecated>
+
+        data_collator:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. The RLOOTrainer does not use a data
+            collator, so this parameter is ignored.
+
+            </Deprecated>
     """
 
     _tag_names = ["trl", "rloo"]
@@ -1503,7 +1544,7 @@ class RLOOTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=tags,
+            tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="RLOO",
