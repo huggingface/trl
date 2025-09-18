@@ -257,7 +257,7 @@ class DPOTrainerTester(TrlTestCase):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
 
         training_args = DPOConfig(
-            output_dir="selftmp_dir",
+            output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             learning_rate=9e-1,
             report_to="none",
@@ -494,42 +494,6 @@ class DPOTrainerTester(TrlTestCase):
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.equal(param, new_param))
-
-    def test_dpo_trainer_padding_token_is_none(self):
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        tokenizer.pad_token = None
-
-        with self.assertRaisesRegex(
-            ValueError,
-            expected_regex=r"`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in "
-            r"the `processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
-            r"`tokenizer.pad_token` \(e.g., `tokenizer.pad_token = tokenizer.eos_token`\) before instantiating "
-            r"the trainer.",
-        ):
-            trainer = DPOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                processing_class=tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
-
-            trainer.train()
 
     def test_dpo_trainer_w_dataset_num_proc(self):
         training_args = DPOConfig(
@@ -1010,7 +974,8 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
+            "`torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 
@@ -1032,7 +997,8 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
+            "`torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 

@@ -26,15 +26,18 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Sampler
 from transformers import (
+    AutoConfig,
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
@@ -1864,3 +1867,35 @@ def truncate_with_protected_tokens(
         truncated_mask.append(new_mask)
 
     return torch.stack(truncated_seq), torch.stack(truncated_mask)
+
+
+def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
+    """
+    Create a model from a given path using the specified initialization arguments.
+
+    Args:
+        model_id (`str`):
+            Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
+        kwargs (`dict`):
+            Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
+            specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
+            or `'auto'`.
+
+    Returns:
+        [`~transformers.PreTrainedModel`]:
+            The instantiated model.
+    """
+    dtype = kwargs.get("dtype")
+    if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+        pass  # dtype is already a torch.dtype or "auto" or None
+    elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
+        kwargs["dtype"] = getattr(torch, dtype)
+    else:
+        raise ValueError(
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
+            f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
+        )
+    config = AutoConfig.from_pretrained(model_id)
+    architecture = getattr(transformers, config.architectures[0])
+    model = architecture.from_pretrained(model_id, **kwargs)
+    return model
