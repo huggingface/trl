@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "trackio",
 #     "kernels",
@@ -62,10 +62,10 @@ class GRPOScriptArguments(ScriptArguments):
     Script arguments for the GRPO training script.
 
     Args:
-        reward_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
+        reward_model_name_or_path (`str`, *optional*):
             Reward model id of a pretrained model hosted inside a model repo on huggingface.co or local path to a
             directory containing model weights saved using [`~transformers.PreTrainedModel.save_pretrained`].
-        reward_funcs (`list[str]` or `None`, *optional*, defaults to `None`):
+        reward_funcs (`list[str]`, *optional*):
             Reward functions to use. Supported values are:
 
                 - `"think_format_reward"`
@@ -146,7 +146,7 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
 
 
-def make_parser(subparsers: argparse._SubParsersAction = None):
+def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
     dataclass_types = (GRPOScriptArguments, GRPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("grpo", help="Run the GRPO training script", dataclass_types=dataclass_types)

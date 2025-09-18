@@ -22,11 +22,9 @@ from typing import Any, Callable, Optional, TypeVar, Union
 
 import torch
 import torch.nn as nn
-import transformers
 from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
 from transformers import (
-    AutoConfig,
     AutoProcessor,
     BaseImageProcessor,
     DataCollator,
@@ -55,6 +53,7 @@ from ..data_utils import (
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
 from .utils import (
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
@@ -132,7 +131,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
             generated accordingly.
-        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
@@ -195,7 +194,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # For packing with position_ids, we should NOT create attention_mask as it causes
         # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
         if not has_packed_position_ids:
-            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+            attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         if self.return_position_ids:
             if "seq_lengths" in examples[0]:
@@ -524,9 +523,9 @@ class SFTTrainer(Trainer):
             - A [`~transformers.PreTrainedModel`] object.
             If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
             as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
-        args ([`SFTConfig`], *optional*, defaults to `None`):
+        args ([`SFTConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        data_collator ([`~transformers.DataCollator`] or `None`, *optional*):
+        data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`~trainer.sft_trainer.DataCollatorForLanguageModeling`] if the model is a language model
             and [`~trainer.sft_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
@@ -541,23 +540,23 @@ class SFTTrainer(Trainer):
             The trainer also supports processed datasets (tokenized) as long as they contain an `input_ids` field.
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
-        compute_loss_func (`Callable` or `None`, *optional*, defaults to `None`):
+        compute_loss_func (`Callable`, *optional*):
             A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
             batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss
             function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618)
             used by [`Trainer`].
-        compute_metrics (`Callable[[EvalPrediction], dict]` or `None`, *optional*, defaults to `None`):
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
             The function that will be used to compute metrics at evaluation. Must take a
             [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
             [`SFTConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
             `compute_result` argument. This will be triggered after the last eval batch to signal that the function
             needs to calculate and return the global summary statistics rather than accumulating the batch-level
             statistics.
-        callbacks (list of [`~transformers.TrainerCallback`] or `None`, *optional*, defaults to `None`):
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
@@ -566,21 +565,21 @@ class SFTTrainer(Trainer):
         optimizers (`tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
             model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+        optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
 
             Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before
             initializing the Trainer.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.
 
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
-        peft_config ([`~peft.PeftConfig`] or `None`, *optional*, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
-        formatting_func (`Callable` or `None`, *optional*, defaults to `None`):
+        formatting_func (`Callable`, *optional*):
             Formatting function applied to the dataset before tokenization. Applying the formatting function explicitly
             converts the dataset into a [language modeling](#language-modeling) type.
     """
@@ -616,30 +615,15 @@ class SFTTrainer(Trainer):
             args = SFTConfig(**dict_args)
 
         # Model
-        model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
-            model_id = model
-            dtype = model_init_kwargs.get("dtype")
-            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-                pass  # dtype is already a torch.dtype or "auto" or None
-            elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
-                dtype = getattr(torch, dtype)
-                model_init_kwargs["dtype"] = dtype
-            else:
-                raise ValueError(
-                    "Invalid `dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                    f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
-                )
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            model = create_model_from_path(model, **args.model_init_kwargs or {})
         else:
-            model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
@@ -892,14 +876,6 @@ class SFTTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
-        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
-                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
-                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
-                "loss.",
-            )
 
     def _prepare_dataset(
         self,
@@ -1104,11 +1080,6 @@ class SFTTrainer(Trainer):
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
 
-        # Add auxiliary loss if available
-        if self.aux_loss_enabled and self.aux_loss_coef:
-            aux_loss = self.aux_loss_coef * outputs.aux_loss
-            loss += aux_loss
-
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
@@ -1178,6 +1149,7 @@ class SFTTrainer(Trainer):
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
                 if self.aux_loss_enabled:
+                    aux_loss = outputs.aux_loss
                     aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
                     self._metrics[mode]["aux_loss"].append(aux_loss)
 
@@ -1220,11 +1192,11 @@ class SFTTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
