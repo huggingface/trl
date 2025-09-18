@@ -997,7 +997,8 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
+            "`torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 
