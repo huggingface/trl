@@ -270,7 +270,7 @@ class GKDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / (jsd.size(0) * jsd.size(1))
+            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
