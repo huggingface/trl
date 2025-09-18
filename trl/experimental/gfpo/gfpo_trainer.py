@@ -29,13 +29,7 @@ from ...extras.profiling import profiling_context
 from ...import_utils import is_vllm_available
 from ...models import unwrap_model_for_generation
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
-from ...trainer.utils import (
-    nanmax,
-    nanmin,
-    nanstd,
-    pad,
-    truncate_with_protected_tokens,
-)
+from ...trainer.utils import nanmax, nanmin, nanstd, pad, truncate_with_protected_tokens
 
 
 logger = logging.getLogger(__name__)

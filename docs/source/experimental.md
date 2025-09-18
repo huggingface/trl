@@ -45,13 +45,12 @@ trainer.train()
 
 ### GFPO
 
-This feature implements the GFPO algorithm to enforce concise reasoning in the model's output generation, as proposed in the paper [Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning](https://www.arxiv.org/abs/2508.09726).
+This feature implements the GFPO algorithm to enforce concise reasoning in the model's output generation, as proposed in the paper [Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning](https://huggingface.co/papers/2508.09726).
 
-To activate GFPO in GFPOTrainer:
+To activate GFPO in [`GFPOTrainer`]:
+
 - set `num_remains_in_group` in [`GFPOConfig`]
-- define a group filter function and set it to `group_filter_func` in [`GFPOTrainer`]. `group_filter_func` will
-  score the `num_generations` completions and The GFPOTrainer filters groups according to their scores to get top `num_remains_in_group` completions as a
-  new group. Model will be trained on the filtered group.
+- define a group filter function and set it to `group_filter_func` in [`GFPOTrainer`]. `group_filter_func` will score the `num_generations` completions and The GFPOTrainer filters groups according to their scores to get top `num_remains_in_group` completions as a new group. Model will be trained on the filtered group.
 
 ```python
 # train_gfpo.py
