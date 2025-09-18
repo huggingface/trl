@@ -29,7 +29,10 @@ from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
 from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
-from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_trainer import GRPOWithReplayBufferTrainer, ReplayBuffer
+from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_trainer import (
+    GRPOWithReplayBufferTrainer,
+    ReplayBuffer,
+)
 
 from .testing_utils import TrlTestCase, require_vllm
 
@@ -1639,7 +1642,7 @@ class GRPOTrainerTester(TrlTestCase):
 
         self.assertEqual(len(trainer.reward_processing_classes), 1)
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
-    
+
 
 class TestReplayBuffer(TrlTestCase):
     def setUp(self):
@@ -1866,8 +1869,8 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
             in output_prompt_ids
         )
 
+
 class TestGRPOWithReplayBufferTrainer(TrlTestCase):
-    
     def test_training_with_replay_buffer(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

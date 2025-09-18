@@ -1,21 +1,32 @@
-import copy
-import re
-import heapq
-from contextlib import nullcontext
+# Copyright 2020-2025 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+import copy
+import heapq
+import re
+from contextlib import nullcontext
 from typing import Any, Optional, Union
 
 import torch
 from accelerate.utils import broadcast_object_list, gather_object
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-
 from transformers.utils import is_flash_attn_2_available
 
 from trl.data_utils import is_conversational, maybe_apply_chat_template, prepare_multimodal_messages
 from trl.extras.profiling import profiling_context
 from trl.import_utils import is_vllm_available
 from trl.models import unwrap_model_for_generation
-from .grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
 from trl.trainer.grpo_trainer import GRPOTrainer
 from trl.trainer.utils import (
     nanmax,
@@ -25,9 +36,11 @@ from trl.trainer.utils import (
     truncate_with_protected_tokens,
 )
 
+from .grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
+
 
 if is_vllm_available():
-    from vllm import LLM, SamplingParams
+    from vllm import SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
 
 
@@ -63,12 +76,11 @@ class ReplayBuffer:
         return [self.heap[i][1] for i in chosen_indices]
 
 
-
 class GRPOWithReplayBufferTrainer(GRPOTrainer):
-    def __init__(self, args: Optional[GRPOWithReplayBufferConfig]=None, **kwargs):
-        super().__init__(args=args,**kwargs)
+    def __init__(self, args: Optional[GRPOWithReplayBufferConfig] = None, **kwargs):
+        super().__init__(args=args, **kwargs)
         self.replay_buffer = ReplayBuffer(args.replay_buffer_size) if args.replay_buffer_size > 0 else None
-    
+
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
     ) -> dict[str, Union[torch.Tensor, Any]]:
@@ -610,7 +622,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 if field in prompt_inputs:
                     output[field] = prompt_inputs[field]
             return output
-    
+
     def slice_group_data(
         self, data: torch.Tensor, mask: torch.Tensor, group_idx: int
     ) -> tuple[torch.Tensor, torch.Tensor]:
