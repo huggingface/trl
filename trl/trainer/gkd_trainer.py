@@ -435,11 +435,11 @@ class GKDTrainer(SFTTrainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -482,7 +482,7 @@ class GKDTrainer(SFTTrainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=tags,
+            tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="GKD",

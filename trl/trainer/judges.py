@@ -297,7 +297,7 @@ class HfPairwiseJudge(BasePairwiseJudge):
             Model to use for the judge.
         token (`str`, *optional*):
             Hugging Face API token to use for the [`huggingface_hub.InferenceClient`].
-        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+        system_prompt (`str`, *optional*):
             The system prompt to be used for the judge. If not provided, a default prompt is used. Note that the system
             prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`. Also, the
             inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token
@@ -351,7 +351,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     Args:
         model (`str`, *optional*, defaults to `"gpt-4-turbo-preview"`):
             Model to use for the judge.
-        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+        system_prompt (`str`, *optional*):
             System prompt to be used for the judge. If not provided, a default prompt is used. Note that the system
             prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`. Also, the
             inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token

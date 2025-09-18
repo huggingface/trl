@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
@@ -25,7 +25,7 @@
 # ///
 
 """
-pip install math_verify num2words peft trackio vllm
+pip install math_verify num2words==0.5.14 peft trackio vllm
 export TRACKIO_PROJECT="RLOO-NuminaMath-TIR"
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/rloo.py
 """

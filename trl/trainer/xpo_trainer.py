@@ -88,7 +88,7 @@ class XPOTrainer(OnlineDPOTrainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
@@ -555,11 +555,11 @@ class XPOTrainer(OnlineDPOTrainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -600,7 +600,7 @@ class XPOTrainer(OnlineDPOTrainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=tags,
+            tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="XPO",
