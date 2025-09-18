@@ -79,9 +79,10 @@ class WeightSyncWorkerExtension:
     """
     A vLLM worker extension that enables weight synchronization between a client and multiple server workers.
 
-    This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` or `ProcessGroupXCCL` to handle
-    efficient GPU-based communication using NCCL. The primary purpose of this class is to receive updated model weights
-    from a client process and distribute them to all worker processes participating in model inference.
+    This worker uses a `StatelessProcessGroup` to establish communication and a `PyNcclCommunicator` or
+    `ProcessGroupXCCL` to handle efficient GPU-based communication using NCCL. The primary purpose of this class is to
+    receive updated model weights from a client process and distribute them to all worker processes participating in
+    model inference.
     """
 
     # The following attributes are initialized when `init_communicator` method is called.
