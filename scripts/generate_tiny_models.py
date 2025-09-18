@@ -300,6 +300,7 @@ for model_id, model_class in [
 
     if isinstance(config, (Qwen2VLConfig, Qwen2_5_VLConfig)):
         config.text_config.rope_scaling["mrope_section"] = [2]
+        config.rope_scaling["mrope_section"] = [2]  # different dict object from text_config; see GH-4101
 
     if isinstance(config, (Qwen2_5_VLConfig)):
         config.vision_config.out_hidden_size = 16
