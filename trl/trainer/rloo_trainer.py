@@ -1181,7 +1181,7 @@ class RLOOTrainer(Trainer):
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
                 obj_list = [payload]
                 broadcast_object_list(obj_list, from_process=0)
-                completion_ids, all_logprobs = obj_list[0]
+                completion_ids, _ = obj_list[0]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
