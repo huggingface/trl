@@ -24,12 +24,12 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
-from transformers.testing_utils import require_peft
+from transformers.testing_utils import require_peft, require_vision
 from transformers.utils import is_peft_available
 
 from trl import RLOOConfig, RLOOTrainer
 
-from .testing_utils import TrlTestCase, require_vision, require_vllm
+from .testing_utils import TrlTestCase, require_vllm
 
 
 if is_peft_available():
