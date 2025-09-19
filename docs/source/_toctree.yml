@@ -66,14 +66,10 @@
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: alignprop_trainer
-      title: AlignProp
     - local: bco_trainer
       title: BCO
     - local: cpo_trainer
       title: CPO
-    - local: ddpo_trainer
-      title: DDPO
     - local: dpo_trainer
       title: DPO
     - local: online_dpo_trainer
@@ -98,8 +94,6 @@
       title: RLOO
     - local: sft_trainer
       title: SFT
-    - local: iterative_sft_trainer
-      title: Iterative SFT
     - local: xpo_trainer
       title: XPO
     title: Trainers

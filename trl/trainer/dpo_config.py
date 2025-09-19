@@ -70,8 +70,9 @@ class DPOConfig(TrainingArguments):
 
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        padding_value (`int`, *optional*):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
+        pad_token (`str`, *optional*):
+            Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
+            it falls back to `processing_class.eos_token`.
         label_pad_token_id (`int`, *optional*, defaults to `-100`):
             Padding value to use for labels.
         max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
@@ -186,6 +187,16 @@ class DPOConfig(TrainingArguments):
         generate_during_eval (`bool`, *optional*, defaults to `False`):
             Whether to generate and log completions from both the model and the reference model to W&B or Comet during
             evaluation.
+
+        > Deprecated parameters
+
+        padding_value:
+
+            <Deprecated version="0.24.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `pad_token` (`str`) instead.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
@@ -265,9 +276,12 @@ class DPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    padding_value: Optional[int] = field(
+    pad_token: Optional[str] = field(
         default=None,
-        metadata={"help": "Padding value to use. If `None`, the padding value of the tokenizer is used."},
+        metadata={
+            "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
+            "is also `None`, it falls back to `processing_class.eos_token`."
+        },
     )
     label_pad_token_id: int = field(
         default=-100,
@@ -447,6 +461,12 @@ class DPOConfig(TrainingArguments):
             "help": "Whether to generate and log completions from both the model and the reference model to W&B, MLFLow "
             "or Comet during evaluation."
         },
+    )
+
+    # Deprecated arguments
+    padding_value: Optional[int] = field(
+        default=None,
+        metadata={"help": "Deprecated, use `pad_token` (str) instead."},
     )
 
     def __post_init__(self):

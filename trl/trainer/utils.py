@@ -16,7 +16,6 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
-from collections import deque
 from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -27,15 +26,18 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Sampler
 from transformers import (
+    AutoConfig,
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
@@ -542,48 +544,6 @@ def exact_div(a, b, custom_error_message=""):
     if a != q * b:
         raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
     return q
-
-
-# copied from https://github.com/kvablack/ddpo-pytorch/blob/main/ddpo_pytorch/stat_tracking.py#L5
-class PerPromptStatTracker:
-    r"""
-    Class for tracking statistics per prompt. Mainly used to calculate advantage for the DPPO algorithm
-
-    Args:
-        buffer_size (`int`):
-            Size of the buffer to keep for each prompt.
-        min_count (`int`):
-            Minimum number of samples to keep in the buffer before calculating the mean and std.
-    """
-
-    def __init__(self, buffer_size, min_count):
-        self.buffer_size = buffer_size
-        self.min_count = min_count
-        self.stats = {}
-
-    def update(self, prompts, rewards):
-        prompts = np.array(prompts)
-        rewards = np.array(rewards)
-        unique = np.unique(prompts)
-        advantages = np.empty_like(rewards)
-        for prompt in unique:
-            prompt_rewards = rewards[prompts == prompt]
-            if prompt not in self.stats:
-                self.stats[prompt] = deque(maxlen=self.buffer_size)
-            self.stats[prompt].extend(prompt_rewards)
-
-            if len(self.stats[prompt]) < self.min_count:
-                mean = np.mean(rewards)
-                std = np.std(rewards) + 1e-6
-            else:
-                mean = np.mean(self.stats[prompt])
-                std = np.std(self.stats[prompt]) + 1e-6
-            advantages[prompts == prompt] = (prompt_rewards - mean) / std
-
-        return advantages
-
-    def get_stats(self):
-        return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
 
 
 def peft_module_casting_to_bf16(model):
@@ -1907,3 +1867,35 @@ def truncate_with_protected_tokens(
         truncated_mask.append(new_mask)
 
     return torch.stack(truncated_seq), torch.stack(truncated_mask)
+
+
+def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
+    """
+    Create a model from a given path using the specified initialization arguments.
+
+    Args:
+        model_id (`str`):
+            Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
+        kwargs (`dict`):
+            Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
+            specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
+            or `'auto'`.
+
+    Returns:
+        [`~transformers.PreTrainedModel`]:
+            The instantiated model.
+    """
+    dtype = kwargs.get("dtype")
+    if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+        pass  # dtype is already a torch.dtype or "auto" or None
+    elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
+        kwargs["dtype"] = getattr(torch, dtype)
+    else:
+        raise ValueError(
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
+            f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
+        )
+    config = AutoConfig.from_pretrained(model_id)
+    architecture = getattr(transformers, config.architectures[0])
+    model = architecture.from_pretrained(model_id, **kwargs)
+    return model

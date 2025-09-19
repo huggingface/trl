@@ -14,7 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "Pillow",
 #     "peft",
 #     "math-verify",
@@ -46,7 +46,7 @@ accelerate launch \
     --log_completions
 
 # For HuggingFaceTB/SmolVLM2-2.2B-Instruct
-pip install num2words
+pip install num2words==0.5.14
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \

@@ -22,11 +22,9 @@ from typing import Any, Callable, Optional, TypeVar, Union
 
 import torch
 import torch.nn as nn
-import transformers
 from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
 from transformers import (
-    AutoConfig,
     AutoProcessor,
     BaseImageProcessor,
     DataCollator,
@@ -55,6 +53,7 @@ from ..data_utils import (
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
 from .utils import (
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
@@ -195,7 +194,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # For packing with position_ids, we should NOT create attention_mask as it causes
         # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
         if not has_packed_position_ids:
-            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+            attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         if self.return_position_ids:
             if "seq_lengths" in examples[0]:
@@ -616,30 +615,15 @@ class SFTTrainer(Trainer):
             args = SFTConfig(**dict_args)
 
         # Model
-        model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
-            model_id = model
-            dtype = model_init_kwargs.get("dtype")
-            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-                pass  # dtype is already a torch.dtype or "auto" or None
-            elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
-                dtype = getattr(torch, dtype)
-                model_init_kwargs["dtype"] = dtype
-            else:
-                raise ValueError(
-                    "Invalid `dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                    f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
-                )
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            model = create_model_from_path(model, **args.model_init_kwargs or {})
         else:
-            model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
@@ -892,14 +876,6 @@ class SFTTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
-        self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
-        if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            logger.warning(
-                "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
-                "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
-                "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
-                "loss.",
-            )
 
     def _prepare_dataset(
         self,
@@ -1104,11 +1080,6 @@ class SFTTrainer(Trainer):
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
 
-        # Add auxiliary loss if available
-        if self.aux_loss_enabled and self.aux_loss_coef:
-            aux_loss = self.aux_loss_coef * outputs.aux_loss
-            loss += aux_loss
-
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
@@ -1178,6 +1149,7 @@ class SFTTrainer(Trainer):
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
                 if self.aux_loss_enabled:
+                    aux_loss = outputs.aux_loss
                     aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
                     self._metrics[mode]["aux_loss"].append(aux_loss)
 
