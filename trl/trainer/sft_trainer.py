@@ -1074,6 +1074,16 @@ class SFTTrainer(Trainer):
         # This can be removed when this issue is fixed.
         labels = inputs["labels"]
 
+        if mode == "eval" and self.args.loss_type == "dft":
+            shift_labels = labels.clone()[..., 1:]
+            loss_mask = shift_labels.ne(-100)
+            num_items_in_batch = loss_mask.sum()
+
+            if self.args.average_tokens_across_devices:
+                num_items_in_batch = self.accelerator.gather(num_items_in_batch).sum().item()
+            else:
+                num_items_in_batch = num_items_in_batch.item()
+
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
