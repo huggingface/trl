@@ -184,7 +184,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
 
@@ -216,8 +216,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output = {}
         if self.padding_free:
             input_ids = [torch.cat(input_ids, dim=0)]
-            if not has_packed_position_ids:
-                attention_mask = [torch.cat(attention_mask, dim=0)]
             if self.return_position_ids:
                 position_ids = [torch.cat(position_ids, dim=0)]
             labels = [torch.cat(labels, dim=0)]
@@ -233,7 +231,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
+        # For packing with position_ids, we should NOT create attention_mask as it causes
+        # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
         if not has_packed_position_ids:
+            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
             output["attention_mask"] = pad(
                 attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
             )
@@ -370,7 +371,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if "messages" in examples[0] or self.dataset_text_field in examples[0]:
             if self.completion_only_loss:
                 raise ValueError(
@@ -382,7 +383,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         else:
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
 
-    def _collate_language_modeling(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
 
         if "messages" in examples[0]:  # conversational case
@@ -417,7 +418,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         output["labels"] = labels
         return output
 
-    def _collate_prompt_completion(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def _collate_prompt_completion(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if self.pad_to_multiple_of is not None:
             raise NotImplementedError(
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
@@ -588,9 +589,9 @@ class SFTTrainer(Trainer):
 
     def __init__(
         self,
-        model: Union[str, nn.Module, PreTrainedModel],
+        model: Union[str, PreTrainedModel],
         args: Optional[Union[SFTConfig, TrainingArguments]] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
+        data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
@@ -1064,7 +1065,13 @@ class SFTTrainer(Trainer):
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[torch.Tensor] = None,
+    ):
         """
         Compute training loss and additionally compute token accuracies
         """
