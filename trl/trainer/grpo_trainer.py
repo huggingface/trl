@@ -461,6 +461,7 @@ class GRPOTrainer(Trainer):
         self._total_train_tokens = 0
         self.log_completions = args.log_completions
         self.wandb_log_unique_prompts = args.wandb_log_unique_prompts
+        self.wandb_log_extra_columns = args.wandb_log_extra_columns
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
@@ -469,6 +470,7 @@ class GRPOTrainer(Trainer):
             "completion": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
             "advantages": deque(maxlen=args.generation_batch_size),
+            "extra_columns": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
         }
 
         # Ensure each process receives a unique seed to prevent duplicate completions when generating with
@@ -1068,6 +1070,22 @@ class GRPOTrainer(Trainer):
 
         prompts = [x["prompt"] for x in inputs]
 
+        # Collect extra columns if configured
+        extra_columns_data = {}
+        if self.wandb_log_extra_columns is not None:
+            # Determine which columns to collect
+            if self.wandb_log_extra_columns == []:
+                # Empty list means collect all available columns except 'prompt' and 'image'
+                all_keys = set(inputs[0].keys()) if inputs else set()
+                columns_to_collect = all_keys - {"prompt", "image"}
+            else:
+                # Specific list of columns
+                columns_to_collect = set(self.wandb_log_extra_columns)
+
+            # Collect the data from each input
+            for col in columns_to_collect:
+                extra_columns_data[col] = [x.get(col) for x in inputs]
+
         # We don't yet support visual reward models/function, so we keep a copy of the original text-only prompts for
         # later use in the reward computation. If images are present, we insert {"type": "image"} as required by the
         # VLM chat template.
@@ -1168,6 +1186,12 @@ class GRPOTrainer(Trainer):
                 if has_images:
                     all_images = gather_object(images)
 
+                # Gather extra columns data for vLLM server mode
+                all_extra_columns_data = {}
+                if self.wandb_log_extra_columns is not None and extra_columns_data:
+                    for col, values in extra_columns_data.items():
+                        all_extra_columns_data[col] = gather_object(values)
+
                 if self.accelerator.is_main_process:
                     # Since 'prompts' contains 'num_generations' duplicates, we first take unique prompts, and generate
                     # num_generations outputs for each one. This is faster than generating outputs for each duplicate
@@ -1209,6 +1233,12 @@ class GRPOTrainer(Trainer):
                 completion_ids = completion_ids[process_slice]
                 all_logprobs = all_logprobs[process_slice]
 
+                # Slice extra columns data back to process-specific portion
+                if self.wandb_log_extra_columns is not None and all_extra_columns_data:
+                    extra_columns_data = {}
+                    for col, all_values in all_extra_columns_data.items():
+                        extra_columns_data[col] = all_values[process_slice]
+
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
                 if self.guided_decoding_regex:
@@ -1245,9 +1275,18 @@ class GRPOTrainer(Trainer):
                         all_images = [img for sublist in gathered_images for img in sublist]
                     else:
                         all_images = None
+
+                    # Gather extra columns for tensor parallel
+                    all_extra_columns_data = {}
+                    if self.wandb_log_extra_columns is not None and extra_columns_data:
+                        for col, values in extra_columns_data.items():
+                            gathered_col_values = [None for _ in range(self.vllm_tensor_parallel_size)]
+                            torch.distributed.all_gather_object(gathered_col_values, values, group=self.tp_group)
+                            all_extra_columns_data[col] = [v for sublist in gathered_col_values for v in sublist]
                 else:
                     all_prompts_text = prompts_text
                     all_images = images if has_images else None
+                    all_extra_columns_data = extra_columns_data  # No gathering needed for single GPU
 
                 if has_images and all_images:
                     vllm_inputs = []
@@ -1276,6 +1315,14 @@ class GRPOTrainer(Trainer):
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
                     all_logprobs = all_logprobs[tp_slice]
+
+                    # Slice extra columns back to this rank's portion
+                    if self.wandb_log_extra_columns is not None and all_extra_columns_data:
+                        extra_columns_data = {}
+                        for col, all_values in all_extra_columns_data.items():
+                            extra_columns_data[col] = all_values[tp_slice]
+                    else:
+                        extra_columns_data = all_extra_columns_data
 
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=1)
@@ -1525,6 +1572,11 @@ class GRPOTrainer(Trainer):
 
         if has_images:
             self._logs["image"].extend(gather_object(images))
+
+        # Log extra columns if configured
+        if self.wandb_log_extra_columns is not None and extra_columns_data:
+            for col, values in extra_columns_data.items():
+                self._logs["extra_columns"][col].extend(gather_object(values))
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
@@ -1817,6 +1869,13 @@ class GRPOTrainer(Trainer):
                             table["image"].append(wandb.Image(img))
                         else:
                             table["image"].append(None)
+
+                # Add extra columns to the table if configured
+                if self.wandb_log_extra_columns is not None and self._logs["extra_columns"]:
+                    for col, values in self._logs["extra_columns"].items():
+                        # Ensure the column has the same length as prompts
+                        if values:
+                            table[col] = list(values)
 
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
