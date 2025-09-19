@@ -1644,7 +1644,7 @@ class GRPOTrainerTester(TrlTestCase):
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
 
 
-class TestReplayBuffer(TrlTestCase):
+class TestReplayBuffer(unittest.TestCase):
     def setUp(self):
         self.replay_buffer = ReplayBuffer(max_size=5)
 
