@@ -464,7 +464,7 @@ class GRPOTrainer(Trainer):
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
-            "image": deque(maxlen=args.generation_batch_size),
+            "images": deque(maxlen=args.generation_batch_size),
             "prompt": deque(maxlen=args.generation_batch_size),
             "completion": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
@@ -609,7 +609,7 @@ class GRPOTrainer(Trainer):
         # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image"]
+            self._signature_columns = ["prompt", "image", "images"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -804,9 +804,9 @@ class GRPOTrainer(Trainer):
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
 
             if image_grid_thw is not None and pixel_values is not None:
-                model_inputs["image_grid_thw"] = image_grid_thw[start : start + batch_size]
-                start_pixel_idx = image_grid_thw[:start].prod(-1).sum().item()
-                end_pixel_idx = image_grid_thw[: start + batch_size].prod(-1).sum().item()
+                model_inputs["image_grid_thw"] = torch.cat(image_grid_thw[start : start + batch_size])
+                start_pixel_idx = 0 if start == 0 else torch.cat(image_grid_thw[:start]).prod(-1).sum().item()
+                end_pixel_idx = torch.cat(image_grid_thw[: start + batch_size]).prod(-1).sum().item()
                 model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
             elif pixel_values is not None:
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
@@ -1070,14 +1070,19 @@ class GRPOTrainer(Trainer):
         # VLM chat template.
         original_prompts = copy.deepcopy(prompts)
 
+        if "images" in inputs[0]:
+            images = [example.get("images") for example in inputs]
+        elif "image" in inputs[0]:
+            images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
+        else:
+            images = None
+
         # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
         # [{"role": "user", "content": "What color is the sky?"}] to
         # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
         kwargs = {}
-        has_images = "image" in inputs[0]
-        if has_images:
-            images = [example.get("image") for example in inputs]
-            kwargs = {"images": [[img] for img in images]}
+        if images is not None:
+            kwargs = {"images": images}
             for prompt in prompts:
                 if isinstance(prompt, list):  # i.e., when using conversational data
                     prepare_multimodal_messages(prompt, num_images=1)
@@ -1152,7 +1157,7 @@ class GRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
-                if has_images:
+                if images is not None:
                     all_images = gather_object(images)
 
                 if self.accelerator.is_main_process:
@@ -1161,7 +1166,7 @@ class GRPOTrainer(Trainer):
                     # prompt individually.
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
 
-                    if has_images:
+                    if images is not None:
                         ordered_set_of_images = all_images[:: self.num_generations]
                     else:
                         ordered_set_of_images = None
@@ -1226,7 +1231,7 @@ class GRPOTrainer(Trainer):
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
                     all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
 
-                    if has_images:
+                    if images is not None:
                         gathered_images = [None for _ in range(self.vllm_tensor_parallel_size)]
                         torch.distributed.all_gather_object(gathered_images, images, group=self.tp_group)
                         all_images = [img for sublist in gathered_images for img in sublist]
@@ -1234,15 +1239,13 @@ class GRPOTrainer(Trainer):
                         all_images = None
                 else:
                     all_prompts_text = prompts_text
-                    all_images = images if has_images else None
+                    all_images = images
 
-                if has_images and all_images:
+                if images is not None and all_images:
                     vllm_inputs = []
-                    for prompt, image in zip(all_prompts_text, all_images):
-                        if image is not None:
-                            vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image}})
-                        else:
-                            vllm_inputs.append(prompt)
+                    for prompt, image_list in zip(all_prompts_text, all_images):
+                        vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image_list}})
+
                 else:
                     vllm_inputs = all_prompts_text
 
@@ -1507,8 +1510,8 @@ class GRPOTrainer(Trainer):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
-        if has_images:
-            self._logs["image"].extend(gather_object(images))
+        if images is not None:
+            self._logs["images"].extend(gather_object(images))
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
@@ -1564,6 +1567,8 @@ class GRPOTrainer(Trainer):
             output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
         if "image_sizes" in prompt_inputs:
             output["image_sizes"] = prompt_inputs["image_sizes"]
+        if images is not None:
+            output["num_images"] = [len(img_list) if img_list is not None else 0 for img_list in images]
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1790,14 +1795,11 @@ class GRPOTrainer(Trainer):
                     "advantage": self._logs["advantages"],
                 }
 
-                if self._logs["image"]:
-                    table["image"] = []
-                    for img in self._logs["image"]:
-                        if img is not None:
-                            # Convert images to wandb Image objects for proper visualization
-                            table["image"].append(wandb.Image(img))
-                        else:
-                            table["image"].append(None)
+                if self._logs["images"]:
+                    table["images"] = []
+                    for img in self._logs["images"]:
+                        # Convert images to wandb Image objects for proper visualization
+                        table["images"].append(wandb.Image(img))
 
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:

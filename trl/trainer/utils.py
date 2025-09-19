@@ -19,6 +19,7 @@ import random
 from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
+from itertools import accumulate
 from typing import Any, Literal, Optional, Union
 
 import numpy as np
@@ -1780,20 +1781,23 @@ def identity(x):
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
     """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
-    `batch["image_grid_thw"]`, while keeping other entries unchanged.
+    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
+    and batch["num_images"] while keeping other entries unchanged.
     """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch:
+    if "image_grid_thw" not in batch or "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
-    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [batch_size]
+    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
     pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
     if sum(lengths) != pixel_values.size(0):
         raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
 
-    split_values = list(torch.split(batch["pixel_values"], lengths, dim=0))
-    return {**batch, "pixel_values": split_values}
+    boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
+    sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
+    split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
+    image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
+    return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
