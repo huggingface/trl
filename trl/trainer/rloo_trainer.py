@@ -789,16 +789,13 @@ class RLOOTrainer(Trainer):
             # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
 
-            if image_grid_thw is not None:
+            if image_grid_thw is not None and pixel_values is not None:
                 model_inputs["image_grid_thw"] = image_grid_thw[start : start + batch_size]
-            if pixel_values is not None:
-                if image_grid_thw is not None:
-                    image_split_sizes = image_grid_thw.prod(dim=1).tolist()
-                    start_pixel_idx = sum(image_split_sizes[:start])
-                    end_pixel_idx = sum(image_split_sizes[: start + batch_size])
-                    model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
-                else:
-                    model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+                start_pixel_idx = image_grid_thw[:start].prod(-1).sum().item()
+                end_pixel_idx = image_grid_thw[: start + batch_size].prod(-1).sum().item()
+                model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
+            elif pixel_values is not None:
+                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
