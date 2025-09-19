@@ -518,6 +518,66 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+## Vision-Language Model (VLM) Training
+
+RLOO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
+
+### Supported Models
+
+Tested with:
+
+- **Gemma3** — e.g., `google/gemma-3-4b-it`
+- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
+- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
+- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
+- **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
+  
+<Tip>
+Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+</Tip>
+
+### Quick Start
+
+Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/rloo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+
+```bash
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/rloo_vlm.py \
+  --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
+  --output_dir rloo-Qwen2.5-VL-3B-Instruct \
+  --learning_rate 1e-5 \
+  --gradient_checkpointing \
+  --dtype bfloat16 \
+  --max_prompt_length 2048 \
+  --max_completion_length 1024 \
+  --use_vllm \
+  --vllm_mode colocate \
+  --use_peft \
+  --lora_target_modules "q_proj", "v_proj" \
+  --log_completions
+```
+
+### Configuration Tips
+
+<Tip warning={true}>
+VLM training may fail if image tokens are truncated. We highly recommend to disable truncation by setting `max_prompt_length` to `None`.
+</Tip>
+
+- Use LoRA on vision-language projection layers
+- Enable 4-bit quantization to reduce memory usage
+- VLMs are memory-intensive — start with smaller batch sizes
+- Most models are compatible with vLLM (`server` and `colocate` modes)
+
+### Dataset Format
+
+Each training sample should include:
+
+- `prompt`: Text formatted via the processor's chat template
+- `image`: A single image (PIL or NumPy array)
+
+The trainer automatically handles image-to-tensor conversion via the model’s image processor.
+
 ## RLOOTrainer
 
 [[autodoc]] RLOOTrainer
