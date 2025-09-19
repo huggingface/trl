@@ -53,7 +53,7 @@ class ReplayBuffer:
         self.max_size = max_size
         self.heap = []  # Min-heap of (score, data) tuples
 
-    def add(self, scores: list[float], data: list[dict]) -> None:
+    def add(self, scores: list[float], data: list[dict]):
         for score, datum in zip(scores, data):
             if len(self.heap) < self.max_size:
                 heapq.heappush(self.heap, (score, datum))
@@ -62,7 +62,7 @@ class ReplayBuffer:
                 if score > self.heap[0][0]:
                     heapq.heapreplace(self.heap, (score, datum))
 
-    def sample(self, num_samples: int) -> list[dict[str, torch.Tensor]] | None:
+    def sample(self, num_samples: int) -> list[dict[str, torch.Tensor]]:
         if not self.heap:
             return None
 
