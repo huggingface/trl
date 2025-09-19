@@ -74,9 +74,9 @@ from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
 
 from trl import (
+    ModelConfig,
     RLOOConfig,
     RLOOTrainer,
-    ModelConfig,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
