@@ -70,7 +70,7 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 In RLOO, the reward consists of two components: the reward provided by the reward model (or reward function) and a KL penalty that discourages the policy from deviating too far from a fixed reference policy
 
 1. For each of the  \\( G \\) generated sequences  \\( o_i = (o_{i,1}, \dots, o_{i,T}) \\) conditioned on a query \\( q \\), we compute a scalar reward using a reward model  \\( R(o_i, q) \\).
-2. Concurenlty, we estimate the KL divergence between the current policy  \\( \pi_\theta \\) and the fixed reference policy  \\( \pi_{\text{ref}} \\) over the sequence. The KL estimate for sequence  \\( o_i \\) is:
+2. Concurrently, we estimate the KL divergence between the current policy  \\( \pi_\theta \\) and the fixed reference policy  \\( \pi_{\text{ref}} \\) over the sequence. The KL estimate for sequence  \\( o_i \\) is:
 
 $$
 \mathbb{D}_{\mathrm{KL}}\!\left[\pi_\theta\|\pi_{\mathrm{ref}}\right] = \sum_{t=1}^T \log \frac{\pi_\theta(o_{i,t} \mid q, o_{i,<t})}{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}.
@@ -145,7 +145,7 @@ While training and evaluating, we record the following reward metrics:
 - `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
-- `completions/clipped_ratio` : The ratio of truncated (clipped) completions.
+- `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after applying reward weights.
@@ -244,7 +244,7 @@ For more information, see [Speeding up training with vLLM](speeding_up_training#
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
 
-- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
+- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such models. For more details, see [DeepSpeed Integration](deepspeed_integration).
 - **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
 - **vLLM**: See the previous section on how to use vLLM to speed up generation.
 
@@ -323,7 +323,7 @@ The [`RLOOTrainer`] supports using custom reward functions instead of dense rewa
      - `completions` (contains the generated completions),
      - `completions_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
-     - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
+     - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
    - Depending on the dataset format, the input will vary:
@@ -352,7 +352,7 @@ You can test it as follows:
 [2.0, 4.0]
 ```
 
-#### Example 1.1: Reward longer completions (based in the number of characters)
+#### Example 1.1: Reward longer completions (based on the number of characters)
 
 Same as the previous example, but this time the reward function is based on the number of characters instead of tokens.
 
@@ -372,10 +372,10 @@ You can test it as follows:
 [6.0, 12.0]
 ```
 
-#### Example 2: Reward completions with specific format
+#### Example 2: Reward completions with a specific format
 
 Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the _format reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
-It is designed for conversational format, where prompts and completions consist of structured messages.
+It is designed for a conversational format, where prompts and completions consist of structured messages.
 
 ```python
 import re
@@ -484,7 +484,7 @@ trainer = RLOOTrainer(
 trainer.train()
 ```
 
-In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None` and the [`RLOOTrainer`] will continue with the valid functions and tasks. This allows the [`RLOOTrainer`] to handle multiple reward functions with different applicability.
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None`, and the [`RLOOTrainer`] will continue with the valid functions and tasks. This allows the [`RLOOTrainer`] to handle multiple reward functions with different applicability.
 
 Note that the [`RLOOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
 
@@ -518,6 +518,68 @@ and the reward will be computed as the sum of the rewards from each function, or
 
 Note that [`RLOOTrainer`] supports multiple reward functions of different types. See the parameters documentation for more details.
 
+## Vision-Language Model (VLM) Training
+
+RLOO supports training Vision-Language Models (VLMs) on multimodal datasets containing both text and images.
+
+### Supported Models
+
+Tested with:
+
+- **Gemma3** — e.g., `google/gemma-3-4b-it`
+- **LLaVA-NeXT** — e.g., `llava-hf/llava-v1.6-mistral-7b-hf`
+- **Qwen2-VL** — e.g., `Qwen/Qwen2-VL-2B-Instruct`
+- **Qwen2.5-VL** — e.g., `Qwen/Qwen2.5-VL-3B-Instruct`
+- **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
+  
+<Tip>
+Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+</Tip>
+
+### Quick Start
+
+Use [rloo\_vlm.py](https://github.com/huggingface/trl/blob/main/examples/scripts/rloo_vlm.py) to fine-tune a VLM. Example command for training on [`lmms-lab/multimodal-open-r1-8k-verified`](https://huggingface.co/datasets/lmms-lab/multimodal-open-r1-8k-verified):
+
+```bash
+accelerate launch \
+  --config_file=examples/accelerate_configs/deepspeed_zero3.yaml \
+  examples/scripts/rloo_vlm.py \
+  --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
+  --output_dir rloo-Qwen2.5-VL-3B-Instruct \
+  --learning_rate 1e-5 \
+  --gradient_checkpointing \
+  --dtype bfloat16 \
+  --max_prompt_length 2048 \
+  --max_completion_length 1024 \
+  --use_vllm \
+  --vllm_mode colocate \
+  --use_peft \
+  --lora_target_modules "q_proj", "v_proj" \
+  --log_completions
+```
+
+### Configuration Tips
+
+<Tip warning={true}>
+
+VLM training may fail if image tokens are truncated. We highly recommend disabling truncation by setting `max_prompt_length` to `None`.
+
+</Tip>
+
+- Use LoRA on vision-language projection layers
+- Enable 4-bit quantization to reduce memory usage
+- VLMs are memory-intensive — start with smaller batch sizes
+- Most models are compatible with vLLM (`server` and `colocate` modes)
+
+### Dataset Format
+
+Each training sample should include:
+
+- `prompt`: Text formatted via the processor's chat template
+- `image`: A single image (PIL or NumPy array)
+
+The trainer automatically handles image-to-tensor conversion via the model’s image processor.
+
 ## RLOOTrainer
 
 [[autodoc]] RLOOTrainer
@@ -540,7 +602,7 @@ Note that [`RLOOTrainer`] supports multiple reward functions of different types.
 
 ## Migration Guide from the old implementation (0.21 and below)
 
-With the release of version 0.22.0, we have revamped the [`RLOOTrainer`] to be more alinged with other online trainers in the library like [`GRPOTrainer`]. This new implementation introduces several changes to the configuration parameters and overall structure of the trainer.
+With the release of version 0.22.0, we have revamped the [`RLOOTrainer`] to be more aligned with other online trainers in the library, like [`GRPOTrainer`]. This new implementation introduces several changes to the configuration parameters and overall structure of the trainer.
 Below is a summary of the key changes for [`RLOOConfig`]:
 
 | TRL ≤ 0.21.x | TRL ≥ 0.22.0 |
