@@ -352,7 +352,7 @@ The [`GRPOTrainer`] supports using custom reward functions instead of dense rewa
      - `completions` (contains the generated completions),
      - `completions_ids` (contains the tokenized completions),
      - `trainer_state` ([`~transformers.TrainerState`]): The current state of the trainer. This can be used to implement dynamic reward functions, such as curriculum learning, where the reward is adjusted based on the training progress.
-     - All columns names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
+     - All column names (but `prompt`) that the dataset may have. For example, if the dataset contains a column named `ground_truth`, the function will be called with `ground_truth` as a keyword argument.
 
      The easiest way to comply with this requirement is to use `**kwargs` in the function signature.
    - Depending on the dataset format, the input will vary:
@@ -381,7 +381,7 @@ You can test it as follows:
 [2.0, 4.0]
 ```
 
-#### Example 1.1: Reward longer completions (based in the number of characters)
+#### Example 1.1: Reward longer completions (based on the number of characters)
 
 Same as the previous example, but this time the reward function is based on the number of characters instead of tokens.
 
@@ -401,10 +401,10 @@ You can test it as follows:
 [6.0, 12.0]
 ```
 
-#### Example 2: Reward completions with specific format
+#### Example 2: Reward completions with a specific format
 
 Below is an example of a reward function that checks if the completion has a specific format. This example is inspired by the _format reward_ function used in the paper [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://huggingface.co/papers/2501.12948).
-It is designed for conversational format, where prompts and completions consist of structured messages.
+It is designed for a conversational format, where prompts and completions consist of structured messages.
 
 ```python
 import re
@@ -513,7 +513,7 @@ trainer = GRPOTrainer(
 trainer.train()
 ```
 
-In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None` and the [`GRPOTrainer`] will continue with the valid functions and tasks. This allows the [`GRPOTrainer`] to handle multiple reward functions with different applicability.
+In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None`, and the [`GRPOTrainer`] will continue with the valid functions and tasks. This allows the [`GRPOTrainer`] to handle multiple reward functions with different applicability.
 
 Note that the [`GRPOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
 
