@@ -37,7 +37,7 @@ class RLOOConfig(TrainingArguments):
 
         model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string.
+            argument of the [`RLOOTrainer`] is provided as a string.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -362,7 +362,7 @@ class RLOOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
-            "argument of the `GRPOTrainer` is provided as a string."
+            "argument of the `RLOOTrainer` is provided as a string."
         },
     )
     disable_dropout: bool = field(
@@ -374,7 +374,7 @@ class RLOOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
+    # The default value remove_unused_columns is overwritten from the parent class, because in RLOO we usually rely on
     # additional columns to compute the reward
     remove_unused_columns: Optional[bool] = field(
         default=False,
@@ -807,6 +807,6 @@ class RLOOConfig(TrainingArguments):
 
         if self.num_generations < 2:
             raise ValueError(
-                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )

@@ -167,7 +167,7 @@ While training and evaluating, we record the following reward metrics:
 - `completions/mean_terminated_length`: The average length of generated completions that terminate with EOS.
 - `completions/min_terminated_length`: The minimum length of generated completions that terminate with EOS.
 - `completions/max_terminated_length`: The maximum length of generated completions that terminate with EOS.
-- `completions/clipped_ratio` : The ratio of truncated (clipped) completions.
+- `completions/clipped_ratio`: The ratio of truncated (clipped) completions.
 - `reward/{reward_func_name}/mean`: The average reward from a specific reward function.
 - `reward/{reward_func_name}/std`: The standard deviation of the reward from a specific reward function.
 - `reward`: The overall average reward after applying reward weights.
@@ -273,7 +273,7 @@ For more information, see [Speeding up training with vLLM](speeding_up_training#
 
 When training large models like **Qwen2.5-72B**, you need several key optimizations to make the training efficient and scalable across multiple GPUs and nodes. These include:
 
-- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such model. For more details, see [DeepSpeed Integration](deepspeed_integration).
+- **DeepSpeed ZeRO Stage 3**: ZeRO leverages data parallelism to distribute model states (weights, gradients, optimizer states) across multiple GPUs and CPUs, reducing memory and compute requirements on each device. Since large models cannot fit on a single GPU, using ZeRO Stage 3 is required for training such models. For more details, see [DeepSpeed Integration](deepspeed_integration).
 - **Accelerate**: Accelerate is a library that simplifies distributed training across multiple GPUs and nodes. It provides a simple API to launch distributed training and handles the complexities of distributed training, such as data parallelism, gradient accumulation, and distributed data loading. For more details, see [Distributing Training](distributing_training).
 - **vLLM**: See the previous section on how to use vLLM to speed up generation.
 
@@ -590,7 +590,9 @@ accelerate launch \
 ### Configuration Tips
 
 <Tip warning={true}>
-VLM training may fail if image tokens are truncated. We highly recommend to disable truncation by setting `max_prompt_length` to `None`.
+
+VLM training may fail if image tokens are truncated. We highly recommend disabling truncation by setting `max_prompt_length` to `None`.
+
 </Tip>
 
 - Use LoRA on vision-language projection layers
