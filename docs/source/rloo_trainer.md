@@ -70,7 +70,7 @@ At each training step, we sample a batch of prompts and generate a set of  \\( G
 In RLOO, the reward consists of two components: the reward provided by the reward model (or reward function) and a KL penalty that discourages the policy from deviating too far from a fixed reference policy
 
 1. For each of the  \\( G \\) generated sequences  \\( o_i = (o_{i,1}, \dots, o_{i,T}) \\) conditioned on a query \\( q \\), we compute a scalar reward using a reward model  \\( R(o_i, q) \\).
-2. Concurenlty, we estimate the KL divergence between the current policy  \\( \pi_\theta \\) and the fixed reference policy  \\( \pi_{\text{ref}} \\) over the sequence. The KL estimate for sequence  \\( o_i \\) is:
+2. Concurrently, we estimate the KL divergence between the current policy  \\( \pi_\theta \\) and the fixed reference policy  \\( \pi_{\text{ref}} \\) over the sequence. The KL estimate for sequence  \\( o_i \\) is:
 
 $$
 \mathbb{D}_{\mathrm{KL}}\!\left[\pi_\theta\|\pi_{\mathrm{ref}}\right] = \sum_{t=1}^T \log \frac{\pi_\theta(o_{i,t} \mid q, o_{i,<t})}{\pi_{\mathrm{ref}}(o_{i,t} \mid q, o_{i,<t})}.
@@ -561,7 +561,9 @@ accelerate launch \
 ### Configuration Tips
 
 <Tip warning={true}>
-VLM training may fail if image tokens are truncated. We highly recommend to disable truncation by setting `max_prompt_length` to `None`.
+
+VLM training may fail if image tokens are truncated. We highly recommend disabling truncation by setting `max_prompt_length` to `None`.
+
 </Tip>
 
 - Use LoRA on vision-language projection layers
