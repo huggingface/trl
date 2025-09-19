@@ -1083,9 +1083,9 @@ class GRPOTrainer(Trainer):
         kwargs = {}
         if images is not None:
             kwargs = {"images": images}
-            for prompt in prompts:
+            for prompt, image_list in zip(prompts, images):
                 if isinstance(prompt, list):  # i.e., when using conversational data
-                    prepare_multimodal_messages(prompt, num_images=1)
+                    prepare_multimodal_messages(prompt, num_images=len(image_list))
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1797,9 +1797,9 @@ class GRPOTrainer(Trainer):
 
                 if self._logs["images"]:
                     table["images"] = []
-                    for img in self._logs["images"]:
+                    for image_list in self._logs["images"]:
                         # Convert images to wandb Image objects for proper visualization
-                        table["images"].append(wandb.Image(img))
+                        table["images"].append([wandb.Image(image) for image in image_list])
 
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
