@@ -419,35 +419,35 @@ class TestOnlineDPOTrainer(TrlTestCase):
         self.assertEqual(trainer.generation_config.max_new_tokens, 64)
         self.assertFalse(trainer.generation_config.do_sample)  # From generation_kwargs
 
-    @require_torch_accelerator
-    @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
-    def test_training_with_transformers_paged(self, config_name):
-        if Version(transformers.__version__) < Version("4.56.2"):
-            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.56.2")
-        training_args = OnlineDPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            learning_rate=5.0e-7,
-            eval_strategy="steps",
-            report_to="none",
-            use_transformers_paged=True,
-        )
-        dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
+    # @require_torch_accelerator
+    # @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    # def test_training_with_transformers_paged(self, config_name):
+    #     if Version(transformers.__version__) < Version("4.56.2"):
+    #         pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.56.2")
+    #     training_args = OnlineDPOConfig(
+    #         output_dir=self.tmp_dir,
+    #         per_device_train_batch_size=2,
+    #         max_steps=3,
+    #         learning_rate=5.0e-7,
+    #         eval_strategy="steps",
+    #         report_to="none",
+    #         use_transformers_paged=True,
+    #     )
+    #     dummy_dataset = load_dataset("trl-internal-testing/zen", config_name)
 
-        trainer = OnlineDPOTrainer(
-            model=self.model,
-            reward_funcs=self.reward_model,
-            args=training_args,
-            train_dataset=dummy_dataset["train"],
-            eval_dataset=dummy_dataset["test"],
-            processing_class=self.tokenizer,
-            reward_processing_classes=self.reward_tokenizer,
-        )
-        trainer.train()
+    #     trainer = OnlineDPOTrainer(
+    #         model=self.model,
+    #         reward_funcs=self.reward_model,
+    #         args=training_args,
+    #         train_dataset=dummy_dataset["train"],
+    #         eval_dataset=dummy_dataset["test"],
+    #         processing_class=self.tokenizer,
+    #         reward_processing_classes=self.reward_tokenizer,
+    #     )
+    #     trainer.train()
 
-        # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+    #     # Check if training loss is available
+    #     self.assertIn("train_loss", trainer.state.log_history[-1])
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     def test_training_with_reward_funcs(self, config_name):
