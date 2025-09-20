@@ -1075,6 +1075,7 @@ class SFTTrainer(Trainer):
         labels = inputs["labels"]
 
         if mode == "eval" and self.args.loss_type == "dft":
+            # Trainer.prediction_step doesn't pass the num_items_in_batch, but it's needed for dft loss.
             shift_labels = labels.clone()[..., 1:]
             loss_mask = shift_labels.ne(-100)
             num_items_in_batch = loss_mask.sum()
