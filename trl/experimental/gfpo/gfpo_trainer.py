@@ -93,18 +93,12 @@ class GFPOTrainer(_GRPOTrainer):
         # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
         kwargs = {}
         has_images = "image" in inputs[0]
-        image_split_sizes = None
         if has_images:
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
                 if isinstance(prompt, list):  # i.e., when using conversational data
                     prepare_multimodal_messages(prompt, num_images=1)
-
-            if hasattr(self.processing_class, "_get_num_multimodal_tokens"):
-                image_sizes = [(image.height, image.width) for image in images]
-                multimodal_extra_data = self.processing_class._get_num_multimodal_tokens(image_sizes)
-                image_split_sizes = multimodal_extra_data.num_image_patches
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -116,12 +110,8 @@ class GFPOTrainer(_GRPOTrainer):
             add_special_tokens=False,
             **kwargs,
         )
-        prompt_inputs = super(_GRPOTrainer, self)._prepare_inputs(prompt_inputs)
+        prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-        if "image_grid_thw" in prompt_inputs and image_split_sizes is None:
-            # Fallback for VLMs that require image_grid_thw but don't provide _get_num_multimodal_tokens
-            image_split_sizes = prompt_inputs["image_grid_thw"].prod(dim=1).tolist()
 
         if self.max_prompt_length is not None:
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
@@ -407,7 +397,6 @@ class GFPOTrainer(_GRPOTrainer):
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
-                    image_split_sizes=image_split_sizes,
                 )
             else:
                 old_per_token_logps = None
@@ -432,7 +421,6 @@ class GFPOTrainer(_GRPOTrainer):
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         image_sizes=prompt_inputs.get("image_sizes"),
-                        image_split_sizes=image_split_sizes,
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -446,7 +434,6 @@ class GFPOTrainer(_GRPOTrainer):
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                             image_sizes=prompt_inputs.get("image_sizes"),
-                            image_split_sizes=image_split_sizes,
                         )
             else:
                 ref_per_token_logps = None
@@ -652,6 +639,4 @@ class GFPOTrainer(_GRPOTrainer):
             output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
         if "image_sizes" in prompt_inputs:
             output["image_sizes"] = prompt_inputs["image_sizes"]
-        if image_split_sizes is not None:
-            output["image_split_sizes"] = image_split_sizes
         return output

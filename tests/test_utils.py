@@ -873,7 +873,7 @@ class SplitTensorDictTester(TrlTestCase):
 class SplitPixelValuesByGridTester(TrlTestCase):
     def test_split_correctly_0(self):
         batch = {
-            "image_split_sizes": [4, 4],
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]]),
             "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
         }
         result = split_pixel_values_by_grid(batch)
@@ -884,7 +884,7 @@ class SplitPixelValuesByGridTester(TrlTestCase):
 
     def test_split_correctly_1(self):
         batch = {
-            "image_split_sizes": [4, 8],
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 4]]),
             "pixel_values": torch.arange(12 * 3).reshape(12, 3),  # Shape: [12, 3]
         }
         result = split_pixel_values_by_grid(batch)
@@ -900,7 +900,7 @@ class SplitPixelValuesByGridTester(TrlTestCase):
 
     def test_mismatched_length(self):
         batch = {
-            "image_split_sizes": torch.tensor([2, 2]),  # Total = 4
+            "image_grid_thw": torch.tensor([[1, 1, 2], [1, 2, 1]]),  # Total = 8
             "pixel_values": torch.randn(3, 5),  # Only 3 rows
         }
         with self.assertRaises(ValueError):
