@@ -19,7 +19,6 @@ import torch
 from accelerate.utils import gather_object
 
 from ...data_utils import is_conversational
-from ...import_utils import is_vllm_available
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
 from ...trainer.utils import nanmax, nanmin, nanstd
 
@@ -27,9 +26,6 @@ from ...trainer.utils import nanmax, nanmin, nanstd
 logger = logging.getLogger(__name__)
 
 GroupFilterFunc = Callable[[list[list[Any]], list[list[Any]]], list[list[float]]]
-
-if is_vllm_available():
-    pass
 
 
 class GFPOTrainer(_GRPOTrainer):
