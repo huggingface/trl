@@ -279,23 +279,29 @@ for model_id, model_class in [
     ("Qwen/Qwen2.5-VL-3B-Instruct", Qwen2_5_VLForConditionalGeneration),
 ]:
     processor = AutoProcessor.from_pretrained(model_id)
-    config = AutoConfig.from_pretrained(model_id)
 
-    config.text_config.num_hidden_layers = 2
-    config.text_config.hidden_size = 16
-    config.text_config.num_attention_heads = 4
-    config.text_config.num_key_value_heads = 2
-
-    config.vision_config.num_hidden_layers = 2
-    config.vision_config.hidden_size = 16
-    config.vision_config.num_attention_heads = 4
-    config.vision_config.num_key_value_heads = 2
+    text_config = {
+        "num_hidden_layers": 2,
+        "hidden_size": 16,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "layer_types": None,  # Set it automatically from num_hidden_layers
+    }
+    vision_config = {
+        "num_hidden_layers": 2,
+        "hidden_size": 16,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "embed_dim": 64,
+    }
+    config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config)
 
     if isinstance(config, (Qwen2VLConfig)):
         config.vision_config.depth = 2
 
     if isinstance(config, (Qwen2VLConfig, Qwen2_5_VLConfig)):
         config.text_config.rope_scaling["mrope_section"] = [2]
+        config.rope_scaling["mrope_section"] = [2]  # different dict object from text_config; see GH-4101
 
     if isinstance(config, (Qwen2_5_VLConfig)):
         config.vision_config.out_hidden_size = 16
