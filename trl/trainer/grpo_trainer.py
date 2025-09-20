@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import inspect
 import os
 import re
@@ -1020,6 +1019,14 @@ class GRPOTrainer(Trainer):
             with profiling_context(self, reward_func_name):
                 if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
+                        # VLM reward models aren't supported yet, so we drop the image and raise a warning if needed
+                        for prompt in prompts:
+                            for turn in prompt:
+                                if isinstance(turn["content"], list):
+                                    logger.warning_once("Visual reward models aren't supported yet; dropping image.")
+                                    turn["content"] = " ".join(
+                                        e["text"] for e in turn["content"] if e["type"] == "text"
+                                    )
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
                     else:
@@ -1064,11 +1071,6 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
-
-        # We don't yet support visual reward models/function, so we keep a copy of the original text-only prompts for
-        # later use in the reward computation. If images are present, we insert {"type": "image"} as required by the
-        # VLM chat template.
-        original_prompts = copy.deepcopy(prompts)
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -1436,7 +1438,7 @@ class GRPOTrainer(Trainer):
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
-        rewards_per_func = self._calculate_rewards(inputs, original_prompts, completions, completion_ids_list)
+        rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
