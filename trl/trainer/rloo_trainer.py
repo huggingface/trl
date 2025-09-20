@@ -774,6 +774,7 @@ class RLOOTrainer(Trainer):
         compute_entropy=False,
         pixel_values=None,
         image_grid_thw=None,
+        num_images=None,
         pixel_attention_mask=None,
         image_sizes=None,
     ) -> dict[str, Optional[torch.Tensor]]:
@@ -789,10 +790,15 @@ class RLOOTrainer(Trainer):
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
 
             if image_grid_thw is not None and pixel_values is not None:
-                model_inputs["image_grid_thw"] = torch.cat(image_grid_thw[start : start + batch_size])
-                start_pixel_idx = 0 if start == 0 else torch.cat(image_grid_thw[:start]).prod(-1).sum().item()
-                end_pixel_idx = torch.cat(image_grid_thw[: start + batch_size]).prod(-1).sum().item()
-                model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
+                rows_per_image = image_grid_thw.prod(dim=-1)
+                rows_per_sample = torch.split(rows_per_image, num_images)
+                rows_per_sample = torch.stack([s.sum() for s in rows_per_sample])
+                cum_rows = torch.cat([torch.tensor([0], device=rows_per_sample.device), rows_per_sample.cumsum(0)])
+                row_start, row_end = cum_rows[start].item(), cum_rows[start + batch_size].item()
+                model_inputs["pixel_values"] = pixel_values[row_start:row_end]
+                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
+                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
+                model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
             elif pixel_values is not None:
                 model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
@@ -1326,6 +1332,8 @@ class RLOOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
+        num_images = [len(img_list) for img_list in images] if images is not None else None
+
         with torch.no_grad():
             # Compute the per-token log probabilities for the current model
             old_per_token_logps, _ = self._get_per_token_logps_and_entropies(
@@ -1336,6 +1344,7 @@ class RLOOTrainer(Trainer):
                 batch_size,
                 pixel_values=prompt_inputs.get("pixel_values"),
                 image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                num_images=num_images,
                 pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                 image_sizes=prompt_inputs.get("image_sizes"),
             )
@@ -1352,6 +1361,7 @@ class RLOOTrainer(Trainer):
                         batch_size=batch_size,
                         pixel_values=prompt_inputs.get("pixel_values"),
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                        num_images=num_images,
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         image_sizes=prompt_inputs.get("image_sizes"),
                     )
@@ -1365,6 +1375,7 @@ class RLOOTrainer(Trainer):
                             batch_size=batch_size,
                             pixel_values=prompt_inputs.get("pixel_values"),
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                            num_images=num_images,
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                             image_sizes=prompt_inputs.get("image_sizes"),
                         )
@@ -1488,7 +1499,7 @@ class RLOOTrainer(Trainer):
         if "image_sizes" in prompt_inputs:
             output["image_sizes"] = prompt_inputs["image_sizes"]
         if images is not None:
-            output["num_images"] = [len(img_list) if img_list is not None else 0 for img_list in images]
+            output["num_images"] = num_images
         return output
 
     @profiling_decorator

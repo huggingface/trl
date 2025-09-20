@@ -1806,12 +1806,16 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
     tensor along the first dimension.
     """
     pixel_values = batch.get("pixel_values")
-
     if isinstance(pixel_values, list):
         merged = torch.cat(pixel_values, dim=0)
-        return {**batch, "pixel_values": merged}
-    else:
-        return batch
+        batch = {**batch, "pixel_values": merged}
+
+    image_grid_thw = batch.get("image_grid_thw")
+    if isinstance(image_grid_thw, list):
+        merged = torch.cat(image_grid_thw, dim=0)
+        batch = {**batch, "image_grid_thw": merged}
+
+    return batch
 
 
 def truncate_with_protected_tokens(
