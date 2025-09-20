@@ -1411,10 +1411,9 @@ class SFTTrainerTester(TrlTestCase):
     def test_peft_model_with_quantization(self):
         """SFTTrainer should not freeze layers of existing PeftModel.
 
-        This test simulates a realistic QLoRA scenario where a quantized base model
-        is first converted to a PeftModel, then passed to SFTTrainer. The issue was
-        that prepare_model_for_kbit_training would freeze all parameters including
-        the LoRA adapters, making training impossible.
+        This test simulates a realistic QLoRA scenario where a quantized base model is first converted to a PeftModel,
+        then passed to SFTTrainer. The issue was that prepare_model_for_kbit_training would freeze all parameters
+        including the LoRA adapters, making training impossible.
         """
         # Get the base model
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
