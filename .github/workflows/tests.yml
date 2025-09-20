@@ -77,7 +77,6 @@ jobs:
       - name: Test with pytest
         run: |
           source .venv/bin/activate
-          export CUDA_LAUNCH_BLOCKING=1
           make test
 
       - name: Post to Slack
