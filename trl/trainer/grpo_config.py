@@ -37,6 +37,9 @@ class GRPOConfig(TrainingArguments):
         model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string.
+        config_init_kwargs (`str`, `dict[str, Any]`, *optional*):
+            Keyword arguments for [`~transformers.AutoConfig.from_pretrained`], used when the `config`
+            argument of the [`GRPOTrainer`] is provided as a string.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -242,7 +245,7 @@ class GRPOConfig(TrainingArguments):
             are logged.
     """
 
-    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
+    _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "config_init_kwargs"]
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
@@ -276,6 +279,13 @@ class GRPOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
+            "argument of the `GRPOTrainer` is provided as a string."
+        },
+    )
+    config_init_kwargs: Optional[Union[dict, str]] = field(
+        default=None,
+        metadata={
+            "help": "Keyword arguments for `transformers.AutoConfig.from_pretrained`, used when the `config` "
             "argument of the `GRPOTrainer` is provided as a string."
         },
     )
