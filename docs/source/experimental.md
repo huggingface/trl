@@ -66,7 +66,7 @@ class GroupFilter:
         return group_scores
 
 training_args = GFPOConfig(
-    output_dir="Qwen3-0.6B-GFPO"
+    output_dir="Qwen3-0.6B-GFPO",
     per_device_train_batch_size=4,
     num_remains_in_group=2,
     bf16=True,
