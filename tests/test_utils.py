@@ -1071,12 +1071,16 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
 
 class UnsplitPixelValuesByGridTester(TrlTestCase):
     def test_unsplit_correctly(self):
-        split = [torch.randn(4, 5), torch.randn(2, 5)]
-        merged = torch.cat(split, dim=0)
-        batch = {"pixel_values": split, "other_key": torch.tensor([1])}
+        pixel_values = [torch.randn(4, 5), torch.randn(2, 5)]
+        pixel_values_merged = torch.cat(pixel_values, dim=0)
+        image_grid_thw = [torch.tensor([[1, 2, 2]]), torch.tensor([[1, 2, 1]])]
+        image_grid_thw_merged = torch.cat(image_grid_thw, dim=0)
+        batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
         result = unsplit_pixel_values_by_grid(batch)
         self.assertIsInstance(result["pixel_values"], torch.Tensor)
-        self.assertTrue(torch.allclose(result["pixel_values"], merged))
+        self.assertTrue(torch.allclose(result["pixel_values"], pixel_values_merged))
+        self.assertIsInstance(result["image_grid_thw"], torch.Tensor)
+        self.assertTrue(torch.equal(result["image_grid_thw"], image_grid_thw_merged))
         self.assertIn("other_key", result)
 
     def test_no_op_if_not_list(self):
