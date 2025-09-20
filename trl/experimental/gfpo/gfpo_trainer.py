@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import logging
 import re
 from contextlib import nullcontext
@@ -373,6 +372,8 @@ class GFPOTrainer(_GRPOTrainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
+        num_images = [len(img_list) for img_list in images] if images is not None else None
+
         with torch.no_grad():
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
             # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
@@ -393,6 +394,7 @@ class GFPOTrainer(_GRPOTrainer):
                     batch_size,
                     pixel_values=prompt_inputs.get("pixel_values"),
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                    num_images=num_images,
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
                 )
@@ -417,6 +419,7 @@ class GFPOTrainer(_GRPOTrainer):
                         batch_size=batch_size,
                         pixel_values=prompt_inputs.get("pixel_values"),
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                        num_images=num_images,
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         image_sizes=prompt_inputs.get("image_sizes"),
                     )
@@ -430,6 +433,7 @@ class GFPOTrainer(_GRPOTrainer):
                             batch_size=batch_size,
                             pixel_values=prompt_inputs.get("pixel_values"),
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                            num_images=num_images,
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                             image_sizes=prompt_inputs.get("image_sizes"),
                         )
@@ -638,5 +642,5 @@ class GFPOTrainer(_GRPOTrainer):
         if "image_sizes" in prompt_inputs:
             output["image_sizes"] = prompt_inputs["image_sizes"]
         if images is not None:
-            output["num_images"] = [len(img_list) if img_list is not None else 0 for img_list in images]
+            output["num_images"] = num_images
         return output
