@@ -1348,7 +1348,7 @@ class GRPOTrainerTester(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
         )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
         def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
