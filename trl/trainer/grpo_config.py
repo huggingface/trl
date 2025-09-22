@@ -635,6 +635,14 @@ class GRPOConfig(TrainingArguments):
             "all prompts are logged."
         },
     )
+    wandb_log_extra_columns: Optional[Union[None, list[str]]] = field(
+        default=None,
+        metadata={
+            "help": "Extra dataset columns to include in W&B logging. If `None` (default), no extra columns are "
+            "logged. If `[]` (empty list), all available dataset columns are logged. If `['col1', 'col2']`, only "
+            "the specified columns are logged. Columns that don't exist in the dataset will be ignored."
+        },
+    )
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
