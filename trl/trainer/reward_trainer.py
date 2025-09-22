@@ -198,7 +198,7 @@ class RewardTrainer(Trainer):
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
               using `AutoModelForSequenceClassification.from_pretrained` with the keyword arguments in
               `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object.
+            - A sequence classification [`~transformers.PreTrainedModel`] object.
         args ([`RewardConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
