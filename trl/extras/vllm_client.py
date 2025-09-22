@@ -178,7 +178,7 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
-        guided_decoding_regex: Optional[str] = None,
+        structured_outputs_regex: Optional[str] = None,
         generation_kwargs: Optional[dict] = None,
     ) -> list[list[int]]:
         """
@@ -203,7 +203,7 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
-            guided_decoding_regex (`str`, *optional*):
+            structured_outputs_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
                 Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
@@ -240,7 +240,7 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
-                "guided_decoding_regex": guided_decoding_regex,
+                "structured_outputs_regex": structured_outputs_regex,
                 "generation_kwargs": generation_kwargs or {},
             },
         )

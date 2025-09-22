@@ -117,8 +117,8 @@ class OnlineDPOConfig(TrainingArguments):
               server is running (start with `trl vllm-serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
-        vllm_guided_decoding_regex (`str`, *optional*):
-            Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
+        vllm_structured_outputs_regex (`str`, *optional*):
+            Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
@@ -304,9 +304,9 @@ class OnlineDPOConfig(TrainingArguments):
             "model implementation."
         },
     )
-    vllm_guided_decoding_regex: Optional[str] = field(
+    vllm_structured_outputs_regex: Optional[str] = field(
         default=None,
-        metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
+        metadata={"help": "Regex for vLLM structured outputs. If `None` (default), structured outputs is disabled."},
     )
     vllm_gpu_memory_utilization: Optional[float] = field(
         default=0.55,

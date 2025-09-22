@@ -761,8 +761,8 @@ class GRPOTrainerTester(TrlTestCase):
 
     @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
-    def test_training_vllm_guided_decoding(self):
-        """Test that training works with vLLM for generation with guided decoding."""
+    def test_training_vllm_structured_outputs(self):
+        """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
@@ -773,7 +773,7 @@ class GRPOTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
             use_vllm=True,
-            vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
+            vllm_structured_outputs_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
         )
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
@@ -796,7 +796,7 @@ class GRPOTrainerTester(TrlTestCase):
     @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vllm_importance_sampling_correction(self):
-        """Test that training works with vLLM for generation with guided decoding."""
+        """Test that training works with vLLM for generation with structured outputs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
         training_args = GRPOConfig(
