@@ -1114,8 +1114,19 @@ class GRPOTrainer(Trainer):
             # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
             protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
             protected = [token for token in protected if token is not None]
+
+            # Ensure max_prompt_length can accommodate protected tokens to prevent truncation errors
+            if protected:
+                protected_tensor = torch.tensor(protected, device=prompt_ids.device)
+                max_protected = max(
+                    torch.isin(prompt_ids[i], protected_tensor).sum().item() for i in range(prompt_ids.shape[0])
+                )
+                effective_max_length = max(self.max_prompt_length, max_protected)
+            else:
+                effective_max_length = self.max_prompt_length
+
             prompt_ids, prompt_mask = truncate_with_protected_tokens(
-                prompt_ids, prompt_mask, self.max_prompt_length, protected
+                prompt_ids, prompt_mask, effective_max_length, protected
             )
 
             prompts_text = self.processing_class.batch_decode(
