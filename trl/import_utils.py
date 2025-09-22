@@ -82,9 +82,8 @@ def is_uvicorn_available() -> bool:
 
 
 def is_vllm_available() -> bool:
-    if (
-        _vllm_available
-        and version.parse(_vllm_version) < version.parse("0.10.0")
+    if _vllm_available and (
+        version.parse(_vllm_version) < version.parse("0.10.0")
         or version.parse(_vllm_version) > version.parse("0.10.2")
     ):
         warnings.warn(
