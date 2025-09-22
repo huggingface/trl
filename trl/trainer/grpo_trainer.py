@@ -480,7 +480,7 @@ class GRPOTrainer(Trainer):
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "`pip install [vllm]` to use it."
                 )
 
             if self.vllm_mode == "server":

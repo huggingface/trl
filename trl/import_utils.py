@@ -14,6 +14,7 @@
 
 import importlib
 import os
+import warnings
 from itertools import chain
 from types import ModuleType
 from typing import Any
@@ -35,7 +36,7 @@ _pydantic_available = _is_package_available("pydantic")
 _requests_available = _is_package_available("requests")
 _unsloth_available = _is_package_available("unsloth")
 _uvicorn_available = _is_package_available("uvicorn")
-_vllm_available = _is_package_available("vllm")
+_vllm_available, _vllm_version = _is_package_available("vllm", return_version=True)
 _vllm_ascend_available = _is_package_available("vllm_ascend")
 _weave_available = _is_package_available("weave")
 
@@ -81,6 +82,16 @@ def is_uvicorn_available() -> bool:
 
 
 def is_vllm_available() -> bool:
+    if (
+        _vllm_available
+        and version.parse(_vllm_version) < version.parse("0.10.0")
+        or version.parse(_vllm_version) > version.parse("0.10.2")
+    ):
+        warnings.warn(
+            "TRL currently only supports vLLM versions `0.10.0`, `0.10.1`, and `0.10.2`. You have version "
+            f"{_vllm_version} installed. We recommend to install one of these versions to avoid compatibility issues.",
+            UserWarning,
+        )
     return _vllm_available
 
 
