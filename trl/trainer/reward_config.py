@@ -58,8 +58,8 @@ class RewardConfig(TrainingArguments):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
             it falls back to `processing_class.eos_token`.
         max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
-            If `None`, no truncation is applied.
+            Maximum length of the tokenized sequence. Samples are filtered out if either chosen or rejected sequence
+            exceeds this value. If `None`, no filtering is applied.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
 

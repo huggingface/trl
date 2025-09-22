@@ -42,7 +42,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import is_conversational, truncate_dataset
+from ..data_utils import is_conversational
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .reward_config import RewardConfig
 from .utils import disable_dropout_in_model, generate_model_card, get_comet_experiment_url, pad, remove_none_values
@@ -507,11 +507,15 @@ class RewardTrainer(Trainer):
 
                 dataset = dataset.map(tokenize, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
-            # Truncate
+            # Filter samples that are longer than `max_length`
             if args.max_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+                    map_kwargs["desc"] = f"Filtering {dataset_name} >{args.max_length} tokens"
+                dataset = dataset.filter(
+                    lambda example: len(example["chosen_input_ids"]) <= args.max_length
+                    and len(example["rejected_input_ids"]) <= args.max_length,
+                    **map_kwargs,
+                )
 
         return dataset
 
