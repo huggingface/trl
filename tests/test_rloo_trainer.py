@@ -1121,8 +1121,6 @@ class RLOOTrainerTester(TrlTestCase):
         params_to_skip = (
             "model.vision_tower.",
             "model.multi_modal_projector.",
-            "model.vision_model.",
-            "model.connector.modality_projection.",
             "model.visual.",
             "model.image_newline",
         )
