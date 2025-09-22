@@ -272,7 +272,7 @@ When using vLLM as the generation backend, you can enable _sleep mode_ to offloa
 ```python
 from trl import GRPOConfig
 
-training_args = GRPOConfig(..., vllm_sleep_enabled=True)
+training_args = GRPOConfig(..., vllm_enable_sleep_mode=True)
 ```
 
 </hfoption>
@@ -281,7 +281,7 @@ training_args = GRPOConfig(..., vllm_sleep_enabled=True)
 ```python
 from trl import RLOOConfig
 
-training_args = RLOOConfig(..., vllm_sleep_enabled=True)
+training_args = RLOOConfig(..., vllm_enable_sleep_mode=True)
 ```
 
 </hfoption>
