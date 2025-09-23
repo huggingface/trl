@@ -1011,14 +1011,6 @@ class RLOOTrainer(Trainer):
             with profiling_context(self, reward_func_name):
                 if isinstance(reward_func, nn.Module):  # Module (no PretrainedModel) for compat with compiled models
                     if is_conversational(inputs[0]):
-                        # VLM reward models aren't supported yet, so we drop the image and raise a warning if needed
-                        for prompt in prompts:
-                            for turn in prompt:
-                                if isinstance(turn["content"], list):
-                                    logger.warning_once("Visual reward models aren't supported yet; dropping image.")
-                                    turn["content"] = " ".join(
-                                        e["text"] for e in turn["content"] if e["type"] == "text"
-                                    )
                         messages = [{"messages": p + c} for p, c in zip(prompts, completions)]
                         texts = [apply_chat_template(x, reward_processing_class)["text"] for x in messages]
                     else:
