@@ -478,7 +478,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
-def dft_loss(outputs, labels, num_items_in_batch):
+def dft_loss(outputs, labels, num_items_in_batch=None):
     """
     DFT loss function, as presented in [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward
     Rectification](https://huggingface.co/papers/2508.05629)
@@ -489,6 +489,8 @@ def dft_loss(outputs, labels, num_items_in_batch):
     shift_labels[~loss_mask] = 0
     logprobs = selective_log_softmax(outputs.logits, shift_labels)
     per_token_loss = -logprobs.exp().detach() * logprobs
+    if num_items_in_batch is None:
+        num_items_in_batch = loss_mask.sum()
     loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
     return loss
 
@@ -1073,16 +1075,6 @@ class SFTTrainer(Trainer):
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
         labels = inputs["labels"]
-
-        if mode == "eval" and self.args.loss_type == "dft":
-            shift_labels = labels.clone()[..., 1:]
-            loss_mask = shift_labels.ne(-100)
-            num_items_in_batch = loss_mask.sum()
-
-            if self.args.average_tokens_across_devices:
-                num_items_in_batch = self.accelerator.gather(num_items_in_batch).sum().item()
-            else:
-                num_items_in_batch = num_items_in_batch.item()
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
