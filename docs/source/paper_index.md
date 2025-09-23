@@ -202,6 +202,12 @@ training_args = GRPOConfig(
 )
 ```
 
+### Sample More to Think Less: Group Filtered Policy Optimization for Concise Reasoning
+
+**📜 Paper**: https://huggingface.co/papers/2508.09726
+
+See [Experimental - GFPO](experimental#gfpo).
+
 ## Direct Policy Optimization
 
 Papers relating to the [`DPOTrainer`]

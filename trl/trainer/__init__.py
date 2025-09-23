@@ -26,6 +26,7 @@ _import_structure = {
         "MergeModelCallback",
         "RichProgressCallback",
         "SyncRefModelCallback",
+        "WeaveCallback",
         "WinRateCallback",
     ],
     "cpo_config": ["CPOConfig"],
@@ -85,6 +86,7 @@ if TYPE_CHECKING:
         MergeModelCallback,
         RichProgressCallback,
         SyncRefModelCallback,
+        WeaveCallback,
         WinRateCallback,
     )
     from .cpo_config import CPOConfig

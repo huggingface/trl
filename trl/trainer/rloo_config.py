@@ -37,7 +37,7 @@ class RLOOConfig(TrainingArguments):
 
         model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string.
+            argument of the [`RLOOTrainer`] is provided as a string.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -141,6 +141,9 @@ class RLOOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
+            for weight sync and generation.
 
         > Parameters that control the training
 
@@ -362,7 +365,7 @@ class RLOOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
-            "argument of the `GRPOTrainer` is provided as a string."
+            "argument of the `RLOOTrainer` is provided as a string."
         },
     )
     disable_dropout: bool = field(
@@ -374,7 +377,7 @@ class RLOOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
+    # The default value remove_unused_columns is overwritten from the parent class, because in RLOO we usually rely on
     # additional columns to compute the reward
     remove_unused_columns: Optional[bool] = field(
         default=False,
@@ -505,6 +508,13 @@ class RLOOConfig(TrainingArguments):
             "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
             "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
             "model implementation."
+        },
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
+            "and woken for weight sync and generation."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
@@ -807,6 +817,6 @@ class RLOOConfig(TrainingArguments):
 
         if self.num_generations < 2:
             raise ValueError(
-                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )

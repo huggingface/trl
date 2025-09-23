@@ -16,6 +16,7 @@ import inspect
 import os
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
@@ -32,8 +33,7 @@ from datasets import Dataset, IterableDataset
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
+    AutoProcessor,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -61,6 +61,7 @@ from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     RunningMoments,
     cap_exp,
+    create_model_from_path,
     disable_dropout_in_model,
     empty_cache,
     flush_left,
@@ -269,52 +270,66 @@ class DPOTrainer(Trainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         # Args
-        model_id = model if isinstance(model, str) else model.config._name_or_path
         if args is None:
-            model_name = model_id.split("/")[-1]
+            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
-        # Handle the tokenizer
-        if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_id)
-
-        if args.padding_value is not None:
-            self.padding_value = args.padding_value
+        # Model and reference model
+        if isinstance(model, str):
+            model = create_model_from_path(model, **args.model_init_kwargs or {})
         else:
-            if hasattr(processing_class, "pad_token_id") and processing_class.pad_token_id is not None:
-                self.padding_value = processing_class.pad_token_id
-            elif hasattr(processing_class, "tokenizer") and processing_class.tokenizer.pad_token_id is not None:
-                self.padding_value = processing_class.tokenizer.pad_token_id
-            else:
-                raise ValueError(
-                    "`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in the "
-                    "`processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
-                    "`tokenizer.pad_token` (e.g., `tokenizer.pad_token = tokenizer.eos_token`) before instantiating "
-                    "the trainer."
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
                 )
-
-        # Model
-        if not isinstance(model, str) and ref_model is model:
+        model_id = model.config._name_or_path
+        if isinstance(ref_model, str):
+            ref_model = create_model_from_path(ref_model, **args.ref_model_init_kwargs or {})
+        else:
+            if args.ref_model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `ref_model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
+                    "The `ref_model_init_kwargs` will be ignored."
+                )
+        if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
-                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+                "same as `model`, you can simply omit the `ref_model` argument and it will be created for you."
             )
 
-        if args.model_init_kwargs is not None and not isinstance(model, str):
-            logger.warning(
-                "You passed model_init_kwargs to the `DPOConfig`, but your model is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
-            )
-        if isinstance(model, str):
-            model = self._create_model_from_path(model, args)
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(model_id)
 
-        if args.ref_model_init_kwargs is not None and not isinstance(ref_model, str):
-            logger.warning(
-                "You passed ref_model_init_kwargs to the `DPOConfig`, but your ref_model is already instantiated. "
-                "The `ref_model_init_kwargs` will be ignored."
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        # Get the pad token: if not provided, use the one from the processing class or the eos token
+        # if the processing class does not have a pad token.
+        if args.padding_value is not None:  # deprecated, will be removed in 0.26.0.
+            warnings.warn(
+                "The `padding_value` argument is deprecated and will be removed in version 0.26.0. Please use "
+                "`pad_token` (str) instead."
             )
-        if isinstance(ref_model, str):
-            ref_model = self._create_model_from_path(ref_model, args, is_ref=True)
+            self.pad_token_id = args.padding_value
+        else:
+            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
+            self.pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
+            if self.pad_token_id is None:
+                raise ValueError(
+                    f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
+                    "in the vocabulary before using it as a padding token."
+                )
 
         # PEFT configuration and model wrapping
         model = self._prepare_peft_model(model, ref_model, peft_config, args)
@@ -376,7 +391,7 @@ class DPOTrainer(Trainer):
 
         # Data collator
         if data_collator is None:
-            data_collator = DataCollatorForPreference(pad_token_id=self.padding_value)
+            data_collator = DataCollatorForPreference(pad_token_id=self.pad_token_id)
 
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
@@ -516,29 +531,21 @@ class DPOTrainer(Trainer):
         if "bco_pair" in self.loss_type:
             self.running = RunningMoments(self.accelerator)
 
-    def _create_model_from_path(self, model_path: str, args: DPOConfig, is_ref: bool = False) -> PreTrainedModel:
-        """Creates a model from a path or model identifier."""
-        if not is_ref:
-            model_init_kwargs = args.model_init_kwargs or {}
-        else:
-            model_init_kwargs = args.ref_model_init_kwargs or {}
+    @property
+    def padding_value(self):
+        warnings.warn(
+            "The `padding_value` property is deprecated and will be removed in version 0.26.0. Please use "
+            "`pad_token_id` instead.",
+        )
+        return self.pad_token_id
 
-        # Handle torch dtype
-        dtype = model_init_kwargs.get("dtype")
-        if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-            pass  # dtype is already a torch.dtype or "auto" or None
-        elif isinstance(dtype, str):  # it's a str, but not "auto"
-            dtype = getattr(torch, dtype)
-            model_init_kwargs["dtype"] = dtype
-        else:
-            raise ValueError(
-                "Invalid `dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
-                f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
-            )
-
-        # Create model
-        model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        return model
+    @padding_value.setter
+    def padding_value(self, value):
+        warnings.warn(
+            "The `padding_value` property is deprecated and will be removed in version 0.26.0. Please use "
+            "`pad_token_id` instead.",
+        )
+        self.pad_token_id = value
 
     def _prepare_peft_model(
         self, model: PreTrainedModel, ref_model: PreTrainedModel, peft_config: Any, args: DPOConfig
@@ -1217,7 +1224,7 @@ class DPOTrainer(Trainer):
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
     ) -> dict[str, torch.Tensor]:
         unwrapped_model = self.accelerator.unwrap_model(model)
-        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.pad_token_id)
 
         model_kwargs = {}
         if self.aux_loss_enabled:
@@ -1464,7 +1471,7 @@ class DPOTrainer(Trainer):
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
-        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.pad_token_id)
 
         model_kwargs = {"use_cache": False}
         if self.aux_loss_enabled:
@@ -1792,7 +1799,7 @@ class DPOTrainer(Trainer):
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.padding_value,
+                pad_token_id=self.pad_token_id,
             )
 
             # if ref_output in batch use that otherwise use the reference model
@@ -1806,7 +1813,7 @@ class DPOTrainer(Trainer):
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
-                            pad_token_id=self.padding_value,
+                            pad_token_id=self.pad_token_id,
                         )
                 else:
                     ref_output = self.ref_model.generate(
@@ -1814,13 +1821,13 @@ class DPOTrainer(Trainer):
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
-                        pad_token_id=self.padding_value,
+                        pad_token_id=self.pad_token_id,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.padding_value)
+        policy_output = pad_to_length(policy_output, self.max_length, self.pad_token_id)
         policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        ref_output = pad_to_length(ref_output, self.max_length, self.padding_value)
+        ref_output = pad_to_length(ref_output, self.max_length, self.pad_token_id)
         ref_output_decoded = self.processing_class.batch_decode(ref_output, skip_special_tokens=True)
 
         return policy_output_decoded, ref_output_decoded
@@ -2008,7 +2015,7 @@ class DPOTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=tags,
+            tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="DPO",
