@@ -18,7 +18,6 @@ import json
 import os
 import random
 import socket
-from collections import deque
 from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
@@ -194,36 +193,24 @@ def _find_free_port() -> int:
 
 
 def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = None) -> None:
-    """Ensure MASTER_ADDR/MASTER_PORT are set safely.
+    """
+    Ensure `MASTER_ADDR`/`MASTER_PORT` are set safely.
 
     - Respects existing environment variables.
-    - Defaults MASTER_ADDR to localhost if unset.
-    - Chooses a free TCP port if MASTER_PORT is unset to avoid collisions.
-    - If MASTER_PORT is set to "0" or "auto", it is resolved to a free port.
+    - Defaults `MASTER_ADDR` to localhost if unset.
+    - Chooses a free TCP port if `MASTER_PORT` is unset to avoid collisions.
+    - If `MASTER_PORT` is set to `"0"` or `"auto"`, it is resolved to a free port.
     """
-    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", addr or "localhost")
+    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR") or addr or "localhost"
 
-    # Determine desired port precedence: explicit arg > env > auto
-    desired_port: Optional[int] = port
-    if desired_port is None:
-        env_port = os.environ.get("MASTER_PORT")
-        if env_port is None:
-            desired_port = None
-        else:
-            env_port_str = str(env_port).strip().lower()
-            if env_port_str in {"0", "auto", ""}:
-                desired_port = 0
-            else:
-                try:
-                    desired_port = int(env_port)
-                except ValueError:
-                    desired_port = 0  # treat invalid as auto
+    env_port = os.environ.get("MASTER_PORT", "").strip().lower()
+    if port is None and env_port not in {"", "0", "auto"}:
+        try:
+            port = int(env_port)
+        except ValueError:
+            pass
 
-    if desired_port in (None, 0):
-        chosen = str(_find_free_port())
-        os.environ["MASTER_PORT"] = chosen
-    else:
-        os.environ["MASTER_PORT"] = str(desired_port)
+    os.environ["MASTER_PORT"] = str(_find_free_port() if port in (None, 0) else port)
 
 
 @dataclass
