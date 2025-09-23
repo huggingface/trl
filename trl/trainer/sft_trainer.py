@@ -1037,9 +1037,9 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
                 columns = ["input_ids"]
-                if "completion_mask" in dataset.column_names:
+                if "completion_mask" in get_dataset_column_names(dataset):
                     columns.append("completion_mask")
-                if "assistant_masks" in dataset.column_names:
+                if "assistant_masks" in get_dataset_column_names(dataset):
                     columns.append("assistant_masks")
 
                 dataset = dataset.select_columns(columns)
