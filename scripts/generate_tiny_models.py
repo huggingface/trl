@@ -286,6 +286,17 @@ for model_id, model_class in [
     config.text_config.num_attention_heads = 4
     config.text_config.num_key_value_heads = 2
 
+    if (
+        hasattr(config.text_config, "layer_types")
+        and len(config.text_config.layer_types) != config.text_config.num_hidden_layers
+    ):
+        original_layer_types = config.text_config.layer_types
+        if len(original_layer_types) > 0:
+            config.text_config.layer_types = [
+                original_layer_types[i % len(original_layer_types)]
+                for i in range(config.text_config.num_hidden_layers)
+            ]
+
     config.vision_config.num_hidden_layers = 2
     config.vision_config.hidden_size = 16
     config.vision_config.num_attention_heads = 4
