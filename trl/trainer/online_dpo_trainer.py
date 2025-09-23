@@ -94,7 +94,7 @@ else:
 
 if is_vllm_available():
     from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
+    from vllm.sampling_params import StructuredOutputsParams
 
 if is_wandb_available():
     import wandb
@@ -528,7 +528,7 @@ class OnlineDPOTrainer(Trainer):
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
             # vLLM specific sampling arguments
-            self.guided_decoding_regex = args.vllm_guided_decoding_regex
+            self.structured_outputs_regex = args.vllm_structured_outputs_regex
             self._last_loaded_step = -1  # tag to avoid useless loading during grad accumulation
 
             # Set up vLLM generation config
@@ -544,8 +544,8 @@ class OnlineDPOTrainer(Trainer):
             }
             if args.generation_kwargs is not None:
                 generation_params.update(args.generation_kwargs)
-            if self.guided_decoding_regex:
-                generation_params["guided_decoding"] = GuidedDecodingParams(regex=self.guided_decoding_regex)
+            if self.structured_outputs_regex:
+                generation_params["structured_outputs"] = StructuredOutputsParams(regex=self.structured_outputs_regex)
             self.generation_config = SamplingParams(**generation_params)
 
             # When using vLLM, the main process is responsible for loading the model weights. This can cause process
@@ -791,7 +791,7 @@ class OnlineDPOTrainer(Trainer):
                 top_k=-1 if self.top_k is None else self.top_k,
                 min_p=0.0 if self.min_p is None else self.min_p,
                 max_tokens=self.generation_config.max_tokens,
-                guided_decoding_regex=self.guided_decoding_regex if hasattr(self, "guided_decoding_regex") else None,
+                structured_outputs_regex=self.structured_outputs_regex if hasattr(self, "structured_outputs_regex") else None,
                 generation_kwargs=self.args.generation_kwargs,
             )
             # Flatten: each prompt generates 2 completions
