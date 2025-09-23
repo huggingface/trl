@@ -397,7 +397,6 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
 | [`GKDTrainer`]          | [Prompt-completion](#prompt-completion)                                                                |
 | [`GRPOTrainer`]         | [Prompt-only](#prompt-only)                                                                            |
-| [`IterativeSFTTrainer`] | [Unpaired preference](#unpaired-preference)                                                            |
 | [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                                                                            |
 | [`OnlineDPOTrainer`]    | [Prompt-only](#prompt-only)                                                                            |
@@ -1038,7 +1037,7 @@ Some trainers also support fine-tuning vision-language models (VLMs) using image
 
 A conversational vision dataset differs from a standard conversational dataset in two key ways:
 
-1. The dataset must contain the key `images` with the image data.
+1. The dataset must contain the key `images` with the image data (as lists of PIL images) or `image` with a single PIL image.
 2. The `"content"` field in messages must be a list of dictionaries, where each dictionary specifies the type of data: `"image"` or `"text"`.
 
 Example:
