@@ -59,6 +59,7 @@ from .rloo_config import RLOOConfig
 from .utils import (
     RepeatSampler,
     disable_dropout_in_model,
+    ensure_master_addr_port,
     entropy_from_logits,
     generate_model_card,
     get_comet_experiment_url,
@@ -551,7 +552,7 @@ class RLOOTrainer(Trainer):
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "`pip install trl[vllm]` to use it."
                 )
 
             if self.vllm_mode == "server":
@@ -586,8 +587,8 @@ class RLOOTrainer(Trainer):
                 os.environ["RANK"] = str(self.accelerator.process_index)
                 os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
-                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+                # Ensure distributed rendezvous variables are set without colliding across concurrent runs
+                ensure_master_addr_port()
 
                 if self.max_prompt_length is not None and self.max_completion_length is not None:
                     max_model_len = self.max_prompt_length + self.max_completion_length
@@ -607,7 +608,10 @@ class RLOOTrainer(Trainer):
                     # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
+                    enable_sleep_mode=self.args.vllm_enable_sleep_mode,
                 )
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.sleep(level=1)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
@@ -634,10 +638,6 @@ class RLOOTrainer(Trainer):
                 "repetition_penalty": self.repetition_penalty,
                 "cache_implementation": args.cache_implementation,
             }
-            if args.use_transformers_paged:
-                generation_kwargs["max_batch_tokens"] = 512
-                generation_kwargs["num_blocks"] = 1024
-                generation_kwargs["block_size"] = 128
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs)
@@ -1130,6 +1130,11 @@ class RLOOTrainer(Trainer):
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
+            if self.vllm_mode == "colocate" and self.args.vllm_enable_sleep_mode:
+                # wake up colocated vLLM instances if needed
+                torch.cuda.empty_cache()  # required to avoid OOM in some cases
+                self.llm.wake_up()
+
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
                 self._move_model_to_vllm()
@@ -1240,6 +1245,9 @@ class RLOOTrainer(Trainer):
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = completion_ids[tp_slice]
 
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.sleep(level=1)
+
             # Pad the completions, and concatenate them with the prompts
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
@@ -1272,6 +1280,7 @@ class RLOOTrainer(Trainer):
                     all_outputs = unwrapped_model.generate_batch(
                         paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
                     )
+                    unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
