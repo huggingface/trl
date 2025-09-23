@@ -43,6 +43,7 @@ from transformers import (
     GPT2LMHeadModel,
     GPTNeoXConfig,
     GPTNeoXForCausalLM,
+    GPTNeoXForSequenceClassification,
     GptOssConfig,
     GptOssForCausalLM,
     Idefics2Config,
@@ -73,6 +74,7 @@ from transformers import (
     Qwen3ForSequenceClassification,
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
+    Qwen3MoeForSequenceClassification,
     SmolVLMForConditionalGeneration,
     T5ForConditionalGeneration,
 )
@@ -234,21 +236,36 @@ model = Qwen3ForCausalLM(config)
 push_to_hub(model, tokenizer, "small")
 
 # Reward models
-for model_id, config_class, model_class, suffix in [
-    ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForSequenceClassification, "3.2"),
-    ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForSequenceClassification, "2.5"),
-    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForSequenceClassification, None),
+for model_id, model_class, suffix in [
+    ("EleutherAI/pythia-14m", GPTNeoXForSequenceClassification, None),
+    ("meta-llama/Llama-3.2-1B-Instruct", LlamaForSequenceClassification, "3.2"),
+    ("Qwen/Qwen2.5-32B-Instruct", Qwen2ForSequenceClassification, "2.5"),
+    ("Qwen/Qwen3-4B", Qwen3ForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    config = config_class(
-        vocab_size=len(tokenizer.vocab),
-        hidden_size=8,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        num_hidden_layers=2,
-        intermediate_size=32,
-        num_labels=1,
-    )
+    config = AutoConfig.from_pretrained(model_id)
+    config.hidden_size = 16
+    config.num_attention_heads = 4
+    config.num_key_value_heads = 2
+    config.num_hidden_layers = 2
+    config.num_labels = 1
+    if model_id in ("Qwen/Qwen2.5-32B-Instruct", "Qwen/Qwen3-4B"):
+        config.layer_types = config.layer_types[:2]
+    model = model_class(config)
+    push_to_hub(model, tokenizer, "tiny", suffix)
+
+# MoE Reward models
+for model_id, model_class, suffix in [
+    ("Qwen/Qwen3-30B-A3B", Qwen3MoeForSequenceClassification, None),
+]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    config = AutoConfig.from_pretrained(model_id)
+    config.hidden_size = 16
+    config.num_attention_heads = 4
+    config.num_hidden_layers = 2
+    config.num_labels = 1
+    config.num_experts = 4
+    config.num_experts_per_tok = 2
     model = model_class(config)
     push_to_hub(model, tokenizer, "tiny", suffix)
 

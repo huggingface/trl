@@ -68,6 +68,7 @@ from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     empty_cache,
+    ensure_master_addr_port,
     generate_model_card,
     get_comet_experiment_url,
     pad,
@@ -483,7 +484,7 @@ class OnlineDPOTrainer(Trainer):
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "`pip install trl[vllm]` to use it."
                 )
 
             if self.vllm_mode == "server":
@@ -521,8 +522,8 @@ class OnlineDPOTrainer(Trainer):
                 os.environ["RANK"] = str(self.accelerator.process_index)
                 os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
-                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+                # Ensure distributed rendezvous variables are set without colliding across concurrent runs
+                ensure_master_addr_port()
 
                 self.llm = LLM(**vllm_kwargs)
             else:
@@ -571,10 +572,6 @@ class OnlineDPOTrainer(Trainer):
                 generation_kwargs["min_p"] = self.min_p
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
-            if self.use_transformers_paged:
-                generation_kwargs["max_batch_tokens"] = 512
-                generation_kwargs["num_blocks"] = 1024
-                generation_kwargs["block_size"] = 128
             # Remove None values
             generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
             self.generation_config = GenerationConfig(**generation_kwargs)
@@ -1111,6 +1108,7 @@ class OnlineDPOTrainer(Trainer):
                         generation_config=self.generation_config,
                         progress_bar=False,
                     )
+                    unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")

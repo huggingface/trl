@@ -557,7 +557,7 @@ def main(script_args: ScriptArguments):
 
         # Guided decoding, if enabled
         if request.guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(backend="outlines", regex=request.guided_decoding_regex)
+            guided_decoding = GuidedDecodingParams(regex=request.guided_decoding_regex)
         else:
             guided_decoding = None
 

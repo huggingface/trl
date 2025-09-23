@@ -15,12 +15,15 @@
 import dataclasses
 import importlib.resources as pkg_resources
 import json
+import os
 import random
-from collections.abc import Sequence, Sized
+import socket
+import warnings
+from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from itertools import accumulate
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, TypeVar, Union
 
 import numpy as np
 import pandas as pd
@@ -171,10 +174,58 @@ class DataCollatorForChatML:
         }
 
 
+def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def _find_free_port() -> int:
+    candidates = (29500, 23456, 12355, 12345)
+    for p in candidates:
+        if _is_port_free(p):
+            return p
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = None) -> None:
+    """
+    Ensure `MASTER_ADDR`/`MASTER_PORT` are set safely.
+
+    - Respects existing environment variables.
+    - Defaults `MASTER_ADDR` to localhost if unset.
+    - Chooses a free TCP port if `MASTER_PORT` is unset to avoid collisions.
+    - If `MASTER_PORT` is set to `"0"` or `"auto"`, it is resolved to a free port.
+    """
+    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR") or addr or "localhost"
+
+    env_port = os.environ.get("MASTER_PORT", "").strip().lower()
+    if port is None and env_port not in {"", "0", "auto"}:
+        try:
+            port = int(env_port)
+        except ValueError:
+            pass
+
+    os.environ["MASTER_PORT"] = str(_find_free_port() if port in (None, 0) else port)
+
+
 @dataclass
 class RewardDataCollatorWithPadding:
     r"""
     Reward DataCollator class that pads the inputs to the maximum length of the batch.
+
+    <Tip warning={true}>
+
+    This class is deprecated and will be removed in version 0.27.0. Please use
+    `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
+
+    </Tip>
 
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
@@ -191,6 +242,14 @@ class RewardDataCollatorWithPadding:
     padding: Union[bool, str] = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
+
+    def __init__(self, *args, **kwargs) -> None:
+        warnings.warn(
+            "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
+            "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
+            DeprecationWarning,
+        )
+        super().__init__(*args, **kwargs)
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_chosen = []
@@ -1189,6 +1248,13 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     """
     Decodes the input tensor and strips the padding tokens.
 
+    <Tip warning={true}>
+
+    This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy the
+    code into your codebase and use it from there.
+
+    </Tip>
+
     Args:
         inputs (`torch.Tensor`):
             The input tensor to be decoded.
@@ -1199,6 +1265,11 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
         `list[str]`:
             The list of decoded strings with padding tokens stripped.
     """
+    warnings.warn(
+        "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
+        "to keep using it, please copy the code into your codebase and use it from there.",
+        DeprecationWarning,
+    )
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
     return [d.replace(tokenizer.pad_token, "") for d in decoded]
 
@@ -1212,6 +1283,7 @@ def generate_model_card(
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
+    template_file: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
     comet_url: Optional[str] = None,
@@ -1238,6 +1310,8 @@ def generate_model_card(
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
             Trainer citation as a BibTeX entry.
+        template_file (`str` *optional*):
+            Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
         paper_title (`str` or `None`, defaults to `None`):
             Paper title.
         paper_id (`str` or `None`, defaults to `None`):
@@ -1255,9 +1329,10 @@ def generate_model_card(
         model_name=model_name,
         tags=["generated_from_trainer", *tags],
     )
+    template_file = template_file or "lm_model_card.md"
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath("templates/lm_model_card.md")),
+        template_path=str(pkg_resources.files("trl").joinpath(f"templates/{template_file}")),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,
@@ -1875,6 +1950,41 @@ def truncate_with_protected_tokens(
         truncated_mask.append(new_mask)
 
     return torch.stack(truncated_seq), torch.stack(truncated_mask)
+
+
+TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
+
+
+def remove_none_values(example: TListOrMapping) -> TListOrMapping:
+    """
+    Recursively removes entries with `None` values from a nested structure (list or dictionary).
+
+    Args:
+        example (`list` or `Mapping`):
+            Input nested structure (list or dictionary) from which to remove `None`.
+
+    Example:
+    ```python
+    >>> [
+    ...     {
+    ...         "a": {"aa": None, "ab": 1},
+    ...         "b": "my_string",
+    ...     }
+    ... ]
+    >>> remove_none_values(example)
+    [{'a': {'ab': 1}, 'b': 'my_string'}]
+    ```
+    """
+    if isinstance(example, list):
+        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
+    elif isinstance(example, Mapping):
+        return {
+            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
+            for key, value in example.items()
+            if value is not None
+        }
+    else:
+        raise TypeError("Input must be a list or a dictionary.")
 
 
 def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:

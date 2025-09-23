@@ -14,13 +14,7 @@ To speed up generation, you can use [vLLM](https://github.com/vllm-project/vllm)
 To use [vLLM](https://github.com/vllm-project/vllm), first install it using:
 
 ```bash
-pip install vllm
-```
-
-or 
-
-```bash
-pip install "trl[vllm]"
+pip install trl[vllm]
 ```
 
 <hfoptions id="vllm examples">

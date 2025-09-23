@@ -15,10 +15,9 @@
 import contextlib
 import os
 from collections import defaultdict
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -59,6 +58,7 @@ from .utils import (
     generate_model_card,
     get_comet_experiment_url,
     pad,
+    remove_none_values,
     selective_log_softmax,
 )
 
@@ -71,39 +71,9 @@ if is_wandb_available():
 
 logger = logging.get_logger(__name__)
 
-TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
-
-def remove_none_values(example: TListOrMapping) -> TListOrMapping:
-    """
-    Recursively removes entries with `None` values from a nested structure (list or dictionary).
-
-    Args:
-        example (`list` or `Mapping`):
-            Input nested structure (list or dictionary) from which to remove `None`.
-
-    Example:
-    ```python
-    >>> [
-    ...     {
-    ...         "a": {"aa": None, "ab": 1},
-    ...         "b": "my_string",
-    ...     }
-    ... ]
-    >>> remove_none_values(example)
-    [{'a': {'ab': 1}, 'b': 'my_string'}]
-    ```
-    """
-    if isinstance(example, list):
-        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
-    elif isinstance(example, Mapping):
-        return {
-            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
-            for key, value in example.items()
-            if value is not None
-        }
-    else:
-        raise TypeError("Input must be a list or a dictionary.")
+def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
@@ -892,7 +862,7 @@ class SFTTrainer(Trainer):
             dataset = dataset.with_transform(remove_none_values)
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
-        column_names = list(next(iter(dataset)).keys())
+        column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names
 
         # Build the kwargs for the `map` function
@@ -924,7 +894,7 @@ class SFTTrainer(Trainer):
                 if is_conversational_from_value(first_example):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-                    column_names = next(iter(dataset)).keys()
+                    column_names = get_dataset_column_names(dataset)
                     dataset = dataset.map(
                         maybe_convert_to_chatml,
                         remove_columns="conversations" if "conversations" in column_names else None,
@@ -1033,9 +1003,9 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
                 columns = ["input_ids"]
-                if "completion_mask" in dataset.column_names:
+                if "completion_mask" in get_dataset_column_names(dataset):
                     columns.append("completion_mask")
-                if "assistant_masks" in dataset.column_names:
+                if "assistant_masks" in get_dataset_column_names(dataset):
                     columns.append("assistant_masks")
 
                 dataset = dataset.select_columns(columns)
@@ -1049,7 +1019,8 @@ class SFTTrainer(Trainer):
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
-                dataset = dataset.select_columns(collator_expected_keys.intersection(dataset.column_names))
+                column_names = get_dataset_column_names(dataset)
+                dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
 
         return dataset
 
