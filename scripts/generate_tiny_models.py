@@ -286,6 +286,7 @@ for model_id, model_class in [
     config.text_config.num_attention_heads = 4
     config.text_config.num_key_value_heads = 2
 
+    # Fix layer_types to match num_hidden_layers
     if (
         hasattr(config.text_config, "layer_types")
         and len(config.text_config.layer_types) != config.text_config.num_hidden_layers
