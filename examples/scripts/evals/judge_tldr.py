@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl",
-#     "vllm",
+#     "trl[vllm]",
 # ]
 # ///
 
