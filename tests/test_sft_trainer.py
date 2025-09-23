@@ -29,7 +29,7 @@ from transformers.testing_utils import (
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, DataCollatorForVisionLanguageModeling
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
 
 from .testing_utils import TrlTestCase, ignore_warnings
 
@@ -250,31 +250,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         self.assertEqual(len(result), 2)
         self.assertTrue(torch.equal(result[0], torch.tensor([0, 1, 0, 1])))
         self.assertTrue(torch.equal(result[1], torch.arange(3)))
-
-
-class TestDataCollatorForVisionLanguageModeling(TrlTestCase):
-    def test_vlm_text_only_data(self):
-        """Test VLM collator with text-only data (no images)"""
-        from unittest.mock import MagicMock
-
-        # Setup mock processor
-        processor = MagicMock()
-        processor.apply_chat_template = MagicMock(return_value=["test"])
-        processor.return_value = {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
-
-        collator = DataCollatorForVisionLanguageModeling(processor=processor)
-
-        # Test with images
-        examples = [{"images": ["img"], "messages": [{"role": "user", "content": "test"}]}]
-        collator(examples)
-        self.assertIn("images", processor.call_args.kwargs)
-
-        # Test without images (failed before the fix in #4080)
-        processor.reset_mock()
-        processor.return_value = {"input_ids": torch.tensor([[1, 2, 3]]), "attention_mask": torch.tensor([[1, 1, 1]])}
-        examples = [{"messages": [{"role": "user", "content": "test"}]}]
-        collator(examples)
-        self.assertNotIn("images", processor.call_args.kwargs)
 
 
 class SFTTrainerTester(TrlTestCase):
@@ -1398,6 +1373,36 @@ class SFTTrainerTester(TrlTestCase):
                 # The vision tower is not updated, not sure why at this point.
                 continue
             self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
+
+    @require_vision
+    def test_train_vlm_text_only_data(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                self.assertTrue(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated")
+            else:
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
 
     @require_peft
     def test_prompt_tuning(self):
