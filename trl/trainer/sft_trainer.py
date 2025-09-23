@@ -387,17 +387,11 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
 
     def _collate_language_modeling(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
-        # Check if examples contain images - some VLMs can be used for text-only tasks
-        has_images = "images" in examples[0]
-        if has_images:
-            images = [example["images"] for example in examples]
-        else:
-            images = None
+        images = [example["images"] for example in examples]
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                num_images = len(example["images"]) if has_images else 0
-                prepare_multimodal_messages(example["messages"], num_images)
+                prepare_multimodal_messages(example["messages"], len(example["images"]))
             messages = [example["messages"] for example in examples]
             texts = self.processor.apply_chat_template(messages)
         elif self.dataset_text_field in examples[0]:  # standard case
@@ -408,21 +402,17 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "data."
             )
 
-        # For text-only data with VLM models, don't pass images to the processor
-        processor_kwargs = {
-            "text": texts,
-            "padding": True,
-            "padding_side": "right",
-            "pad_to_multiple_of": self.pad_to_multiple_of,
-            "truncation": self.max_length is not None,
-            "max_length": self.max_length,
-            "return_tensors": self.return_tensors,
-            "add_special_tokens": False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-        }
-        if has_images:
-            processor_kwargs["images"] = images
-
-        output = self.processor(**processor_kwargs)
+        output = self.processor(
+            images=images,
+            text=texts,
+            padding=True,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            truncation=self.max_length is not None,
+            max_length=self.max_length,
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
         labels = output["input_ids"].clone()
         labels[output["attention_mask"] == 0] = -100
         # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
@@ -437,35 +427,23 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
                 "prompt-completion data yet."
             )
-
-        # Check if examples contain images - some VLMs can be used for text-only tasks
-        has_images = "images" in examples[0]
-        if has_images:
-            images = [example["images"] for example in examples]
-        else:
-            images = None
-
+        images = [example["images"] for example in examples]
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
-                num_images = len(example["images"]) if has_images else 0
-                prepare_multimodal_messages(example["prompt"] + example["completion"], num_images)
+                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
             examples = [apply_chat_template(example, self.processor) for example in examples]
 
         prompts = [example["prompt"] for example in examples]
         completions = [example["completion"] for example in examples]
 
-        # For text-only data with VLM models, don't pass images to the processor
-        processor_kwargs = {
-            "text": prompts,
-            "padding": True,
-            "padding_side": "left",
-            "return_tensors": self.return_tensors,
-            "add_special_tokens": False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-        }
-        if has_images:
-            processor_kwargs["images"] = images
-
-        processed_prompts = self.processor(**processor_kwargs)
+        processed_prompts = self.processor(
+            images=images,
+            text=prompts,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
         processed_completions = self.processor(
             text=completions,
             padding=True,
