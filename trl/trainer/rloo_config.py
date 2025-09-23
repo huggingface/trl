@@ -37,7 +37,7 @@ class RLOOConfig(TrainingArguments):
 
         model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
-            argument of the [`GRPOTrainer`] is provided as a string.
+            argument of the [`RLOOTrainer`] is provided as a string.
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
@@ -141,6 +141,9 @@ class RLOOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
+            for weight sync and generation.
 
         > Parameters that control the training
 
@@ -190,6 +193,142 @@ class RLOOConfig(TrainingArguments):
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
             are logged.
+
+        > Deprecated parameters
+
+        rloo_k:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `num_generations` instead.
+
+            </Deprecated>
+
+        cliprange:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `epsilon` instead.
+
+            </Deprecated>
+
+        kl_coef:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `beta` instead.
+
+            </Deprecated>
+
+        exp_name:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `run_name` instead.
+
+            </Deprecated>
+
+        normalize_reward:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `normalize_advantages` instead.
+
+            </Deprecated>
+
+        num_ppo_epochs:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `num_iterations` instead.
+
+            </Deprecated>
+
+        num_mini_batches:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `steps_per_generation` instead.
+
+            </Deprecated>
+
+        total_episodes:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `max_steps` instead.
+
+            </Deprecated>
+
+        response_length:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `max_completion_length` instead.
+
+            </Deprecated>
+
+        token_level_kl:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. KL is now computed only at the sequence
+            level.
+
+            </Deprecated>
+
+        dataset_num_proc:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. This parameter was unused, you can
+            safely remove it from your scripts.
+
+            </Deprecated>
+
+        local_rollout_forward_batch_size:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Now it is automatically set to
+            `per_device_train_batch_size` (or `per_device_eval_batch_size` during evaluation).
+
+            </Deprecated>
+
+        num_sample_generations:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `logging_steps` to control
+            generation logging frequency.
+
+            </Deprecated>
+
+        stop_token:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0.
+
+            </Deprecated>
+
+        stop_token_id:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `processing_class.eos_token_id`
+            instead.
+
+            </Deprecated>
+
+        missing_eos_penalty:
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Replicate with a custom reward function
+            checking if `eos_token_id` is in `completion_ids`.
+
+            </Deprecated>
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs"]
@@ -226,7 +365,7 @@ class RLOOConfig(TrainingArguments):
         default=None,
         metadata={
             "help": "Keyword arguments for `transformers.AutoModelForCausalLM.from_pretrained`, used when the `model` "
-            "argument of the `GRPOTrainer` is provided as a string."
+            "argument of the `RLOOTrainer` is provided as a string."
         },
     )
     disable_dropout: bool = field(
@@ -238,7 +377,7 @@ class RLOOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    # The default value remove_unused_columns is overwritten from the parent class, because in GRPO we usually rely on
+    # The default value remove_unused_columns is overwritten from the parent class, because in RLOO we usually rely on
     # additional columns to compute the reward
     remove_unused_columns: Optional[bool] = field(
         default=False,
@@ -369,6 +508,13 @@ class RLOOConfig(TrainingArguments):
             "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
             "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
             "model implementation."
+        },
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
+            "and woken for weight sync and generation."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
@@ -671,6 +817,6 @@ class RLOOConfig(TrainingArguments):
 
         if self.num_generations < 2:
             raise ValueError(
-                "GRPO requires at least 2 generations per prompt to calculate the advantages. You provided "
+                "RLOO requires at least 2 generations per prompt to calculate the advantages. You provided "
                 f"{self.num_generations}, which is less than the minimum required."
             )

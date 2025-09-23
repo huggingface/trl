@@ -16,10 +16,10 @@ import dataclasses
 import importlib.resources as pkg_resources
 import json
 import random
-from collections import deque
 from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
+from itertools import accumulate
 from typing import Any, Literal, Optional, Union
 
 import numpy as np
@@ -27,15 +27,18 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import torch.utils.data
+import transformers
 from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Sampler
 from transformers import (
+    AutoConfig,
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
@@ -542,48 +545,6 @@ def exact_div(a, b, custom_error_message=""):
     if a != q * b:
         raise ValueError(f"{custom_error_message}, inexact division: {a} / {b} = {a / b}")
     return q
-
-
-# copied from https://github.com/kvablack/ddpo-pytorch/blob/main/ddpo_pytorch/stat_tracking.py#L5
-class PerPromptStatTracker:
-    r"""
-    Class for tracking statistics per prompt. Mainly used to calculate advantage for the DPPO algorithm
-
-    Args:
-        buffer_size (`int`):
-            Size of the buffer to keep for each prompt.
-        min_count (`int`):
-            Minimum number of samples to keep in the buffer before calculating the mean and std.
-    """
-
-    def __init__(self, buffer_size, min_count):
-        self.buffer_size = buffer_size
-        self.min_count = min_count
-        self.stats = {}
-
-    def update(self, prompts, rewards):
-        prompts = np.array(prompts)
-        rewards = np.array(rewards)
-        unique = np.unique(prompts)
-        advantages = np.empty_like(rewards)
-        for prompt in unique:
-            prompt_rewards = rewards[prompts == prompt]
-            if prompt not in self.stats:
-                self.stats[prompt] = deque(maxlen=self.buffer_size)
-            self.stats[prompt].extend(prompt_rewards)
-
-            if len(self.stats[prompt]) < self.min_count:
-                mean = np.mean(rewards)
-                std = np.std(rewards) + 1e-6
-            else:
-                mean = np.mean(self.stats[prompt])
-                std = np.std(self.stats[prompt]) + 1e-6
-            advantages[prompts == prompt] = (prompt_rewards - mean) / std
-
-        return advantages
-
-    def get_stats(self):
-        return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
 
 
 def peft_module_casting_to_bf16(model):
@@ -1820,20 +1781,23 @@ def identity(x):
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
     """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
-    `batch["image_grid_thw"]`, while keeping other entries unchanged.
+    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
+    and batch["num_images"] while keeping other entries unchanged.
     """
-    if "image_grid_thw" not in batch or "pixel_values" not in batch:
+    if "image_grid_thw" not in batch or "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
-    lengths = batch["image_grid_thw"].prod(dim=1).tolist()  # [batch_size]
+    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
     pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
     if sum(lengths) != pixel_values.size(0):
         raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
 
-    split_values = list(torch.split(batch["pixel_values"], lengths, dim=0))
-    return {**batch, "pixel_values": split_values}
+    boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
+    sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
+    split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
+    image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
+    return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
@@ -1842,12 +1806,16 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
     tensor along the first dimension.
     """
     pixel_values = batch.get("pixel_values")
-
     if isinstance(pixel_values, list):
         merged = torch.cat(pixel_values, dim=0)
-        return {**batch, "pixel_values": merged}
-    else:
-        return batch
+        batch = {**batch, "pixel_values": merged}
+
+    image_grid_thw = batch.get("image_grid_thw")
+    if isinstance(image_grid_thw, list):
+        merged = torch.cat(image_grid_thw, dim=0)
+        batch = {**batch, "image_grid_thw": merged}
+
+    return batch
 
 
 def truncate_with_protected_tokens(
@@ -1907,3 +1875,35 @@ def truncate_with_protected_tokens(
         truncated_mask.append(new_mask)
 
     return torch.stack(truncated_seq), torch.stack(truncated_mask)
+
+
+def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
+    """
+    Create a model from a given path using the specified initialization arguments.
+
+    Args:
+        model_id (`str`):
+            Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
+        kwargs (`dict`):
+            Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
+            specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
+            or `'auto'`.
+
+    Returns:
+        [`~transformers.PreTrainedModel`]:
+            The instantiated model.
+    """
+    dtype = kwargs.get("dtype")
+    if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+        pass  # dtype is already a torch.dtype or "auto" or None
+    elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
+        kwargs["dtype"] = getattr(torch, dtype)
+    else:
+        raise ValueError(
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
+            f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
+        )
+    config = AutoConfig.from_pretrained(model_id)
+    architecture = getattr(transformers, config.architectures[0])
+    model = architecture.from_pretrained(model_id, **kwargs)
+    return model
