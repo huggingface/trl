@@ -309,21 +309,25 @@ for model_id, model_class in [
         "hidden_size": 16,
         "num_attention_heads": 4,
         "num_key_value_heads": 2,
+        "embed_dim": 64,
     }
-    config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config)
+    kwargs = {}
 
-    if isinstance(config, (Qwen2VLConfig)):
-        config.vision_config.depth = 2
+    if issubclass(model_class.config_class, Qwen2VLConfig):
+        vision_config["depth"] = 2
 
-    if isinstance(config, (Qwen2VLConfig, Qwen2_5_VLConfig)):
-        config.text_config.rope_scaling["mrope_section"] = [2]
-        config.rope_scaling["mrope_section"] = [2]  # different dict object from text_config; see GH-4101
+    if issubclass(model_class.config_class, (Qwen2VLConfig, Qwen2_5_VLConfig)):
+        text_config["rope_scaling"] = {"type": "default", "mrope_section": [2], "rope_type": "default"}
+        # Different dict object from text_config; see GH-4101 and transformers#41020
+        kwargs["rope_scaling"] = {"type": "default", "mrope_section": [2], "rope_type": "default"}
 
-    if isinstance(config, (Qwen2_5_VLConfig)):
-        config.vision_config.out_hidden_size = 16
+    if issubclass(model_class.config_class, Qwen2_5_VLConfig):
+        vision_config["out_hidden_size"] = 16
 
-    if isinstance(config, Idefics2Config):
-        config.perceiver_config.hidden_size = 16
+    if issubclass(model_class.config_class, Idefics2Config):
+        kwargs["perceiver_config"] = {"hidden_size": 16}
+
+    config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
 
     model = model_class(config).to(dtype=torch.bfloat16)
 
