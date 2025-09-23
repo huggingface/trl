@@ -230,6 +230,8 @@ We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-mem
 
 If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
 
+If you still find you are getting out-of-memory errors set `vllm_enable_sleep_mode` to True and the vllm parameters and cache will be offloaded during the optimization step. For more information, see [Reducing Memory Usage with vLLM Sleep Mode](reducing_memory_usage#vllm-sleep-mode).
+
 </Tip>
 
 <Tip>
@@ -533,7 +535,9 @@ Tested with:
 - **SmolVLM2** — e.g., `HuggingFaceTB/SmolVLM2-2.2B-Instruct`
   
 <Tip>
+
 Compatibility with all VLMs is not guaranteed. If you believe a model should be supported, feel free to open an issue on GitHub — or better yet, submit a pull request with the required changes.
+
 </Tip>
 
 ### Quick Start
@@ -576,7 +580,7 @@ VLM training may fail if image tokens are truncated. We highly recommend disabli
 Each training sample should include:
 
 - `prompt`: Text formatted via the processor's chat template
-- `image`: A single image (PIL or NumPy array)
+- `image`/`images`: PIL Image or list of PIL Images
 
 The trainer automatically handles image-to-tensor conversion via the model’s image processor.
 

@@ -271,7 +271,7 @@ class PPOTrainer(Trainer):
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
 
         #########
-        ### trainer specifics
+        # trainer specifics
         #########
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
@@ -303,7 +303,7 @@ class PPOTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         #########
-        ### setup dataloader
+        # setup dataloader
         #########
         self.dataloader = DataLoader(
             self.train_dataset,

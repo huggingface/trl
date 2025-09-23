@@ -141,6 +141,9 @@ class RLOOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
+            for weight sync and generation.
 
         > Parameters that control the training
 
@@ -505,6 +508,13 @@ class RLOOConfig(TrainingArguments):
             "help": "Model implementation to use for vLLM. Must be one of `transformers` or `vllm`. `transformers`: "
             "Use the `transformers` backend for model implementation. `vllm`: Use the `vllm` library for "
             "model implementation."
+        },
+    )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
+            "and woken for weight sync and generation."
         },
     )
     vllm_guided_decoding_regex: Optional[str] = field(
