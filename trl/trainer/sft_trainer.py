@@ -22,11 +22,9 @@ from typing import Any, Callable, Optional, TypeVar, Union
 
 import torch
 import torch.nn as nn
-import transformers
 from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
 from transformers import (
-    AutoConfig,
     AutoProcessor,
     BaseImageProcessor,
     DataCollator,
@@ -55,6 +53,7 @@ from ..data_utils import (
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .sft_config import SFTConfig
 from .utils import (
+    create_model_from_path,
     entropy_from_logits,
     flush_left,
     generate_model_card,
@@ -105,6 +104,10 @@ def remove_none_values(example: TListOrMapping) -> TListOrMapping:
         }
     else:
         raise TypeError("Input must be a list or a dictionary.")
+
+
+def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
@@ -195,7 +198,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         # For packing with position_ids, we should NOT create attention_mask as it causes
         # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
         if not has_packed_position_ids:
-            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
+            attention_mask = [torch.ones_like(ids) for ids in input_ids]
 
         if self.return_position_ids:
             if "seq_lengths" in examples[0]:
@@ -616,30 +619,15 @@ class SFTTrainer(Trainer):
             args = SFTConfig(**dict_args)
 
         # Model
-        model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
-            model_id = model
-            dtype = model_init_kwargs.get("dtype")
-            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
-                pass  # dtype is already a torch.dtype or "auto" or None
-            elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
-                dtype = getattr(torch, dtype)
-                model_init_kwargs["dtype"] = dtype
-            else:
-                raise ValueError(
-                    "Invalid `dtype` passed to `SFTConfig`. Expected either 'auto' or a string representing "
-                    f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
-                )
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            model = create_model_from_path(model, **args.model_init_kwargs or {})
         else:
-            model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 logger.warning(
                     "You passed `model_init_kwargs` to the `SFTConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
@@ -770,7 +758,14 @@ class SFTTrainer(Trainer):
         else:
             self.completion_only_loss = args.completion_only_loss
 
-        if data_collator is None and not self._is_vlm:
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
+
+        if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
@@ -789,7 +784,7 @@ class SFTTrainer(Trainer):
                 return_position_ids=use_flash_attention,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
-        elif data_collator is None and self._is_vlm:
+        elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
                 max_length=args.max_length,
@@ -817,7 +812,9 @@ class SFTTrainer(Trainer):
         # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
         # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
         skip_prepare_dataset = (
-            args.dataset_kwargs is not None and args.dataset_kwargs.get("skip_prepare_dataset", False) or self._is_vlm
+            args.dataset_kwargs is not None
+            and args.dataset_kwargs.get("skip_prepare_dataset", False)
+            or self._is_vision_dataset
         )
         if not skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
@@ -908,7 +905,7 @@ class SFTTrainer(Trainer):
             dataset = dataset.with_transform(remove_none_values)
 
         # If the dataset is already preprocessed (tokenized), skip the processing steps.
-        column_names = list(next(iter(dataset)).keys())
+        column_names = get_dataset_column_names(dataset)
         is_processed = "input_ids" in column_names
 
         # Build the kwargs for the `map` function
@@ -940,7 +937,7 @@ class SFTTrainer(Trainer):
                 if is_conversational_from_value(first_example):
                     if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                         map_kwargs["desc"] = f"Converting {dataset_name} dataset to ChatML"
-                    column_names = next(iter(dataset)).keys()
+                    column_names = get_dataset_column_names(dataset)
                     dataset = dataset.map(
                         maybe_convert_to_chatml,
                         remove_columns="conversations" if "conversations" in column_names else None,
@@ -971,22 +968,36 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
+                def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss):
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
+                            if self._is_vlm:
+                                prepare_multimodal_messages(example["prompt"], num_images=0)
+                                prepare_multimodal_messages(example["completion"], num_images=0)
                             prompt_ids = processing_class.apply_chat_template(
                                 example["prompt"],
+                                tokenize=True,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
+                            # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
                                 example["prompt"] + example["completion"],
                                 return_dict=True,
+                                tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
+                            # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            prompt_completion_processed = {
+                                k: v[0] if isinstance(v[0], list) else v
+                                for k, v in prompt_completion_processed.items()
+                            }
                             prompt_completion_ids = prompt_completion_processed["input_ids"]
                             if "assistant_masks" in prompt_completion_processed:
                                 output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
@@ -1011,13 +1022,19 @@ class SFTTrainer(Trainer):
 
                     else:  # language modeling case
                         if is_conversational(example):
+                            if self._is_vlm:
+                                prepare_multimodal_messages(example["messages"], num_images=0)
                             processed = processing_class.apply_chat_template(
                                 example["messages"],
                                 return_dict=True,
+                                tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
+                            # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            processed = {k: v[0] if isinstance(v[0], list) else v for k, v in processed.items()}
                             if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
                                 raise RuntimeError(
                                     "You're using `assistant_only_loss=True`, but at least one example has no "
@@ -1032,7 +1049,7 @@ class SFTTrainer(Trainer):
                     return output
 
                 dataset = dataset.map(
-                    tokenize,
+                    tokenize_fn,
                     fn_kwargs={
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
@@ -1049,9 +1066,9 @@ class SFTTrainer(Trainer):
                     map_kwargs["desc"] = f"Packing {dataset_name} dataset"
 
                 columns = ["input_ids"]
-                if "completion_mask" in dataset.column_names:
+                if "completion_mask" in get_dataset_column_names(dataset):
                     columns.append("completion_mask")
-                if "assistant_masks" in dataset.column_names:
+                if "assistant_masks" in get_dataset_column_names(dataset):
                     columns.append("assistant_masks")
 
                 dataset = dataset.select_columns(columns)
@@ -1065,7 +1082,8 @@ class SFTTrainer(Trainer):
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
-                dataset = dataset.select_columns(collator_expected_keys.intersection(dataset.column_names))
+                column_names = get_dataset_column_names(dataset)
+                dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
 
         return dataset
 
@@ -1075,7 +1093,7 @@ class SFTTrainer(Trainer):
         # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
-            if self._is_vlm:
+            if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "images"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]

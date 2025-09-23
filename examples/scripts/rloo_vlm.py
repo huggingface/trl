@@ -15,9 +15,11 @@
 # /// script
 # dependencies = [
 #     "trl",
+#     "Pillow",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
+#     "torchvision",
 #     "trackio",
 #     "kernels",
 # ]
@@ -26,14 +28,31 @@
 """
 pip install math_verify
 
-# For Qwen/Qwen3-0.6B
+# For Qwen/Qwen2.5-VL-3B-Instruct
+accelerate launch \
+    --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
+    examples/scripts/rloo_vlm.py \
+    --model_name_or_path Qwen/Qwen2.5-VL-3B-Instruct \
+    --output_dir rloo-Qwen2.5-VL-3B-Instruct \
+    --learning_rate 1e-5 \
+    --gradient_checkpointing \
+    --dtype bfloat16 \
+    --max_prompt_length 2048 \
+    --max_completion_length 1024 \
+    --use_vllm \
+    --vllm_mode colocate \
+    --use_peft \
+    --lora_target_modules "q_proj", "v_proj" \
+    --log_completions
+
+# For HuggingFaceTB/SmolVLM2-2.2B-Instruct
 pip install num2words==0.5.14
 
 accelerate launch \
     --config_file examples/accelerate_configs/deepspeed_zero3.yaml \
-    examples/scripts/gspo.py \
-    --model_name_or_path Qwen/Qwen3-0.6B \
-    --output_dir gspo-Qwen3-0.6B \
+    examples/scripts/rloo_vlm.py \
+    --model_name_or_path HuggingFaceTB/SmolVLM2-2.2B-Instruct \
+    --output_dir rloo-SmolVLM2-2.2B-Instruct \
     --learning_rate 1e-5 \
     --dtype bfloat16 \
     --max_prompt_length 2048 \
@@ -41,15 +60,9 @@ accelerate launch \
     --use_peft \
     --lora_target_modules "q_proj", "v_proj" \
     --log_completions \
-    --per_device_train_batch_size 8 \
-    --num_generations 8 \
-    --importance_sampling_level sequence \
-    --epsilon 3e-4 \
-    --epsilon_high 4e-4 \
-    --beta 0.0 \
-    --loss_type grpo \
+    --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 2 \
-    --steps_per_generation 8
+    --num_generations 2
 
 """
 
@@ -61,9 +74,9 @@ from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
 
 from trl import (
-    GRPOConfig,
-    GRPOTrainer,
     ModelConfig,
+    RLOOConfig,
+    RLOOTrainer,
     ScriptArguments,
     TrlParser,
     get_kbit_device_map,
@@ -76,8 +89,9 @@ from trl.rewards import think_format_reward
 # Enable logging in a Hugging Face Space
 os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
+
 if __name__ == "__main__":
-    parser = TrlParser((ScriptArguments, GRPOConfig, ModelConfig))
+    parser = TrlParser((ScriptArguments, RLOOConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_and_config()
     ################
     # Model & Processor
@@ -97,7 +111,8 @@ if __name__ == "__main__":
     ################
     # Dataset
     ################
-    train_dataset, eval_dataset = load_dataset("AI-MO/NuminaMath-TIR", split=["train[:5%]", "test[:5%]"])
+    dataset = load_dataset("lmms-lab/multimodal-open-r1-8k-verified", split="train")
+    dataset = dataset.train_test_split(test_size=100, seed=42)
 
     SYSTEM_PROMPT = (
         "A conversation between user and assistant. The user asks a question, and the assistant solves it. The "
@@ -107,18 +122,32 @@ if __name__ == "__main__":
     )
 
     def make_conversation(example):
-        return {
-            "prompt": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": example["problem"]},
-            ],
-        }
+        prompt = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": example["problem"]},
+        ]
+        return {"prompt": prompt}
 
-    train_dataset = train_dataset.map(make_conversation)
-    eval_dataset = eval_dataset.map(make_conversation)
+    dataset = dataset.map(make_conversation)
 
-    train_dataset = train_dataset.remove_columns(["messages", "problem"])
-    eval_dataset = eval_dataset.remove_columns(["messages", "problem"])
+    # Filter have big images
+    def filter_big_images(example):
+        image = example["image"]
+        return image.size[0] < 512 and image.size[1] < 512
+
+    dataset = dataset.filter(filter_big_images)
+
+    def convert_to_rgb(example):
+        image = example["image"]
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        example["image"] = image
+        return example
+
+    dataset = dataset.map(convert_to_rgb)
+
+    train_dataset = dataset["train"]
+    eval_dataset = dataset["test"] if training_args.eval_strategy != "no" else None
 
     ################
     # Reward Function for Training
@@ -171,7 +200,7 @@ if __name__ == "__main__":
     ################
     # Training
     ################
-    trainer = GRPOTrainer(
+    trainer = RLOOTrainer(
         model=model_args.model_name_or_path,
         args=training_args,
         reward_funcs=[think_format_reward, accuracy_reward],

@@ -14,7 +14,7 @@ For general details about Hugging Face Jobs (hardware selection, job monitoring,
 ## Requirements
 
 * A [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan
-* Logged in to the Hugging Face Hub (`huggingface-cli login`)
+* Logged in to the Hugging Face Hub (`hf auth login`)
 
 ## Using TRL Jobs
 
@@ -87,7 +87,7 @@ To run successfully, the script needs:
 
 When training with Jobs, be sure to:
 
-* **Set a sufficient timeout**. Jobs time out after 30 minutes by default. If your job exceeds the without, it will fail and all progress will be lost. See [Setting a custom timeout](https://huggingface.co/docs/huggingface_hub/guides/jobs#setting-a-custom-timeout).
+* **Set a sufficient timeout**. Jobs time out after 30 minutes by default. If your job exceeds the timeout, it will fail and all progress will be lost. See [Setting a custom timeout](https://huggingface.co/docs/huggingface_hub/guides/jobs#setting-a-custom-timeout).
 * **Push the model to the Hub**. The Jobs environment is ephemeral—files are deleted when the job ends. If you don’t push the model, it will be lost.
 
 </Tip>

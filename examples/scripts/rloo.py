@@ -14,18 +14,17 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[vllm]",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "trackio",
-#     "vllm",
 #     "kernels",
 # ]
 # ///
 
 """
-pip install math_verify num2words peft trackio vllm
+pip install math_verify num2words==0.5.14 peft trackio vllm
 export TRACKIO_PROJECT="RLOO-NuminaMath-TIR"
 accelerate launch --config_file examples/accelerate_configs/deepspeed_zero3.yaml examples/scripts/rloo.py
 """

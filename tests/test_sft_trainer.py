@@ -19,7 +19,13 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_flash_attn, require_liger_kernel, require_peft, require_vision
+from transformers.testing_utils import (
+    require_bitsandbytes,
+    require_flash_attn,
+    require_liger_kernel,
+    require_peft,
+    require_vision,
+)
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -1368,6 +1374,36 @@ class SFTTrainerTester(TrlTestCase):
                 continue
             self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
 
+    @require_vision
+    def test_train_vlm_text_only_data(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                self.assertTrue(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated")
+            else:
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
+
     @require_peft
     def test_prompt_tuning(self):
         """Test that SFT works with Prompt Tuning."""
@@ -1399,6 +1435,106 @@ class SFTTrainerTester(TrlTestCase):
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+    @require_peft
+    @require_bitsandbytes
+    def test_peft_model_with_quantization(self):
+        """SFTTrainer should not freeze layers of existing PeftModel.
+
+        This test simulates a realistic QLoRA scenario where a quantized base model is first converted to a PeftModel,
+        then passed to SFTTrainer. The issue was that prepare_model_for_kbit_training would freeze all parameters
+        including the LoRA adapters, making training impossible.
+        """
+        # Get the base model
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        # Simulate a realistic QLoRA setup by mocking quantization attributes
+        # This mimics what happens when loading a model with load_in_4bit=True
+        model.is_loaded_in_4bit = True
+        model.is_loaded_in_8bit = False
+
+        # Verify that this triggers the is_qlora condition
+        is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
+        self.assertTrue(is_qlora, "Model should be detected as QLoRA (quantized)")
+
+        # Create LoRA configuration suitable for QLoRA
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=["q_proj", "v_proj"],
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.1,
+        )
+
+        # Convert the quantized model to a PeftModel (typical QLoRA workflow)
+        peft_model = get_peft_model(model, lora_config)
+
+        # Verify the quantization attributes are preserved on the PeftModel
+        self.assertTrue(getattr(peft_model, "is_loaded_in_4bit", False), "PeftModel should preserve quantization flag")
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Analyze parameters before SFTTrainer initialization
+        trainable_params_before = []
+        base_params_before = []
+        lora_params_before = []
+
+        for name, param in peft_model.named_parameters():
+            if param.requires_grad:
+                trainable_params_before.append(name)
+                if "lora" in name.lower():
+                    lora_params_before.append(name)
+                else:
+                    base_params_before.append(name)
+
+        # Ensure we have the expected parameter distribution for QLoRA
+        self.assertTrue(len(trainable_params_before) > 0, "PeftModel should have trainable parameters initially")
+        self.assertTrue(len(lora_params_before) > 0, "PeftModel should have trainable LoRA parameters")
+        self.assertEqual(len(base_params_before), 0, "Base model parameters should already be frozen in PeftModel")
+
+        # Initialize the trainer with the already configured PeftModel
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", max_steps=1)
+        trainer = SFTTrainer(model=peft_model, args=training_args, train_dataset=dataset)
+
+        # Analyze parameters after SFTTrainer initialization
+        trainable_params_after = []
+        lora_params_after = []
+
+        for name, param in trainer.model.named_parameters():
+            if param.requires_grad:
+                trainable_params_after.append(name)
+                if "lora" in name.lower():
+                    lora_params_after.append(name)
+
+        # LoRA parameters should remain trainable
+        self.assertTrue(
+            len(trainable_params_after) > 0,
+            f"PeftModel should still have trainable parameters after SFTTrainer initialization. "
+            f"Found {len(trainable_params_after)} trainable params. "
+            f"This test fails without the fix for issue #3926.",
+        )
+
+        self.assertTrue(
+            len(lora_params_after) > 0,
+            f"LoRA adapter parameters should remain trainable. "
+            f"Found {len(lora_params_after)} trainable LoRA params out of {len(lora_params_before)} original.",
+        )
+
+        # Ensure the parameter counts are preserved (no additional freezing occurred)
+        self.assertEqual(
+            len(trainable_params_before),
+            len(trainable_params_after),
+            "Number of trainable parameters should not change after SFTTrainer initialization",
+        )
+
+        # Verify that all original LoRA parameters are still trainable
+        self.assertEqual(
+            set(lora_params_before),
+            set(lora_params_after),
+            "All original LoRA parameters should remain trainable after SFTTrainer initialization",
+        )
 
     @require_peft
     def test_prompt_tuning_peft_model(self):
