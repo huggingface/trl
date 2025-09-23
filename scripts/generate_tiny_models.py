@@ -292,6 +292,7 @@ for model_id, model_class in [
         "hidden_size": 16,
         "num_attention_heads": 4,
         "num_key_value_heads": 2,
+        "embed_dim": 64,
     }
     kwargs = {}
 

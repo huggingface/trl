@@ -874,6 +874,7 @@ class SplitPixelValuesByGridTester(TrlTestCase):
     def test_split_correctly_0(self):
         batch = {
             "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]]),
+            "num_images": [1, 1],
             "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
         }
         result = split_pixel_values_by_grid(batch)
@@ -881,10 +882,15 @@ class SplitPixelValuesByGridTester(TrlTestCase):
         self.assertEqual(len(result["pixel_values"]), 2)
         self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:4]))
         self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][4:]))
+        self.assertIsInstance(result["image_grid_thw"], list)
+        self.assertEqual(len(result["image_grid_thw"]), 2)
+        self.assertTrue(torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]])))
+        self.assertTrue(torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2]])))
 
     def test_split_correctly_1(self):
         batch = {
             "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 4]]),
+            "num_images": [1, 1],
             "pixel_values": torch.arange(12 * 3).reshape(12, 3),  # Shape: [12, 3]
         }
         result = split_pixel_values_by_grid(batch)
@@ -892,6 +898,10 @@ class SplitPixelValuesByGridTester(TrlTestCase):
         self.assertEqual(len(result["pixel_values"]), 2)
         self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:4]))
         self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][4:12]))
+        self.assertIsInstance(result["image_grid_thw"], list)
+        self.assertEqual(len(result["image_grid_thw"]), 2)
+        self.assertTrue(torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]])))
+        self.assertTrue(torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 4]])))
 
     def test_missing_keys(self):
         batch = {"pixel_values": torch.tensor([1.0])}
@@ -901,10 +911,27 @@ class SplitPixelValuesByGridTester(TrlTestCase):
     def test_mismatched_length(self):
         batch = {
             "image_grid_thw": torch.tensor([[1, 1, 2], [1, 2, 1]]),  # Total = 8
+            "num_images": [1, 1],
             "pixel_values": torch.randn(3, 5),  # Only 3 rows
         }
         with self.assertRaises(ValueError):
             split_pixel_values_by_grid(batch)
+
+    def test_multi_images(self):
+        batch = {
+            "image_grid_thw": torch.tensor([[1, 1, 2], [1, 2, 2], [1, 2, 1]]),  # Total = 8
+            "num_images": [1, 2],
+            "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
+        }
+        result = split_pixel_values_by_grid(batch)
+        self.assertIsInstance(result["pixel_values"], list)
+        self.assertEqual(len(result["pixel_values"]), 2)
+        self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:2]))
+        self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][2:]))
+        self.assertIsInstance(result["image_grid_thw"], list)
+        self.assertEqual(len(result["image_grid_thw"]), 2)
+        self.assertTrue(torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]])))
+        self.assertTrue(torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]])))
 
 
 class TruncateWithProtectedTokensTester(TrlTestCase):
@@ -1044,12 +1071,16 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
 
 class UnsplitPixelValuesByGridTester(TrlTestCase):
     def test_unsplit_correctly(self):
-        split = [torch.randn(4, 5), torch.randn(2, 5)]
-        merged = torch.cat(split, dim=0)
-        batch = {"pixel_values": split, "other_key": torch.tensor([1])}
+        pixel_values = [torch.randn(4, 5), torch.randn(2, 5)]
+        pixel_values_merged = torch.cat(pixel_values, dim=0)
+        image_grid_thw = [torch.tensor([[1, 2, 2]]), torch.tensor([[1, 2, 1]])]
+        image_grid_thw_merged = torch.cat(image_grid_thw, dim=0)
+        batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
         result = unsplit_pixel_values_by_grid(batch)
         self.assertIsInstance(result["pixel_values"], torch.Tensor)
-        self.assertTrue(torch.allclose(result["pixel_values"], merged))
+        self.assertTrue(torch.allclose(result["pixel_values"], pixel_values_merged))
+        self.assertIsInstance(result["image_grid_thw"], torch.Tensor)
+        self.assertTrue(torch.equal(result["image_grid_thw"], image_grid_thw_merged))
         self.assertIn("other_key", result)
 
     def test_no_op_if_not_list(self):
