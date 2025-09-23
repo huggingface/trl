@@ -293,7 +293,7 @@ class OnlineDPOConfig(TrainingArguments):
         default=False,
         metadata={
             "help": "Whether to use vLLM for generating completions. Requires vLLM to be installed "
-            "(`pip install vllm`)."
+            "(`pip install trl[vllm]`)."
         },
     )
     vllm_model_impl: str = field(
