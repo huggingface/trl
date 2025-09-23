@@ -22,7 +22,9 @@ from typing import Optional, Union
 from urllib.parse import urlparse
 
 import torch
+import torch.distributed.distributed_c10d as c10d
 from torch import nn
+from transformers import is_torch_xpu_available
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -270,7 +272,14 @@ class VLLMClient:
 
         # Initialize weight update group
         url = f"{self.base_url}/init_communicator/"
-        client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
+        # Will simplify it after torch xpu 2.9 support get uuid.
+        if is_torch_xpu_available():
+            if hasattr(torch.xpu.get_device_properties(device), "uuid"):
+                client_device_uuid = str(torch.xpu.get_device_properties(device).uuid)
+            else:
+                client_device_uuid = "42"
+        else:
+            client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
 
         # In the server side, the host is set to 0.0.0.0
         response = self.session.post(
@@ -291,8 +300,22 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device=device)
+        if is_torch_xpu_available():
+            store = torch.distributed.TCPStore(
+                host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
+            )
+            prefixed_store = c10d.PrefixStore("client2server", store)
+            pg = c10d.ProcessGroupXCCL(
+                store=prefixed_store,
+                rank=self.rank,
+                size=world_size,
+            )
+            self.communicator = pg
+        else:
+            pg = StatelessProcessGroup.create(
+                host=self.host, port=self.group_port, rank=self.rank, world_size=world_size
+            )
+            self.communicator = PyNcclCommunicator(pg, device=device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -313,9 +336,14 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        # Broadcast the weights to the other processes
-        self.pynccl_comm.broadcast(weights, src=self.rank)
-        self.pynccl_comm.group.barrier()
+        if is_torch_xpu_available():
+            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, root=self.rank)
+            self.communicator.barrier()
+        else:
+            # Use NCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, src=self.rank)
+            self.communicator.group.barrier()
 
     def update_model_params(self, model: nn.Module):
         """
@@ -358,8 +386,9 @@ class VLLMClient:
 if __name__ == "__main__":
     from vllm import SamplingParams
 
+    device = "xpu" if is_torch_xpu_available() else "cuda"
     client = VLLMClient()
-    client.init_communicator(device="cuda")
+    client.init_communicator(device=device)
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
@@ -368,5 +397,5 @@ if __name__ == "__main__":
     # Update model weights
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to(device)
     client.update_model_params(model)

@@ -270,7 +270,7 @@ class GKDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / (jsd.size(0) * jsd.size(1))
+            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
@@ -482,7 +482,7 @@ class GKDTrainer(SFTTrainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=tags,
+            tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="GKD",

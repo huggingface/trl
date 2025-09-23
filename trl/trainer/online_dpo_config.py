@@ -62,6 +62,14 @@ class OnlineDPOConfig(TrainingArguments):
 
         dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
+
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Since OnlineDPO does not involve
+            dataset preparation, you can safely remove it.
+
+            </Deprecated>
+
         disable_dropout (`bool`, *optional*, defaults to `True`):
             Whether to disable dropout in the model and reference model.
 
@@ -89,7 +97,7 @@ class OnlineDPOConfig(TrainingArguments):
         generation_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
             using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
-            as setting `supress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
+            as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
             parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
@@ -237,7 +245,7 @@ class OnlineDPOConfig(TrainingArguments):
         metadata={
             "help": "Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or "
             "`SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the "
-            "generation behavior, such as setting `supress_tokens`, `num_beams`, etc. If it contains keys that "
+            "generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that "
             "conflict with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them."
         },
     )
