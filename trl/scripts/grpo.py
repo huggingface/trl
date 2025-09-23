@@ -118,6 +118,7 @@ def main(script_args, training_args, model_args, dataset_args):
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
             "dataset and `dataset_name` will be ignored."
         )
+        dataset = get_dataset(dataset_args)
     elif dataset_args.datasets and not script_args.dataset_name:
         dataset = get_dataset(dataset_args)
     elif not dataset_args.datasets and script_args.dataset_name:

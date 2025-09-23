@@ -114,7 +114,7 @@ class VLLMClient:
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
         if not is_vllm_available():
-            raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
+            raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
 
