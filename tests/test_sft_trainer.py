@@ -1145,7 +1145,11 @@ class SFTTrainerTester(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/toolcall", split="train")
 
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # in this dataset, some samples are quite long, so we reduce the batch size
+            report_to="none",
+        )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
         )
@@ -1274,6 +1278,7 @@ class SFTTrainerTester(TrlTestCase):
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,  # some models use many image tokens, so we reduce the bz to reduce memory
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
         )

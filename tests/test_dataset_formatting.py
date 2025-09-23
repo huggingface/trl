@@ -14,6 +14,7 @@
 
 from typing import Callable
 
+import pytest
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -183,6 +184,7 @@ class CloneChatTemplateTestCase(TrlTestCase):
         # Check that the input embeddings size matches the tokenizer vocabulary size
         self.assertEqual(self.model.vocab_size, len(modified_tokenizer.vocab))
 
+    @pytest.mark.slow
     def test_clone_with_resize_and_extra_tokens_already_in_vocab(self):
         # This will add <extra_id_0>, <extra_id_1>, ... to the tokenizer
         modified_model, modified_tokenizer, _ = clone_chat_template(
