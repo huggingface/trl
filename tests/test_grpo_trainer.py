@@ -1291,7 +1291,6 @@ class GRPOTrainerTester(TrlTestCase):
             "model.vision_tower.",
             "model.multi_modal_projector.",
             "model.vision_model.",
-            "model.connector.modality_projection.",
             "model.visual.",
             "model.image_newline",
         )
@@ -1587,17 +1586,7 @@ class GRPOTrainerTester(TrlTestCase):
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
         # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
-        params_to_skip = (
-            # "model.vision_tower.",
-            # "model.multi_modal_projector.",
-            # "model.vision_model.",
-            # "model.connector.modality_projection.",
-            # "model.visual.",
-            # "model.image_newline",
-        )
         for n, param in previous_trainable_params.items():
-            if n.startswith(params_to_skip):
-                continue
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
