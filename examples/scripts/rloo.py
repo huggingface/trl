@@ -14,12 +14,11 @@
 
 # /// script
 # dependencies = [
-#     "trl",
+#     "trl[vllm]",
 #     "peft",
 #     "math-verify",
 #     "latex2sympy2_extended",
 #     "trackio",
-#     "vllm",
 #     "kernels",
 # ]
 # ///
