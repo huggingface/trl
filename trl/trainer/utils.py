@@ -1867,7 +1867,7 @@ def truncate_with_protected_tokens(
     target_length: int,
     protected_tokens: list[int],
     image_token_id: int = None,
-    processing_class=None,
+    image_seq_length: int = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict]:
     """
     Truncate tensors to target length while preserving protected tokens and handling image token blocks.
@@ -1882,9 +1882,9 @@ def truncate_with_protected_tokens(
         protected_tokens (`list[int]`):
             List of token IDs that should be preserved in the output.
         image_token_id (`int`, *optional*):
-            Token ID for image tokens. If provided, will attempt to detect and preserve image token blocks.
-        processing_class (*optional*):
-            Processing class (tokenizer/processor) to help detect image token block patterns.
+            Token ID for image tokens. If provided, will preserve image token blocks.
+        image_seq_length (`int`, *optional*):
+            Number of image tokens per image block. If provided, will use this for block detection and reduction.
 
     Returns:
         tuple[torch.Tensor, torch.Tensor, dict]:
@@ -1896,14 +1896,19 @@ def truncate_with_protected_tokens(
     # Create protected_tokens tensor once to avoid recreating it on every call
     protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
 
-    def detect_image_block_size(ids, image_token_id, processing_class=None):
+    def detect_image_block_size(ids, image_token_id, image_seq_length):
         """
-        Detect the size of image token blocks by finding common block patterns.
+        Detect image token blocks using the provided image_seq_length.
 
-        For models like InternVL, image tokens appear in consecutive blocks of fixed size. This function tries to
-        detect that block size automatically.
+        Args:
+            ids: Token IDs tensor
+            image_token_id: ID of image tokens
+            image_seq_length: Expected number of image tokens per image block
+
+        Returns:
+            image_seq_length if valid blocks are found, None otherwise
         """
-        if image_token_id is None:
+        if image_token_id is None or image_seq_length is None:
             return None
 
         # Find all positions of image tokens
@@ -1913,81 +1918,13 @@ def truncate_with_protected_tokens(
         if total_image_tokens == 0:
             return None
 
-        # Try to get image_seq_length from model config if available
-        config_image_seq_length = None
-        if processing_class is not None:
-            # Try different ways to access the config
-            config = getattr(processing_class, "config", None)
-            if config is None:
-                # Some processors have tokenizer with config
-                tokenizer = getattr(processing_class, "tokenizer", None)
-                if tokenizer is not None:
-                    config = getattr(tokenizer, "config", None)
-
-            if config is not None:
-                # Check for image_seq_length in various config formats
-                config_image_seq_length = getattr(config, "image_seq_length", None)
-                if config_image_seq_length is None:
-                    # For some models, it might be in a nested config
-                    vision_config = getattr(config, "vision_config", None)
-                    if vision_config is not None:
-                        config_image_seq_length = getattr(vision_config, "image_seq_length", None)
-
-        # If we found image_seq_length in config, use it for detection
-        if config_image_seq_length is not None:
-            if total_image_tokens % config_image_seq_length == 0 and total_image_tokens >= config_image_seq_length:
-                return config_image_seq_length
-
-        # Fallback to pattern detection for models without config or unknown patterns
-        # Check if all image tokens are consecutive (typical for vision models)
-        if len(image_positions) > 1:
-            diffs = torch.diff(image_positions)
-            if torch.all(diffs == 1):  # All consecutive
-                # For consecutive blocks, check known sizes
-                if total_image_tokens in [144, 256, 576, 1024]:  # Common sizes
-                    return total_image_tokens
-                elif total_image_tokens % 256 == 0:  # Multiple of 256 (InternVL default)
-                    return 256
-
-        # Look for patterns in consecutive image token runs (for more complex cases)
-        if len(image_positions) >= 32:  # Need enough tokens to detect pattern
-            # Find consecutive runs of image tokens
-            diffs = torch.diff(image_positions)
-            consecutive_runs = []
-            current_run_start = 0
-
-            for i, diff in enumerate(diffs):
-                if diff > 1:  # End of consecutive run
-                    run_length = i - current_run_start + 1
-                    consecutive_runs.append(run_length)
-                    current_run_start = i + 1
-
-            # Add the last run
-            if current_run_start < len(image_positions):
-                run_length = len(image_positions) - current_run_start
-                consecutive_runs.append(run_length)
-
-            # Find the most common run length
-            if consecutive_runs:
-                from collections import Counter
-
-                run_counts = Counter(consecutive_runs)
-                most_common_length = run_counts.most_common(1)[0][0]
-
-                # Common vision model block sizes
-                common_sizes = [256, 144, 576, 1024]  # InternVL, Qwen2-VL, etc.
-
-                # If the detected size matches a known pattern, use it
-                if most_common_length in common_sizes:
-                    return most_common_length
-
-                # For InternVL specifically, look for multiples of 256
-                if most_common_length % 256 == 0 and most_common_length >= 256:
-                    return 256  # Base block size for InternVL
+        # Check if we have complete blocks of the expected size
+        if total_image_tokens >= image_seq_length and total_image_tokens % image_seq_length == 0:
+            return image_seq_length
 
         return None
 
-    def reduce_image_blocks_if_needed(ids, mask, image_token_id, target_reduction, processing_class=None):
+    def reduce_image_blocks_if_needed(ids, mask, image_token_id, target_reduction, image_seq_length):
         """
         Reduce image token blocks to fit within target length while keeping complete blocks. Returns (ids, mask,
         images_removed) where images_removed is the number of complete image blocks removed.
@@ -1995,7 +1932,7 @@ def truncate_with_protected_tokens(
         if image_token_id is None:
             return ids, mask, 0
 
-        block_size = detect_image_block_size(ids, image_token_id, processing_class)
+        block_size = detect_image_block_size(ids, image_token_id, image_seq_length)
         if block_size is None:
             return ids, mask, 0
 
@@ -2041,10 +1978,10 @@ def truncate_with_protected_tokens(
         if current_length > target_length and image_token_id is not None:
             target_reduction = current_length - target_length
             ids, mask, images_removed = reduce_image_blocks_if_needed(
-                ids, mask, image_token_id, target_reduction, processing_class
+                ids, mask, image_token_id, target_reduction, image_seq_length
             )
             if images_removed > 0:
-                block_size = detect_image_block_size(ids, image_token_id, processing_class)
+                block_size = detect_image_block_size(ids, image_token_id, image_seq_length)
 
         # If still too long, fall back to the original protected token logic
         if ids.shape[0] > target_length:

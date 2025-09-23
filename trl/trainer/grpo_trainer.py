@@ -1107,6 +1107,19 @@ class GRPOTrainer(Trainer):
             protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
             protected = [token for token in protected if token is not None]
 
+            # Extract image_seq_length from model config for vision models
+            image_seq_length = None
+            if self.image_token_id is not None:
+                # Try to get image_seq_length from model config
+                config = getattr(self.model, "config", None)
+                if config is not None:
+                    image_seq_length = getattr(config, "image_seq_length", None)
+                    if image_seq_length is None:
+                        # For some models, it might be in a nested config
+                        vision_config = getattr(config, "vision_config", None)
+                        if vision_config is not None:
+                            image_seq_length = getattr(vision_config, "image_seq_length", None)
+
             # Use the enhanced truncate_with_protected_tokens which handles image blocks and protected tokens intelligently
             prompt_ids, prompt_mask, truncation_metadata = truncate_with_protected_tokens(
                 prompt_ids,
@@ -1114,7 +1127,7 @@ class GRPOTrainer(Trainer):
                 self.max_prompt_length,
                 protected,
                 image_token_id=self.image_token_id,
-                processing_class=self.processing_class,
+                image_seq_length=image_seq_length,
             )
 
             # Fix pixel_values alignment if images were removed during truncation

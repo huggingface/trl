@@ -1070,7 +1070,7 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         self.assertEqual(metadata["total_images_removed"], 0)
 
     def test_image_token_block_detection_internvl(self):
-        """Test automatic detection of InternVL image token blocks (256 tokens per image)."""
+        """Test InternVL image token blocks (256 tokens per image)."""
         # Simulate InternVL with 768 image tokens (3 x 256)
         image_token_id = 151667
         prompt_ids = torch.tensor([[1, 2] + [image_token_id] * 768 + [3, 4, 5]])
@@ -1079,7 +1079,12 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         target_length = 400  # Force reduction
 
         new_ids, _, metadata = truncate_with_protected_tokens(
-            prompt_ids, prompt_mask, target_length, protected_tokens, image_token_id=image_token_id
+            prompt_ids,
+            prompt_mask,
+            target_length,
+            protected_tokens,
+            image_token_id=image_token_id,
+            image_seq_length=256,
         )
 
         # Should reduce from 3 image blocks to 1 block (768 -> 256 tokens)
@@ -1102,7 +1107,12 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         target_length = 400  # Force reduction
 
         _, _, metadata = truncate_with_protected_tokens(
-            prompt_ids, prompt_mask, target_length, protected_tokens, image_token_id=image_token_id
+            prompt_ids,
+            prompt_mask,
+            target_length,
+            protected_tokens,
+            image_token_id=image_token_id,
+            image_seq_length=256,
         )
 
         # Both sequences should be reduced from 3 blocks to 1 block
@@ -1138,7 +1148,12 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         target_length = 400
 
         new_ids, _, metadata = truncate_with_protected_tokens(
-            prompt_ids, prompt_mask, target_length, protected_tokens, image_token_id=image_token_id
+            prompt_ids,
+            prompt_mask,
+            target_length,
+            protected_tokens,
+            image_token_id=image_token_id,
+            image_seq_length=256,
         )
 
         # Should reduce image blocks first, then apply protected token logic
@@ -1156,7 +1171,12 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         target_length = 260  # Larger than image block but smaller than total
 
         new_ids, _, metadata = truncate_with_protected_tokens(
-            prompt_ids, prompt_mask, target_length, protected_tokens, image_token_id=image_token_id
+            prompt_ids,
+            prompt_mask,
+            target_length,
+            protected_tokens,
+            image_token_id=image_token_id,
+            image_seq_length=256,
         )
 
         # Should not remove the single image block since there's only one
@@ -1174,7 +1194,12 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         target_length = 200
 
         _, _, metadata = truncate_with_protected_tokens(
-            prompt_ids, prompt_mask, target_length, protected_tokens, image_token_id=image_token_id
+            prompt_ids,
+            prompt_mask,
+            target_length,
+            protected_tokens,
+            image_token_id=image_token_id,
+            image_seq_length=256,
         )
 
         # Should not detect blocks since tokens are not consecutive
@@ -1191,7 +1216,12 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         target_length = 200  # Force reduction
 
         new_ids, _, metadata = truncate_with_protected_tokens(
-            prompt_ids, prompt_mask, target_length, protected_tokens, image_token_id=image_token_id
+            prompt_ids,
+            prompt_mask,
+            target_length,
+            protected_tokens,
+            image_token_id=image_token_id,
+            image_seq_length=256,
         )
 
         # Should not detect blocks and fall back to regular truncation
