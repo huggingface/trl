@@ -1037,7 +1037,7 @@ Some trainers also support fine-tuning vision-language models (VLMs) using image
 
 A conversational vision dataset differs from a standard conversational dataset in two key ways:
 
-1. The dataset must contain the key `images` with the image data.
+1. The dataset must contain the key `images` with the image data (as lists of PIL images) or `image` with a single PIL image.
 2. The `"content"` field in messages must be a list of dictionaries, where each dictionary specifies the type of data: `"image"` or `"text"`.
 
 Example:
