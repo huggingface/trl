@@ -59,6 +59,7 @@ from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
     disable_dropout_in_model,
+    ensure_master_addr_port,
     entropy_from_logits,
     generate_model_card,
     get_comet_experiment_url,
@@ -479,7 +480,7 @@ class GRPOTrainer(Trainer):
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "`pip install [vllm]` to use it."
                 )
 
             if self.vllm_mode == "server":
@@ -514,8 +515,8 @@ class GRPOTrainer(Trainer):
                 os.environ["RANK"] = str(self.accelerator.process_index)
                 os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
-                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+                # Ensure distributed rendezvous variables are set without colliding across concurrent runs
+                ensure_master_addr_port()
 
                 if self.max_prompt_length is not None and self.max_completion_length is not None:
                     max_model_len = self.max_prompt_length + self.max_completion_length
@@ -565,10 +566,6 @@ class GRPOTrainer(Trainer):
                 "repetition_penalty": self.repetition_penalty,
                 "cache_implementation": args.cache_implementation,
             }
-            if args.use_transformers_paged:
-                generation_kwargs["max_batch_tokens"] = 512
-                generation_kwargs["num_blocks"] = 1024
-                generation_kwargs["block_size"] = 128
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs)
@@ -1305,6 +1302,7 @@ class GRPOTrainer(Trainer):
                     all_outputs = unwrapped_model.generate_batch(
                         paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
                     )
+                    unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")

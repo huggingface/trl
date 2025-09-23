@@ -2,6 +2,12 @@
 
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood. Let's go! 🔥
 
+<Tip warning={true}>
+
+TRL currently only supports vLLM versions `0.10.0`, `0.10.1`, and `0.10.2`. Please ensure you have one of these versions installed to avoid compatibility issues.
+
+</Tip>
+
 ## 🚀 How can I use vLLM with TRL to speed up training?
 
 💡 **Note**: Resources required for this specific example: a single node with 8 GPUs.
