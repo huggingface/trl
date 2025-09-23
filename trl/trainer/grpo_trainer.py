@@ -1107,19 +1107,41 @@ class GRPOTrainer(Trainer):
             protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
             protected = [token for token in protected if token is not None]
 
-            # Ensure max_prompt_length can accommodate protected tokens to prevent truncation errors
-            if protected:
-                protected_tensor = torch.tensor(protected, device=prompt_ids.device)
-                max_protected = max(
-                    torch.isin(prompt_ids[i], protected_tensor).sum().item() for i in range(prompt_ids.shape[0])
-                )
-                effective_max_length = max(self.max_prompt_length, max_protected)
-            else:
-                effective_max_length = self.max_prompt_length
-
-            prompt_ids, prompt_mask = truncate_with_protected_tokens(
-                prompt_ids, prompt_mask, effective_max_length, protected
+            # Use the enhanced truncate_with_protected_tokens which handles image blocks and protected tokens intelligently
+            prompt_ids, prompt_mask, truncation_metadata = truncate_with_protected_tokens(
+                prompt_ids,
+                prompt_mask,
+                self.max_prompt_length,
+                protected,
+                image_token_id=self.image_token_id,
+                processing_class=self.processing_class,
             )
+
+            # Fix pixel_values alignment if images were removed during truncation
+            if (
+                hasattr(prompt_inputs, "pixel_values")
+                and prompt_inputs.pixel_values is not None
+                and truncation_metadata["total_images_removed"] > 0
+            ):
+                original_pixel_values = prompt_inputs.pixel_values
+
+                # Calculate how many images to keep per sequence
+                images_removed_per_seq = truncation_metadata["images_removed_per_sequence"]
+                batch_size = len(images_removed_per_seq)
+                original_images_per_seq = original_pixel_values.shape[0] // batch_size
+
+                # Create new pixel_values with reduced images
+                new_pixel_values_list = []
+                for seq_idx, images_removed in enumerate(images_removed_per_seq):
+                    images_to_keep = original_images_per_seq - images_removed
+                    seq_start = seq_idx * original_images_per_seq
+                    seq_end = seq_start + images_to_keep
+                    if seq_end <= original_pixel_values.shape[0]:
+                        new_pixel_values_list.append(original_pixel_values[seq_start:seq_end])
+
+                if new_pixel_values_list:
+                    new_pixel_values = torch.cat(new_pixel_values_list, dim=0)
+                    prompt_inputs["pixel_values"] = new_pixel_values
 
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False

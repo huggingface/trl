@@ -1862,10 +1862,15 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
 
 
 def truncate_with_protected_tokens(
-    ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
-) -> tuple[torch.Tensor, torch.Tensor]:
+    ids: torch.Tensor,
+    mask: torch.Tensor,
+    target_length: int,
+    protected_tokens: list[int],
+    image_token_id: int = None,
+    processing_class=None,
+) -> tuple[torch.Tensor, torch.Tensor, dict]:
     """
-    Truncate tensors to target length while preserving protected tokens.
+    Truncate tensors to target length while preserving protected tokens and handling image token blocks.
 
     Args:
         ids (`torch.Tensor`):
@@ -1876,48 +1881,241 @@ def truncate_with_protected_tokens(
             Desired length of the output sequences.
         protected_tokens (`list[int]`):
             List of token IDs that should be preserved in the output.
+        image_token_id (`int`, *optional*):
+            Token ID for image tokens. If provided, will attempt to detect and preserve image token blocks.
+        processing_class (*optional*):
+            Processing class (tokenizer/processor) to help detect image token block patterns.
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor, dict]:
+            - Truncated token IDs
+            - Truncated attention mask
+            - Metadata dict with image reduction info (images_removed_per_sequence, block_size)
     """
     protected_set = set(protected_tokens)
     # Create protected_tokens tensor once to avoid recreating it on every call
     protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
 
+    def detect_image_block_size(ids, image_token_id, processing_class=None):
+        """
+        Detect the size of image token blocks by finding common block patterns.
+
+        For models like InternVL, image tokens appear in consecutive blocks of fixed size. This function tries to
+        detect that block size automatically.
+        """
+        if image_token_id is None:
+            return None
+
+        # Find all positions of image tokens
+        image_positions = torch.where(ids == image_token_id)[0]
+        total_image_tokens = len(image_positions)
+
+        if total_image_tokens == 0:
+            return None
+
+        # Try to get image_seq_length from model config if available
+        config_image_seq_length = None
+        if processing_class is not None:
+            # Try different ways to access the config
+            config = getattr(processing_class, "config", None)
+            if config is None:
+                # Some processors have tokenizer with config
+                tokenizer = getattr(processing_class, "tokenizer", None)
+                if tokenizer is not None:
+                    config = getattr(tokenizer, "config", None)
+
+            if config is not None:
+                # Check for image_seq_length in various config formats
+                config_image_seq_length = getattr(config, "image_seq_length", None)
+                if config_image_seq_length is None:
+                    # For some models, it might be in a nested config
+                    vision_config = getattr(config, "vision_config", None)
+                    if vision_config is not None:
+                        config_image_seq_length = getattr(vision_config, "image_seq_length", None)
+
+        # If we found image_seq_length in config, use it for detection
+        if config_image_seq_length is not None:
+            if total_image_tokens % config_image_seq_length == 0 and total_image_tokens >= config_image_seq_length:
+                return config_image_seq_length
+
+        # Fallback to pattern detection for models without config or unknown patterns
+        # Check if all image tokens are consecutive (typical for vision models)
+        if len(image_positions) > 1:
+            diffs = torch.diff(image_positions)
+            if torch.all(diffs == 1):  # All consecutive
+                # For consecutive blocks, check known sizes
+                if total_image_tokens in [144, 256, 576, 1024]:  # Common sizes
+                    return total_image_tokens
+                elif total_image_tokens % 256 == 0:  # Multiple of 256 (InternVL default)
+                    return 256
+
+        # Look for patterns in consecutive image token runs (for more complex cases)
+        if len(image_positions) >= 32:  # Need enough tokens to detect pattern
+            # Find consecutive runs of image tokens
+            diffs = torch.diff(image_positions)
+            consecutive_runs = []
+            current_run_start = 0
+
+            for i, diff in enumerate(diffs):
+                if diff > 1:  # End of consecutive run
+                    run_length = i - current_run_start + 1
+                    consecutive_runs.append(run_length)
+                    current_run_start = i + 1
+
+            # Add the last run
+            if current_run_start < len(image_positions):
+                run_length = len(image_positions) - current_run_start
+                consecutive_runs.append(run_length)
+
+            # Find the most common run length
+            if consecutive_runs:
+                from collections import Counter
+
+                run_counts = Counter(consecutive_runs)
+                most_common_length = run_counts.most_common(1)[0][0]
+
+                # Common vision model block sizes
+                common_sizes = [256, 144, 576, 1024]  # InternVL, Qwen2-VL, etc.
+
+                # If the detected size matches a known pattern, use it
+                if most_common_length in common_sizes:
+                    return most_common_length
+
+                # For InternVL specifically, look for multiples of 256
+                if most_common_length % 256 == 0 and most_common_length >= 256:
+                    return 256  # Base block size for InternVL
+
+        return None
+
+    def reduce_image_blocks_if_needed(ids, mask, image_token_id, target_reduction, processing_class=None):
+        """
+        Reduce image token blocks to fit within target length while keeping complete blocks. Returns (ids, mask,
+        images_removed) where images_removed is the number of complete image blocks removed.
+        """
+        if image_token_id is None:
+            return ids, mask, 0
+
+        block_size = detect_image_block_size(ids, image_token_id, processing_class)
+        if block_size is None:
+            return ids, mask, 0
+
+        # Count current image tokens
+        n_image_tokens = (ids == image_token_id).sum().item()
+        if n_image_tokens == 0 or n_image_tokens % block_size != 0:
+            return ids, mask, 0
+
+        n_blocks = n_image_tokens // block_size
+
+        # Calculate how many blocks we need to remove
+        if target_reduction > 0 and n_blocks > 1:
+            # For image blocks, prioritize keeping complete blocks even if it means over-reducing
+            # If we need to reduce any amount and have multiple blocks, remove excess blocks
+            # to keep only one image block (common pattern for GRPO with vision models)
+            blocks_to_keep = 1  # Always keep exactly one image for vision models
+            tokens_to_keep = blocks_to_keep * block_size
+            blocks_removed = n_blocks - blocks_to_keep
+
+            if tokens_to_keep < n_image_tokens:
+                # Find image token positions
+                image_positions = torch.where(ids == image_token_id)[0]
+
+                # Create mask to keep only the first tokens_to_keep image tokens
+                keep_mask = torch.ones_like(ids, dtype=torch.bool)
+                positions_to_remove = image_positions[tokens_to_keep:]
+                keep_mask[positions_to_remove] = False
+
+                # Apply the mask
+                ids = ids[keep_mask]
+                mask = mask[keep_mask]
+
+                return ids, mask, blocks_removed
+
+        return ids, mask, 0
+
     def process_sequence(ids, mask):
-        # Create boolean masks
-        is_protected = torch.isin(ids, protected_tokens_tensor)
-        is_non_protected = ~is_protected
+        # First, try to reduce image blocks if needed
+        current_length = ids.shape[0]
+        images_removed = 0
+        block_size = None
 
-        # Count tokens
-        num_protected = is_protected.sum().item()
-        num_non_protected_needed = target_length - num_protected
-
-        if num_non_protected_needed < 0:
-            raise ValueError(
-                f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-                f"Please increase target length to at least {num_protected} or disable truncation."
+        if current_length > target_length and image_token_id is not None:
+            target_reduction = current_length - target_length
+            ids, mask, images_removed = reduce_image_blocks_if_needed(
+                ids, mask, image_token_id, target_reduction, processing_class
             )
+            if images_removed > 0:
+                block_size = detect_image_block_size(ids, image_token_id, processing_class)
 
-        # Select which non-protected tokens to keep (rightmost ones)
-        non_protected_indices = torch.where(is_non_protected)[0]
-        keep_non_protected = torch.zeros_like(is_non_protected)
-        if num_non_protected_needed > 0:
-            keep_indices = non_protected_indices[-num_non_protected_needed:]
-            keep_non_protected[keep_indices] = True
+        # If still too long, fall back to the original protected token logic
+        if ids.shape[0] > target_length:
+            # Create boolean masks
+            is_protected = torch.isin(ids, protected_tokens_tensor)
+            is_non_protected = ~is_protected
 
-        # Final mask: protected OR selected non-protected
-        keep_mask = is_protected | keep_non_protected
+            # Count tokens
+            num_protected = is_protected.sum().item()
+            num_non_protected_needed = target_length - num_protected
 
-        return ids[keep_mask], mask[keep_mask]
+            if num_non_protected_needed < 0:
+                raise ValueError(
+                    f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
+                    f"Please increase target length to at least {num_protected} or disable truncation."
+                )
+
+            # Select which non-protected tokens to keep (rightmost ones)
+            non_protected_indices = torch.where(is_non_protected)[0]
+            keep_non_protected = torch.zeros_like(is_non_protected)
+            if num_non_protected_needed > 0:
+                keep_indices = non_protected_indices[-num_non_protected_needed:]
+                keep_non_protected[keep_indices] = True
+
+            # Final mask: protected OR selected non-protected
+            keep_mask = is_protected | keep_non_protected
+            ids = ids[keep_mask]
+            mask = mask[keep_mask]
+
+        return ids, mask, images_removed, block_size
 
     # Process each sequence in the batch
     truncated_seq = []
     truncated_mask = []
+    images_removed_per_sequence = []
+    detected_block_size = None
 
     for i in range(ids.shape[0]):
-        new_ids, new_mask = process_sequence(ids[i], mask[i])
+        new_ids, new_mask, images_removed, block_size = process_sequence(ids[i], mask[i])
         truncated_seq.append(new_ids)
         truncated_mask.append(new_mask)
+        images_removed_per_sequence.append(images_removed)
+        if block_size is not None:
+            detected_block_size = block_size
 
-    return torch.stack(truncated_seq), torch.stack(truncated_mask)
+    # Pad sequences to same length for stacking
+    if truncated_seq:
+        max_length = max(seq.shape[0] for seq in truncated_seq)
+        padded_seq = []
+        padded_mask = []
+
+        for seq, mask_seq in zip(truncated_seq, truncated_mask):
+            if seq.shape[0] < max_length:
+                pad_length = max_length - seq.shape[0]
+                # Use pad token 0 for padding sequence
+                seq = torch.cat([seq, torch.zeros(pad_length, dtype=seq.dtype, device=seq.device)])
+                mask_seq = torch.cat([mask_seq, torch.zeros(pad_length, dtype=mask_seq.dtype, device=mask_seq.device)])
+            padded_seq.append(seq)
+            padded_mask.append(mask_seq)
+
+        truncated_seq = padded_seq
+        truncated_mask = padded_mask
+
+    # Create metadata dict
+    metadata = {
+        "images_removed_per_sequence": images_removed_per_sequence,
+        "block_size": detected_block_size,
+        "total_images_removed": sum(images_removed_per_sequence),
+    }
+
+    return torch.stack(truncated_seq), torch.stack(truncated_mask), metadata
 
 
 def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
