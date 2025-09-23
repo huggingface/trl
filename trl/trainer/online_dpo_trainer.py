@@ -68,6 +68,7 @@ from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
     empty_cache,
+    ensure_master_addr_port,
     generate_model_card,
     get_comet_experiment_url,
     pad,
@@ -483,7 +484,7 @@ class OnlineDPOTrainer(Trainer):
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "`pip install trl[vllm]` to use it."
                 )
 
             if self.vllm_mode == "server":
@@ -521,8 +522,8 @@ class OnlineDPOTrainer(Trainer):
                 os.environ["RANK"] = str(self.accelerator.process_index)
                 os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
-                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+                # Ensure distributed rendezvous variables are set without colliding across concurrent runs
+                ensure_master_addr_port()
 
                 self.llm = LLM(**vllm_kwargs)
             else:
