@@ -213,7 +213,7 @@ For more detailed information on tool calling, refer to the [Tool Calling sectio
 
 The [Harmony response format](https://cookbook.openai.com/articles/openai-harmony) was introduced with the [OpenAI GPT OSS models](https://huggingface.co/collections/openai/gpt-oss-68911959590a1634ba11c7a4). It extends the conversational format by adding richer structure for reasoning, function calls, and metadata about the model’s behavior. Key features include:
 
-- **Developer role** – Provides high-level instructions (similar to a system prompt) and lists available tools.
+- **Developer role** – Provides high level instructions (similar to a system prompt) and lists available tools.
 - **Channels** – Separate types of assistant output into distinct streams:
 
   - `analysis` – for internal reasoning, from the key `"thinking"`
@@ -392,12 +392,11 @@ Choosing the right dataset type depends on the task you are working on and the s
 
 | Trainer                 | Expected dataset type                                                                                  |
 | ----------------------- | ------------------------------------------------------------------------------------------------------ |
-| [`BCOTrainer`]          | [Unpaired preference](#unpaired-preference)                                                            |
+| [`BCOTrainer`]          | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`CPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
 | [`DPOTrainer`]          | [Preference (explicit prompt recommended)](#preference)                                                |
 | [`GKDTrainer`]          | [Prompt-completion](#prompt-completion)                                                                |
 | [`GRPOTrainer`]         | [Prompt-only](#prompt-only)                                                                            |
-| [`IterativeSFTTrainer`] | [Unpaired preference](#unpaired-preference)                                                            |
 | [`KTOTrainer`]          | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`NashMDTrainer`]       | [Prompt-only](#prompt-only)                                                                            |
 | [`OnlineDPOTrainer`]    | [Prompt-only](#prompt-only)                                                                            |
@@ -405,6 +404,7 @@ Choosing the right dataset type depends on the task you are working on and the s
 | [`PPOTrainer`]          | Tokenized language modeling                                                                            |
 | [`PRMTrainer`]          | [Stepwise supervision](#stepwise-supervision)                                                          |
 | [`RewardTrainer`]       | [Preference (implicit prompt recommended)](#preference)                                                |
+| [`RLOOTrainer`]         | [Prompt-only](#prompt-only)                                                                            |
 | [`SFTTrainer`]          | [Language modeling](#language-modeling) or [Prompt-completion](#prompt-completion)                     |
 | [`XPOTrainer`]          | [Prompt-only](#prompt-only)                                                                            |
 
@@ -1037,7 +1037,7 @@ Some trainers also support fine-tuning vision-language models (VLMs) using image
 
 A conversational vision dataset differs from a standard conversational dataset in two key ways:
 
-1. The dataset must contain the key `images` with the image data.
+1. The dataset must contain the key `images` with the image data (as lists of PIL images) or `image` with a single PIL image.
 2. The `"content"` field in messages must be a list of dictionaries, where each dictionary specifies the type of data: `"image"` or `"text"`.
 
 Example:

@@ -162,7 +162,7 @@ class BaseBinaryJudge(BaseJudge):
 
         This base class should be used to implement binary evaluations as done in section 4.1.4 of the [CGPO
         paper](https://huggingface.co/papers/2409.20370). It is relevant for assessing whether a prompt-completion pair
-        satisfies a specific contraint.
+        satisfies a specific constraint.
 
         Args:
             prompts (`list[str]`): List of prompts.
@@ -177,7 +177,7 @@ class BaseBinaryJudge(BaseJudge):
 
         Note:
             If the judge returns -1 for any prompt, it indicates that the inner process used to compute the preference
-            has failed. For instance, this could occur if the underlying language model or rule based contraint
+            has failed. For instance, this could occur if the underlying language model or rule based constraint
             returned an invalid answer. In such cases, the caller should handle these invalid indices appropriately,
             possibly by implementing fallback logic or error handling.
         """
@@ -297,7 +297,7 @@ class HfPairwiseJudge(BasePairwiseJudge):
             Model to use for the judge.
         token (`str`, *optional*):
             Hugging Face API token to use for the [`huggingface_hub.InferenceClient`].
-        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+        system_prompt (`str`, *optional*):
             The system prompt to be used for the judge. If not provided, a default prompt is used. Note that the system
             prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`. Also, the
             inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token
@@ -351,7 +351,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     Args:
         model (`str`, *optional*, defaults to `"gpt-4-turbo-preview"`):
             Model to use for the judge.
-        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+        system_prompt (`str`, *optional*):
             System prompt to be used for the judge. If not provided, a default prompt is used. Note that the system
             prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`. Also, the
             inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token
@@ -425,7 +425,7 @@ class AllTrueJudge(BaseBinaryJudge):
     Implements the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370).
 
     Args:
-    judges (`list[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
+        judges (`list[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
     """
 
     def __init__(self, judges: list[BaseBinaryJudge]):

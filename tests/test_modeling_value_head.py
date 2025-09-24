@@ -55,6 +55,10 @@ class BaseTester:
         trl_model_class = None
         transformers_model_class = None
 
+        def setUp(self):
+            super().setUp()
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+
         def test_value_head(self):
             r"""
             Test if the v-head is added to the model successfully
@@ -94,7 +98,7 @@ class BaseTester:
 
         def test_from_save_trl(self):
             """
-            Test if the model can be saved and loaded from a directory and get the same weights Including the
+            Test if the model can be saved and loaded from a directory and get the same weights, including the
             additional modules (e.g. v_head)
             """
             for model_name in self.all_model_names:
@@ -207,8 +211,8 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         EXPECTED_OUTPUT_SIZE = 3
 
         for model_name in self.all_model_names:
-            model = self.trl_model_class.from_pretrained(model_name)
-            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            model = self.trl_model_class.from_pretrained(model_name).to(self.device)
+            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
             outputs = model(input_ids)
 
             # Check if the outputs are of the right size - here
@@ -250,20 +254,20 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         Test if `generate` works for every model
         """
         generation_config = GenerationConfig(max_new_tokens=9)
-        model = self.trl_model_class.from_pretrained(model_name)
-        input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+        model = self.trl_model_class.from_pretrained(model_name).to(self.device)
+        input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
 
         # Just check if the generation works
         _ = model.generate(input_ids, generation_config=generation_config)
 
     def test_transformers_bf16_kwargs(self):
         r"""
-        Test if the transformers kwargs are correctly passed Here we check that loading a model in half precision works
-        as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can run a
-        dummy forward pass without any issue.
+        Test if the transformers kwargs are correctly passed. Here we check that loading a model in half precision
+        works as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can
+        run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
-            trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+            trl_model = self.trl_model_class.from_pretrained(model_name, dtype=torch.bfloat16).to(self.device)
 
             lm_head_namings = ["lm_head", "embed_out", "output_layer"]
 
@@ -276,7 +280,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
                 if hasattr(trl_model.pretrained_model, lm_head_naming):
                     self.assertEqual(getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype, torch.bfloat16)
 
-            dummy_input = torch.LongTensor([[0, 1, 0, 1]])
+            dummy_input = torch.LongTensor([[0, 1, 0, 1]]).to(self.device)
 
             # check dummy forward pass works in half precision
             _ = trl_model(dummy_input)
@@ -323,9 +327,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         EXPECTED_OUTPUT_SIZE = 3
 
         for model_name in self.all_model_names:
-            model = self.trl_model_class.from_pretrained(model_name)
-            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-            decoder_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+            model = self.trl_model_class.from_pretrained(model_name).to(self.device)
+            input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
+            decoder_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
             outputs = model(input_ids, decoder_input_ids=decoder_input_ids)
 
             # Check if the outputs are of the right size - here
@@ -367,9 +371,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         Test if `generate` works for every model
         """
         generation_config = GenerationConfig(max_new_tokens=9)
-        model = self.trl_model_class.from_pretrained(model_name)
-        input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
-        decoder_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]])
+        model = self.trl_model_class.from_pretrained(model_name).to(self.device)
+        input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
+        decoder_input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
 
         # Just check if the generation works
         _ = model.generate(input_ids, decoder_input_ids=decoder_input_ids, generation_config=generation_config)
@@ -395,12 +399,12 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
 
     def test_transformers_bf16_kwargs(self):
         r"""
-        Test if the transformers kwargs are correctly passed Here we check that loading a model in half precision works
-        as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can run a
-        dummy forward pass without any issue.
+        Test if the transformers kwargs are correctly passed. Here we check that loading a model in half precision
+        works as expected, i.e. the weights of the `pretrained_model` attribute is loaded in half precision and you can
+        run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
-            trl_model = self.trl_model_class.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+            trl_model = self.trl_model_class.from_pretrained(model_name, dtype=torch.bfloat16).to(self.device)
 
             lm_head_namings = self.trl_model_class.lm_head_namings
 
@@ -412,7 +416,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
                 if hasattr(trl_model.pretrained_model, lm_head_naming):
                     self.assertTrue(getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype == torch.bfloat16)
 
-            dummy_input = torch.LongTensor([[0, 1, 0, 1]])
+            dummy_input = torch.LongTensor([[0, 1, 0, 1]]).to(self.device)
 
             # check dummy forward pass works in half precision
             _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)

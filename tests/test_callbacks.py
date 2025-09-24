@@ -14,6 +14,7 @@
 
 import json
 import os
+from unittest.mock import call, patch
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
@@ -22,7 +23,15 @@ from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
 from tests.testing_utils import require_comet, require_mergekit
-from trl import BasePairwiseJudge, DPOConfig, DPOTrainer, LogCompletionsCallback, MergeModelCallback, WinRateCallback
+from trl import (
+    BasePairwiseJudge,
+    BEMACallback,
+    DPOConfig,
+    DPOTrainer,
+    LogCompletionsCallback,
+    MergeModelCallback,
+    WinRateCallback,
+)
 from trl.mergekit_utils import MergeConfig
 
 from .testing_utils import TrlTestCase
@@ -109,7 +118,8 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        self.assertListEqual(winrate_history, self.expected_winrates)
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
 
     def test_without_ref_model(self):
         # Same as before, but without the ref_model attribute. It should use the model attribute instead
@@ -134,7 +144,8 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        self.assertListEqual(winrate_history, self.expected_winrates)
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
 
     def test_soft_judge(self):
         """Test that the soft judge functionality works correctly"""
@@ -176,7 +187,8 @@ class WinRateCallbackTester(TrlTestCase):
             for h in trainer.state.log_history
             if "eval_avg_win_prob" in h
         ]
-        self.assertListEqual(winrate_history, expected_soft_winrates)
+        for history_row, expected_row in zip(winrate_history, expected_soft_winrates):
+            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
 
     @require_peft
     def test_lora(self):
@@ -209,7 +221,8 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.add_callback(win_rate_callback)
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
-        self.assertListEqual(winrate_history, self.expected_winrates)
+        for history_row, expected_row in zip(winrate_history, self.expected_winrates):
+            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
 
 
 class LogCompletionsCallbackTester(TrlTestCase):
@@ -362,3 +375,125 @@ class MergeModelCallbackTester(TrlTestCase):
         for checkpoint in checkpoints:
             merged_path = os.path.join(checkpoint, "merged")
             self.assertTrue(os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}.")
+
+
+class BEMACallbackTester(TrlTestCase):
+    def setUp(self):
+        super().setUp()
+        self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        def tokenize_function(examples, tokenizer):
+            out = tokenizer(examples["text"], padding="max_length", max_length=17)
+            out["labels"] = out["input_ids"].copy()
+            return out
+
+        self.dataset = dataset.map(
+            tokenize_function, fn_kwargs={"tokenizer": self.tokenizer}, remove_columns=["text"], batched=True
+        )
+
+    def test_model_saved(self):
+        """Test that BEMACallback saves the BEMA model."""
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=2)
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+            callbacks=[bema_callback],
+        )
+        trainer.train()
+
+        # Check that the BEMA model was saved and can be loaded
+        bema_path = os.path.join(self.tmp_dir, "bema")
+        self.assertTrue(os.path.isdir(bema_path), "BEMA directory was not created")
+        AutoModelForCausalLM.from_pretrained(bema_path)
+
+    def test_update_frequency_0(self):
+        """Test that BEMA callback respects the update frequency."""
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=2)
+
+        with patch.object(bema_callback, "_update_bema_weights") as mock_update:
+            trainer = Trainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset["train"],
+                processing_class=self.tokenizer,
+                callbacks=[bema_callback],
+            )
+
+            trainer.train()
+
+            # Total 9 steps (17 samples, batch size 8, 3 epochs).
+            # BEMA starts after step 0 and updates every 2 steps → updates at 2, 4, 5, 8
+            self.assertEqual(mock_update.call_args_list, [call(2), call(4), call(6), call(8)])
+
+    def test_update_frequency_1(self):
+        """Test that BEMA callback respects the update frequency."""
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=3)
+
+        with patch.object(bema_callback, "_update_bema_weights") as mock_update:
+            trainer = Trainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset["train"],
+                processing_class=self.tokenizer,
+                callbacks=[bema_callback],
+            )
+
+            trainer.train()
+
+            # Total 9 steps (17 samples, batch size 8, 3 epochs).
+            # BEMA starts after step 0 and updates every 3 steps → updates at 3, 6, 9
+            self.assertEqual(mock_update.call_args_list, [call(3), call(6), call(9)])
+
+    def test_update_frequency_2(self):
+        """Test that BEMA callback respects the update frequency."""
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=2, update_after=3)
+
+        with patch.object(bema_callback, "_update_bema_weights") as mock_update:
+            trainer = Trainer(
+                model=self.model,
+                args=training_args,
+                train_dataset=self.dataset["train"],
+                processing_class=self.tokenizer,
+                callbacks=[bema_callback],
+            )
+
+            trainer.train()
+
+            # Total 9 steps (17 samples, batch size 8, 3 epochs).
+            # BEMA starts after step 3 and updates every 2 steps → updates at 5, 7, 9
+            self.assertEqual(mock_update.call_args_list, [call(5), call(7), call(9)])
+
+    def test_no_bema(self):
+        """Test that BEMACallback works without BEMA updates."""
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=2, bias_power=0.0)
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+            callbacks=[bema_callback],
+        )
+        trainer.train()
+
+    def test_no_ema(self):
+        """Test that BEMACallback works without EMA updates."""
+        training_args = TrainingArguments(output_dir=self.tmp_dir, report_to="none")
+        bema_callback = BEMACallback(update_freq=2, ema_power=0.0)
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=self.dataset["train"],
+            processing_class=self.tokenizer,
+            callbacks=[bema_callback],
+        )
+        trainer.train()

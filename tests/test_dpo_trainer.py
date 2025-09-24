@@ -172,12 +172,6 @@ class DPOTrainerTester(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
         self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # get t5 as seq2seq example:
-        model_id = "trl-internal-testing/tiny-T5ForConditionalGeneration"
-        self.t5_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_ref_model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
-        self.t5_tokenizer = AutoTokenizer.from_pretrained(model_id)
-
     def test_train(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -255,6 +249,39 @@ class DPOTrainerTester(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
+    @require_liger_kernel
+    def test_train_encoder_decoder_liger(self):
+        model_id = "trl-internal-testing/tiny-BartModel"
+        model = AutoModelForSeq2SeqLM.from_pretrained(model_id)
+        dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            learning_rate=9e-1,
+            report_to="none",
+            use_liger_loss=True,
+        )
+        trainer = DPOTrainer(
+            model=model,
+            args=training_args,
+            processing_class=tokenizer,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the parameters have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:  # ignore 0 biases
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+
     def test_dpo_trainer_with_weighting(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
 
@@ -287,8 +314,8 @@ class DPOTrainerTester(TrlTestCase):
 
     def test_train_with_multiple_loss_types(self):
         """
-        Tests multi-loss combinations, loss type inference, and weight configuration.
-        MPO combines DPO (sigmoid), BCO (bco_pair), and SFT (sft) losses.
+        Tests multi-loss combinations, loss type inference, and weight configuration. MPO combines DPO (sigmoid), BCO
+        (bco_pair), and SFT (sft) losses.
         """
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         dataset = load_dataset("trl-internal-testing/zen", "standard_preference", split="train")
@@ -467,42 +494,6 @@ class DPOTrainerTester(TrlTestCase):
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
                     self.assertFalse(torch.equal(param, new_param))
-
-    def test_dpo_trainer_padding_token_is_none(self):
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            max_steps=3,
-            remove_unused_columns=False,
-            gradient_accumulation_steps=1,
-            learning_rate=9e-1,
-            eval_strategy="steps",
-            beta=0.1,
-            report_to="none",
-        )
-
-        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
-
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        tokenizer.pad_token = None
-
-        with self.assertRaisesRegex(
-            ValueError,
-            expected_regex=r"`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in "
-            r"the `processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
-            r"`tokenizer.pad_token` \(e.g., `tokenizer.pad_token = tokenizer.eos_token`\) before instantiating "
-            r"the trainer.",
-        ):
-            trainer = DPOTrainer(
-                model=self.model,
-                ref_model=None,
-                args=training_args,
-                processing_class=tokenizer,
-                train_dataset=dummy_dataset["train"],
-                eval_dataset=dummy_dataset["test"],
-            )
-
-            trainer.train()
 
     def test_dpo_trainer_w_dataset_num_proc(self):
         training_args = DPOConfig(
@@ -943,15 +934,15 @@ class DPOTrainerTester(TrlTestCase):
         # train the model
         trainer.train()
 
-    def test_dpo_trainer_torch_dtype(self):
+    def test_dpo_trainer_dtype(self):
         # See https://github.com/huggingface/trl/issues/1751
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            model_init_kwargs={"torch_dtype": "float16"},
-            ref_model_init_kwargs={"torch_dtype": "float16"},
+            model_init_kwargs={"dtype": "float16"},
+            ref_model_init_kwargs={"dtype": "float16"},
             report_to="none",
         )
 
@@ -962,15 +953,15 @@ class DPOTrainerTester(TrlTestCase):
             args=training_args,
             train_dataset=dummy_dataset["train"],
         )
-        self.assertEqual(trainer.model.config.torch_dtype, torch.float16)
-        self.assertEqual(trainer.ref_model.config.torch_dtype, torch.float16)
+        self.assertEqual(trainer.model.config.dtype, torch.float16)
+        self.assertEqual(trainer.ref_model.config.dtype, torch.float16)
 
-        # Now test when `torch_dtype` is provided but is wrong to either the model or the ref_model
+        # Now test when `dtype` is provided but is wrong to either the model or the ref_model
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            model_init_kwargs={"torch_dtype": -1},
+            model_init_kwargs={"dtype": -1},
             report_to="none",
         )
 
@@ -983,7 +974,8 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
+            "`torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 
@@ -991,7 +983,7 @@ class DPOTrainerTester(TrlTestCase):
             output_dir=self.tmp_dir,
             per_device_train_batch_size=2,
             max_steps=1,
-            ref_model_init_kwargs={"torch_dtype": -1},
+            ref_model_init_kwargs={"dtype": -1},
             report_to="none",
         )
 
@@ -1005,7 +997,8 @@ class DPOTrainerTester(TrlTestCase):
             )
 
         self.assertIn(
-            "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing a `torch.dtype` (e.g., 'float32'), but got -1.",
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
+            "`torch.dtype` (e.g., 'float32'), but got -1.",
             str(context.exception),
         )
 
@@ -1311,10 +1304,23 @@ class DPOTrainerTester(TrlTestCase):
                 self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
     @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
-    @parameterized.expand([(0.1,), (0.5,)])
+    @parameterized.expand(
+        [
+            (0.1, "sigmoid"),
+            (0.1, "apo_zero"),
+            (0.1, "apo_down"),
+            (0.1, "sppo_hard"),
+            (0.1, "nca_pair"),
+            (0.5, "sigmoid"),
+            (0.5, "apo_zero"),
+            (0.5, "apo_down"),
+            (0.5, "sppo_hard"),
+            (0.5, "nca_pair"),
+        ]
+    )
     @require_liger_kernel
-    def test_dpo_trainer_with_liger(self, beta):
-        """Test DPO trainer with Liger loss enabled.
+    def test_dpo_trainer_with_liger(self, beta, loss_type):
+        """Test DPO trainer with Liger loss enabled across supported loss types.
 
         This test verifies that:
         1. Training runs successfully with Liger loss
@@ -1331,6 +1337,7 @@ class DPOTrainerTester(TrlTestCase):
             eval_strategy="steps",
             beta=beta,
             use_liger_loss=True,  # Enable Liger loss
+            loss_type=loss_type,
             report_to="none",
         )
 

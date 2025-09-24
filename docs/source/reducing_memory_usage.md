@@ -22,7 +22,7 @@ To reduce memory usage, it's important to truncate sequences to a reasonable len
 DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
 
 <div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="Truncation prompt-completion" width="600"/>
+    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="DPO truncation" width="600"/>
 </div>
 
 To set the truncation parameters, use the following code snippet:
@@ -88,7 +88,7 @@ Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.
     <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png" alt="Packing" width="600"/>
 </div>
 
-Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` and in the [`SFTConfig`].
+Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` in the [`SFTConfig`].
 
 <Tip>
 
@@ -191,17 +191,11 @@ Activation offloading is a memory efficiency technique that reduces GPU VRAM usa
 
 To enable activation offloading in your SFT training configuration:
 
-<hfoptions>
-<hfoption id="SFT">
-
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(..., activation_offloading=True)
 ```
-
-</hfoption>
-</hfoptions>
 
 <Tip warning={true}>
 
@@ -267,3 +261,28 @@ training_args = RLOOConfig(..., ds3_gather_for_generation=False)
 </hfoptions>
 
 This adjustment prevents model weights from being gathered, avoiding OOM errors, but it may result in slower generation speeds.
+
+## vLLM sleep mode
+
+When using vLLM as the generation backend, you can enable _sleep mode_ to offload vLLM parameters and cache to CPU RAM during the optimization step and reload them back to GPU VRAM when needed for weight synchronization and generation.
+
+<hfoptions id="vllm_sleep">
+<hfoption id="GRPO">
+
+```python
+from trl import GRPOConfig
+
+training_args = GRPOConfig(..., vllm_enable_sleep_mode=True)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(..., vllm_enable_sleep_mode=True)
+```
+
+</hfoption>
+</hfoptions>

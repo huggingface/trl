@@ -12,8 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import dataclasses
 import itertools
+import warnings
+from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -93,7 +94,9 @@ def setup_chat_format(
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
     embedding layer of the model based on the new special tokens.
 
-    <Tip warning="true"> We recommend using [`clone_chat_template`] instead of this function.
+    <Tip warning="true">
+
+    This function is deprecated and will be removed in version 0.26.0. Please use [`clone_chat_template`] instead.
 
     </Tip>
 
@@ -112,6 +115,11 @@ def setup_chat_format(
         tokenizer (`~transformers.PreTrainedTokenizer`):
             The modified tokenizer.
     """
+    warnings.warn(
+        "The `setup_chat_format` function is deprecated and will be removed in version 0.26.0. Please use "
+        "`clone_chat_template` instead.",
+        DeprecationWarning,
+    )
     # check if model already had a chat template
     if tokenizer.chat_template is not None:
         raise ValueError(
@@ -424,18 +432,18 @@ class _ForwardRedirection:
     """
 
     def __call__(
-        self, wrapper_module: nn.Module, original_module: nn.Module, method: callable, *args: Any, **kwargs: Any
+        self, wrapper_module: nn.Module, original_module: nn.Module, method: Callable, *args: Any, **kwargs: Any
     ):
         """Reroutes a method call through the `wrapper_module`'s `forward` method.
 
         Args:
             wrapper_module: The module that has `original_module` wrapped.
             original_module: The module that was wrapped inside `wrapper_module`.
-            method_name: The name of the method that should be called on the `original_module` after inputs get
+            method: The method that should be called on the `original_module` after inputs get
                 redirected through the `wrapper_module`'s `forward` method.
-            *args: The positional arguments to the method `method_name`. They will get passed to a patched
+            *args: The positional arguments to the `method`. They will get passed to a patched
                 `forward` method instead.
-            **kwargs: The keyword arguments to the method `method_name`. They will get passed to a patched
+            **kwargs: The keyword arguments to the `method`. They will get passed to a patched
                 `forward` method instead.
 
         """
@@ -527,14 +535,14 @@ def prepare_peft_model(
                 break
 
     # Prepare model for kbit training if needed
-    if is_qlora and not is_sharded_qlora:
+    if is_qlora and not is_sharded_qlora and not isinstance(model, PeftModel):
         model = prepare_model_for_kbit_training(
             model,
             use_gradient_checkpointing=args.gradient_checkpointing,
             gradient_checkpointing_kwargs=args.gradient_checkpointing_kwargs or {},
         )
         # Disable gradient checkpointing as it's handled by prepare_model_for_kbit_training
-        args = dataclasses.replace(args, gradient_checkpointing=False)
+        args.gradient_checkpointing = False
     elif args.gradient_checkpointing:
         model = enable_gradient_checkpointing(model, args.gradient_checkpointing_kwargs)
 

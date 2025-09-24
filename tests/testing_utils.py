@@ -12,24 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import random
 import shutil
+import signal
 import tempfile
 import unittest
+import warnings
 
+import psutil
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import torch_device
 from transformers.utils import is_rich_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
-from trl.import_utils import (
-    is_diffusers_available,
-    is_joblib_available,
-    is_llm_blender_available,
-    is_mergekit_available,
-    is_vllm_available,
-)
+from trl.import_utils import is_joblib_available, is_llm_blender_available, is_mergekit_available, is_vllm_available
 
 
 # transformers.testing_utils contains a require_bitsandbytes function, but relies on pytest markers which we don't use
@@ -46,13 +44,6 @@ def require_comet(test_case):
     Decorator marking a test that requires Comet. Skips the test if Comet is not available.
     """
     return unittest.skipUnless(is_comet_available(), "test requires comet_ml")(test_case)
-
-
-def require_diffusers(test_case):
-    """
-    Decorator marking a test that requires diffusers. Skips the test if diffusers is not available.
-    """
-    return unittest.skipUnless(is_diffusers_available(), "test requires diffusers")(test_case)
 
 
 def require_llm_blender(test_case):
@@ -140,3 +131,46 @@ class TrlTestCase(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp_dir)
         super().tearDown()
+
+
+def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> callable:
+    """
+    Decorator to ignore warnings with a specific message and/or category.
+
+    Args:
+        message (`str`, *optional*):
+            Regex pattern for the warning message to ignore. If `None`, all messages are ignored.
+        category (`type[Warning]`, *optional*, defaults to `Warning`):
+            Warning class to ignore. Defaults to `Warning`, which ignores all warnings.
+    """
+
+    def decorator(test_func):
+        @functools.wraps(test_func)
+        def wrapper(*args, **kwargs):
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", message=message, category=category)
+                return test_func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def kill_process(process):
+    parent = psutil.Process(process.pid)
+    children = parent.children(recursive=True)
+    for child in children:
+        try:
+            child.send_signal(signal.SIGTERM)
+            child.wait(timeout=5)
+        except psutil.TimeoutExpired:
+            child.kill()
+        except psutil.NoSuchProcess:
+            pass
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except psutil.TimeoutExpired:
+        process.kill()
+    except psutil.NoSuchProcess:
+        pass

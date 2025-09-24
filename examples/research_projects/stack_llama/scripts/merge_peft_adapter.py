@@ -42,12 +42,10 @@ peft_config = PeftConfig.from_pretrained(script_args.adapter_model_name)
 if peft_config.task_type == "SEQ_CLS":
     # The sequence classification task is used for the reward model in PPO
     model = AutoModelForSequenceClassification.from_pretrained(
-        script_args.base_model_name, num_labels=1, torch_dtype=torch.bfloat16
+        script_args.base_model_name, num_labels=1, dtype=torch.bfloat16
     )
 else:
-    model = AutoModelForCausalLM.from_pretrained(
-        script_args.base_model_name, return_dict=True, torch_dtype=torch.bfloat16
-    )
+    model = AutoModelForCausalLM.from_pretrained(script_args.base_model_name, return_dict=True, dtype=torch.bfloat16)
 
 tokenizer = AutoTokenizer.from_pretrained(script_args.base_model_name)
 

@@ -15,11 +15,13 @@
 import dataclasses
 import importlib.resources as pkg_resources
 import json
+import os
 import random
-import warnings
-from collections import deque
+import socket
+from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
+from itertools import accumulate
 from typing import Any, Literal, Optional, Union
 
 import numpy as np
@@ -27,14 +29,18 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import torch.utils.data
-from accelerate import Accelerator, PartialState
+import transformers
+from accelerate import Accelerator, PartialState, logging
 from accelerate.state import AcceleratorState
 from huggingface_hub import ModelCard, ModelCardData
 from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Sampler
 from transformers import (
+    AutoConfig,
     BitsAndBytesConfig,
     EvalPrediction,
     GenerationConfig,
+    PreTrainedModel,
     PreTrainedTokenizerBase,
     TrainerState,
     TrainingArguments,
@@ -63,6 +69,9 @@ if is_comet_available():
 
 if is_peft_available():
     from peft import LoraConfig, PeftConfig
+
+
+logger = logging.get_logger(__name__)
 
 
 @dataclass
@@ -164,6 +173,47 @@ class DataCollatorForChatML:
         }
 
 
+def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def _find_free_port() -> int:
+    candidates = (29500, 23456, 12355, 12345)
+    for p in candidates:
+        if _is_port_free(p):
+            return p
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = None) -> None:
+    """
+    Ensure `MASTER_ADDR`/`MASTER_PORT` are set safely.
+
+    - Respects existing environment variables.
+    - Defaults `MASTER_ADDR` to localhost if unset.
+    - Chooses a free TCP port if `MASTER_PORT` is unset to avoid collisions.
+    - If `MASTER_PORT` is set to `"0"` or `"auto"`, it is resolved to a free port.
+    """
+    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR") or addr or "localhost"
+
+    env_port = os.environ.get("MASTER_PORT", "").strip().lower()
+    if port is None and env_port not in {"", "0", "auto"}:
+        try:
+            port = int(env_port)
+        except ValueError:
+            pass
+
+    os.environ["MASTER_PORT"] = str(_find_free_port() if port in (None, 0) else port)
+
+
 @dataclass
 class RewardDataCollatorWithPadding:
     r"""
@@ -258,7 +308,7 @@ def pad(
             Value to use for padding. Default is 0.
         padding_side (`str`):
             Side on which to add padding. Must be 'left' or 'right'. Default is 'right'.
-        pad_to_multiple_of (`int`, *optional*, defaults to `None`):
+        pad_to_multiple_of (`int`, *optional*):
             If set will pad the sequence to a multiple of the provided value.
 
     Returns:
@@ -492,10 +542,13 @@ def compute_accuracy(eval_pred: EvalPrediction) -> dict[str, float]:
         equal_predictions_count = int(equal_mask.sum())
 
         if equal_predictions_count > 0:
-            warnings.warn(
+            # Before using the logger, the accelerate state must be initialized. It'susually the case when using this
+            # function inside a Trainer, but it may not be the case otherwise, in particular when unit testing.
+            PartialState()
+
+            logger.warning(
                 f"There are {equal_predictions_count} out of {len(predictions[:, 0])} instances where the predictions "
                 "for both options are equal. These instances are ignored in the accuracy computation.",
-                UserWarning,
             )
 
         # Filter out equal predictions
@@ -537,48 +590,6 @@ def exact_div(a, b, custom_error_message=""):
     return q
 
 
-# copied from https://github.com/kvablack/ddpo-pytorch/blob/main/ddpo_pytorch/stat_tracking.py#L5
-class PerPromptStatTracker:
-    r"""
-    Class for tracking statistics per prompt. Mainly used to calculate advantage for the DPPO algorithm
-
-    Args:
-        buffer_size (`int`):
-            Size of the buffer to keep for each prompt.
-        min_count (`int`):
-            Minimum number of samples to keep in the buffer before calculating the mean and std.
-    """
-
-    def __init__(self, buffer_size, min_count):
-        self.buffer_size = buffer_size
-        self.min_count = min_count
-        self.stats = {}
-
-    def update(self, prompts, rewards):
-        prompts = np.array(prompts)
-        rewards = np.array(rewards)
-        unique = np.unique(prompts)
-        advantages = np.empty_like(rewards)
-        for prompt in unique:
-            prompt_rewards = rewards[prompts == prompt]
-            if prompt not in self.stats:
-                self.stats[prompt] = deque(maxlen=self.buffer_size)
-            self.stats[prompt].extend(prompt_rewards)
-
-            if len(self.stats[prompt]) < self.min_count:
-                mean = np.mean(rewards)
-                std = np.std(rewards) + 1e-6
-            else:
-                mean = np.mean(self.stats[prompt])
-                std = np.std(self.stats[prompt]) + 1e-6
-            advantages[prompts == prompt] = (prompt_rewards - mean) / std
-
-        return advantages
-
-    def get_stats(self):
-        return {k: {"mean": np.mean(v), "std": np.std(v), "count": len(v)} for k, v in self.stats.items()}
-
-
 def peft_module_casting_to_bf16(model):
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.LayerNorm) or "norm" in name:
@@ -593,10 +604,10 @@ def get_quantization_config(model_args: ModelConfig) -> Optional[BitsAndBytesCon
     if model_args.load_in_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype=model_args.torch_dtype,  # For consistency with model weights, we use the same value as `torch_dtype`
+            bnb_4bit_compute_dtype=model_args.dtype,  # For consistency with model weights, we use the same value as `dtype`
             bnb_4bit_quant_type=model_args.bnb_4bit_quant_type,
             bnb_4bit_use_double_quant=model_args.use_bnb_nested_quant,
-            bnb_4bit_quant_storage=model_args.torch_dtype,
+            bnb_4bit_quant_storage=model_args.dtype,
         )
     elif model_args.load_in_8bit:
         quantization_config = BitsAndBytesConfig(
@@ -643,8 +654,7 @@ def get_peft_config(model_args: ModelConfig) -> "Optional[PeftConfig]":
 def get_exp_cap(value, decimal=4):
     """
     Get the exponent cap of a value. This is used to cap the exponent of a value to avoid overflow. The formula is :
-    log(value.dtype.max) E.g.
-      For float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
+    log(value.dtype.max) E.g. for float32 data type, the maximum exponent value is 88.7228 to 4 decimal points.
 
     Args:
         value (`torch.Tensor`):
@@ -703,13 +713,13 @@ class OnPolicyConfig(TrainingArguments):
     command line.
 
     Parameters:
-        run_name (`str` or `None`, *optional*, defaults to `None`):
+        run_name (`str`, *optional*):
             Name of the run.
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         num_mini_batches (`int`, *optional*, defaults to `1`):
             Number of minibatches to split a batch into.
-        total_episodes (`int` or `None`, *optional*, defaults to `None`):
+        total_episodes (`int`, *optional*):
             Total number of episodes in the dataset.
         local_rollout_forward_batch_size (`int`, *optional*, defaults to `64`):
             Per rank no grad forward pass in the rollout phase.
@@ -717,38 +727,38 @@ class OnPolicyConfig(TrainingArguments):
             Number of debugging samples generations (i.e., `generate_completions` calls) throughout training.
         response_length (`int`, *optional*, defaults to `53`):
             Length of the response.
-        stop_token (`str` or `None`, *optional*, defaults to `None`):
+        stop_token (`str`, *optional*):
             Specifies the stop token to use for text generation. This parameter is mutually exclusive with
             `stop_token_id`.
 
             - `None`: No stop token is applied, unless `stop_token_id` is specified.
             - `'eos'`: Uses the tokenizer's `eos_token`.
 
-        stop_token_id (`int` or `None`, *optional*, defaults to `None`):
+        stop_token_id (`int`, *optional*):
             Specifies the ID of the stop token to use for text generation. If `None`, no stop token ID is applied,
             unless `stop_token` is specified. This parameter is mutually exclusive with `stop_token`.
         temperature (`float`, *optional*, defaults to `0.7`):
             Sampling temperature.
-        missing_eos_penalty (`float` or `None`, *optional*, defaults to `None`):
+        missing_eos_penalty (`float`, *optional*):
             Penalty applied to the score when the model fails to generate an EOS token. This is useful to encourage to
             generate completions shorter than the maximum length (`max_new_tokens`). The penalty must be a positive
             value.
         sft_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
             Path to the SFT model.
-        world_size (`int` or `None`, *optional*, defaults to `None`):
+        world_size (`int`, *optional*):
             Number of processes (GPUs) to use for the training.
-        num_total_batches (`int` or `None`, *optional*, defaults to `None`):
+        num_total_batches (`int`, *optional*):
             Number of total batches to train.
-        micro_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        micro_batch_size (`int`, *optional*):
             Micro batch size across devices (HF's `per_device_train_batch_size` * `world_size`).
-        local_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        local_batch_size (`int`, *optional*):
             Batch size per GPU (HF's `per_device_train_batch_size` * `gradient_accumulation_steps`).
-        batch_size (`int` or `None`, *optional*, defaults to `None`):
+        batch_size (`int`, *optional*):
             Batch size across devices (HF's `per_device_train_batch_size` * `world_size` *
             `gradient_accumulation_steps`).
-        local_mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        local_mini_batch_size (`int`, *optional*):
             Mini batch size per GPU.
-        mini_batch_size (`int` or `None`, *optional*, defaults to `None`):
+        mini_batch_size (`int`, *optional*):
             Mini batch size across GPUs.
         push_to_hub (`bool`, *optional*, defaults to `False`):
             Whether to push the model to the Hub after training.
@@ -996,6 +1006,10 @@ def prepare_deepspeed(
             The model to be prepared for DeepSpeed training.
         per_device_train_batch_size (`int`):
             The training batch size per device.
+        fp16 (`bool`, defaults to `False`):
+            Whether to use FP16 precision.
+        bf16 (`bool`, defaults to `False`):
+            Whether to use BF16 precision.
 
     Returns:
         `torch.nn.Module`:
@@ -1353,7 +1367,7 @@ def flush_left(mask: torch.Tensor, *tensors: torch.Tensor) -> Union[torch.Tensor
     Args:
         mask (`torch.Tensor`):
             2D tensor (binary mask) with shape `(N, M)`.
-        *tensors (`torch.Tensor`)
+        *tensors (`torch.Tensor`):
             One or more 2D tensors with the same shape as `mask`. These tensors will be processed alongside `mask`,
             with non-zero values shifted and excess zero columns truncated in the same manner.
 
@@ -1467,32 +1481,41 @@ def selective_log_softmax(logits, index) -> torch.Tensor:
     return per_token_logps
 
 
-def entropy_from_logits(logits, chunk_size: int = 1) -> torch.Tensor:
+def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Tensor:
     """
-    Compute the Shannon entropy (in nats) for each row of *logits* without
-    materialising the full soft-max in memory.
-    The batch dimension is processed in chunks of size `chunk_size` so that
-    only a subset of rows is expanded to probabilities at any one time.
+    Compute the Shannon entropy (in nats) for each row of *logits* in a memory-efficient way.
+
+    Instead of materializing the full softmax for all rows at once, the logits are flattened to shape (N, num_classes),
+    where N is the product of all leading dimensions. Computation is then performed in chunks of size `chunk_size`
+    along this flattened dimension, reducing peak memory usage. The result is reshaped back to match the input's
+    leading dimensions.
 
     Args:
         logits (`torch.Tensor`):
-            Logits tensor of shape `(..., num_classes)`. Entropy is taken along the last axis; all
-            leading dimensions are preserved.
-        chunk_size (`int`, *optional*, defaults to `1`):
-            Number of rows to process per iteration.
+            Logits tensor of shape `(..., num_classes)`. Entropy is taken along the last axis; all leading dimensions
+            are preserved in the output.
+        chunk_size (`int`, *optional*, defaults to `128`):
+            Number of rows from the flattened logits to process per iteration. Smaller values reduce memory usage at
+            the cost of more iterations.
 
     Returns:
         `torch.Tensor`:
             Entropy values with shape `logits.shape[:-1]`.
     """
-    per_token_entropies = []
-    for logits_chunk in logits.split(chunk_size, dim=0):
-        logps = F.log_softmax(logits_chunk, dim=-1)
-        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
-        per_token_entropies.extend(chunk_entropy)
+    original_shape = logits.shape[:-1]  # all dims except num_classes
+    num_classes = logits.shape[-1]
 
-    per_token_entropies = torch.stack(per_token_entropies)
-    return per_token_entropies
+    # Flatten all leading dimensions into one
+    flat_logits = logits.reshape(-1, num_classes)
+
+    entropies = []
+    for chunk in flat_logits.split(chunk_size, dim=0):
+        logps = F.log_softmax(chunk, dim=-1)
+        chunk_entropy = -(torch.exp(logps) * logps).sum(-1)
+        entropies.append(chunk_entropy)
+
+    entropies = torch.cat(entropies, dim=0)
+    return entropies.reshape(original_shape)
 
 
 def print_prompt_completions_sample(
@@ -1520,7 +1543,7 @@ def print_prompt_completions_sample(
             List of advantages corresponding to the prompts and completions.
         step (`int`):
             Current training step number, used in the output title.
-        num_samples (`int` or `None`, *optional*, defaults to `None`):
+        num_samples (`int`, *optional*):
             Number of random samples to display. If `None` (default), all items will be displayed.
 
     Example:
@@ -1580,3 +1603,350 @@ def print_prompt_completions_sample(
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
     console.print(panel)
+
+
+class RepeatSampler(Sampler):
+    """
+    Sampler that repeats the indices of a dataset in a structured manner.
+
+    Args:
+        data_source (`Sized`):
+            Dataset to sample from.
+        mini_repeat_count (`int`):
+            Number of times to repeat each index per batch.
+        batch_size (`int`, *optional*, defaults to `1`):
+            Number of unique indices per batch.
+        repeat_count (`int`, *optional*, defaults to `1`):
+            Number of times to repeat the full sampling process.
+        shuffle (`bool`, *optional*, defaults to `True`):
+            Whether to shuffle the dataset.
+        seed (`int`, *optional*):
+            Random seed for reproducibility (only affects this sampler).
+
+    Example:
+    ```python
+    >>> sampler = RepeatSampler(["a", "b", "c", "d", "e", "f", "g"], mini_repeat_count=2, batch_size=3, repeat_count=4)
+    >>> list(sampler)
+    [4, 4, 3, 3, 0, 0,
+     4, 4, 3, 3, 0, 0,
+     4, 4, 3, 3, 0, 0,
+     4, 4, 3, 3, 0, 0,
+     1, 1, 2, 2, 6, 6,
+     1, 1, 2, 2, 6, 6,
+     1, 1, 2, 2, 6, 6,
+     1, 1, 2, 2, 6, 6]
+    ```
+
+    ```txt
+    mini_repeat_count = 3
+          -   -   -
+         [0,  0,  0,  1,  1,  1,  2,  2,  2,  3,  3,  3,      |
+          4,  4,  4,  5,  5,  5,  6,  6,  6,  7,  7,  7,      |
+          8,  8,  8,  9,  9,  9, 10, 10, 10, 11, 11, 11,      |
+                                                                repeat_count = 2
+          0,  0,  0,  1,  1,  1,  2,  2,  2,  3,  3,  3,      |
+          4,  4,  4,  5,  5,  5,  6,  6,  6,  7,  7,  7,      |
+          8,  8,  8,  9,  9,  9, 10, 10, 10, 11, 11, 11, ...] |
+          ---------   ---------   ---------   ---------
+           ---------   ---------   ---------   ---------
+            ---------   ---------   ---------   ---------
+                         batch_size = 12
+    ```
+    """
+
+    def __init__(
+        self,
+        data_source: Sized,
+        mini_repeat_count: int,
+        batch_size: int = 1,
+        repeat_count: int = 1,
+        shuffle: bool = True,
+        seed: Optional[int] = None,
+    ):
+        self.data_source = data_source
+        self.mini_repeat_count = mini_repeat_count
+        self.batch_size = batch_size
+        self.repeat_count = repeat_count
+        self.num_samples = len(data_source)
+        self.shuffle = shuffle
+        self.seed = seed
+
+        if shuffle:
+            self.generator = torch.Generator()  # Create a local random generator
+            if seed is not None:
+                self.generator.manual_seed(seed)
+
+    def __iter__(self):
+        if self.shuffle:
+            # E.g., [2, 4, 3, 1, 0, 6, 5] (num_samples = 7)
+            indexes = torch.randperm(self.num_samples, generator=self.generator).tolist()
+        else:
+            indexes = list(range(self.num_samples))
+
+        #    [2, 4, 3, 1, 0, 6, 5]
+        # -> [[2, 4, 3], [1, 0, 6], [5]]  (batch_size = 3)
+        indexes = [indexes[i : i + self.batch_size] for i in range(0, len(indexes), self.batch_size)]
+
+        #    [[2, 4, 3], [1, 0, 6], [5]]
+        # -> [[2, 4, 3], [1, 0, 6]]
+        indexes = [chunk for chunk in indexes if len(chunk) == self.batch_size]
+
+        for chunk in indexes:
+            for _ in range(self.repeat_count):
+                for index in chunk:
+                    for _ in range(self.mini_repeat_count):
+                        yield index
+
+    def __len__(self) -> int:
+        return (self.num_samples // self.batch_size) * self.batch_size * self.mini_repeat_count * self.repeat_count
+
+
+# torch.nanstd doesn't exist, so we define it here
+def nanstd(tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the standard deviation of a tensor, ignoring NaNs. This function only supports 1D tensors.
+
+    Args:
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
+
+    Returns:
+        `torch.Tensor`:
+            Standard deviation of the tensor, ignoring NaNs.
+    """
+    variance = torch.nanmean((tensor - torch.nanmean(tensor, keepdim=True)) ** 2)  # Compute variance ignoring NaNs
+    count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
+    variance *= count / (count - 1)  # Bessel's correction
+    return torch.sqrt(variance)
+
+
+def split_tensor_dict(
+    tensor_dict: dict[str, Optional[torch.Tensor]], num_chunks: int
+) -> list[dict[str, Optional[torch.Tensor]]]:
+    """
+    Splits a dictionary of tensors along the first dimension into `num_chunks` equal parts.
+
+    Example:
+    ```python
+    >>> x = torch.arange(12).reshape(6, 2)
+    >>> y = torch.arange(6).reshape(6, 1)
+    >>> tensor_dict = {"x": x, "y": y}
+    >>> split_tensor_dict(tensor_dict, 3)
+    [
+        {"x": tensor([[0, 1], [2, 3]]), "y": tensor([[0], [1]])},
+        {"x": tensor([[4, 5], [6, 7]]), "y": tensor([[2], [3]])},
+        {"x": tensor([[ 8,  9], [10, 11]]), "y": tensor([[4], [5]])}
+    ]
+    ```
+    """
+    first_tensor = next(tensor for tensor in tensor_dict.values() if tensor is not None)
+    chunk_size = first_tensor.shape[0] // num_chunks
+    chunks = []
+    for i in range(num_chunks):
+        chunk_dict = {}
+        for key, tensor in tensor_dict.items():
+            if tensor is not None and (isinstance(tensor, list) or tensor.ndim > 0):
+                chunk_dict[key] = tensor[i * chunk_size : (i + 1) * chunk_size]
+            elif tensor is not None and tensor.ndim == 0:
+                chunk_dict[key] = tensor
+            else:
+                chunk_dict[key] = None
+        chunks.append(chunk_dict)
+    return chunks
+
+
+def shuffle_sequence_dict(seq_dict: dict[str, Optional[Sequence]]) -> dict[str, Optional[Sequence]]:
+    """
+    Shuffles all sequence-like values in a dictionary along the first dimension in unison.
+
+    Example:
+    ```python
+    >>> x = torch.arange(6).reshape(3, 2)
+    >>> y = ["a", "b", "c"]
+    >>> seq_dict = {"x": x, "y": y}
+    >>> shuffle_sequence_dict(seq_dict)
+    {'x': tensor([[2, 3],
+                  [0, 1],
+                  [4, 5]]),
+     'y': ['b', 'a', 'c']}
+    ```
+    """
+    # Determine batch size from the first non-None sequence
+    batch_size = len(next(v for v in seq_dict.values() if v is not None))
+    permutation = torch.randperm(batch_size)
+
+    def permute(v: Optional[Sequence]) -> Optional[Sequence]:
+        if v is None:
+            return None
+        if isinstance(v, torch.Tensor) and v.ndim == 0:
+            return v
+        if isinstance(v, torch.Tensor) and v.ndim >= 1:
+            return v[permutation]
+        return [v[i] for i in permutation]
+
+    return {key: permute(val) for key, val in seq_dict.items()}
+
+
+def nanmin(tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the minimum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
+
+    Args:
+        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+
+    Returns:
+        `torch.Tensor`: Minimum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+    """
+    if torch.isnan(tensor).all():
+        return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
+    return torch.min(tensor[~torch.isnan(tensor)])
+
+
+def nanmax(tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the maximum value of a tensor, ignoring NaNs. This function only supports 1D tensors.
+
+    Args:
+        tensor (`torch.Tensor`): Input tensor of shape `(N,)`.
+
+    Returns:
+        `torch.Tensor`: Maximum value of the tensor, ignoring NaNs. Returns NaN if all values are NaN.
+    """
+    if torch.isnan(tensor).all():
+        return torch.tensor(float("nan"), dtype=tensor.dtype, device=tensor.device)
+    return torch.max(tensor[~torch.isnan(tensor)])
+
+
+def identity(x):
+    """Do we really need docs for this?"""
+    return x
+
+
+def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
+    """
+    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
+    and batch["num_images"] while keeping other entries unchanged.
+    """
+    if "image_grid_thw" not in batch or "pixel_values" not in batch or "num_images" not in batch:
+        return batch
+
+    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
+    pixel_values = batch["pixel_values"]  # [total, feature_dim]
+
+    if sum(lengths) != pixel_values.size(0):
+        raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
+
+    boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
+    sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
+    split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
+    image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
+    return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
+
+
+def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
+    """
+    Opposite of `split_pixel_values_by_grid`. Merges a list of tensors in `batch["pixel_values"]` back into a single
+    tensor along the first dimension.
+    """
+    pixel_values = batch.get("pixel_values")
+    if isinstance(pixel_values, list):
+        merged = torch.cat(pixel_values, dim=0)
+        batch = {**batch, "pixel_values": merged}
+
+    image_grid_thw = batch.get("image_grid_thw")
+    if isinstance(image_grid_thw, list):
+        merged = torch.cat(image_grid_thw, dim=0)
+        batch = {**batch, "image_grid_thw": merged}
+
+    return batch
+
+
+def truncate_with_protected_tokens(
+    ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Truncate tensors to target length while preserving protected tokens.
+
+    Args:
+        ids (`torch.Tensor`):
+            Input tensor of token IDs, shape (batch_size, sequence_length).
+        mask (`torch.Tensor`):
+            Input tensor of attention masks, shape (batch_size, sequence_length).
+        target_length (`int`):
+            Desired length of the output sequences.
+        protected_tokens (`list[int]`):
+            List of token IDs that should be preserved in the output.
+    """
+    protected_set = set(protected_tokens)
+    # Create protected_tokens tensor once to avoid recreating it on every call
+    protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
+
+    def process_sequence(ids, mask):
+        # Create boolean masks
+        is_protected = torch.isin(ids, protected_tokens_tensor)
+        is_non_protected = ~is_protected
+
+        # Count tokens
+        num_protected = is_protected.sum().item()
+        num_non_protected_needed = target_length - num_protected
+
+        if num_non_protected_needed < 0:
+            raise ValueError(
+                f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
+                f"Please increase target length to at least {num_protected} or disable truncation."
+            )
+
+        # Select which non-protected tokens to keep (rightmost ones)
+        non_protected_indices = torch.where(is_non_protected)[0]
+        keep_non_protected = torch.zeros_like(is_non_protected)
+        if num_non_protected_needed > 0:
+            keep_indices = non_protected_indices[-num_non_protected_needed:]
+            keep_non_protected[keep_indices] = True
+
+        # Final mask: protected OR selected non-protected
+        keep_mask = is_protected | keep_non_protected
+
+        return ids[keep_mask], mask[keep_mask]
+
+    # Process each sequence in the batch
+    truncated_seq = []
+    truncated_mask = []
+
+    for i in range(ids.shape[0]):
+        new_ids, new_mask = process_sequence(ids[i], mask[i])
+        truncated_seq.append(new_ids)
+        truncated_mask.append(new_mask)
+
+    return torch.stack(truncated_seq), torch.stack(truncated_mask)
+
+
+def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
+    """
+    Create a model from a given path using the specified initialization arguments.
+
+    Args:
+        model_id (`str`):
+            Path to the model. Can be either a local directory or a model identifier from the Hugging Face Hub.
+        kwargs (`dict`):
+            Initialization keyword arguments to pass to the model's `from_pretrained` method. When `'dtype'` is
+            specified, it can be either a `torch.dtype` or one of the strings: `'bfloat16'`, `'float16'`, `'float32'`,
+            or `'auto'`.
+
+    Returns:
+        [`~transformers.PreTrainedModel`]:
+            The instantiated model.
+    """
+    dtype = kwargs.get("dtype")
+    if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+        pass  # dtype is already a torch.dtype or "auto" or None
+    elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
+        kwargs["dtype"] = getattr(torch, dtype)
+    else:
+        raise ValueError(
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing "
+            f"a valid `torch.dtype` (e.g., 'float32'), but got {dtype}."
+        )
+    config = AutoConfig.from_pretrained(model_id)
+    architecture = getattr(transformers, config.architectures[0])
+    model = architecture.from_pretrained(model_id, **kwargs)
+    return model

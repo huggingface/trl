@@ -98,6 +98,42 @@ class PolicyAndValueWrapper(nn.Module):
 
 
 class PPOTrainer(Trainer):
+    """Trainer for Proximal Policy Optimization (PPO).
+
+    For details on PPO, see the paper: [Proximal Policy Optimization
+    Algorithms](https://huggingface.co/papers/1707.06347).
+
+    Args:
+        args ([`PPOConfig`]):
+            Training arguments.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
+            Class to process the data.
+        model (`torch.nn.Module`):
+            Model to be trained. This is the policy model.
+        ref_model (`torch.nn.Module`, *optional*):
+            Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
+        reward_model (`torch.nn.Module`):
+            Reward model used to compute the rewards.
+        train_dataset ([`~datasets.Dataset`]):
+            Dataset for training.
+        value_model (`torch.nn.Module`):
+            Value model used to predict the value of a state.
+        data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
+            Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
+            using the `processing_class`.
+        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
+            Dataset for evaluation.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`, the
+            optimizer and the learning rate scheduler are created using the
+            [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
+        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
+            Callbacks to use during training.
+        peft_config ([`~peft.config.PeftConfig`], *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
+            will be wrapped with the specified PEFT adapter.
+    """
+
     _tag_names = ["trl", "ppo"]
 
     def __init__(
@@ -235,7 +271,7 @@ class PPOTrainer(Trainer):
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
 
         #########
-        ### trainer specifics
+        # trainer specifics
         #########
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
@@ -267,7 +303,7 @@ class PPOTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         #########
-        ### setup dataloader
+        # setup dataloader
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
@@ -682,7 +718,7 @@ class PPOTrainer(Trainer):
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
         if self.control.should_save:
-            self._save_checkpoint(model, trial=None, metrics=None)
+            self._save_checkpoint(model, trial=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
@@ -768,11 +804,11 @@ class PPOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -794,8 +830,12 @@ class PPOTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{mziegler2019fine-tuning,
             title        = {{Fine-Tuning Language Models from Human Preferences}},
@@ -809,7 +849,7 @@ class PPOTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=tags,
+            tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="PPO",

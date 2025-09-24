@@ -27,14 +27,13 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from accelerate.utils import tqdm
 from datasets import Dataset, IterableDataset
 from torch import autocast
 from torch.utils.data import DataLoader
 from transformers import (
-    AutoModelForCausalLM,
-    AutoTokenizer,
+    AutoProcessor,
     BaseImageProcessor,
     DataCollator,
     FeatureExtractionMixin,
@@ -49,7 +48,7 @@ from transformers.integrations import (
     is_mlflow_available,
     is_wandb_available,
 )
-from transformers.models.auto.modeling_auto import MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES
+from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_liger_kernel_available, is_peft_available
@@ -62,6 +61,7 @@ from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     RunningMoments,
     cap_exp,
+    create_model_from_path,
     disable_dropout_in_model,
     empty_cache,
     flush_left,
@@ -95,11 +95,15 @@ if is_mlflow_available():
     import mlflow
 
 
+logger = logging.get_logger(__name__)
+
+
 def shift_tokens_right(input_ids: torch.Tensor, decoder_start_token_id: int) -> torch.Tensor:
     """Shift input ids one token to the right, and pad with pad_token_id"""
     shifted_input_ids = input_ids.new_zeros(input_ids.shape)
     shifted_input_ids[:, 1:] = input_ids[:, :-1].clone()
     shifted_input_ids[:, 0] = decoder_start_token_id
+    return shifted_input_ids
 
 
 @dataclass
@@ -200,7 +204,7 @@ class DPOTrainer(Trainer):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        args ([`DPOConfig`], *optional*, defaults to `None`):
+        args ([`DPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator (`DataCollator`, *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
@@ -214,7 +218,7 @@ class DPOTrainer(Trainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoTokenizer.from_pretrained`].
         compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
@@ -223,7 +227,7 @@ class DPOTrainer(Trainer):
             `True`, your compute_metrics function must take a boolean `compute_result` argument. This will be triggered
             after the last eval batch to signal that the function needs to calculate and return the global summary
             statistics rather than accumulating the batch-level statistics.
-        callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
@@ -232,16 +236,16 @@ class DPOTrainer(Trainer):
         optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to `None`):
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.
 
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
-        peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
@@ -266,52 +270,66 @@ class DPOTrainer(Trainer):
         peft_config: Optional["PeftConfig"] = None,
     ):
         # Args
-        model_id = model if isinstance(model, str) else model.config._name_or_path
         if args is None:
-            model_name = model_id.split("/")[-1]
+            model_name = model if isinstance(model, str) else model.config._name_or_path
+            model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
-        # Handle the tokenizer
-        if processing_class is None:
-            processing_class = AutoTokenizer.from_pretrained(model_id)
-
-        if args.padding_value is not None:
-            self.padding_value = args.padding_value
+        # Model and reference model
+        if isinstance(model, str):
+            model = create_model_from_path(model, **args.model_init_kwargs or {})
         else:
-            if hasattr(processing_class, "pad_token_id") and processing_class.pad_token_id is not None:
-                self.padding_value = processing_class.pad_token_id
-            elif hasattr(processing_class, "tokenizer") and processing_class.tokenizer.pad_token_id is not None:
-                self.padding_value = processing_class.tokenizer.pad_token_id
-            else:
-                raise ValueError(
-                    "`padding_value` is not specified in `DPOConfig`, and `pad_token_id` is missing in the "
-                    "`processing_class`. Please either set the `padding_value` argument in `DPOConfig`, or set "
-                    "`tokenizer.pad_token` (e.g., `tokenizer.pad_token = tokenizer.eos_token`) before instantiating "
-                    "the trainer."
+            if args.model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
+                    "The `model_init_kwargs` will be ignored."
                 )
-
-        # Model
-        if not isinstance(model, str) and ref_model is model:
+        model_id = model.config._name_or_path
+        if isinstance(ref_model, str):
+            ref_model = create_model_from_path(ref_model, **args.ref_model_init_kwargs or {})
+        else:
+            if args.ref_model_init_kwargs is not None:
+                logger.warning(
+                    "You passed `ref_model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
+                    "The `ref_model_init_kwargs` will be ignored."
+                )
+        if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
-                "same as `model`, you must mass a copy of it, or `None` if you use peft."
+                "same as `model`, you can simply omit the `ref_model` argument and it will be created for you."
             )
 
-        if args.model_init_kwargs is not None and not isinstance(model, str):
-            warnings.warn(
-                "You passed model_init_kwargs to the `DPOConfig`, but your model is already instantiated. "
-                "The `model_init_kwargs` will be ignored."
-            )
-        if isinstance(model, str):
-            model = self._create_model_from_path(model, args)
+        # Processing class
+        if processing_class is None:
+            processing_class = AutoProcessor.from_pretrained(model_id)
 
-        if args.ref_model_init_kwargs is not None and not isinstance(ref_model, str):
+        # Handle pad token for processors or tokenizers
+        if isinstance(processing_class, ProcessorMixin):
+            tokenizer = processing_class.tokenizer
+            self._is_vlm = True
+        elif isinstance(processing_class, PreTrainedTokenizerBase):
+            tokenizer = processing_class
+            self._is_vlm = False
+        else:
+            raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
+
+        # Get the pad token: if not provided, use the one from the processing class or the eos token
+        # if the processing class does not have a pad token.
+        if args.padding_value is not None:  # deprecated, will be removed in 0.26.0.
             warnings.warn(
-                "You passed ref_model_init_kwargs to the `DPOConfig`, but your ref_model is already instantiated. "
-                "The `ref_model_init_kwargs` will be ignored."
+                "The `padding_value` argument is deprecated and will be removed in version 0.26.0. Please use "
+                "`pad_token` (str) instead."
             )
-        if isinstance(ref_model, str):
-            ref_model = self._create_model_from_path(ref_model, args, is_ref=True)
+            self.pad_token_id = args.padding_value
+        else:
+            pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
+            self.pad_token_id = tokenizer.convert_tokens_to_ids(pad_token)
+            if self.pad_token_id is None:
+                raise ValueError(
+                    f"The specified `pad_token` ('{pad_token}') is not found in the vocabulary of the given "
+                    f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
+                    "in the vocabulary before using it as a padding token."
+                )
 
         # PEFT configuration and model wrapping
         model = self._prepare_peft_model(model, ref_model, peft_config, args)
@@ -323,7 +341,7 @@ class DPOTrainer(Trainer):
             )
 
         self.is_encoder_decoder = model.config.is_encoder_decoder
-        self.is_vision_model = model.config.model_type in MODEL_FOR_VISION_2_SEQ_MAPPING_NAMES.keys()
+        self.is_vision_model = model.config.model_type in MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES.keys()
         self.is_peft_model = is_peft_available() and isinstance(model, PeftModel)
         self.model_adapter_name = args.model_adapter_name
         self.ref_adapter_name = args.ref_adapter_name
@@ -350,16 +368,17 @@ class DPOTrainer(Trainer):
                     "You set `use_liger_loss=True` but the liger kernel is not available. "
                     "Please install liger-kernel first: `pip install liger-kernel`"
                 )
-            if args.loss_type != "sigmoid":
+            if args.loss_type not in ["sigmoid", "apo_zero", "apo_down", "sppo_hard", "nca_pair"]:
                 raise ValueError(
-                    "You set `use_liger_loss=True` but the loss type is not `sigmoid`. "
-                    "Please set `loss_type='sigmoid'` to use the liger kernel."
+                    "You set `use_liger_loss=True` but the loss type is not from `[sigmoid, apo_zero, apo_down, sppo_hard, nca_pair`. "
+                    "Please set `loss_type='[sigmoid | apo_zero | apo_down | sppo_hard | nca_pair]'` to use the liger kernel."
                 )
             self.dpo_loss_fn = LigerFusedLinearDPOLoss(
                 ignore_index=args.label_pad_token_id,
                 beta=args.beta,
                 use_ref_model=not args.reference_free,
                 average_log_prob=False,
+                loss_type=args.loss_type,
             )
         # The trainer estimates the number of FLOPs (floating-point operations) using the number of elements in the
         # input tensor associated with the key "input_ids". However, in DPO, the sampled data does not include the
@@ -372,7 +391,7 @@ class DPOTrainer(Trainer):
 
         # Data collator
         if data_collator is None:
-            data_collator = DataCollatorForPreference(pad_token_id=self.padding_value)
+            data_collator = DataCollatorForPreference(pad_token_id=self.pad_token_id)
 
         self.generate_during_eval = args.generate_during_eval
         self.label_pad_token_id = args.label_pad_token_id
@@ -385,7 +404,7 @@ class DPOTrainer(Trainer):
 
         if args.padding_free:
             if model.config._attn_implementation != "flash_attention_2":
-                warnings.warn(
+                logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to "
                     "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
                     "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
@@ -394,7 +413,7 @@ class DPOTrainer(Trainer):
                     "attention mechanism can handle flattened sequences."
                 )
             if args.per_device_train_batch_size == 1:
-                warnings.warn(
+                logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."
@@ -414,22 +433,21 @@ class DPOTrainer(Trainer):
         self.use_weighting = args.use_weighting
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
         for loss_type in self.loss_type:
             if (
                 loss_type in ["hinge", "ipo", "bco_pair", "sppo_hard", "nca_pair", "apo_zero", "apo_down"]
                 and args.label_smoothing > 0
             ):
-                warnings.warn(
+                logger.warning(
                     f"You are using the {loss_type} loss type that does not support label smoothing. The "
-                    "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
-                    UserWarning,
+                    "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this "
+                    "warning.",
                 )
             if loss_type == "kto_pair":
                 raise ValueError("Support for kto_pair has been removed in DPOTrainer. Please use KTOTrainer.")
@@ -513,32 +531,21 @@ class DPOTrainer(Trainer):
         if "bco_pair" in self.loss_type:
             self.running = RunningMoments(self.accelerator)
 
-    def _create_model_from_path(self, model_path: str, args: DPOConfig, is_ref: bool = False) -> PreTrainedModel:
-        """Creates a model from a path or model identifier."""
-        if not is_ref:
-            model_init_kwargs = args.model_init_kwargs or {}
-        else:
-            model_init_kwargs = args.ref_model_init_kwargs or {}
+    @property
+    def padding_value(self):
+        warnings.warn(
+            "The `padding_value` property is deprecated and will be removed in version 0.26.0. Please use "
+            "`pad_token_id` instead.",
+        )
+        return self.pad_token_id
 
-        # Handle torch dtype
-        torch_dtype = model_init_kwargs.get("torch_dtype")
-        if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-            pass  # torch_dtype is already a torch.dtype or "auto" or None
-        elif isinstance(torch_dtype, str):  # it's a str, but not "auto"
-            torch_dtype = getattr(torch, torch_dtype)
-            model_init_kwargs["torch_dtype"] = torch_dtype
-        else:
-            raise ValueError(
-                "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
-                f"a `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
-            )
-        # Disable caching if gradient checkpointing is enabled (not supported)
-        # if args.gradient_checkpointing:
-        #     model_init_kwargs["use_cache"] = False
-
-        # Create model
-        model = AutoModelForCausalLM.from_pretrained(model_path, **model_init_kwargs)
-        return model
+    @padding_value.setter
+    def padding_value(self, value):
+        warnings.warn(
+            "The `padding_value` property is deprecated and will be removed in version 0.26.0. Please use "
+            "`pad_token_id` instead.",
+        )
+        self.pad_token_id = value
 
     def _prepare_peft_model(
         self, model: PreTrainedModel, ref_model: PreTrainedModel, peft_config: Any, args: DPOConfig
@@ -1011,6 +1018,29 @@ class DPOTrainer(Trainer):
                 Log probabilities of the reference model for the chosen responses. Shape: `(batch_size,)`.
             ref_rejected_logps (`torch.FloatTensor`):
                 Log probabilities of the reference model for the rejected responses. Shape: `(batch_size,)`.
+            loss_type (`str`, defaults to `"sigmoid"`):
+                The type of loss to compute. One of:
+                - `"sigmoid"`: Sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
+                - `"hinge"`: Hinge loss on the normalized likelihood from the
+                  [SLiC](https://huggingface.co/papers/2305.10425) paper.
+                - `"ipo"`: IPO loss from the [IPO](https://huggingface.co/papers/2310.12036) paper.
+                - `"exo_pair"`: Pairwise EXO loss from the [EXO](https://huggingface.co/papers/2402.00856) paper.
+                - `"nca_pair"`: Pairwise NCA loss from the [NCA](https://huggingface.co/papers/2402.05369) paper.
+                - `"robust"`: Unbiased estimate of the DPO loss that is robust to preference noise from the [Robust
+                  DPO](https://huggingface.co/papers/2403.00409) paper.
+                - `"bco_pair"`: Pairwise BCO loss from the [BCO](https://huggingface.co/papers/2404.04656) paper.
+                - `"sppo_hard"`: SPPO loss with hard label from the [SPPO](https://huggingface.co/papers/2405.00675)
+                  paper.
+                - `"aot"`: AOT loss for paired datasets from the [AOT](https://huggingface.co/papers/2406.05882) paper.
+                - `"aot_pair"`: AOT loss for unpaired datasets from the [AOT](https://huggingface.co/papers/2406.05882)
+                  paper.
+                - `"discopop"`: DiscoPOP (a.k.a Log-Ratio Modulated Loss, LRML) loss from the
+                  [DiscoPOP](https://huggingface.co/papers/2406.08414) paper.
+                - `"apo_zero"`: APO-zero loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"apo_down"`: APO-down loss from the [APO](https://huggingface.co/papers/2408.06266) paper.
+                - `"sft"`: Negative log-likelihood loss (standard supervised fine-tuning loss).
+            model_output (`dict[str, torch.FloatTensor]`, *optional*):
+                The output of the model's forward pass. This is used to compute auxiliary losses if enabled.
 
         Returns:
             A tuple of three tensors: `(losses, chosen_rewards, rejected_rewards)`. The losses tensor contains the DPO
@@ -1194,7 +1224,7 @@ class DPOTrainer(Trainer):
         self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
     ) -> dict[str, torch.Tensor]:
         unwrapped_model = self.accelerator.unwrap_model(model)
-        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.pad_token_id)
 
         model_kwargs = {}
         if self.aux_loss_enabled:
@@ -1330,10 +1360,11 @@ class DPOTrainer(Trainer):
                 model_kwargs["attention_mask"] = attention_mask
 
             # Get the base model outputs (before LM head)
-            if hasattr(unwrapped_model, "get_decoder"):
+            if hasattr(unwrapped_model, "get_decoder") and unwrapped_model.get_decoder() is not None:
                 base_model = unwrapped_model.get_decoder()
             else:
-                base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
+                base_attr = getattr(unwrapped_model, "base_model_prefix", self.args.base_model_attribute_name)
+                base_model = getattr(unwrapped_model, base_attr, unwrapped_model)
 
             outputs = base_model(
                 input_ids,
@@ -1346,12 +1377,11 @@ class DPOTrainer(Trainer):
             ref_hidden_states = None
             if not self.reference_free and self.ref_model is not None:
                 unwrapped_ref_model = self.accelerator.unwrap_model(self.ref_model)
-                if hasattr(unwrapped_ref_model, "get_decoder"):
+                if hasattr(unwrapped_ref_model, "get_decoder") and unwrapped_ref_model.get_decoder() is not None:
                     ref_base_model = unwrapped_ref_model.get_decoder()
                 else:
-                    ref_base_model = getattr(
-                        unwrapped_ref_model, self.args.base_model_attribute_name, unwrapped_ref_model
-                    )
+                    ref_attr = getattr(unwrapped_ref_model, "base_model_prefix", self.args.base_model_attribute_name)
+                    ref_base_model = getattr(unwrapped_ref_model, ref_attr, unwrapped_ref_model)
 
                 ref_outputs = ref_base_model(
                     input_ids,
@@ -1360,10 +1390,11 @@ class DPOTrainer(Trainer):
                 )
                 ref_hidden_states = ref_outputs.last_hidden_state[:, :-1]
             elif not self.reference_free:
-                if hasattr(unwrapped_model, "get_decoder"):
+                if hasattr(unwrapped_model, "get_decoder") and unwrapped_model.get_decoder() is not None:
                     ref_base_model = unwrapped_model.get_decoder()
                 else:
-                    ref_base_model = getattr(unwrapped_model, self.args.base_model_attribute_name, unwrapped_model)
+                    ref_attr = getattr(unwrapped_model, "base_model_prefix", self.args.base_model_attribute_name)
+                    ref_base_model = getattr(unwrapped_model, ref_attr, unwrapped_model)
                 with self.null_ref_context():
                     ref_outputs = ref_base_model(
                         input_ids,
@@ -1440,7 +1471,7 @@ class DPOTrainer(Trainer):
         """
         num_examples = batch["prompt_input_ids"].shape[0]
 
-        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.padding_value)
+        concatenated_batch = self.concatenated_inputs(batch, padding_value=self.pad_token_id)
 
         model_kwargs = {"use_cache": False}
         if self.aux_loss_enabled:
@@ -1768,7 +1799,7 @@ class DPOTrainer(Trainer):
                 attention_mask=batch["prompt_attention_mask"],
                 max_length=self.max_length,
                 do_sample=True,
-                pad_token_id=self.padding_value,
+                pad_token_id=self.pad_token_id,
             )
 
             # if ref_output in batch use that otherwise use the reference model
@@ -1782,7 +1813,7 @@ class DPOTrainer(Trainer):
                             attention_mask=batch["prompt_attention_mask"],
                             max_length=self.max_length,
                             do_sample=True,
-                            pad_token_id=self.padding_value,
+                            pad_token_id=self.pad_token_id,
                         )
                 else:
                     ref_output = self.ref_model.generate(
@@ -1790,13 +1821,13 @@ class DPOTrainer(Trainer):
                         attention_mask=batch["prompt_attention_mask"],
                         max_length=self.max_length,
                         do_sample=True,
-                        pad_token_id=self.padding_value,
+                        pad_token_id=self.pad_token_id,
                     )
 
-        policy_output = pad_to_length(policy_output, self.max_length, self.padding_value)
+        policy_output = pad_to_length(policy_output, self.max_length, self.pad_token_id)
         policy_output_decoded = self.processing_class.batch_decode(policy_output, skip_special_tokens=True)
 
-        ref_output = pad_to_length(ref_output, self.max_length, self.padding_value)
+        ref_output = pad_to_length(ref_output, self.max_length, self.pad_token_id)
         ref_output_decoded = self.processing_class.batch_decode(ref_output, skip_special_tokens=True)
 
         return policy_output_decoded, ref_output_decoded
@@ -1905,7 +1936,7 @@ class DPOTrainer(Trainer):
         Args:
             logs (`dict[str, float]`):
                 The values to log.
-            start_time (`float` or `None`, *optional*, defaults to `None`):
+            start_time (`float`, *optional*):
                 Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
@@ -1935,11 +1966,11 @@ class DPOTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -1961,8 +1992,12 @@ class DPOTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
+        # docstyle-ignore
         citation = textwrap.dedent(
             """\
             @inproceedings{rafailov2023direct,
@@ -1980,7 +2015,7 @@ class DPOTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=tags,
+            tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="DPO",

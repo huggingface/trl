@@ -1,4 +1,4 @@
-.PHONY: test precommit common_tests slow_tests test_examples tests_gpu
+.PHONY: test precommit common_tests slow_tests test_examples tests_gpu test_experimental
 
 check_dirs := examples tests trl
 
@@ -11,6 +11,7 @@ test:
 precommit:
 	python scripts/add_copyrights.py
 	pre-commit run --all-files
+	doc-builder style trl tests docs/source --max_len 119
 
 slow_tests:
 	pytest -m "slow" tests/ $(if $(IS_GITHUB_CI),--report-log "slow_tests.log",)
@@ -27,3 +28,6 @@ test_examples:
 		TRL_ACCELERATE_CONFIG=$${file} bash $(COMMAND_FILES_PATH)/run_dpo.sh; \
 		echo $$?','$${file} >> temp_results_dpo_tests.txt; \
 	done
+
+test_experimental:
+	pytest -k "experimental"

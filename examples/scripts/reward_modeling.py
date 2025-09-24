@@ -14,7 +14,9 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -45,13 +47,15 @@ python examples/scripts/reward_modeling.py \
     --eval_steps 50 \
     --max_length 2048 \
     --use_peft \
+    --lora_task_type SEQ_CLS \
     --lora_r 32 \
     --lora_alpha 16
 """
 
-import warnings
+import os
 
 import torch
+from accelerate import logging
 from datasets import load_dataset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
 
@@ -67,6 +71,12 @@ from trl import (
 )
 
 
+logger = logging.get_logger(__name__)
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
+
+
 if __name__ == "__main__":
     parser = HfArgumentParser((ScriptArguments, RewardConfig, ModelConfig))
     script_args, training_args, model_args = parser.parse_args_into_dataclasses()
@@ -75,17 +85,18 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
         use_cache=False if training_args.gradient_checkpointing else True,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )
@@ -100,10 +111,9 @@ if __name__ == "__main__":
         model, tokenizer = setup_chat_format(model, tokenizer)
 
     if model_args.use_peft and model_args.lora_task_type != "SEQ_CLS":
-        warnings.warn(
+        logger.warning(
             "You are using a `task_type` that is different than `SEQ_CLS` for PEFT. This will lead to silent bugs"
             " Make sure to pass --lora_task_type SEQ_CLS when using this script with PEFT.",
-            UserWarning,
         )
 
     ##############

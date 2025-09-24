@@ -80,7 +80,7 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
   trainer = XPOTrainer(
       ...
 -     judge=judge,
-+     reward_model=reward_model,
++     reward_funcs=reward_model,
   )
 ```
 
@@ -131,7 +131,7 @@ python examples/scripts/xpo.py \
 
 ## Logged metrics
 
-The logged metrics are as follows:
+While training and evaluating we record the following reward metrics:
 
 * `loss/xpo`: The mean xpo part of the full loss.
 * `loss/dpo`: The mean dpo part of the full loss.

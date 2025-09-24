@@ -118,7 +118,7 @@ accelerate launch trl/scripts/dpo.py \
 
 ## Logged metrics
 
-While training and evaluating we record the following reward metrics:
+While training and evaluating, we record the following reward metrics:
 
 - `rewards/chosen`: the mean difference between the log probabilities of the policy model and the reference model for the chosen responses scaled by beta
 - `rewards/rejected`: the mean difference between the log probabilities of the policy model and the reference model for the rejected responses scaled by beta
@@ -255,10 +255,9 @@ model = AutoModelForCausalLM.from_pretrained(
     load_in_4bit=True,
     quantization_config=bnb_config,
     attn_implementation="flash_attention_2",
-    torch_dtype=torch.bfloat16,
+    dtype=torch.bfloat16,
     device_map="auto",
 )
-model.config.use_cache = False
 
 # Load the adapter.
 model = PeftModel.from_pretrained(

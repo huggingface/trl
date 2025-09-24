@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-import warnings
 from collections import defaultdict
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -22,7 +21,7 @@ from typing import Any, Callable, Optional, Union
 import pandas as pd
 import torch
 import torch.nn as nn
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from accelerate.utils import gather_object
 from datasets import Dataset
 from transformers import (
@@ -62,6 +61,9 @@ if is_wandb_available():
     import wandb
 
 
+logger = logging.get_logger(__name__)
+
+
 def _tokenize(batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase") -> dict[str, list[Any]]:
     """Tokenize a batch from a reward modelling dataset."""
     new_examples = {
@@ -82,6 +84,44 @@ def _tokenize(batch: dict[str, list[Any]], tokenizer: "PreTrainedTokenizerBase")
 
 
 class RewardTrainer(Trainer):
+    """
+    Trainer for custom reward.
+
+    Args:
+        model ([`~transformers.PreTrainedModel`] or `torch.nn.Module`, *optional*):
+            Model to be trained, preferably an [`~transformers.AutoModelForSequenceClassification`].
+        args ([`RewardConfig`], *optional*):
+            Training arguments.
+        data_collator ([`~transformers.DataCollator`], *optional*):
+            The data collator to use for training. If None is specified, the default data collator
+            [`~trainer.utils.RewardDataCollatorWithPadding`] will be used which will pad the sequences to the maximum
+            length of the sequences in the batch, given a dataset of paired sequences.
+        train_dataset ([`~datasets.Dataset`], *optional*):
+            The dataset to use for training.
+        eval_dataset ([`~datasets.Dataset`], *optional*):
+            The dataset to use for evaluation.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
+        model_init (`Callable[[], transformers.PreTrainedModel]`, *optional*):
+            The model initializer to use for training. If None is specified, the default model initializer will be
+            used.
+        compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional*, defaults to [`~trainer.utils.compute_accuracy`]):
+            Function to compute metrics at evaluation. Must take in an [`~transformers.EvalPrediction`] and return a
+            dictionary string to float.
+        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
+            Callbacks to use during training.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*):
+            Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
+            return the logits to be used for metrics computation.
+        peft_config (`dict`, *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
+            wrapped with the specified PEFT adapter.
+    """
+
     _tag_names = ["trl", "reward-trainer"]
 
     def __init__(
@@ -104,42 +144,6 @@ class RewardTrainer(Trainer):
         preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
         peft_config: Optional[dict] = None,
     ):
-        """
-        Initialize RewardTrainer.
-
-        Args:
-            model (`transformers.PreTrainedModel`):
-                The model to train, preferably an `AutoModelForSequenceClassification`.
-            args (`RewardConfig`):
-                The arguments to use for training.
-            data_collator (`transformers.DataCollator`):
-                The data collator to use for training. If None is specified, the default data collator
-                (`RewardDataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of
-                the sequences in the batch, given a dataset of paired sequences.
-            train_dataset (`datasets.Dataset`):
-                The dataset to use for training.
-            eval_dataset (`datasets.Dataset`):
-                The dataset to use for evaluation.
-            processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
-                Processing class used to process the data. If provided, will be used to automatically process the
-                inputs for the model, and it will be saved along the model to make it easier to rerun an interrupted
-                training or reuse the fine-tuned model.
-            model_init (`Callable[[], transformers.PreTrainedModel]`):
-                The model initializer to use for training. If None is specified, the default model initializer will be
-                used.
-            compute_metrics (`Callable[[transformers.EvalPrediction], dict]`, *optional* defaults to `compute_accuracy`):
-                The metrics to use for evaluation. If no metrics are specified, the default metric (`compute_accuracy`)
-                will be used.
-            callbacks (`list[transformers.TrainerCallback]`):
-                The callbacks to use for training.
-            optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
-                The optimizer and scheduler to use for training.
-            preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
-                The function to use to preprocess the logits before computing the metrics.
-            peft_config (`dict`, defaults to `None`):
-                The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped
-                in a PEFT model.
-        """
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
 
@@ -166,10 +170,9 @@ class RewardTrainer(Trainer):
                 except FrozenInstanceError:
                     args = replace(args, remove_unused_columns=False)
                 # warn users
-                warnings.warn(
+                logger.warning(
                     "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_reward_data_collator = True
@@ -365,11 +368,11 @@ class RewardTrainer(Trainer):
         Creates a draft of a model card using the information available to the `Trainer`.
 
         Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
+            model_name (`str`, *optional*):
                 Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+            dataset_name (`str`, *optional*):
                 Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+            tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
         if not self.is_world_process_zero():
@@ -391,6 +394,9 @@ class RewardTrainer(Trainer):
         if hasattr(self.model.config, "unsloth_version"):
             tags.add("unsloth")
 
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
         tags.update(self._tag_names)
 
         model_card = generate_model_card(
@@ -398,7 +404,7 @@ class RewardTrainer(Trainer):
             model_name=model_name,
             hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=tags,
+            tags=list(tags),
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
             trainer_name="Reward",

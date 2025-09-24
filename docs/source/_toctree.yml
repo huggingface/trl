@@ -11,6 +11,8 @@
     title: Dataset Formats
   - local: paper_index
     title: Paper Index
+  - local: experimental
+    title: Experimental
   - local: how_to_train
     title: Training FAQ
   - local: logging
@@ -19,6 +21,8 @@
 - sections:
   - local: clis
     title: Command Line Interface (CLI)
+  - local: jobs_training
+    title: Training using Jobs
   - local: customization
     title: Customizing the Training
   - local: reducing_memory_usage
@@ -33,10 +37,14 @@
 - sections:
   - local: deepspeed_integration
     title: DeepSpeed
+  - local: kernels_hub
+    title: Kernels Hub
   - local: liger_kernel_integration
     title: Liger Kernel
   - local: peft_integration
     title: PEFT
+  - local: trackio_integration
+    title: Trackio
   - local: unsloth_integration
     title: Unsloth
   - local: vllm_integration
@@ -58,14 +66,10 @@
   title: Examples
 - sections:
   - sections: # Sorted alphabetically
-    - local: alignprop_trainer
-      title: AlignProp
     - local: bco_trainer
       title: BCO
     - local: cpo_trainer
       title: CPO
-    - local: ddpo_trainer
-      title: DDPO
     - local: dpo_trainer
       title: DPO
     - local: online_dpo_trainer
@@ -90,8 +94,6 @@
       title: RLOO
     - local: sft_trainer
       title: SFT
-    - local: iterative_sft_trainer
-      title: Iterative SFT
     - local: xpo_trainer
       title: XPO
     title: Trainers
