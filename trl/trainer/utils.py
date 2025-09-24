@@ -15,10 +15,13 @@
 import dataclasses
 import importlib.resources as pkg_resources
 import json
+import os
 import random
+import socket
 from collections.abc import Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
+from itertools import accumulate
 from typing import Any, Literal, Optional, Union
 
 import numpy as np
@@ -168,6 +171,47 @@ class DataCollatorForChatML:
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
         }
+
+
+def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((host, port))
+            return True
+    except OSError:
+        return False
+
+
+def _find_free_port() -> int:
+    candidates = (29500, 23456, 12355, 12345)
+    for p in candidates:
+        if _is_port_free(p):
+            return p
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = None) -> None:
+    """
+    Ensure `MASTER_ADDR`/`MASTER_PORT` are set safely.
+
+    - Respects existing environment variables.
+    - Defaults `MASTER_ADDR` to localhost if unset.
+    - Chooses a free TCP port if `MASTER_PORT` is unset to avoid collisions.
+    - If `MASTER_PORT` is set to `"0"` or `"auto"`, it is resolved to a free port.
+    """
+    os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR") or addr or "localhost"
+
+    env_port = os.environ.get("MASTER_PORT", "").strip().lower()
+    if port is None and env_port not in {"", "0", "auto"}:
+        try:
+            port = int(env_port)
+        except ValueError:
+            pass
+
+    os.environ["MASTER_PORT"] = str(_find_free_port() if port in (None, 0) else port)
 
 
 @dataclass
@@ -1780,20 +1824,23 @@ def identity(x):
 
 def split_pixel_values_by_grid(batch: dict[str, torch.Tensor]) -> dict[str, Union[torch.Tensor, list[torch.Tensor]]]:
     """
-    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in
-    `batch["image_grid_thw"]`, while keeping other entries unchanged.
+    Splits `batch["pixel_values"]` into a list of tensors based on the product of each row in `batch["image_grid_thw"]`
+    and batch["num_images"] while keeping other entries unchanged.
     """
-    if "image_split_sizes" not in batch or "pixel_values" not in batch:
+    if "image_grid_thw" not in batch or "pixel_values" not in batch or "num_images" not in batch:
         return batch
 
-    lengths = batch["image_split_sizes"]  # [batch_size]
+    lengths = batch["image_grid_thw"].prod(-1).tolist()  # [num_images]
     pixel_values = batch["pixel_values"]  # [total, feature_dim]
 
     if sum(lengths) != pixel_values.size(0):
         raise ValueError(f"Mismatch: sum(lengths) = {sum(lengths)} != pixel_values.size(0) = {pixel_values.size(0)}")
 
-    split_values = list(torch.split(batch["pixel_values"], lengths, dim=0))
-    return {**batch, "pixel_values": split_values}
+    boundaries = [0, *accumulate(batch["num_images"])]  # [3, 4, 5] -> [0, 3, 7, 12]
+    sections = [sum(lengths[boundaries[i] : boundaries[i + 1]]) for i in range(len(batch["num_images"]))]
+    split_values = list(torch.split(batch["pixel_values"], sections, dim=0))
+    image_grid_thw = list(torch.split(batch["image_grid_thw"], batch["num_images"], dim=0))
+    return {**batch, "pixel_values": split_values, "image_grid_thw": image_grid_thw}
 
 
 def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch.Tensor]]]) -> dict[str, torch.Tensor]:
@@ -1802,12 +1849,16 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
     tensor along the first dimension.
     """
     pixel_values = batch.get("pixel_values")
-
     if isinstance(pixel_values, list):
         merged = torch.cat(pixel_values, dim=0)
-        return {**batch, "pixel_values": merged}
-    else:
-        return batch
+        batch = {**batch, "pixel_values": merged}
+
+    image_grid_thw = batch.get("image_grid_thw")
+    if isinstance(image_grid_thw, list):
+        merged = torch.cat(image_grid_thw, dim=0)
+        batch = {**batch, "image_grid_thw": merged}
+
+    return batch
 
 
 def truncate_with_protected_tokens(

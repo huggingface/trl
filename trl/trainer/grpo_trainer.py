@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import inspect
 import os
 import re
@@ -60,6 +59,7 @@ from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
     disable_dropout_in_model,
+    ensure_master_addr_port,
     entropy_from_logits,
     generate_model_card,
     get_comet_experiment_url,
@@ -464,7 +464,7 @@ class GRPOTrainer(Trainer):
         self.num_completions_to_print = args.num_completions_to_print
         # Keep logs sized to the generation batch to record only outputs from the latest model update.
         self._logs = {
-            "image": deque(maxlen=args.generation_batch_size),
+            "images": deque(maxlen=args.generation_batch_size),
             "prompt": deque(maxlen=args.generation_batch_size),
             "completion": deque(maxlen=args.generation_batch_size),
             "rewards": defaultdict(lambda: deque(maxlen=args.generation_batch_size)),
@@ -480,7 +480,7 @@ class GRPOTrainer(Trainer):
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install vllm` to use it."
+                    "`pip install [vllm]` to use it."
                 )
 
             if self.vllm_mode == "server":
@@ -515,8 +515,8 @@ class GRPOTrainer(Trainer):
                 os.environ["RANK"] = str(self.accelerator.process_index)
                 os.environ["LOCAL_RANK"] = str(self.accelerator.local_process_index)
                 os.environ["WORLD_SIZE"] = str(self.accelerator.num_processes)
-                os.environ["MASTER_ADDR"] = os.environ.get("MASTER_ADDR", "localhost")
-                os.environ["MASTER_PORT"] = os.environ.get("MASTER_PORT", "12345")
+                # Ensure distributed rendezvous variables are set without colliding across concurrent runs
+                ensure_master_addr_port()
 
                 if self.max_prompt_length is not None and self.max_completion_length is not None:
                     max_model_len = self.max_prompt_length + self.max_completion_length
@@ -566,10 +566,6 @@ class GRPOTrainer(Trainer):
                 "repetition_penalty": self.repetition_penalty,
                 "cache_implementation": args.cache_implementation,
             }
-            if args.use_transformers_paged:
-                generation_kwargs["max_batch_tokens"] = 512
-                generation_kwargs["num_blocks"] = 1024
-                generation_kwargs["block_size"] = 128
             if args.generation_kwargs is not None:
                 generation_kwargs.update(args.generation_kwargs)
             self.generation_config = GenerationConfig(**generation_kwargs)
@@ -609,7 +605,7 @@ class GRPOTrainer(Trainer):
         # In GRPOTrainer, we preprocess data, so using the model's signature columns doesn't work.
         # Instead, we set them to the columns expected by the `training_step` method, hence the override.
         if self._signature_columns is None:
-            self._signature_columns = ["prompt", "image"]
+            self._signature_columns = ["prompt", "image", "images"]
 
     # This method overrides `Trainer.get_train_dataloader` to support our custom batching strategy.
     # Instead of returning a standard per-step batch (i.e., `per_device_batch_size), our dataloader loads an
@@ -789,9 +785,9 @@ class GRPOTrainer(Trainer):
         compute_entropy=False,
         pixel_values=None,
         image_grid_thw=None,
+        num_images=None,
         pixel_attention_mask=None,
         image_sizes=None,
-        image_split_sizes=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -803,16 +799,18 @@ class GRPOTrainer(Trainer):
 
             # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
-
-            if image_grid_thw is not None:
-                model_inputs["image_grid_thw"] = image_grid_thw[start : start + batch_size]
-            if pixel_values is not None:
-                if image_split_sizes is not None:
-                    start_pixel_idx = sum(image_split_sizes[:start])
-                    end_pixel_idx = sum(image_split_sizes[: start + batch_size])
-                    model_inputs["pixel_values"] = pixel_values[start_pixel_idx:end_pixel_idx]
-                else:
-                    model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
+            if image_grid_thw is not None and pixel_values is not None:
+                rows_per_image = image_grid_thw.prod(dim=-1)
+                rows_per_sample = torch.split(rows_per_image, num_images)
+                rows_per_sample = torch.stack([s.sum() for s in rows_per_sample])
+                cum_rows = torch.cat([torch.tensor([0], device=rows_per_sample.device), rows_per_sample.cumsum(0)])
+                row_start, row_end = cum_rows[start].item(), cum_rows[start + batch_size].item()
+                model_inputs["pixel_values"] = pixel_values[row_start:row_end]
+                cum_imgs = torch.tensor([0] + num_images).cumsum(0)
+                img_start, img_end = cum_imgs[start], cum_imgs[start + batch_size]
+                model_inputs["image_grid_thw"] = image_grid_thw[img_start:img_end]
+            elif pixel_values is not None:
+                model_inputs["pixel_values"] = pixel_values[start : start + batch_size]
             if pixel_attention_mask is not None:
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
@@ -1068,28 +1066,22 @@ class GRPOTrainer(Trainer):
 
         prompts = [x["prompt"] for x in inputs]
 
-        # We don't yet support visual reward models/function, so we keep a copy of the original text-only prompts for
-        # later use in the reward computation. If images are present, we insert {"type": "image"} as required by the
-        # VLM chat template.
-        original_prompts = copy.deepcopy(prompts)
+        if "images" in inputs[0]:
+            images = [example.get("images") for example in inputs]
+        elif "image" in inputs[0]:
+            images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
+        else:
+            images = None
 
         # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
         # [{"role": "user", "content": "What color is the sky?"}] to
         # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
         kwargs = {}
-        has_images = "image" in inputs[0]
-        image_split_sizes = None
-        if has_images:
-            images = [example.get("image") for example in inputs]
-            kwargs = {"images": [[img] for img in images]}
-            for prompt in prompts:
+        if images is not None:
+            kwargs = {"images": images}
+            for prompt, image_list in zip(prompts, images):
                 if isinstance(prompt, list):  # i.e., when using conversational data
-                    prepare_multimodal_messages(prompt, num_images=1)
-
-            if hasattr(self.processing_class, "_get_num_multimodal_tokens"):
-                image_sizes = [(image.height, image.width) for image in images]
-                multimodal_extra_data = self.processing_class._get_num_multimodal_tokens(image_sizes)
-                image_split_sizes = multimodal_extra_data.num_image_patches
+                    prepare_multimodal_messages(prompt, num_images=len(image_list))
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -1103,10 +1095,6 @@ class GRPOTrainer(Trainer):
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-        if "image_grid_thw" in prompt_inputs and image_split_sizes is None:
-            # Fallback for VLMs that require image_grid_thw but don't provide _get_num_multimodal_tokens
-            image_split_sizes = prompt_inputs["image_grid_thw"].prod(dim=1).tolist()
 
         if self.max_prompt_length is not None:
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
@@ -1165,7 +1153,7 @@ class GRPOTrainer(Trainer):
             # Generate completions using vLLM: gather all prompts and use them in a single call in the main process
             if self.vllm_mode == "server":
                 all_prompts_text = gather_object(prompts_text)
-                if has_images:
+                if images is not None:
                     all_images = gather_object(images)
 
                 if self.accelerator.is_main_process:
@@ -1174,7 +1162,7 @@ class GRPOTrainer(Trainer):
                     # prompt individually.
                     ordered_set_of_prompts = all_prompts_text[:: self.num_generations]
 
-                    if has_images:
+                    if images is not None:
                         ordered_set_of_images = all_images[:: self.num_generations]
                     else:
                         ordered_set_of_images = None
@@ -1239,7 +1227,7 @@ class GRPOTrainer(Trainer):
                     torch.distributed.all_gather_object(gathered_prompts, prompts_text, group=self.tp_group)
                     all_prompts_text = [p for sublist in gathered_prompts for p in sublist]
 
-                    if has_images:
+                    if images is not None:
                         gathered_images = [None for _ in range(self.vllm_tensor_parallel_size)]
                         torch.distributed.all_gather_object(gathered_images, images, group=self.tp_group)
                         all_images = [img for sublist in gathered_images for img in sublist]
@@ -1247,15 +1235,13 @@ class GRPOTrainer(Trainer):
                         all_images = None
                 else:
                     all_prompts_text = prompts_text
-                    all_images = images if has_images else None
+                    all_images = images
 
-                if has_images and all_images:
+                if images is not None and all_images:
                     vllm_inputs = []
-                    for prompt, image in zip(all_prompts_text, all_images):
-                        if image is not None:
-                            vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image}})
-                        else:
-                            vllm_inputs.append(prompt)
+                    for prompt, image_list in zip(all_prompts_text, all_images):
+                        vllm_inputs.append({"prompt": prompt, "multi_modal_data": {"image": image_list}})
+
                 else:
                     vllm_inputs = all_prompts_text
 
@@ -1316,6 +1302,7 @@ class GRPOTrainer(Trainer):
                     all_outputs = unwrapped_model.generate_batch(
                         paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
                     )
+                    unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
             completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
@@ -1370,6 +1357,8 @@ class GRPOTrainer(Trainer):
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
+        num_images = [len(img_list) for img_list in images] if images is not None else None
+
         with torch.no_grad():
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
             # a full optimizer step (when gradient_accumulation_steps is not a multiple of generate_every)—then the
@@ -1390,9 +1379,9 @@ class GRPOTrainer(Trainer):
                     batch_size,
                     pixel_values=prompt_inputs.get("pixel_values"),
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                    num_images=num_images,
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
-                    image_split_sizes=image_split_sizes,
                 )
             else:
                 old_per_token_logps = None
@@ -1415,9 +1404,9 @@ class GRPOTrainer(Trainer):
                         batch_size=batch_size,
                         pixel_values=prompt_inputs.get("pixel_values"),
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                        num_images=num_images,
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         image_sizes=prompt_inputs.get("image_sizes"),
-                        image_split_sizes=image_split_sizes,
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -1429,9 +1418,9 @@ class GRPOTrainer(Trainer):
                             batch_size=batch_size,
                             pixel_values=prompt_inputs.get("pixel_values"),
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
+                            num_images=num_images,
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                             image_sizes=prompt_inputs.get("image_sizes"),
-                            image_split_sizes=image_split_sizes,
                         )
             else:
                 ref_per_token_logps = None
@@ -1449,7 +1438,7 @@ class GRPOTrainer(Trainer):
         # Calculate rewards for each reward function. rewards_per_func aggregates rewards across all processes. This is
         # important because rewards will be normalized per group, and completions are distributed. We will later slice
         # rewards_per_func to extract each process's subset.
-        rewards_per_func = self._calculate_rewards(inputs, original_prompts, completions, completion_ids_list)
+        rewards_per_func = self._calculate_rewards(inputs, prompts, completions, completion_ids_list)
 
         # Apply weights to each reward function's output and sum
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).nansum(dim=1)
@@ -1523,8 +1512,8 @@ class GRPOTrainer(Trainer):
             self._logs["rewards"][name].extend(rewards_per_func[:, i].tolist())
         self._logs["advantages"].extend(all_process_advantages.tolist())
 
-        if has_images:
-            self._logs["image"].extend(gather_object(images))
+        if images is not None:
+            self._logs["images"].extend(gather_object(images))
 
         if self.use_vllm and self.vllm_importance_sampling_correction:
             delta = torch.abs(old_per_token_logps - sampling_per_token_logps)
@@ -1580,8 +1569,8 @@ class GRPOTrainer(Trainer):
             output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
         if "image_sizes" in prompt_inputs:
             output["image_sizes"] = prompt_inputs["image_sizes"]
-        if image_split_sizes is not None:
-            output["image_split_sizes"] = image_split_sizes
+        if images is not None:
+            output["num_images"] = num_images
         return output
 
     def compute_liger_loss(self, unwrapped_model, inputs):
@@ -1654,9 +1643,9 @@ class GRPOTrainer(Trainer):
             compute_entropy=True,
             pixel_values=inputs.get("pixel_values"),
             image_grid_thw=inputs.get("image_grid_thw"),
+            num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
-            image_split_sizes=inputs.get("image_split_sizes"),
         )
 
         if self.top_entropy_quantile < 1.0:
@@ -1809,14 +1798,11 @@ class GRPOTrainer(Trainer):
                     "advantage": self._logs["advantages"],
                 }
 
-                if self._logs["image"]:
-                    table["image"] = []
-                    for img in self._logs["image"]:
-                        if img is not None:
-                            # Convert images to wandb Image objects for proper visualization
-                            table["image"].append(wandb.Image(img))
-                        else:
-                            table["image"].append(None)
+                if self._logs["images"]:
+                    table["images"] = []
+                    for image_list in self._logs["images"]:
+                        # Convert images to wandb Image objects for proper visualization
+                        table["images"].append([wandb.Image(image) for image in image_list])
 
                 df = pd.DataFrame(table)
                 if self.wandb_log_unique_prompts:
