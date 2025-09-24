@@ -86,7 +86,7 @@ trainer.train()
 In the paper [Group Sequence Policy Optimization](https://huggingface.co/papers/2507.18071), the authors propose a token-level objective variant to GSPO, called GSPO-token. To use GSPO-token, you can use the `GRPOTrainer` class in `trl.experimental.gspo_token`.
 
 ```python
-from trl.experimental.gspo_token import GRPOTrainer, 
+from trl.experimental.gspo_token import GRPOTrainer
 from trl import GRPOConfig
 
 training_args = GRPOConfig(
