@@ -17,6 +17,7 @@ env:
   TQDM_DISABLE: 1
   CI_SLACK_CHANNEL: ${{ secrets.CI_PUSH_MAIN_CHANNEL }}
   CUDA_LAUNCH_BLOCKING: 1
+  TORCH_SHOW_CPP_STACKTRACES: 1
 
 jobs:
 #  check_code_quality:
