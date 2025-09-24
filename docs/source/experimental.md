@@ -13,8 +13,6 @@ The `trl.experimental` namespace provides a minimal, clearly separated space for
 The following modules are currently available under [`trl.experimental`](https://github.com/huggingface/trl/tree/main/trl/experimental).
 This list is not exhaustive and may change at any time.
 
-## Usage
-
 ### BEMA for Reference Model
 
 This feature implements the BEMA algorithm to update the reference model during DPO training.
@@ -84,6 +82,7 @@ trainer.train()
 ```
 
 ### GRPO With Replay Buffer
+
 This experimental trainer, trains a model with GRPO but replaces groups (and corresponding completions) that have 0 standard deviation with groups with high rewards and standard deviation that've been used to train a model in prior batches.
 
 ```python

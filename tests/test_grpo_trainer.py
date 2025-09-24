@@ -24,6 +24,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
+import pytest
 from transformers.testing_utils import require_liger_kernel, require_peft, require_vision
 from transformers.utils import is_peft_available
 
@@ -1644,6 +1645,7 @@ class GRPOTrainerTester(TrlTestCase):
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
 
 
+@pytest.mark.low_priority
 class TestReplayBuffer(unittest.TestCase):
     def setUp(self):
         self.replay_buffer = ReplayBuffer(max_size=5)
@@ -1711,6 +1713,7 @@ class TestReplayBuffer(unittest.TestCase):
             self.assertIn(item, [entry[1] for entry in self.replay_buffer.heap])
 
 
+@pytest.mark.low_priority
 class TestUpdateWithReplayBuffer(unittest.TestCase):
     def setUp(self):
         config = GRPOWithReplayBufferConfig(
@@ -1870,6 +1873,7 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         )
 
 
+@pytest.mark.low_priority
 class TestGRPOWithReplayBufferTrainer(TrlTestCase):
     def test_training_with_replay_buffer(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
