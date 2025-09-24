@@ -7,7 +7,6 @@ COMMAND_FILES_PATH = `pwd`/commands
 
 test:
 	pytest -n auto -m "not slow and not low-priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504||not less than or equal to 0.01)' tests/
-	#pytest -q -n 1 -m "not slow and not low-priority" -s -v --reruns 5 --reruns-delay 1 --only-rerun '(OSError|Timeout|HTTPError.*502|HTTPError.*504||not less than or equal to 0.01)' tests/test_grpo_trainer.py::GRPOTrainerTester::test_training_vlm_multi_image
 
 precommit:
 	python scripts/add_copyrights.py
