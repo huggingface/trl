@@ -14,7 +14,6 @@
 
 import os
 
-import pytest
 import torch
 import torch.nn.functional as F
 from datasets import load_dataset
@@ -247,7 +246,6 @@ class GKDTrainerTester(TrlTestCase):
         self.assertIn("model.safetensors", os.listdir(self.tmp_dir + "/checkpoint-2"))
 
     @require_liger_kernel
-    @pytest.mark.xfail(reason="Computing the Liger loss spikes GPU memory usage, causing the test to run OOM.")
     def test_gkd_trainer_with_liger(self):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
