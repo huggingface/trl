@@ -15,6 +15,7 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -24,7 +25,6 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
-import pytest
 from transformers.testing_utils import require_liger_kernel, require_peft, require_vision
 from transformers.utils import is_peft_available
 
