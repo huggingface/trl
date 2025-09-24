@@ -1108,8 +1108,9 @@ class SFTTrainer(Trainer):
         # This can be removed when this issue is fixed.
         labels = inputs["labels"]
 
-        # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
-        inputs["use_cache"] = False
+        if self.args.checkpointing:
+            # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
+            inputs["use_cache"] = False
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
