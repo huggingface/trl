@@ -32,7 +32,7 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_apex_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
@@ -49,10 +49,6 @@ from .utils import (
     selective_log_softmax,
     truncate_right,
 )
-
-
-if is_apex_available():
-    from apex import amp
 
 
 if is_wandb_available():

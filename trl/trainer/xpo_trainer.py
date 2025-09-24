@@ -28,7 +28,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    is_apex_available,
     is_wandb_available,
 )
 from transformers.trainer_utils import EvalPrediction
@@ -49,10 +48,6 @@ from .utils import (
     truncate_right,
 )
 from .xpo_config import XPOConfig
-
-
-if is_apex_available():
-    from apex import amp
 
 
 if is_wandb_available():

@@ -43,7 +43,6 @@ from transformers import (
     ProcessorMixin,
     Trainer,
     TrainerCallback,
-    is_apex_available,
     is_wandb_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
@@ -79,9 +78,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
-
-if is_apex_available():
-    from apex import amp
 
 
 if is_sagemaker_mp_enabled():
