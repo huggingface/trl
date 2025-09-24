@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import random
 import textwrap
 from typing import Any, Callable, Optional, Union
@@ -30,7 +29,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
@@ -44,16 +42,11 @@ from .utils import (
     DataCollatorForChatML,
     disable_dropout_in_model,
     empty_cache,
-    generate_model_card,
-    get_comet_experiment_url,
 )
 
 
 if is_peft_available():
     from peft import PeftConfig
-
-if is_wandb_available():
-    import wandb
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -442,30 +435,6 @@ class GKDTrainer(SFTTrainer):
             tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
         # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{agarwal2024on-policy,
@@ -476,19 +445,12 @@ class GKDTrainer(SFTTrainer):
             publisher    = {OpenReview.net},
             url          = {https://openreview.net/forum?id=3zKtaqxLhW},
         }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
+        self._create_model_card(
             model_name=model_name,
-            hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
+            tags=tags,
             trainer_name="GKD",
             trainer_citation=citation,
             paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
             paper_id="2306.13649",
         )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

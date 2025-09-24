@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import inspect
-import os
 import random
 import textwrap
 from collections import defaultdict
@@ -38,7 +37,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     is_comet_available,
     is_torch_xla_available,
     is_wandb_available,
@@ -48,14 +46,13 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
+from .base_trainer import BaseTrainer
 from .orpo_config import ORPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     add_bos_token_if_needed,
     add_eos_token_if_needed,
     disable_dropout_in_model,
-    generate_model_card,
-    get_comet_experiment_url,
     log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -77,7 +74,7 @@ if is_torch_xla_available():
 logger = logging.get_logger(__name__)
 
 
-class ORPOTrainer(Trainer):
+class ORPOTrainer(BaseTrainer):
     r"""
     Initialize ORPOTrainer.
 
@@ -1049,30 +1046,6 @@ class ORPOTrainer(Trainer):
             tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
         # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{hong2024orpo,
@@ -1081,19 +1054,12 @@ class ORPOTrainer(Trainer):
             year         = 2024,
             eprint       = {arXiv:2403.07691}
         }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
+        self._create_model_card(
             model_name=model_name,
-            hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
+            tags=tags,
             trainer_name="ORPO",
             trainer_citation=citation,
             paper_title="ORPO: Monolithic Preference Optimization without Reference Model",
             paper_id="2403.07691",
         )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

@@ -32,9 +32,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     TrainingArguments,
-    is_wandb_available,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
@@ -51,13 +49,12 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
+from .base_trainer import BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
-    generate_model_card,
-    get_comet_experiment_url,
     pad,
     selective_log_softmax,
 )
@@ -66,8 +63,6 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel
 
-if is_wandb_available():
-    import wandb
 
 logger = logging.get_logger(__name__)
 
@@ -497,7 +492,7 @@ def dft_loss(outputs, labels, num_items_in_batch):
     return loss
 
 
-class SFTTrainer(Trainer):
+class SFTTrainer(BaseTrainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
 
@@ -1204,39 +1199,9 @@ class SFTTrainer(Trainer):
             tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
-        model_card = generate_model_card(
-            base_model=base_model,
+        self._create_model_card(
             model_name=model_name,
-            hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
+            tags=tags,
             trainer_name="SFT",
         )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

@@ -42,7 +42,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     TrainerCallback,
     is_wandb_available,
 )
@@ -54,6 +53,7 @@ from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
+from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .rloo_config import RLOOConfig
 from .utils import (
@@ -61,8 +61,6 @@ from .utils import (
     disable_dropout_in_model,
     ensure_master_addr_port,
     entropy_from_logits,
-    generate_model_card,
-    get_comet_experiment_url,
     identity,
     nanmax,
     nanmin,
@@ -97,7 +95,7 @@ logger = logging.get_logger(__name__)
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
-class RLOOTrainer(Trainer):
+class RLOOTrainer(BaseTrainer):
     """
     Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the paper [Back to
     Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs]
@@ -1645,30 +1643,6 @@ class RLOOTrainer(Trainer):
             tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
         # docstyle-ignore
         citation = textwrap.dedent(
             """\
@@ -1683,19 +1657,12 @@ class RLOOTrainer(Trainer):
             }
             """
         )
-
-        model_card = generate_model_card(
-            base_model=base_model,
+        self._create_model_card(
             model_name=model_name,
-            hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
+            tags=tags,
             trainer_name="RLOO",
             trainer_citation=citation,
             paper_title="Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",
             paper_id="2402.14740",
         )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import inspect
-import os
 import random
 import textwrap
 import warnings
@@ -40,7 +39,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.integrations import (
@@ -56,6 +54,7 @@ from transformers.utils import is_liger_kernel_available, is_peft_available
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
 from ..models.utils import prepare_fsdp
+from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
@@ -66,8 +65,6 @@ from .utils import (
     empty_cache,
     flush_left,
     flush_right,
-    generate_model_card,
-    get_comet_experiment_url,
     log_table_to_comet_experiment,
     pad,
     pad_to_length,
@@ -184,7 +181,7 @@ class DataCollatorForPreference(DataCollatorMixin):
         return output
 
 
-class DPOTrainer(Trainer):
+class DPOTrainer(BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method.
 
@@ -1973,30 +1970,6 @@ class DPOTrainer(Trainer):
             tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
         # docstyle-ignore
         citation = textwrap.dedent(
             """\
@@ -2009,19 +1982,12 @@ class DPOTrainer(Trainer):
                 editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
             }"""
         )
-
-        model_card = generate_model_card(
-            base_model=base_model,
+        self._create_model_card(
             model_name=model_name,
-            hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
+            tags=tags,
             trainer_name="DPO",
             trainer_citation=citation,
             paper_title="Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
             paper_id="2305.18290",
         )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

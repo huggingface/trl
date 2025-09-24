@@ -37,10 +37,8 @@ from transformers import (
     GenerationConfig,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     TrainerCallback,
     TrainerControl,
-    is_wandb_available,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
@@ -50,6 +48,7 @@ from transformers.utils import is_peft_available, is_rich_available
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
+from .base_trainer import BaseTrainer
 from .ppo_config import PPOConfig
 from .utils import (
     OnlineTrainerState,
@@ -59,8 +58,6 @@ from .utils import (
     exact_div,
     first_true_indices,
     forward,
-    generate_model_card,
-    get_comet_experiment_url,
     get_reward,
     log_table_to_comet_experiment,
     peft_module_casting_to_bf16,
@@ -73,9 +70,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
-
-if is_wandb_available():
-    import wandb
 
 
 INVALID_LOGPROB = 1.0
@@ -97,7 +91,7 @@ class PolicyAndValueWrapper(nn.Module):
         return self.policy(**kwargs), logits
 
 
-class PPOTrainer(Trainer):
+class PPOTrainer(BaseTrainer):
     """Trainer for Proximal Policy Optimization (PPO).
 
     For details on PPO, see the paper: [Proximal Policy Optimization
@@ -811,30 +805,6 @@ class PPOTrainer(Trainer):
             tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
         # docstyle-ignore
         citation = textwrap.dedent("""\
         @article{mziegler2019fine-tuning,
@@ -843,19 +813,12 @@ class PPOTrainer(Trainer):
             year         = 2019,
             eprint       = {arXiv:1909.08593}
         }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
+        self._create_model_card(
             model_name=model_name,
-            hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
+            tags=tags,
             trainer_name="PPO",
             trainer_citation=citation,
             paper_title="Fine-Tuning Language Models from Human Preferences",
             paper_id="1909.08593",
         )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

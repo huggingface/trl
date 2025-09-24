@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import textwrap
 from typing import Any, Callable, Optional, Union
 
@@ -28,7 +27,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    is_wandb_available,
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
@@ -43,8 +41,6 @@ from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
     empty_cache,
-    generate_model_card,
-    get_comet_experiment_url,
     get_reward,
     selective_log_softmax,
     truncate_right,
@@ -53,10 +49,6 @@ from .utils import (
 
 if is_apex_available():
     from apex import amp
-
-
-if is_wandb_available():
-    import wandb
 
 
 if is_peft_available():
@@ -514,30 +506,6 @@ class NashMDTrainer(OnlineDPOTrainer):
             tags (`str`, `list[str]`, *optional*):
                 Tags to be associated with the model card.
         """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
         # docstyle-ignore
         citation = textwrap.dedent("""\
         @inproceedings{munos2024nash,
@@ -548,19 +516,12 @@ class NashMDTrainer(OnlineDPOTrainer):
             publisher    = {OpenReview.net},
             url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
         }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
+        self._create_model_card(
             model_name=model_name,
-            hub_model_id=self.hub_model_id,
             dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
+            tags=tags,
             trainer_name="Nash-MD",
             trainer_citation=citation,
             paper_title="Nash Learning from Human Feedback",
             paper_id="2312.00886",
         )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
