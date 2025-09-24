@@ -1303,6 +1303,7 @@ class GRPOTrainer(Trainer):
             prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
             # Restore the original attention implementation, training mode
             self.model_wrapped.config._attn_implementation = previous_attn
+            sampling_per_token_logps = None  # not used in this case
 
         else:
             # Regular generation path

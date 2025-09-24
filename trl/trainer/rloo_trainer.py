@@ -787,6 +787,7 @@ class RLOOTrainer(Trainer):
 
             # Build model inputs - check if the model supports logits_to_keep (some models and VLMs don't)
             model_inputs = {"input_ids": input_ids_batch, "attention_mask": attention_mask_batch}
+
             if image_grid_thw is not None and pixel_values is not None:
                 rows_per_image = image_grid_thw.prod(dim=-1)
                 rows_per_sample = torch.split(rows_per_image, num_images)
@@ -1340,13 +1341,7 @@ class RLOOTrainer(Trainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return (
-            prompt_ids,
-            completion_ids,
-            prompt_mask,
-            completion_mask,
-            forward_kwargs
-        )
+        return prompt_ids, completion_ids, prompt_mask, completion_mask, forward_kwargs
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1363,13 +1358,7 @@ class RLOOTrainer(Trainer):
         else:
             images = None
 
-        (
-            prompt_ids,
-            completion_ids,
-            prompt_mask,
-            completion_mask,
-            forward_kwargs,
-        ) = self._generate(prompts, images)
+        prompt_ids, completion_ids, prompt_mask, completion_mask, forward_kwargs = self._generate(prompts, images)
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
@@ -1476,7 +1465,6 @@ class RLOOTrainer(Trainer):
         )
         all_process_advantages = advantages.clone()  # keep the aggregated advantages for logging
         advantages = advantages[process_slice]
-
 
         # Calculate and log the mean KL divergence between current and reference model
         if self.beta != 0.0:
