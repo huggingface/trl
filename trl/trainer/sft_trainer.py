@@ -482,7 +482,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
-def dft_loss(outputs, labels, num_items_in_batch):
+def dft_loss(outputs, labels, num_items_in_batch=None):
     """
     DFT loss function, as presented in [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward
     Rectification](https://huggingface.co/papers/2508.05629)
@@ -493,6 +493,8 @@ def dft_loss(outputs, labels, num_items_in_batch):
     shift_labels[~loss_mask] = 0
     logprobs = selective_log_softmax(outputs.logits, shift_labels)
     per_token_loss = -logprobs.exp().detach() * logprobs
+    if num_items_in_batch is None:
+        num_items_in_batch = loss_mask.sum()
     loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
     return loss
 
