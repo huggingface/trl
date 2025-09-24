@@ -364,6 +364,9 @@ class SFTTrainerTester(TrlTestCase):
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
             loss_type="dft",
+            # DFT loss scale is smaller, especially with randomly initialized models, so increase learning rate to
+            # ensure params change
+            learning_rate=1e-3,
             report_to="none",
             eval_strategy="steps",
             eval_steps=3,
