@@ -1147,6 +1147,7 @@ class RLOOTrainerTester(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"}
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -1232,6 +1233,7 @@ class RLOOTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             max_prompt_length=18,
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"}
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -1320,6 +1322,7 @@ class RLOOTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"}
         )
         trainer = RLOOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
