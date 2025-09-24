@@ -75,6 +75,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
+          pip install pytest-forked
 
       - name: Test with pytest
         run: |
