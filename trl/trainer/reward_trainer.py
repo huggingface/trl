@@ -116,6 +116,8 @@ class RewardTrainer(BaseTrainer):
     """
 
     _tag_names = ["trl", "reward-trainer"]
+    _name = "Reward"
+    _paper = {}
 
     def __init__(
         self,
@@ -350,27 +352,3 @@ class RewardTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="Reward",
-        )

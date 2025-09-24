@@ -103,6 +103,21 @@ class NashMDTrainer(OnlineDPOTrainer):
     """
 
     _tag_names = ["trl", "nash-md"]
+    _name = "Nash-MD"
+    _paper = {
+        "title": "Nash Learning from Human Feedback",
+        "id": "2312.00886",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{munos2024nash,
+                title        = {{Nash Learning from Human Feedback}},
+                author       = {R{\'{e}}mi Munos and Michal Valko and Daniele Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot},
+                year         = 2024,
+                booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
+                publisher    = {OpenReview.net},
+                url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -488,40 +503,3 @@ class NashMDTrainer(OnlineDPOTrainer):
             self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @inproceedings{munos2024nash,
-            title        = {{Nash Learning from Human Feedback}},
-            author       = {R{\'{e}}mi Munos and Michal Valko and Daniele Calandriello and Mohammad Gheshlaghi Azar and Mark Rowland and Zhaohan Daniel Guo and Yunhao Tang and Matthieu Geist and Thomas Mesnard and C{\\^{o}}me Fiegel and Andrea Michi and Marco Selvi and Sertan Girgin and Nikola Momchev and Olivier Bachem and Daniel J. Mankowitz and Doina Precup and Bilal Piot},
-            year         = 2024,
-            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=Y5AmNYiyCQ}
-        }""")
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="Nash-MD",
-            trainer_citation=citation,
-            paper_title="Nash Learning from Human Feedback",
-            paper_id="2312.00886",
-        )

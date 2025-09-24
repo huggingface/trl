@@ -239,6 +239,22 @@ class RLOOTrainer(BaseTrainer):
     """
 
     _tag_names = ["trl", "rloo"]
+    _name = "RLOO"
+    _paper = {
+        "title": "Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",
+        "id": "2402.14740",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{ahmadian2024back,
+                title        = {{Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs}},
+                author       = {Arash Ahmadian and Chris Cremer and Matthias Gall{\'{e}} and Marzieh Fadaee and Julia Kreutzer and Olivier Pietquin and Ahmet {\"{U}}st{\"{u}}n and Sara Hooker},
+                year         = 2024,
+                booktitle    = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), {ACL} 2024, Bangkok, Thailand, August 11-16, 2024},
+                pages        = {12248--12267},
+                publisher    = {Association for Computational Linguistics},
+                editor       = {Lun{-}Wei Ku and Andre Martins and Vivek Srikumar},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1625,44 +1641,3 @@ class RLOOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent(
-            """\
-            @inproceedings{ahmadian2024back,
-                title        = {{Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs}},
-                author       = {Arash Ahmadian and Chris Cremer and Matthias Gall{\'{e}} and Marzieh Fadaee and Julia Kreutzer and Olivier Pietquin and Ahmet {\"{U}}st{\"{u}}n and Sara Hooker},
-                year         = 2024,
-                booktitle    = {Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 1: Long Papers), {ACL} 2024, Bangkok, Thailand, August 11-16, 2024},
-                pages        = {12248--12267},
-                publisher    = {Association for Computational Linguistics},
-                editor       = {Lun{-}Wei Ku and Andre Martins and Vivek Srikumar},
-            }
-            """
-        )
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="RLOO",
-            trainer_citation=citation,
-            paper_title="Back to Basics: Revisiting REINFORCE-Style Optimization for Learning from Human Feedback in LLMs",
-            paper_id="2402.14740",
-        )

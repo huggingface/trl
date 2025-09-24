@@ -105,6 +105,19 @@ class XPOTrainer(OnlineDPOTrainer):
     """
 
     _tag_names = ["trl", "xpo"]
+    _name = "XPO"
+    _paper = {
+        "title": "Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
+        "id": "2405.21046",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{jung2024binary,
+                title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
+                author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
+                year         = 2024,
+                eprint       = {arXiv:2405.21046}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -536,38 +549,3 @@ class XPOTrainer(OnlineDPOTrainer):
             self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{jung2024binary,
-            title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
-            author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
-            year         = 2024,
-            eprint       = {arXiv:2405.21046}
-        }""")
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="XPO",
-            trainer_citation=citation,
-            paper_title="Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
-            paper_id="2405.21046",
-        )

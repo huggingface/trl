@@ -129,6 +129,19 @@ class PPOTrainer(BaseTrainer):
     """
 
     _tag_names = ["trl", "ppo"]
+    _name = "PPO"
+    _paper = {
+        "title": "Fine-Tuning Language Models from Human Preferences",
+        "id": "1909.08593",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{mziegler2019fine-tuning,
+                title        = {{Fine-Tuning Language Models from Human Preferences}},
+                author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
+                year         = 2019,
+                eprint       = {arXiv:1909.08593}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -787,38 +800,3 @@ class PPOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{mziegler2019fine-tuning,
-            title        = {{Fine-Tuning Language Models from Human Preferences}},
-            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
-            year         = 2019,
-            eprint       = {arXiv:1909.08593}
-        }""")
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="PPO",
-            trainer_citation=citation,
-            paper_title="Fine-Tuning Language Models from Human Preferences",
-            paper_id="1909.08593",
-        )

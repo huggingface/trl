@@ -26,17 +26,30 @@ if is_wandb_available():
 
 class BaseTrainer(Trainer):
     _tag_names = []
+    _name = "Base"
+    _paper = {
+        "title": None,
+        "id": None,
+        "citation": None,
+    }
 
-    def _create_model_card(
+    def create_model_card(
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-        trainer_name: Optional[str] = None,
-        trainer_citation: Optional[str] = None,
-        paper_title: Optional[str] = None,
-        paper_id: Optional[str] = None,
+        tags: Optional[Union[str, list[str]]] = None,
     ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str`, *optional*):
+                Name of the model.
+            dataset_name (`str`, *optional*):
+                Name of the dataset used for training.
+            tags (`str`, `list[str]`, *optional*):
+                Tags to be associated with the model card.
+        """
         if not self.is_world_process_zero():
             return
 
@@ -67,9 +80,9 @@ class BaseTrainer(Trainer):
             tags=tags,
             wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
             comet_url=get_comet_experiment_url(),
-            trainer_name=trainer_name,
-            trainer_citation=trainer_citation,
-            paper_title=paper_title,
-            paper_id=paper_id,
+            trainer_name=self._name,
+            trainer_citation=self._paper.get("citation"),
+            paper_title=self._paper.get("title"),
+            paper_id=self._paper.get("id"),
         )
         model_card.save(os.path.join(self.args.output_dir, "README.md"))

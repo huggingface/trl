@@ -93,6 +93,21 @@ class GKDTrainer(SFTTrainer):
     """
 
     _tag_names = ["trl", "gkd"]
+    _name = "GKD"
+    _paper = {
+        "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
+        "id": "2306.13649",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{agarwal2024on-policy,
+                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
+                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
+                year         = 2024,
+                booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+                publisher    = {OpenReview.net},
+                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -417,40 +432,3 @@ class GKDTrainer(SFTTrainer):
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @inproceedings{agarwal2024on-policy,
-            title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-            author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-            year         = 2024,
-            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=3zKtaqxLhW},
-        }""")
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="GKD",
-            trainer_citation=citation,
-            paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
-            paper_id="2306.13649",
-        )

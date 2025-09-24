@@ -175,6 +175,19 @@ class OnlineDPOTrainer(BaseTrainer):
     """
 
     _tag_names = ["trl", "online-dpo"]
+    _name = "Online DPO"
+    _paper = {
+        "title": "Direct Language Model Alignment from Online AI Feedback",
+        "id": "2402.04792",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{guo2024direct,
+                title        = {{Direct Language Model Alignment from Online AI Feedback}},
+                author       = {Shangmin Guo and Biao Zhang and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel},
+                year         = 2024,
+                eprint       = {arXiv:2402.04792}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1503,38 +1516,3 @@ class OnlineDPOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{guo2024direct,
-            title        = {{Direct Language Model Alignment from Online AI Feedback}},
-            author       = {Shangmin Guo and Biao Zhang and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel},
-            year         = 2024,
-            eprint       = {arXiv:2402.04792}
-        }""")
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="Online DPO",
-            trainer_citation=citation,
-            paper_title="Direct Language Model Alignment from Online AI Feedback",
-            paper_id="2402.04792",
-        )

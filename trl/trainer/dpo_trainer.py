@@ -247,6 +247,21 @@ class DPOTrainer(BaseTrainer):
     """
 
     _tag_names = ["trl", "dpo"]
+    _name = "DPO"
+    _paper = {
+        "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+        "id": "2305.18290",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{rafailov2023direct,
+                title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},
+                author       = {Rafael Rafailov and Archit Sharma and Eric Mitchell and Christopher D. Manning and Stefano Ermon and Chelsea Finn},
+                year         = 2023,
+                booktitle    = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
+                url          = {http://papers.nips.cc/paper_files/paper/2023/hash/a85b405ed65c6477a4fe8302b5e06ce7-Abstract-Conference.html},
+                editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1952,42 +1967,3 @@ class DPOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent(
-            """\
-            @inproceedings{rafailov2023direct,
-                title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},
-                author       = {Rafael Rafailov and Archit Sharma and Eric Mitchell and Christopher D. Manning and Stefano Ermon and Chelsea Finn},
-                year         = 2023,
-                booktitle    = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
-                url          = {http://papers.nips.cc/paper_files/paper/2023/hash/a85b405ed65c6477a4fe8302b5e06ce7-Abstract-Conference.html},
-                editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
-            }"""
-        )
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="DPO",
-            trainer_citation=citation,
-            paper_title="Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
-            paper_id="2305.18290",
-        )

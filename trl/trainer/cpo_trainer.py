@@ -109,6 +109,21 @@ class CPOTrainer(BaseTrainer):
     """
 
     _tag_names = ["trl", "cpo"]
+    _name = "CPO"
+    _paper = {
+        "title": "Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",
+        "id": "2401.08417",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{xu2024contrastive,
+                title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
+                author       = {Haoran Xu and Amr Sharaf and Yunmo Chen and Weiting Tan and Lingfeng Shen and Benjamin Van Durme and Kenton Murray and Young Jin Kim},
+                year         = 2024,
+                booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
+                publisher    = {OpenReview.net},
+                url          = {https://openreview.net/forum?id=51iwkioZpn}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1066,40 +1081,3 @@ class CPOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @inproceedings{xu2024contrastive,
-            title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
-            author       = {Haoran Xu and Amr Sharaf and Yunmo Chen and Weiting Tan and Lingfeng Shen and Benjamin Van Durme and Kenton Murray and Young Jin Kim},
-            year         = 2024,
-            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=51iwkioZpn}
-        }""")
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="CPO",
-            trainer_citation=citation,
-            paper_title="Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",
-            paper_id="2401.08417",
-        )

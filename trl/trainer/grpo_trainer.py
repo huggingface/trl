@@ -200,6 +200,20 @@ class GRPOTrainer(BaseTrainer):
     """
 
     _tag_names = ["trl", "grpo"]
+    _name = "GRPO"
+    _paper = {
+        "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
+        "id": "2402.03300",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{shao2024deepseekmath,
+                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
+                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
+                year         = 2024,
+                eprint       = {arXiv:2402.03300},
+            }
+            """),
+    }
 
     def __init__(
         self,
@@ -1815,41 +1829,3 @@ class GRPOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent(
-            """\
-            @article{shao2024deepseekmath,
-                title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
-                author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
-                year         = 2024,
-                eprint       = {arXiv:2402.03300},
-            }
-            """
-        )
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="GRPO",
-            trainer_citation=citation,
-            paper_title="DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
-            paper_id="2402.03300",
-        )

@@ -319,6 +319,19 @@ class KTOTrainer(BaseTrainer):
     """
 
     _tag_names = ["trl", "kto"]
+    _name = "KTO"
+    _paper = {
+        "title": "KTO: Model Alignment as Prospect Theoretic Optimization",
+        "id": "2402.01306",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{ethayarajh2024kto,
+                title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
+                author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
+                year         = 2024,
+                eprint       = {arXiv:2402.01306},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1674,38 +1687,3 @@ class KTOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{ethayarajh2024kto,
-            title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
-            author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
-            year         = 2024,
-            eprint       = {arXiv:2402.01306},
-        }""")
-        self._create_model_card(
-            model_name=model_name,
-            dataset_name=dataset_name,
-            tags=tags,
-            trainer_name="KTO",
-            trainer_citation=citation,
-            paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",
-            paper_id="2402.01306",
-        )
