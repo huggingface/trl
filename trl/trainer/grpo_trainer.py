@@ -500,7 +500,7 @@ class GRPOTrainer(Trainer):
             if not is_vllm_available():
                 raise ImportError(
                     "vLLM is not available and `use_vllm` is set to True. Please install vLLM with "
-                    "`pip install [vllm]` to use it."
+                    "`pip install trl[vllm]` to use it."
                 )
 
             if self.vllm_mode == "server":
@@ -553,7 +553,7 @@ class GRPOTrainer(Trainer):
                     distributed_executor_backend="external_launcher",
                     # Feed identical seed for tp groups to ensure sampling results are the same across workers
                     seed=self.accelerator.process_index // self.vllm_tensor_parallel_size,
-                    # Latest vLLM  v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
+                    # Latest vLLM v1 memory profiler is misled by the high default value (i.e., 32768) - thinking there's not enough memory
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
@@ -1324,6 +1324,7 @@ class GRPOTrainer(Trainer):
             prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
             # Restore the original attention implementation, training mode
             self.model_wrapped.config._attn_implementation = previous_attn
+            sampling_per_token_logps = None  # not used in this case
 
         else:
             # Regular generation path
@@ -1386,9 +1387,6 @@ class GRPOTrainer(Trainer):
         self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
-
-        if images is not None:
-            self._logs["image"].extend(gather_object(images))
 
         return (
             prompt_ids,

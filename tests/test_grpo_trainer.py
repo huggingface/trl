@@ -15,6 +15,7 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -28,6 +29,7 @@ from transformers.testing_utils import require_liger_kernel, require_peft, requi
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
+from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
 
 from .testing_utils import TrlTestCase, require_vllm
 
@@ -1704,6 +1706,40 @@ class GRPOTrainerTester(TrlTestCase):
 
         self.assertEqual(len(trainer.reward_processing_classes), 1)
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
+
+
+@pytest.mark.low_priority
+class GSPOTokenTrainerTester(TrlTestCase):
+    def test_training(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_iterations=2,  # the importance sampling weights won't be 0 in this case
+            importance_sampling_level="sequence_token",
+            report_to="none",
+        )
+        trainer = GSPOTokenTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
 
 if __name__ == "__main__":
