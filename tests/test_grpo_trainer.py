@@ -1569,6 +1569,7 @@ class GRPOTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"},
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
