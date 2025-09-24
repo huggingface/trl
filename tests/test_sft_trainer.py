@@ -1276,6 +1276,7 @@ class SFTTrainerTester(TrlTestCase):
             output_dir=self.tmp_dir,
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
+            **({"model_init_kwargs": {"revision": "refs/pr/4"}} if "Qwen2_5" in model_id else {})
         )
         trainer = SFTTrainer(model=model_id, args=training_args, train_dataset=dataset)
 
@@ -1317,6 +1318,7 @@ class SFTTrainerTester(TrlTestCase):
             output_dir=self.tmp_dir,
             max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"},
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -1380,7 +1382,7 @@ class SFTTrainerTester(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
 
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", model_init_kwargs={"revision": "refs/pr/4"})
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
             args=training_args,

@@ -1101,6 +1101,7 @@ class RLOOTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
             report_to="none",
+            **({"model_init_kwargs": {"revision": "refs/pr/4"}} if "Qwen2_5" in model_id else {})
         )
         trainer = RLOOTrainer(
             model=model_id,
@@ -1174,7 +1175,8 @@ class RLOOTrainerTester(TrlTestCase):
     @require_peft
     def test_training_vlm_peft(self):
         model = AutoModelForImageTextToText.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            revision="refs/pr/4",
         )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
@@ -1280,6 +1282,7 @@ class RLOOTrainerTester(TrlTestCase):
             report_to="none",
             use_vllm=True,
             vllm_mode="server",
+            **({"model_init_kwargs": {"revision": "refs/pr/4"}} if "Qwen2_5" in model_id else {})
         )
         trainer = RLOOTrainer(
             model=model_id,

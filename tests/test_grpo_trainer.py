@@ -1270,6 +1270,7 @@ class GRPOTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
             report_to="none",
+            **({"model_init_kwargs": {"revision": "refs/pr/4"}} if "Qwen2_5" in model_id else {})
         )
         trainer = GRPOTrainer(
             model=model_id,
@@ -1316,6 +1317,7 @@ class GRPOTrainerTester(TrlTestCase):
             num_generations=3,  # reduce the number of generations to reduce memory usage
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"},
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -1344,7 +1346,7 @@ class GRPOTrainerTester(TrlTestCase):
     @require_peft
     def test_training_vlm_peft(self):
         model = AutoModelForImageTextToText.from_pretrained(
-            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
+            "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration", revision="refs/pr/4",
         )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
@@ -1399,6 +1401,7 @@ class GRPOTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             steps_per_generation=2,  # increase the steps per generation to trigger IS
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"},
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -1441,6 +1444,7 @@ class GRPOTrainerTester(TrlTestCase):
             use_liger_loss=True,  # enable Liger loss
             loss_type="bnpo",  # default dapo is not supported yet
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"},
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -1482,6 +1486,7 @@ class GRPOTrainerTester(TrlTestCase):
             max_completion_length=8,  # reduce the completion length to reduce memory usage
             max_prompt_length=18,
             report_to="none",
+            model_init_kwargs={"revision": "refs/pr/4"},
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
@@ -1532,6 +1537,7 @@ class GRPOTrainerTester(TrlTestCase):
             report_to="none",
             use_vllm=True,
             vllm_mode="server",
+            **({"model_init_kwargs": {"revision": "refs/pr/4"}} if "Qwen2_5" in model_id else {})
         )
         trainer = GRPOTrainer(
             model=model_id,
