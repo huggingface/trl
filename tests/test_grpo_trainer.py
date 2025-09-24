@@ -1264,6 +1264,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -1275,7 +1279,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1293,7 +1297,6 @@ class GRPOTrainerTester(TrlTestCase):
             "model.vision_tower.",
             "model.multi_modal_projector.",
             "model.vision_model.",
-            "model.connector.modality_projection.",
             "model.visual.",
             "model.image_newline",
         )
@@ -1307,6 +1310,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
@@ -1318,7 +1325,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1346,7 +1353,11 @@ class GRPOTrainerTester(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
         )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1358,7 +1369,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -1382,6 +1393,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm_and_importance_sampling(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -1393,7 +1408,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1419,6 +1434,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -1431,7 +1450,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1457,6 +1476,10 @@ class GRPOTrainerTester(TrlTestCase):
         # If not handled properly, prompt truncation may truncate image token
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -1468,7 +1491,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1501,6 +1524,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,
@@ -1514,7 +1541,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1525,6 +1552,46 @@ class GRPOTrainerTester(TrlTestCase):
 
         self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_vision
+    def test_training_vlm_multi_image(self):
+        dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
+
+        # For now, mixing image+text and text-only examples is not supported, so we filter out text-only examples
+        dataset = dataset.filter(lambda x: len(x["images"]) > 0)
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the params have changed
+        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
+        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
