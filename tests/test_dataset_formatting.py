@@ -174,6 +174,7 @@ class CloneChatTemplateTestCase(TrlTestCase):
         # Check if special tokens are correctly set
         self.assertEqual(modified_tokenizer.eos_token, "<|im_end|>")
 
+    @pytest.mark.slow
     def test_clone_with_resize(self):
         modified_model, modified_tokenizer, _ = clone_chat_template(
             self.model, self.tokenizer, self.source, resize_to_multiple_of=123
