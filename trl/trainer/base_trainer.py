@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import os
-from typing import List, Optional, Union
+from typing import Optional, Union
 
 from transformers import Trainer, is_wandb_available
 
@@ -31,7 +31,7 @@ class BaseTrainer(Trainer):
         self,
         model_name: Optional[str] = None,
         dataset_name: Optional[str] = None,
-        tags: Union[str, List[str], None] = None,
+        tags: Union[str, list[str], None] = None,
         trainer_name: Optional[str] = None,
         trainer_citation: Optional[str] = None,
         paper_title: Optional[str] = None,
