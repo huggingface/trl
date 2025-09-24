@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pathlib
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -29,13 +30,36 @@ from transformers.testing_utils import (
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 
 from .testing_utils import TrlTestCase, ignore_warnings
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
+
+
+class DFTLossTester(TrlTestCase):
+    def test_dft_loss(self):
+        batch_size = 2
+        seq_len = 3
+        vocab_size = 2
+        # All tokens have the same probability
+        logits = torch.fill(torch.empty(batch_size, seq_len, vocab_size), torch.rand(1).item())
+        outputs = MagicMock()
+        outputs.logits = logits
+        labels = torch.tensor([[1, 0, 0], [0, 1, -100]])
+        ce_loss = torch.nn.functional.cross_entropy(
+            logits.view(-1, vocab_size), labels.view(-1), ignore_index=-100, reduction="mean"
+        )
+        # We need to account for the logits shift operation so we don't consider the first tokens
+        # in each row of the batch
+        num_items_in_batch = 3
+        # Dft loss
+        predicted_dft_loss = dft_loss(outputs, labels, num_items_in_batch)
+        # If we have just two tokens in our vocab and all logits are the same,
+        # dft scales the ce_loss per token by 0.5. So the dft_loss should be ce_loss/2
+        torch.testing.assert_close(ce_loss / 2.0, predicted_dft_loss, atol=1e-4, rtol=1e-4)
 
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
@@ -334,12 +358,24 @@ class SFTTrainerTester(TrlTestCase):
 
     def test_train_dft_loss(self):
         # Get the dataset
-        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
 
         # Initialize the trainer
-        training_args = SFTConfig(output_dir=self.tmp_dir, loss_type="dft", report_to="none")
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dft",
+            # DFT loss scale is smaller, especially with randomly initialized models, so increase learning rate to
+            # ensure params change
+            learning_rate=1e-3,
+            report_to="none",
+            eval_strategy="steps",
+            eval_steps=3,
+        )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5", args=training_args, train_dataset=dataset
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
         )
 
         # Save the initial parameters to compare them later
