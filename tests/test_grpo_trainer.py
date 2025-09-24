@@ -29,7 +29,7 @@ from transformers.testing_utils import require_liger_kernel, require_peft, requi
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-]from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
+from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
 from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_trainer import (
     GRPOWithReplayBufferTrainer,
     ReplayBuffer,
@@ -1965,6 +1965,20 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
             reward_funcs=[custom_reward_func],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
 
 class GSPOTokenTrainerTester(TrlTestCase):
