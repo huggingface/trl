@@ -743,6 +743,8 @@ class DPOTrainer(Trainer):
 
         prompt_input_ids = processed_features["input_ids"][0]
         pixel_values = processed_features["pixel_values"][0]
+        if "image_grid_thw" in processed_features:
+            pixel_values = processed_features["pixel_values"]
         chosen_input_ids = tokenizer(features["chosen"], add_special_tokens=False)["input_ids"]
         rejected_input_ids = tokenizer(features["rejected"], add_special_tokens=False)["input_ids"]
 
