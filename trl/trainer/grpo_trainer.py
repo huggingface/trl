@@ -47,7 +47,7 @@ from transformers import (
 from transformers.trainer_utils import seed_worker
 from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
-from ..data_utils import apply_chat_template, is_conversational
+from ..data_utils import apply_chat_template, is_conversational,     prepare_multimodal_messages_2, prepare_multimodal_messages, prepare_multimodal_messages_vllm
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_liger_kernel_available, is_vllm_available
@@ -1122,12 +1122,26 @@ class GRPOTrainer(Trainer):
         else:
             all_prompts = prompts
 
+        _is_conversational = is_conversational({"prompt": prompts[0]})
+
+        if images:
+            all_prompts = [prepare_multimodal_messages_vllm(prompt) for prompt in all_prompts]
+
         with profiling_context(self, "vLLM.generate"):
-            all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+            if _is_conversational:
+                all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+            else:
+                all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
 
         all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
-        all_contents = self.processing_class.batch_decode(all_completion_ids, skip_special_tokens=True)
-        all_completions = [[{"role": "assistant", "content": content}] for content in all_contents]
+
+        if _is_conversational:
+            all_contents = self.processing_class.batch_decode(all_completion_ids, skip_special_tokens=True)
+            if images:
+                all_contents = [[{"type": "text", "text": content}] for content in all_contents]
+            all_completions = [[{"role": "assistant", "content": content}] for content in all_contents]
+        else:
+            all_completions = self.processing_class.batch_decode(all_completion_ids, skip_special_tokens=False)
 
         if self.vllm_tensor_parallel_size > 1:
             # Slice completions for this rank within its TP group.
@@ -1163,6 +1177,7 @@ class GRPOTrainer(Trainer):
         mode = "train" if self.model.training else "eval"
 
         prompts = [x["prompt"] for x in inputs]
+        _is_conversational = is_conversational(inputs[0])
 
         if "images" in inputs[0]:
             images = [example.get("images") for example in inputs]
@@ -1170,12 +1185,23 @@ class GRPOTrainer(Trainer):
             images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
         else:
             images = None
+        
+        if images is not None:
+            prompts = [prepare_multimodal_messages(prompt, len(image_list)) for prompt, image_list in zip(prompts, images)]
+            prompts = [prepare_multimodal_messages_2(prompt, image_list) for prompt, image_list in zip(prompts, images)]
 
         completions = self._generate(prompts, images)
-
+        # Tokenize and extract completion ids
         prompts_completions = [p + c for p, c in zip(prompts, completions)]
-        prompt_ids_list = self.processing_class.apply_chat_template(prompts, add_generation_prompt=True)
-        prompt_completion_ids_list = self.processing_class.apply_chat_template(prompts_completions)
+        if _is_conversational:
+            forward_kwargs = self.processing_class.apply_chat_template(prompts, tokenize=True, add_generation_prompt=True, return_dict=True)
+            forward_kwargs = super()._prepare_inputs(forward_kwargs)
+            prompt_ids_list, _ = forward_kwargs.pop("input_ids"), forward_kwargs.pop("attention_mask")
+            prompt_completion_ids_list = self.processing_class.apply_chat_template(prompts_completions, tokenize=True)
+        else:
+            prompt_ids_list = self.processing_class(prompts)["input_ids"]
+            prompt_completion_ids_list = self.processing_class(prompts_completions)["input_ids"]
+            forward_kwargs = {}
         completion_ids_list = [pc[len(p) :] for p, pc in zip(prompt_ids_list, prompt_completion_ids_list)]
 
         # Convert to tensors and pad
@@ -1189,7 +1215,6 @@ class GRPOTrainer(Trainer):
         completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        forward_kwargs = {}
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
