@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 from collections import defaultdict, deque
 from collections.abc import Sequence
 from itertools import takewhile
@@ -58,7 +57,6 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int)
     ]
     ```
     """
-    messages = copy.deepcopy(messages)
     image_included = False
     for message in messages:
         if message["role"] == "system":
@@ -76,44 +74,6 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], num_images: int)
                 message["content"] = [{"type": "text", "text": message["content"]}]
         else:
             raise ValueError(f"Invalid role in message: {message['role']}. Expected 'user', 'assistant', or 'system'.")
-    return messages
-
-
-def insert_images(messages: list[dict[str, Any]], images: list) -> None:
-    """ """
-    messages = prepare_multimodal_messages(messages, num_images=len(images))
-    image_idx = 0
-    for message in messages:
-        if message["role"] == "user":
-            for part in message["content"]:
-                if part["type"] == "image":
-                    part["image"] = images[image_idx]
-                    image_idx += 1
-    return messages
-
-
-def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> None:
-    """
-    Convert messages into a structured multimodal format if needed.
-
-    Each message's content is transformed from a raw string into a list of typed parts. The first user message is
-    prefixed with an image placeholder, while all other user and assistant messages are wrapped as text entries.
-
-    Args:
-        messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content may be a raw string before transformation.
-        images (`list`):
-            Images to include in the first user message.
-    """
-    messages = copy.deepcopy(messages)
-    for message in messages:
-        if message["role"] == "user":
-            if isinstance(message["content"], list):  # if already prepared, the content will be a list
-                for part in message["content"]:
-                    if part["type"] == "image":
-                        part["type"] = "image_pil"
-                        part["image_pil"] = part.pop("image")
-    return messages
 
 
 def is_conversational(example: dict[str, Any]) -> bool:
