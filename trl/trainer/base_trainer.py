@@ -27,11 +27,7 @@ if is_wandb_available():
 class BaseTrainer(Trainer):
     _tag_names = []
     _name = "Base"
-    _paper = {
-        "title": None,
-        "id": None,
-        "citation": None,
-    }
+    _paper = {}
 
     def create_model_card(
         self,

@@ -117,7 +117,6 @@ class RewardTrainer(BaseTrainer):
 
     _tag_names = ["trl", "reward-trainer"]
     _name = "Reward"
-    _paper = {}
 
     def __init__(
         self,

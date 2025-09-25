@@ -586,7 +586,6 @@ class SFTTrainer(BaseTrainer):
 
     _tag_names = ["trl", "sft"]
     _name = "SFT"
-    _paper = {}
 
     def __init__(
         self,
