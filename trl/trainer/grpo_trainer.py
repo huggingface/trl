@@ -1070,9 +1070,8 @@ class GRPOTrainer(BaseTrainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
-    def _generate(self, prompts: list[str], images: Optional[list]):
+    def _generate_single_turn(self, prompts: list[str], images: Optional[list]):
         device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
 
         # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
         # [{"role": "user", "content": "What color is the sky?"}] to
@@ -1088,15 +1087,7 @@ class GRPOTrainer(BaseTrainer):
             maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
         ]
 
-        prompt_inputs = self.processing_class(
-            text=prompts_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            add_special_tokens=False,
-            **kwargs,
-        )
-        prompt_inputs = super()._prepare_inputs(prompt_inputs)
+        prompt_inputs = self.processing_class(text=prompts_text, add_special_tokens=False, **kwargs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
         forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
 
@@ -1266,6 +1257,9 @@ class GRPOTrainer(BaseTrainer):
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
                     completion_ids = all_completion_ids[tp_slice]
                     logprobs = all_logprobs[tp_slice]
+                else:
+                    completion_ids = all_completion_ids
+                    logprobs = all_logprobs
 
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=1)
@@ -1336,6 +1330,14 @@ class GRPOTrainer(BaseTrainer):
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
             logprobs = None  # not used in this case
 
+        return prompt_ids, completion_ids, logprobs, forward_kwargs
+
+    def _generate(self, prompts: list[str], images: Optional[list]):
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
+
+        prompt_ids, completion_ids, completion_logprobs, forward_kwargs = self._generate_single_turn(prompts, images)
+
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
         completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
@@ -1366,7 +1368,7 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, total_completion_tokens, logprobs, forward_kwargs
+        return prompt_ids, completion_ids, completion_logprobs, forward_kwargs
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1383,8 +1385,8 @@ class GRPOTrainer(BaseTrainer):
         else:
             images = None
 
-        (prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list, forward_kwargs) = (
-            self._generate(prompts, images)
+        (prompt_ids_list, completion_ids_list, sampling_per_token_logps_list, forward_kwargs) = self._generate(
+            prompts, images
         )
 
         # Identify truncated sequences (not ending with EOS or PAD) before any padding is applied
@@ -1405,6 +1407,8 @@ class GRPOTrainer(BaseTrainer):
             sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
         else:
             sampling_per_token_logps = None
+
+        num_items_in_batch = completion_mask.sum()
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
