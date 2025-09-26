@@ -1084,14 +1084,6 @@ class GRPOTrainer(BaseTrainer):
         prompts_text = [
             maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
         ]
-
-        if images is not None:
-            prompt_inputs = self.processing_class(text=prompts_text, padding=True, return_tensors="pt", **kwargs)
-            prompt_inputs = super()._prepare_inputs(prompt_inputs)
-            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
-        else:
-            forward_kwargs = {}
-
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
             if self.vllm_mode == "colocate" and self.args.vllm_enable_sleep_mode:
@@ -1304,13 +1296,13 @@ class GRPOTrainer(BaseTrainer):
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
             logprobs = None  # not used in this case
 
-        return prompt_ids, completion_ids, logprobs, forward_kwargs
+        return prompt_ids, completion_ids, logprobs
 
     def _generate(self, prompts: list[str], images: Optional[list]):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompt_ids, completion_ids, logprobs, forward_kwargs = self._generate_single_turn(prompts, images)
+        prompt_ids, completion_ids, logprobs = self._generate_single_turn(prompts, images)
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
@@ -1342,7 +1334,7 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, total_completion_tokens, logprobs, forward_kwargs
+        return prompt_ids, completion_ids, total_completion_tokens, logprobs
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1359,13 +1351,9 @@ class GRPOTrainer(BaseTrainer):
         else:
             images = None
 
-        (
-            prompt_ids_list,
-            completion_ids_list,
-            num_items_in_batch,
-            sampling_per_token_logps_list,
-            forward_kwargs,
-        ) = self._generate(prompts, images)
+        prompt_ids_list, completion_ids_list, num_items_in_batch, sampling_per_token_logps_list = self._generate(
+            prompts, images
+        )
 
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
@@ -1396,6 +1384,22 @@ class GRPOTrainer(BaseTrainer):
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
 
         num_images = [len(img_list) for img_list in images] if images is not None else None
+
+        # Get forward_kwargs for models with multimodal inputs
+        if images is not None:
+            # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
+            # [{"role": "user", "content": "What color is the sky?"}] to
+            # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
+            for prompt, image_list in zip(prompts, images):
+                prepare_multimodal_messages(prompt, num_images=len(image_list))
+            prompts_text = [
+                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+            ]
+            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
 
         with torch.no_grad():
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
