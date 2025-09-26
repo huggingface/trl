@@ -1087,9 +1087,18 @@ class GRPOTrainer(BaseTrainer):
             maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
         ]
 
-        prompt_inputs = self.processing_class(text=prompts_text, add_special_tokens=False, **kwargs)
+        prompt_inputs = self.processing_class(
+            text=prompts_text,
+            return_tensors="pt",
+            padding=True,
+            padding_side="left",
+            add_special_tokens=False,
+            **kwargs,
+        )
+        prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
         forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
 
         if self.max_prompt_length is not None:
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
@@ -1097,9 +1106,7 @@ class GRPOTrainer(BaseTrainer):
             # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
             protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
             protected = [token for token in protected if token is not None]
-            prompt_ids, prompt_mask = truncate_with_protected_tokens(
-                prompt_ids, prompt_mask, self.max_prompt_length, protected
-            )
+            prompt_ids = [truncate_with_protected_tokens(ids, self.max_prompt_length, protected) for ids in prompt_ids]
 
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
@@ -1300,6 +1307,11 @@ class GRPOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
+            prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids]
+            prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+            prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+            prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
+
             with (
                 profiling_context(self, "transformers.generate"),
                 unwrap_model_for_generation(
@@ -1357,7 +1369,7 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        eos_and_pad = [self.processing_class.eos_token_id, self.processing_class.pad_token_id]
+        eos_and_pad = [self.eos_token_id, self.pad_token_id]
         is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
         agg_is_truncated = self.accelerator.gather(is_truncated)
         self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
@@ -1410,7 +1422,7 @@ class GRPOTrainer(BaseTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
-            eos_and_pad = [self.processing_class.eos_token_id, self.processing_class.pad_token_id]
+            eos_and_pad = [self.eos_token_id, self.pad_token_id]
             is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
