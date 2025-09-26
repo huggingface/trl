@@ -181,7 +181,9 @@ To train on completion only, use a [prompt-completion](dataset_formats#prompt-co
 ![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
 
 <Tip>
+
 Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
+
 </Tip>
 
 ### Train adapters with PEFT
