@@ -170,7 +170,9 @@ class DataCollatorForPreference(DataCollatorMixin):
         output["chosen_attention_mask"] = pad(chosen_attention_mask, padding_value=0)
         output["rejected_input_ids"] = pad(rejected_input_ids, padding_value=self.pad_token_id)
         output["rejected_attention_mask"] = pad(rejected_attention_mask, padding_value=0)
-        if "pixel_values" in examples[0]:
+        if "pixel_values" in examples[0] and "image_grid_thw" in examples[0]:
+            output["pixel_values"] = torch.cat([torch.as_tensor(ex["pixel_values"]) for ex in examples], dim=0)
+        elif "pixel_values" in examples[0]:
             output["pixel_values"] = pad(pixel_values, padding_value=0.0)
         if "pixel_attention_mask" in examples[0]:
             output["pixel_attention_mask"] = pad(pixel_attention_mask, padding_value=0)
