@@ -1867,9 +1867,9 @@ def truncate_with_protected_tokens(ids: list[int], target_length: int, protected
 
     Args:
         sequences (`list[int]`):
-            Input tensor of token IDs, shape (batch_size, sequence_length).
+            Input sequence of token IDs.
         target_length (`int`):
-            Desired length of the output sequences.
+            Desired length of the output sequence.
         protected_tokens (`list[int]`):
             List of token IDs that should be preserved in the output.
     """
