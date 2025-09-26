@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import inspect
+import json
 import os
 import re
 import textwrap
@@ -95,6 +96,20 @@ logger = logging.get_logger(__name__)
 # What we call a reward function is a callable that takes a list of prompts and completions and returns a list of
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
+
+def extract_tool_calls(text: str) -> dict[str, Any]:
+    """
+    Given a list of strings, extract all <tool_call> JSON blocks and return them as a list of dictionaries.
+    """
+    pattern = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+    for match in pattern.findall(text):
+        try:
+            return json.loads(match)
+        except json.JSONDecodeError:
+            pass
+    return None
 
 
 class GRPOTrainer(BaseTrainer):
@@ -227,7 +242,10 @@ class GRPOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        tools=None,
     ):
+        self.tools = tools or []
+        self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -1084,7 +1102,8 @@ class GRPOTrainer(BaseTrainer):
                     prepare_multimodal_messages(prompt, num_images=len(image_list))
 
         prompts_text = [
-            maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+            maybe_apply_chat_template({"prompt": prompt}, self.processing_class, tools=self.tools)["prompt"]
+            for prompt in prompts
         ]
 
         prompt_inputs = self.processing_class(text=prompts_text, add_special_tokens=False, **kwargs)
@@ -1337,6 +1356,20 @@ class GRPOTrainer(BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompt_ids, completion_ids, completion_logprobs, forward_kwargs = self._generate_single_turn(prompts, images)
+        completion_contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        completions = [[{"role": "assistant", "content": content}] for content in completion_contents]
+        tool_calls = [extract_tool_calls(completion) for completion in completion_contents]
+        tool_results = [self._tool_dict[tc["name"]](**tc["arguments"]) if tc else None for tc in tool_calls]
+        tool_messages = [
+            [{"role": "tool", "name": tc["name"], "content": str(tr)}] if tc else None
+            for tc, tr in zip(tool_calls, tool_results)
+        ]
+        prompts_completions_tools = [p + c + t for p, c, t in zip(prompts, completions, tool_messages) if t]
+        (prompt_completion_tool_ids, post_tool_ids, post_tool_logprobs, _) = self._generate_single_turn(
+            prompts_completions_tools, images
+        )
+        completion_tool_ids = [pct[len(p) :] for p, pct in zip(prompt_ids, prompt_completion_tool_ids)]
+        completion_ids = [ct + c for ct, c in zip(completion_tool_ids, post_tool_ids)]
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
