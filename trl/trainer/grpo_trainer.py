@@ -1336,7 +1336,7 @@ class GRPOTrainer(BaseTrainer):
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
-        prompt_ids, completion_ids, completion_logprobs, forward_kwargs = self._generate_single_turn(prompts, images)
+        prompt_ids, completion_ids, logprobs, forward_kwargs = self._generate_single_turn(prompts, images)
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
@@ -1368,7 +1368,7 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, completion_logprobs, forward_kwargs
+        return prompt_ids, completion_ids, logprobs, forward_kwargs
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
