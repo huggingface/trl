@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import textwrap
 from typing import Any, Callable, Optional, Union
 
@@ -29,7 +28,6 @@ from transformers import (
     ProcessorMixin,
     TrainerCallback,
     is_apex_available,
-    is_wandb_available,
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
@@ -42,8 +40,6 @@ from .online_dpo_trainer import OnlineDPOTrainer
 from .utils import (
     SIMPLE_CHAT_TEMPLATE,
     empty_cache,
-    generate_model_card,
-    get_comet_experiment_url,
     get_reward,
     selective_log_softmax,
     truncate_right,
@@ -53,10 +49,6 @@ from .xpo_config import XPOConfig
 
 if is_apex_available():
     from apex import amp
-
-
-if is_wandb_available():
-    import wandb
 
 
 if is_peft_available():
@@ -113,6 +105,19 @@ class XPOTrainer(OnlineDPOTrainer):
     """
 
     _tag_names = ["trl", "xpo"]
+    _name = "XPO"
+    _paper = {
+        "title": "Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
+        "id": "2405.21046",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{jung2024binary,
+                title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
+                author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
+                year         = 2024,
+                eprint       = {arXiv:2405.21046}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -544,69 +549,3 @@ class XPOTrainer(OnlineDPOTrainer):
             self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{jung2024binary,
-            title        = {{Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF}},
-            author       = {Tengyang Xie and Dylan J. Foster and Akshay Krishnamurthy and Corby Rosset and Ahmed Awadallah and Alexander Rakhlin},
-            year         = 2024,
-            eprint       = {arXiv:2405.21046}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="XPO",
-            trainer_citation=citation,
-            paper_title="Exploratory Preference Optimization: Harnessing Implicit Q*-Approximation for Sample-Efficient RLHF",
-            paper_id="2405.21046",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
