@@ -1861,41 +1861,6 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
     return batch
 
 
-def truncate_with_protected_tokens(ids: list[int], target_length: int, protected_tokens: list[int]) -> list[int]:
-    """
-    Truncate list to target length while preserving protected tokens.
-
-    Args:
-        sequences (`list[int]`):
-            Input tensor of token IDs, shape (batch_size, sequence_length).
-        target_length (`int`):
-            Desired length of the output sequences.
-        protected_tokens (`list[int]`):
-            List of token IDs that should be preserved in the output.
-    """
-    protected_set = set(protected_tokens)
-
-    # Count protected tokens
-    num_protected = sum(1 for t in ids if t in protected_set)
-    if num_protected > target_length:
-        raise ValueError(
-            f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-            f"Please increase target length to at least {num_protected} or disable truncation."
-        )
-    num_non_protected_needed = target_length - num_protected
-    result = []
-
-    # Iterate backward to select rightmost non-protected tokens
-    for t in reversed(ids):
-        if t in protected_set:
-            result.append(t)
-        elif num_non_protected_needed > 0:
-            result.append(t)
-            num_non_protected_needed -= 1
-    # Reverse to restore original order
-    return result[::-1]
-
-
 def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
     """
     Create a model from a given path using the specified initialization arguments.
