@@ -235,7 +235,7 @@ class GRPOTrainer(Trainer):
         tools=None,
     ):
         self.tools = tools or []
-        self._tool_dict = {name: tool for name, tool in zip([tool.__name__ for tool in self.tools], self.tools)}
+        self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
