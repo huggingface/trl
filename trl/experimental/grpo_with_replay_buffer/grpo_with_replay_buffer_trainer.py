@@ -413,6 +413,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
+                    token_type_ids=prompt_inputs.get("token_type_ids"),
                     image_split_sizes=image_split_sizes,
                 )
             else:
@@ -438,6 +439,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         image_sizes=prompt_inputs.get("image_sizes"),
+                        token_type_ids=prompt_inputs.get("token_type_ids"),
                         image_split_sizes=image_split_sizes,
                     )
                 else:
@@ -452,6 +454,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                             image_sizes=prompt_inputs.get("image_sizes"),
+                            token_type_ids=prompt_inputs.get("token_type_ids"),
                             image_split_sizes=image_split_sizes,
                         )
             else:
@@ -617,6 +620,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 "image_grid_thw",
                 "pixel_attention_mask",
                 "image_sizes",
+                "token_type_ids",
             ]
             for field in optional_vision_fields:
                 if field in prompt_inputs:
