@@ -1265,7 +1265,7 @@ class GRPOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            self.processing_class.truncation_side = "left"  # ensure left truncation for generation
+            self.processing_class.truncation_side = "left"
             generate_inputs = self.processing_class(
                 text=prompts_text,
                 return_tensors="pt",
