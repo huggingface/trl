@@ -28,13 +28,7 @@ from trl.extras.profiling import profiling_context
 from trl.import_utils import is_vllm_available
 from trl.models import unwrap_model_for_generation
 from trl.trainer.grpo_trainer import GRPOTrainer
-from trl.trainer.utils import (
-    nanmax,
-    nanmin,
-    nanstd,
-    pad,
-    truncate_with_protected_tokens,
-)
+from trl.trainer.utils import nanmax, nanmin, nanstd, pad
 
 from .grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
 

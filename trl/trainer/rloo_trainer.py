@@ -71,7 +71,6 @@ from .utils import (
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
     split_tensor_dict,
-    truncate_with_protected_tokens,
     unsplit_pixel_values_by_grid,
 )
 
