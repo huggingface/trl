@@ -1265,17 +1265,18 @@ class GRPOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            prompt_inputs = self.processing_class(
+            self.processing_class.truncation_side = "left"  # ensure left truncation for generation
+            generate_inputs = self.processing_class(
                 text=prompts_text,
                 return_tensors="pt",
                 padding=True,
                 padding_side="left",
+                max_length=self.max_prompt_length,
                 truncation=True,
-                truncation_side="left",
                 add_special_tokens=False,
                 **kwargs,
             )
-            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
                 profiling_context(self, "transformers.generate"),
@@ -1286,11 +1287,11 @@ class GRPOTrainer(BaseTrainer):
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
-                    **prompt_inputs, generation_config=self.generation_config, disable_compile=True
+                    **generate_inputs, generation_config=self.generation_config, disable_compile=True
                 )
             # Compute prompt length and extract completion ids
+            prompt_ids, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
             prompt_length = prompt_ids.size(1)
-            prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
