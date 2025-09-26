@@ -374,6 +374,14 @@ class PPOTrainer(BaseTrainer):
                 self.model.policy.set_adapter(self.model_adapter_name or "default")
 
     def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+        # Handle the None case here so that we can have subfolders for policy and value
+        if output_dir is None:
+            output_dir = self.args.output_dir
+            if output_dir is None:
+                raise ValueError("No output directory specified for saving the model")
+        # I am unsure whether this early return is legal. Line 4814 in Trainer.py says that save_model has to be executed on all processes for TPU training. Previously, save_model would be called in parallel while one process had already set self.model to self.model.policy, resulting in errors. Including this line gets rid of those errors and the model still gets uploaded.
+        if not hasattr(self.model, "policy"):
+            return
         backup_model = self.model
         self.model = self.model.policy  # save only the policy
 
@@ -381,12 +389,27 @@ class PPOTrainer(BaseTrainer):
             backup_deepspeed = self.deepspeed
             self.deepspeed = self.model
 
-        super().save_model(output_dir, _internal_call)
+        policy_output_dir = output_dir if not self.args.save_value_model else os.path.join(output_dir, "policy_model")
+        super().save_model(policy_output_dir, _internal_call)
 
         self.model = backup_model
 
         if self.is_deepspeed_enabled:
             self.deepspeed = backup_deepspeed
+
+        if self.args.save_value_model:
+            backup_model = self.model
+            self.model = self.model.value_model
+
+            if self.is_deepspeed_enabled:
+                backup_deepspeed = self.deepspeed
+                self.deepspeed = self.model
+            value_output_dir = os.path.join(output_dir, "value_model")
+            super().save_model(value_output_dir, _internal_call)
+            self.model = backup_model
+
+            if self.is_deepspeed_enabled:
+                self.deepspeed = backup_deepspeed
 
     def train(self):
         args = self.args
