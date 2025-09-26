@@ -1102,8 +1102,8 @@ class GRPOTrainer(BaseTrainer):
 
         if self.max_prompt_length is not None:
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
-            # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
-            # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
+            # Then we decode those tokens back into text. We set `skip_special_tokens=False` because some special
+            # tokens are needed for generation.
             protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
             protected = [token for token in protected if token is not None]
             prompt_ids = [truncate_with_protected_tokens(ids, self.max_prompt_length, protected) for ids in prompt_ids]
@@ -1111,7 +1111,6 @@ class GRPOTrainer(BaseTrainer):
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
 
             # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
             # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
