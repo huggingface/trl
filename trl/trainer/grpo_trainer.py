@@ -1387,11 +1387,6 @@ class GRPOTrainer(BaseTrainer):
 
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
-            # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
-            # [{"role": "user", "content": "What color is the sky?"}] to
-            # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
-            for prompt, image_list in zip(prompts, images):
-                prepare_multimodal_messages(prompt, num_images=len(image_list))
             prompts_text = [
                 apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
             ]
