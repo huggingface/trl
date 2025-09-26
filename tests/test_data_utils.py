@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
 import itertools
 import textwrap
 import unittest
@@ -20,6 +19,7 @@ from time import strftime
 
 from datasets import Dataset, DatasetDict
 from parameterized import parameterized
+from PIL import Image
 from transformers import AutoProcessor, AutoTokenizer
 
 from trl.data_utils import (
@@ -47,30 +47,46 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
         ]
-
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (32, 32), color="red")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
         ]
 
         self.assertEqual(messages, expected)
 
     def test_first_user_message_gets_image(self):
-        """Test that only the first user message gets an image placeholder."""
+        """Test that only the first user message gets an image."""
         messages = [
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
             {"role": "user", "content": "How about the grass?"},
         ]
 
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (32, 32), color="red")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
-            {"role": "user", "content": [{"type": "text", "text": "How about the grass?"}]},
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "How about the grass?"}],
+            },
         ]
 
         self.assertEqual(messages, expected)
@@ -81,20 +97,23 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "What color is the sky?"},
             {"role": "assistant", "content": "It is blue."},
         ]
-
-        prepare_multimodal_messages(messages, num_images=3)
+        images = [Image.new("RGB", (32, 32), color=color) for color in ["red", "green", "blue"]]
+        messages = prepare_multimodal_messages(messages, images=images)
 
         expected = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "image"},
-                    {"type": "image"},
-                    {"type": "image"},
+                    {"type": "image", "image": images[0]},
+                    {"type": "image", "image": images[1]},
+                    {"type": "image", "image": images[2]},
                     {"type": "text", "text": "What color is the sky?"},
                 ],
             },
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
         ]
 
         self.assertEqual(messages, expected)
@@ -106,11 +125,18 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "user", "content": "What color is the sky?"},
         ]
 
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (32, 32), color="red")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
         expected = [
-            {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant"}]},
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are a helpful assistant"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
         ]
 
         self.assertEqual(messages, expected)
@@ -123,25 +149,22 @@ class PrepareMultimodalMessagesTester(unittest.TestCase):
             {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
         ]
 
-        original = copy.deepcopy(messages)
-        prepare_multimodal_messages(messages, num_images=1)
+        image = Image.new("RGB", (32, 32), color="red")
+        messages = prepare_multimodal_messages(messages, images=[image])
 
-        self.assertEqual(messages, original)
-
-    def test_mixed_prepared_and_unprepared_messages(self):
-        """Test handling of mixed prepared and unprepared messages."""
-        messages = [
-            {"role": "user", "content": "What color is the sky?"},
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
-            {"role": "user", "content": "What about the grass?"},
-        ]
-
-        prepare_multimodal_messages(messages, num_images=1)
-
-        expected = [
-            {"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]},
-            {"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]},
-            {"role": "user", "content": [{"type": "text", "text": "What about the grass?"}]},
+        expected = messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "You are a helpful assistant"}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
+            },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "It is blue."}],
+            },
         ]
 
         self.assertEqual(messages, expected)
