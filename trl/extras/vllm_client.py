@@ -246,7 +246,7 @@ class VLLMClient:
         )
         if response.status_code == 200:
             json_response = response.json()
-            return {"completion_ids": json_response["completion_ids"], "logprobs": json_response["logprobs"]}
+            return {"prompt_ids": json_response["prompt_ids"], "completion_ids": json_response["completion_ids"], "logprobs": json_response["logprobs"]}
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
