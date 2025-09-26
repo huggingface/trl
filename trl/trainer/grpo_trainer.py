@@ -1389,10 +1389,6 @@ class GRPOTrainer(BaseTrainer):
             prompts, images
         )
 
-        # Identify truncated sequences (not ending with EOS or PAD) before any padding is applied
-        eos_and_pad = [self.processing_class.eos_token_id, self.processing_class.pad_token_id]
-        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
-
         # Convert lists of token IDs to padded tensors
         prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
         prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
@@ -1412,6 +1408,8 @@ class GRPOTrainer(BaseTrainer):
 
         # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
         if self.mask_truncated_completions:
+            eos_and_pad = [self.processing_class.eos_token_id, self.processing_class.pad_token_id]
+            is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
             completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
