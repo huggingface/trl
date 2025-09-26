@@ -1086,7 +1086,7 @@ class GRPOTrainer(BaseTrainer):
         ]
 
         if images is not None:
-            prompt_inputs = self.processing_class(text=prompts_text, return_tensors="pt", **kwargs)
+            prompt_inputs = self.processing_class(text=prompts_text, padding=True, return_tensors="pt", **kwargs)
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
             forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
         else:
