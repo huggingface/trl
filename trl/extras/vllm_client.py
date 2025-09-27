@@ -217,6 +217,8 @@ class VLLMClient:
 
         Returns:
             `dict` with keys:
+                - `prompt_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the tokenized input prompts.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each prompt.
                 - `logprobs` (`list[list[float]]`):
