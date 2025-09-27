@@ -495,6 +495,7 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        truncate_prompt_tokens: Optional[int] = None
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: dict = field(default_factory=dict)
 
@@ -524,6 +525,9 @@ def main(script_args: ScriptArguments):
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
+                - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
+                  by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
+                  truncation). If set to `None`, truncation is disabled.
                 - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
                   model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
@@ -569,6 +573,7 @@ def main(script_args: ScriptArguments):
             "top_k": request.top_k,
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
+            "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "guided_decoding": guided_decoding,
             "logprobs": 0,
         }
