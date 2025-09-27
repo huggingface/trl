@@ -19,15 +19,10 @@ import torch
 from accelerate.utils import gather_object
 
 from trl.data_utils import is_conversational
-from trl.import_utils import is_vllm_available
 from trl.trainer.grpo_trainer import GRPOTrainer
 from trl.trainer.utils import nanmax, nanmin, nanstd, pad
 
 from .grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
-
-
-if is_vllm_available():
-    pass
 
 
 class ReplayBuffer:
