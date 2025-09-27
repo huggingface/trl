@@ -1073,9 +1073,82 @@ class SFTTrainer(BaseTrainer):
                 # Packing adds new column "seq_lengths" needed for document aware FlashAttention
                 dataset = pack_dataset(dataset, args.max_length, args.packing_strategy, map_kwargs)
             elif args.max_length is not None:
+
+                def get_trainable_tokens_for_language_modeling(batch, col_name):
+                    batch[col_name] = [len(input_ids) for input_ids in batch["input_ids"]]
+                    return batch
+
+                def get_trainable_tokens_for_conv_language_modeling(batch, col_name):
+                    batch[col_name] = [sum(a_m) for a_m in batch["assistant_masks"]]
+                    return batch
+
+                def get_trainable_tokens_for_non_conv_completions(batch, col_name):
+                    batch[col_name] = [sum(c_m) for c_m in batch["completion_mask"]]
+                    return batch
+
+                def get_trainable_tokens_for_conv_completions(batch, col_name):
+                    batch[col_name] = [
+                        sum(c & a for c, a in zip(c_row, a_row))
+                        for c_row, a_row in zip(batch["completion_mask"], batch["assistant_masks"])
+                    ]
+                    return batch
+
+                first_row = dataset[0] if isinstance(dataset, Dataset) else next(iter(dataset))
+                col_name = "trainable_tokens_before_truncation"
+                # Conversational Prompt Completions Dataset
+                if args.assistant_only_loss and "completion_mask" in first_row:
+                    fn = get_trainable_tokens_for_conv_completions
+                # Prompt Completions/Instruction Tuning Dataset
+                elif "completion_mask" in first_row:
+                    fn = get_trainable_tokens_for_non_conv_completions
+                # Conversational Language Modeling
+                elif args.assistant_only_loss:
+                    fn = get_trainable_tokens_for_conv_language_modeling
+                # Language Modeling
+                else:
+                    fn = get_trainable_tokens_for_language_modeling
+
+                dataset = dataset.map(fn, fn_kwargs={"col_name": col_name}, batched=True, **map_kwargs)
+                total_trainable_tokens_before_truncation = dataset.to_polars()[col_name].sum()
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+
+                col_name = "trainable_tokens_after_truncation"
+                if args.assistant_only_loss and "completion_mask" in first_row:
+                    dataset = dataset.filter(
+                        lambda batch: [
+                            sum(c & a for c, a in zip(a_m, c_m))
+                            for a_m, c_m in zip(batch["assistant_masks"], batch["completion_mask"])
+                        ],
+                        batched=True,
+                    )
+                elif "completion_mask" in first_row:
+                    dataset = dataset.filter(
+                        lambda batch: [1 in c_m for c_m in batch["completion_mask"]], batched=True
+                    )
+                elif args.assistant_only_loss:
+                    dataset = dataset.filter(
+                        lambda batch: [1 in a_m for a_m in batch["assistant_masks"]], batched=True
+                    )
+
+                dataset = dataset.map(fn, fn_kwargs={"col_name": col_name}, batched=True, **map_kwargs)
+                total_trainable_tokens_after_truncation = dataset.to_polars()[col_name].sum()
+
+                if total_trainable_tokens_after_truncation == 0:
+                    raise RuntimeError(
+                        "After truncation, the dataset has no trainable  tokens. This usually means that "
+                        "the max length is too short."
+                    )
+
+                percentage_of_retained_assistant_tokens = (
+                    total_trainable_tokens_after_truncation / total_trainable_tokens_before_truncation
+                ) * 100
+                logger.info(
+                    f"Total number of trainable assistant tokens after truncation: {total_trainable_tokens_after_truncation}. "
+                    f"Percentage of retained assistant tokens after truncating dataset: {percentage_of_retained_assistant_tokens:.2f}%"
+                )
+
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "seq_lengths", "completion_mask", "assistant_masks"}
