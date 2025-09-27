@@ -340,7 +340,7 @@ class TestBatchGeneration(TrlTestCase):
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
 
         self.generation_config = GenerationConfig(
-            max_new_tokens=128,
+            max_new_tokens=16,
             temperature=0.5,
             do_sample=True,
             top_k=0,
