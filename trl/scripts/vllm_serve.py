@@ -596,13 +596,14 @@ def main(script_args: ScriptArguments):
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
+        prompt_ids = [output.prompt_token_ids for output in all_outputs]
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         logprobs: list[list[float]] = [
             [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
             for outputs in all_outputs
             for output in outputs.outputs
         ]
-        return {"completion_ids": completion_ids, "logprobs": logprobs}
+        return {"prompt_ids": prompt_ids, "completion_ids": completion_ids, "logprobs": logprobs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str

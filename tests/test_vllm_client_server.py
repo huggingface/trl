@@ -74,36 +74,42 @@ class TestVLLMClientServer(TrlTestCase):
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)["completion_ids"]
+        outputs = self.client.generate(prompts)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
 
-        # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        # Check that the outputs are lists
+        self.assertIsInstance(prompt_ids, list)
+        self.assertIsInstance(completion_ids, list)
 
-        # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
+        # Check that the number of sequences are equal to the number of prompts
+        self.assertEqual(len(prompt_ids), len(prompts))
+        self.assertEqual(len(completion_ids), len(prompts))
 
-        # Check that the generated sequences are lists of integers
-        for seq in outputs:
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+        for seq in completion_ids:
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+        completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
             "completion_ids"
         ]
 
         # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        self.assertIsInstance(completion_ids, list)
 
         # Check that the number of generated sequences is 2 times the number of prompts
-        self.assertEqual(len(outputs), 2 * len(prompts))
+        self.assertEqual(len(completion_ids), 2 * len(prompts))
 
         # Check that the generated sequences are lists of integers
-        for seq in outputs:
+        for seq in completion_ids:
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
 
         # Check that the length of the generated sequences is less than or equal to 32
-        for seq in outputs:
+        for seq in completion_ids:
             self.assertLessEqual(len(seq), 32)
 
     def test_update_model_params(self):
@@ -150,36 +156,42 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)["completion_ids"]
+        outputs = self.client.generate(prompts)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
 
-        # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        # Check that the outputs are lists
+        self.assertIsInstance(prompt_ids, list)
+        self.assertIsInstance(completion_ids, list)
 
-        # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
+        # Check that the number of sequences are equal to the number of prompts
+        self.assertEqual(len(prompt_ids), len(prompts))
+        self.assertEqual(len(completion_ids), len(prompts))
 
-        # Check that the generated sequences are lists of integers
-        for seq in outputs:
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+        for seq in completion_ids:
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
+        completion_ids = self.client.generate(prompts, n=2, repetition_penalty=0.9, temperature=0.8, max_tokens=32)[
             "completion_ids"
         ]
 
         # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        self.assertIsInstance(completion_ids, list)
 
         # Check that the number of generated sequences is 2 times the number of prompts
-        self.assertEqual(len(outputs), 2 * len(prompts))
+        self.assertEqual(len(completion_ids), 2 * len(prompts))
 
         # Check that the generated sequences are lists of integers
-        for seq in outputs:
+        for seq in completion_ids:
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
 
         # Check that the length of the generated sequences is less than or equal to 32
-        for seq in outputs:
+        for seq in completion_ids:
             self.assertLessEqual(len(seq), 32)
 
     def test_update_model_params(self):
@@ -228,16 +240,22 @@ class TestVLLMClientServerTP(TrlTestCase):
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)["completion_ids"]
+        outputs = self.client.generate(prompts)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
 
-        # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        # Check that the outputs are lists
+        self.assertIsInstance(prompt_ids, list)
+        self.assertIsInstance(completion_ids, list)
 
-        # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
+        # Check that the number of sequences are equal to the number of prompts
+        self.assertEqual(len(prompt_ids), len(prompts))
+        self.assertEqual(len(completion_ids), len(prompts))
 
-        # Check that the generated sequences are lists of integers
-        for seq in outputs:
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+        for seq in completion_ids:
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
 
     def test_update_model_params(self):
@@ -286,16 +304,22 @@ class TestVLLMClientServerDP(TrlTestCase):
 
     def test_generate(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
-        outputs = self.client.generate(prompts)["completion_ids"]
+        outputs = self.client.generate(prompts)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
 
-        # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        # Check that the outputs are lists
+        self.assertIsInstance(prompt_ids, list)
+        self.assertIsInstance(completion_ids, list)
 
-        # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
+        # Check that the number of sequences are equal to the number of prompts
+        self.assertEqual(len(prompt_ids), len(prompts))
+        self.assertEqual(len(completion_ids), len(prompts))
 
-        # Check that the generated sequences are lists of integers
-        for seq in outputs:
+        # Check that the sequences are lists of integers
+        for seq in prompt_ids:
+            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+        for seq in completion_ids:
             self.assertTrue(all(isinstance(tok, int) for tok in seq))
 
     def test_update_model_params(self):
@@ -344,9 +368,13 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
 
         # Test basic functionality
         prompts = ["Hello, AI!"]
-        outputs = client.generate(prompts)["completion_ids"]
-        self.assertIsInstance(outputs, list)
-        self.assertEqual(len(outputs), len(prompts))
+        outputs = client.generate(prompts)
+        prompt_ids = outputs["prompt_ids"]
+        completion_ids = outputs["completion_ids"]
+        self.assertIsInstance(prompt_ids, list)
+        self.assertEqual(len(prompt_ids), len(prompts))
+        self.assertIsInstance(completion_ids, list)
+        self.assertEqual(len(completion_ids), len(prompts))
 
         client.close_communicator()
 
