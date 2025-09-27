@@ -99,18 +99,12 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         # [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky?"}]}]
         kwargs = {}
         has_images = "image" in inputs[0]
-        image_split_sizes = None
         if has_images:
             images = [example.get("image") for example in inputs]
             kwargs = {"images": [[img] for img in images]}
             for prompt in prompts:
                 if isinstance(prompt, list):  # i.e., when using conversational data
                     prepare_multimodal_messages(prompt, num_images=1)
-
-            if hasattr(self.processing_class, "_get_num_multimodal_tokens"):
-                image_sizes = [(image.height, image.width) for image in images]
-                multimodal_extra_data = self.processing_class._get_num_multimodal_tokens(image_sizes)
-                image_split_sizes = multimodal_extra_data.num_image_patches
 
         prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]
 
@@ -124,10 +118,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-        if "image_grid_thw" in prompt_inputs and image_split_sizes is None:
-            # Fallback for VLMs that require image_grid_thw but don't provide _get_num_multimodal_tokens
-            image_split_sizes = prompt_inputs["image_grid_thw"].prod(dim=1).tolist()
 
         if self.max_prompt_length is not None:
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
@@ -413,7 +403,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                     image_grid_thw=prompt_inputs.get("image_grid_thw"),
                     pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                     image_sizes=prompt_inputs.get("image_sizes"),
-                    image_split_sizes=image_split_sizes,
                 )
             else:
                 old_per_token_logps = None
@@ -438,7 +427,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                         image_grid_thw=prompt_inputs.get("image_grid_thw"),
                         pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                         image_sizes=prompt_inputs.get("image_sizes"),
-                        image_split_sizes=image_split_sizes,
                     )
                 else:
                     with self.accelerator.unwrap_model(self.model).disable_adapter():
@@ -452,7 +440,6 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                             image_grid_thw=prompt_inputs.get("image_grid_thw"),
                             pixel_attention_mask=prompt_inputs.get("pixel_attention_mask"),
                             image_sizes=prompt_inputs.get("image_sizes"),
-                            image_split_sizes=image_split_sizes,
                         )
             else:
                 ref_per_token_logps = None
@@ -612,15 +599,14 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 output["importance_sampling_ratio"] = importance_sampling_ratio
             if ref_per_token_logps is not None:
                 output["ref_per_token_logps"] = ref_per_token_logps
-            optional_vision_fields = [
-                "pixel_values",
-                "image_grid_thw",
-                "pixel_attention_mask",
-                "image_sizes",
-            ]
-            for field in optional_vision_fields:
-                if field in prompt_inputs:
-                    output[field] = prompt_inputs[field]
+            if "pixel_values" in prompt_inputs:
+                output["pixel_values"] = prompt_inputs["pixel_values"]
+            if "image_grid_thw" in prompt_inputs:
+                output["image_grid_thw"] = prompt_inputs["image_grid_thw"]
+            if "pixel_attention_mask" in prompt_inputs:
+                output["pixel_attention_mask"] = prompt_inputs["pixel_attention_mask"]
+            if "image_sizes" in prompt_inputs:
+                output["image_sizes"] = prompt_inputs["image_sizes"]
             return output
 
     def slice_group_data(
