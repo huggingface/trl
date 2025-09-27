@@ -212,6 +212,8 @@ class VLLMClient:
 
         Returns:
             `dict` with keys:
+                - `prompt_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the tokenized input prompts.
                 - `completion_ids` (`list[list[int]]`):
                     List of lists of token IDs representing the model-generated completions for each prompt.
                 - `logprobs` (`list[list[float]]`):
@@ -246,7 +248,11 @@ class VLLMClient:
         )
         if response.status_code == 200:
             json_response = response.json()
-            return {"prompt_ids": json_response["prompt_ids"], "completion_ids": json_response["completion_ids"], "logprobs": json_response["logprobs"]}
+            return {
+                "prompt_ids": json_response["prompt_ids"],
+                "completion_ids": json_response["completion_ids"],
+                "logprobs": json_response["logprobs"],
+            }
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
