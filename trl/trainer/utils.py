@@ -1586,9 +1586,17 @@ def print_prompt_completions_sample(
         if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
             for j, msg in enumerate(entry):
                 role = msg.get("role", "")
-                content = msg.get("content", "")
-                t.append(f"{role.upper()}\n", style="bold red")
-                t.append(content)
+                if "content" in msg:
+                    # Chat message
+                    t.append(f"{role.upper()}\n", style="bold red")
+                    t.append(msg["content"])
+                elif "name" in msg and "args" in msg:
+                    # Tool call
+                    t.append(f"{role.upper()}\n", style="bold red")
+                    t.append(f"{msg['name']}({msg['args']})")
+                else:
+                    # Fallback
+                    t.append(str(msg))
                 if j < len(entry) - 1:
                     t.append("\n\n")
         else:
