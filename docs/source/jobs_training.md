@@ -172,46 +172,43 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-> [!TIP]
-> TRL example scripts are fully uv-compatible, so you can run a complete training workflow directly on Jobs. You can customize training with standard script arguments plus hardware and secrets:
->
-> <hfoptions id="script_type">
-> <hfoption id="bash">
->
-> ```bash
-> hf jobs uv run \
->     --flavor a100-large \
->     --secrets HF_TOKEN \
->     https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py \
->     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
->     --dataset_name trl-lib/prm800k \
->     --output_dir Qwen2-0.5B-Reward \
->     --push_to_hub
-> ```
->
-> </hfoption>
-> <hfoption id="python">
->
-> ```python
-> from huggingface_hub import run_uv_job
->
-> run_uv_job(
->     "https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py",
->     flavor="a100-large",
->     secrets={"HF_TOKEN": "hf_..."},
->     script_args=[
->         "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
->         "--dataset_name", "trl-lib/prm800k",
->         "--output_dir", "Qwen2-0.5B-Reward",
->         "--push_to_hub"
->     ]
-> )
-> ```
->
-> </hfoption>
-> </hfoptions>
->
-> See the full list of examples in [Maintained examples](example_overview#maintained-examples).
+TRL example scripts are fully uv-compatible, so you can run a complete training workflow directly on Jobs. You can customize training with standard script arguments plus hardware and secrets:
+
+<hfoptions id="script_type">
+<hfoption id="bash">
+
+```bash
+hf jobs uv run \
+    --flavor a100-large \
+    --secrets HF_TOKEN \
+    https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py \
+    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+    --dataset_name trl-lib/prm800k \
+    --output_dir Qwen2-0.5B-Reward \
+    --push_to_hub
+```
+
+</hfoption>
+<hfoption id="python">
+
+```python
+from huggingface_hub import run_uv_job
+run_uv_job(
+    "https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py",
+    flavor="a100-large",
+    secrets={"HF_TOKEN": "hf_..."},
+    script_args=[
+        "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
+        "--dataset_name", "trl-lib/prm800k",
+        "--output_dir", "Qwen2-0.5B-Reward",
+        "--push_to_hub"
+    ]
+)
+```
+
+</hfoption>
+</hfoptions>
+See the full list of examples in [Maintained examples](example_overview#maintained-examples).
 
 ### Docker Images
 
