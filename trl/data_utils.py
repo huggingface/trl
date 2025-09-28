@@ -132,10 +132,11 @@ def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dic
     """
     messages = copy.deepcopy(messages)  # avoid modifying the original messages
     for message in messages:
-        for part in message["content"]:
-            if part["type"] == "image":
-                part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
-                part["image_pil"] = part.pop("image")
+        if isinstance(message["content"], list):
+            for part in message["content"]:
+                if part["type"] == "image":
+                    part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
+                    part["image_pil"] = part.pop("image")
     return messages
 
 
@@ -211,7 +212,7 @@ def apply_chat_template(
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
         last_role = example["prompt"][-1]["role"]
-        if last_role == "user":
+        if last_role in ["user", "tool"]:
             add_generation_prompt = True
             continue_final_message = False
         elif last_role == "assistant":

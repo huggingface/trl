@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import inspect
+import json
 import os
 import textwrap
+import traceback
 from collections import defaultdict, deque
 from contextlib import nullcontext
 from functools import partial
@@ -92,6 +94,7 @@ if is_vllm_available():
 if is_wandb_available():
     import wandb
 
+import re
 
 logger = logging.get_logger(__name__)
 
@@ -99,6 +102,23 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+def extract_tool_calls(text: str) -> list[dict[str, Any]]:
+    """
+    Extract JSON objects from <tool_call>...</tool_call> blocks in `text`
+    and return them in the format:
+        {"type": "function", "function": {...}}
+    """
+    # Find every block between <tool_call> and </tool_call>
+    blocks = re.findall(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', text, flags=re.DOTALL)
+    
+    result = []
+    for block in blocks:
+        try:
+            parsed = json.loads(block)
+        except json.JSONDecodeError as e:
+            continue
+        result.append({"type": "function", "function": parsed})
+    return result or None
 
 class GRPOTrainer(BaseTrainer):
     """
@@ -208,14 +228,16 @@ class GRPOTrainer(BaseTrainer):
         "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
         "id": "2402.03300",
         # docstyle-ignore
-        "citation": textwrap.dedent("""\
+        "citation": textwrap.dedent(
+            """\
             @article{shao2024deepseekmath,
                 title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
                 author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
                 year         = 2024,
                 eprint       = {arXiv:2402.03300},
             }
-            """),
+            """
+        ),
     }
 
     def __init__(
@@ -230,7 +252,10 @@ class GRPOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
         peft_config: Optional["PeftConfig"] = None,
+        tools=None,
     ):
+        self.tools = tools or []
+        self._tool_dict = {tool.__name__: tool for tool in self.tools}
         # Args
         if args is None:
             model_name = model if isinstance(model, str) else model.config._name_or_path
@@ -278,7 +303,7 @@ class GRPOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, padding_side="left")
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -534,7 +559,7 @@ class GRPOTrainer(BaseTrainer):
                 ensure_master_addr_port()
 
                 if self.max_prompt_length is not None and self.max_completion_length is not None:
-                    max_model_len = self.max_prompt_length + self.max_completion_length
+                    max_model_len = self.max_prompt_length + self.max_completion_length + 512
                 else:
                     max_model_len = None
                 self.llm = LLM(
@@ -552,7 +577,7 @@ class GRPOTrainer(BaseTrainer):
                     max_num_batched_tokens=4096,
                     model_impl=self.args.vllm_model_impl,
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
-                    enforce_eager=True,
+                    # enforce_eager=True,
                 )
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=1)
@@ -1115,7 +1140,9 @@ class GRPOTrainer(BaseTrainer):
                     }
                     with profiling_context(self, "vLLM.generate"):
                         if is_conversational({"prompt": ordered_set_of_prompts[0]}):
-                            output = self.vllm_client.chat(prompts=ordered_set_of_prompts, **sampling_params)
+                            output = self.vllm_client.chat(
+                                prompts=ordered_set_of_prompts, tools=self.tools, **sampling_params
+                            )
                         else:
                             output = self.vllm_client.generate(prompts=ordered_set_of_prompts, **sampling_params)
                         payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
@@ -1170,7 +1197,9 @@ class GRPOTrainer(BaseTrainer):
 
                 with profiling_context(self, "vLLM.generate"):
                     if is_conversational({"prompt": prompts[0]}):
-                        all_outputs = self.llm.chat(all_prompts, sampling_params=sampling_params, use_tqdm=False)
+                        all_outputs = self.llm.chat(
+                            all_prompts, sampling_params=sampling_params, tools=self.tools, use_tqdm=False
+                        )
                     else:
                         all_outputs = self.llm.generate(all_prompts, sampling_params=sampling_params, use_tqdm=False)
 
@@ -1245,7 +1274,7 @@ class GRPOTrainer(BaseTrainer):
             }
             if is_conversational({"prompt": prompts[0]}):
                 generate_inputs = self.processing_class.apply_chat_template(
-                    conversation=prompts, **processor_kwargs, tokenize=True
+                    conversation=prompts, **processor_kwargs, tokenize=True, tools=self.tools
                 )
             else:
                 generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
@@ -1284,6 +1313,65 @@ class GRPOTrainer(BaseTrainer):
         mode = "train" if self.model.training else "eval"
 
         prompt_ids, completion_ids, logprobs = self._generate_single_turn(prompts)
+        completion_contents = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
+        # parsed_completions = []
+        # for content in completion_contents:
+        #     try:
+        #         parsed_completions.append(self.processing_class.parse_response(content))
+        #     except Exception as e:
+        #         logger.warning(f"Failed to parse model output: {content}\nError: {e}")
+        #         parsed_completions.append(None)
+        # tool_calls = [completion.get("tool_calls") if completion is not None else None for completion in parsed_completions]
+        tool_calls = [extract_tool_calls(content) for content in completion_contents]
+        idxs_with_tool = [i for i, t in enumerate(tool_calls) if t]  # find indices that actually have a tool call
+        tool_calls = [tool_calls[i] for i in idxs_with_tool]
+
+        while idxs_with_tool:
+            prompts_for_generation = [prompts[i] for i in idxs_with_tool]
+            for idx, tool_call_list, prompt_for_generation in zip(idxs_with_tool, tool_calls, prompts_for_generation):
+                prompt_for_generation.append({"role": "assistant", "content": completion_contents[idx]})
+                for tool_call in tool_call_list:
+                    if tool_call["type"] == "function":
+                        function = tool_call["function"]
+                        try:
+                            result = self._tool_dict[function["name"]](**function["arguments"])
+                        except Exception as e:
+                            # store the full traceback as a string in the result
+                            result = {"error": str(e), "traceback": traceback.format_exc()}
+                    else:
+                        result = {"error": f"Unsupported tool call type: {tool_call['type']}"}
+                    tool_call["result"] = result
+                    tool_message = {"role": "tool", "name": function["name"], "content": str(result)}
+                    prompt_for_generation.append(tool_message)
+
+            prompt_completion_tool_ids, post_tool_ids, _ = self._generate_single_turn(prompts_for_generation)
+
+            # Truncate post-tool completion so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
+            for i in range(len(post_tool_ids)):
+                excess_length = len(prompt_completion_tool_ids[i]) + len(post_tool_ids[i]) - (
+                    self.max_prompt_length + self.max_completion_length
+                )
+                if excess_length > 0:
+                    post_tool_ids[i] = post_tool_ids[i][:-excess_length]
+
+            for idx, pct, post_tool in zip(idxs_with_tool, prompt_completion_tool_ids, post_tool_ids):
+                completion_ids[idx] = pct[len(prompt_ids[idx]) :] + post_tool
+
+            cc = self.processing_class.batch_decode(post_tool_ids, skip_special_tokens=True)
+            # parsed_completions = []
+            # for content in cc:
+            #     try:
+            #         parsed_completions.append(self.processing_class.parse_response(content))
+            #     except Exception as e:
+            #         logger.warning(f"Failed to parse model output: {content}\nError: {e}")
+            #         parsed_completions.append(None)
+            # tool_calls = [completion.get("tool_calls") if completion is not None else None for completion in parsed_completions]
+            tool_calls = [extract_tool_calls(content) for content in cc]
+            completion_contents =[None] * len(completion_contents)
+            for i, content in zip(idxs_with_tool, cc):
+                completion_contents[i] = content
+            idxs_with_tool = [idx for idx, tc in zip(idxs_with_tool, tool_calls) if tc]
+            tool_calls = [tc for tc in tool_calls if tc]
 
         # Get completion length per sequence, used for logging
         prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
@@ -1375,7 +1463,8 @@ class GRPOTrainer(BaseTrainer):
         # Get forward_kwargs for models with multimodal inputs
         if images is not None:
             prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
+                apply_chat_template({"prompt": prompt}, self.processing_class, tools=self.tools)["prompt"]
+                for prompt in prompts
             ]
             prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
             prompt_inputs = super()._prepare_inputs(prompt_inputs)
