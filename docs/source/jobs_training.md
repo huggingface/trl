@@ -83,14 +83,11 @@ To run successfully, the script needs:
 * **TRL installed**: Use the `--with trl` flag or the `dependencies` argument. uv installs these dependencies automatically before running the script.
 * **An authentication token**: Required to push the trained model (or perform other authenticated operations). Provide it with the `--secrets HF_TOKEN` flag or the `secrets` argument.
 
-<Tip warning={true}>
-
-When training with Jobs, be sure to:
-
-* **Set a sufficient timeout**. Jobs time out after 30 minutes by default. If your job exceeds the timeout, it will fail and all progress will be lost. See [Setting a custom timeout](https://huggingface.co/docs/huggingface_hub/guides/jobs#setting-a-custom-timeout).
-* **Push the model to the Hub**. The Jobs environment is ephemeral—files are deleted when the job ends. If you don’t push the model, it will be lost.
-
-</Tip>
+> [!WARNING]
+> When training with Jobs, be sure to:
+>
+> * **Set a sufficient timeout**. Jobs time out after 30 minutes by default. If your job exceeds the timeout, it will fail and all progress will be lost. See [Setting a custom timeout](https://huggingface.co/docs/huggingface_hub/guides/jobs#setting-a-custom-timeout).
+> * **Push the model to the Hub**. The Jobs environment is ephemeral—files are deleted when the job ends. If you don’t push the model, it will be lost.
 
 You can also run a script directly from a URL:
 
@@ -175,49 +172,46 @@ run_uv_job(
 </hfoption>
 </hfoptions>
 
-<Tip>
-
-TRL example scripts are fully uv-compatible, so you can run a complete training workflow directly on Jobs. You can customize training with standard script arguments plus hardware and secrets:
-
-<hfoptions id="script_type">
-<hfoption id="bash">
-
-```bash
-hf jobs uv run \
-    --flavor a100-large \
-    --secrets HF_TOKEN \
-    https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py \
-    --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
-    --dataset_name trl-lib/prm800k \
-    --output_dir Qwen2-0.5B-Reward \
-    --push_to_hub
-```
-
-</hfoption>
-<hfoption id="python">
-
-```python
-from huggingface_hub import run_uv_job
-
-run_uv_job(
-    "https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py",
-    flavor="a100-large",
-    secrets={"HF_TOKEN": "hf_..."},
-    script_args=[
-        "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
-        "--dataset_name", "trl-lib/prm800k",
-        "--output_dir", "Qwen2-0.5B-Reward",
-        "--push_to_hub"
-    ]
-)
-```
-
-</hfoption>
-</hfoptions>
-
-See the full list of examples in [Maintained examples](example_overview#maintained-examples).
-
-</Tip>
+> [!TIP]
+> TRL example scripts are fully uv-compatible, so you can run a complete training workflow directly on Jobs. You can customize training with standard script arguments plus hardware and secrets:
+>
+> <hfoptions id="script_type">
+> <hfoption id="bash">
+>
+> ```bash
+> hf jobs uv run \
+>     --flavor a100-large \
+>     --secrets HF_TOKEN \
+>     https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py \
+>     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
+>     --dataset_name trl-lib/prm800k \
+>     --output_dir Qwen2-0.5B-Reward \
+>     --push_to_hub
+> ```
+>
+> </hfoption>
+> <hfoption id="python">
+>
+> ```python
+> from huggingface_hub import run_uv_job
+>
+> run_uv_job(
+>     "https://raw.githubusercontent.com/huggingface/trl/refs/heads/main/examples/scripts/prm.py",
+>     flavor="a100-large",
+>     secrets={"HF_TOKEN": "hf_..."},
+>     script_args=[
+>         "--model_name_or_path", "Qwen/Qwen2-0.5B-Instruct",
+>         "--dataset_name", "trl-lib/prm800k",
+>         "--output_dir", "Qwen2-0.5B-Reward",
+>         "--push_to_hub"
+>     ]
+> )
+> ```
+>
+> </hfoption>
+> </hfoptions>
+>
+> See the full list of examples in [Maintained examples](example_overview#maintained-examples).
 
 ### Docker Images
 

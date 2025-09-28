@@ -43,11 +43,8 @@ Or using the TRL CLI:
 trl sft ... --attn_implementation kernels-community/flash-attn
 ```
 
-<Tip>
-
-Now you can leverage faster attention backends with a pre-optimized kernel for your hardware configuration from the Hub, speeding up both development and training.
-
-</Tip>
+> [!TIP]
+> Now you can leverage faster attention backends with a pre-optimized kernel for your hardware configuration from the Hub, speeding up both development and training.
 
 
 ## Comparing Attention Implementations
