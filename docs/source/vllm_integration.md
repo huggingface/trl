@@ -1,6 +1,6 @@
 # vLLM Integration
 
-This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood. Let's go! 🔥
+This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood.
 
 > [!WARNING]
 > TRL currently only supports vLLM versions `0.10.0`, `0.10.1`, and `0.10.2`. Please ensure you have one of these versions installed to avoid compatibility issues.
@@ -10,7 +10,7 @@ This document will guide you through the process of using vLLM with TRL for fast
 > 
 > - [`GRPOTrainer`]
 > - [`OnlineDPO`]
-> - [`NashMD`]
+> - [`NashMDTrainer`]
 > - [`XPOTrainer`]
 > - [`RLOOTrainer`]
 
@@ -254,5 +254,5 @@ training_args = GRPOConfig(
 
 
 > [!WARNING]
-> To reduce GPU memory usage when running vLLM, consider [enabling vLLM sleep mode](https://huggingface.co/docs/trl/main/en/reducing_memory_usage#vllm-sleep-mode).
+> To reduce GPU memory usage when running vLLM, consider [enabling vLLM sleep mode](reducing_memory_usage#vllm-sleep-mode).
 
