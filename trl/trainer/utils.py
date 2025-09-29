@@ -696,6 +696,15 @@ SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitaliz
 
 @dataclass
 class OnlineTrainerState(TrainerState):
+    """
+    Training state for online/on-policy trainers.
+
+    Extends [`~transformers.TrainerState`] with an `episode` counter to track the current rollout/episode.
+
+    Args:
+        episode (`int`, defaults to 0): Zero-based episode index.
+    """
+
     episode: int = 0
 
 
