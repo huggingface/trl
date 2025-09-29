@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import torch
+import pytest
 from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
 from transformers import (
@@ -1511,6 +1512,23 @@ class DPOVisionTrainerTester(TrlTestCase):
                     # the model itself. We should investigate this further, but for now we just skip these params.
                     continue
                 self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
+
+
+class TestDPOConfig:
+    @pytest.mark.parametrize("f_divergence_type", list(FDivergenceType))
+    @pytest.mark.parametrize("as_string", [False, True])
+    def test_f_divergence_type(self, f_divergence_type, as_string: bool, tmp_path):
+        kwargs = {"output_dir": str(tmp_path), "report_to": "none"}
+        config = DPOConfig(
+            f_divergence_type=f_divergence_type.value if as_string else f_divergence_type,
+            **kwargs,
+        )
+        # Internal normalization: keep Enum member
+        assert isinstance(config.f_divergence_type, FDivergenceType)
+        assert config.f_divergence_type == f_divergence_type
+        # Serialization: TrainingArguments.to_dict should yield the enum's string value
+        configparser_dict = config.to_dict()
+        assert configparser_dict["f_divergence_type"] == f_divergence_type.value
 
 
 if __name__ == "__main__":
