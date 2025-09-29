@@ -396,7 +396,7 @@ class DPOConfig(TrainingArguments):
             "Higher β means less deviation from the reference model."
         },
     )
-    f_divergence_type: FDivergenceType = field(
+    f_divergence_type: Union[FDivergenceType, str] = field(
         default=FDivergenceType.REVERSE_KL,
         metadata={
             "help": "Type of f-divergence regularization function to compute divergence between policy and reference "
@@ -496,6 +496,7 @@ class DPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+        self.f_divergence_type = FDivergenceType(self.f_divergence_type)
 
         # Normalize loss_type to string format for internal use
         if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:
