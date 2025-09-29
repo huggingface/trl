@@ -300,6 +300,8 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
                 output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
             if "image_sizes" in forward_kwargs:
                 output["image_sizes"] = forward_kwargs["image_sizes"]
+            if "token_type_ids" in forward_kwargs:
+                output["token_type_ids"] = forward_kwargs["token_type_ids"]
             if images is not None:
                 output["images"] = images
             return output
