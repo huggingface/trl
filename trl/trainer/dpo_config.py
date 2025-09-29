@@ -44,6 +44,13 @@ class FDivergenceType(Enum):
 
 
 class FDivergenceConstants:
+    """Constants for f-divergence types and their parameters.
+
+    Attributes:
+        ALPHA_DIVERGENCE_COEF_KEY (`str`): Key for the alpha divergence coefficient.
+        ALPHA_DIVERGENCE_COEF_DEFAULT (`float`): Default value for the alpha divergence coefficient.
+    """
+
     ALPHA_DIVERGENCE_COEF_KEY = "alpha_divergence_coef"
     ALPHA_DIVERGENCE_COEF_DEFAULT = 1.0
 
