@@ -2,34 +2,25 @@
 
 This document will guide you through the process of using vLLM with TRL for faster generation in online methods like GRPO and Online DPO. We first summarize a tl;dr on how to use vLLM with TRL, and then we will go into the details of how it works under the hood. Let's go! 🔥
 
-<Tip warning={true}>
+> [!WARNING]
+> TRL currently only supports vLLM versions `0.10.0`, `0.10.1`, and `0.10.2`. Please ensure you have one of these versions installed to avoid compatibility issues.
 
-TRL currently only supports vLLM versions `0.10.0`, `0.10.1`, and `0.10.2`. Please ensure you have one of these versions installed to avoid compatibility issues.
-
-</Tip>
-
-<Tip>
-
-The following trainers currently support generation with vLLM:
-
-- [`GRPOTrainer`]
-- [`OnlineDPO`]
-- [`NashMD`]
-- [`XPOTrainer`]
-- [`RLOOTrainer`]
-
-</Tip>
+> [!TIP]
+> The following trainers currently support generation with vLLM:
+> 
+> - [`GRPOTrainer`]
+> - [`OnlineDPO`]
+> - [`NashMD`]
+> - [`XPOTrainer`]
+> - [`RLOOTrainer`]
 
 ## 🚀 How can I use vLLM with TRL to speed up training?
 
 💡 **Note**: Resources required for this specific example: a single node with 8 GPUs.
 
-<Tip warning={true}>
-
-When using vLLM with TRL, the **vLLM server** and the **trainer** must run on **separate CUDA devices** to prevent conflicts.
-For guidance on configuring this properly, see [Modes of using vLLM during training](#modes-of-using-vllm-during-training).
-
-</Tip>
+> [!WARNING]
+> When using vLLM with TRL, the **vLLM server** and the **trainer** must run on **separate CUDA devices** to prevent conflicts.
+> For guidance on configuring this properly, see [Modes of using vLLM during training](#modes-of-using-vllm-during-training).
 
 First, install vLLM using the following command:
 
@@ -258,15 +249,10 @@ training_args = GRPOConfig(
 )
 ```
 
-<Tip warning={true}>
+> [!WARNING]
+> Check the documentation of the trainer you are using for specific details on vLLM usage and parameters.
 
-Check the documentation of the trainer you are using for specific details on vLLM usage and parameters.
 
-</Tip>
-
-<Tip warning={true}>
-
-To reduce GPU memory usage when running vLLM, consider [enabling vLLM sleep mode](https://huggingface.co/docs/trl/main/en/reducing_memory_usage#vllm-sleep-mode).
-
-</Tip>
+> [!WARNING]
+> To reduce GPU memory usage when running vLLM, consider [enabling vLLM sleep mode](https://huggingface.co/docs/trl/main/en/reducing_memory_usage#vllm-sleep-mode).
 
