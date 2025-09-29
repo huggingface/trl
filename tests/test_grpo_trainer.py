@@ -1775,7 +1775,7 @@ class GRPOTrainerTester(TrlTestCase):
         self.assertGreater(ratios.numel(), 0, "No IS ratios recorded.")
         self.assertTrue(torch.isfinite(ratios).all().item(), "NaN/Inf found in IS ratios.")
 
-        ok_mask = (ratios >= 0.85) & (ratios <= 1.15) # expect it not to be exactly 1 but should be close
+        ok_mask = (ratios >= 0.85) & (ratios <= 1.15)  # expect it not to be exactly 1 but should be close
         if ok_mask.mean() < 1 - MAX_PERC_BAD:
             bad = ratios[~ok_mask]
             self.fail(
