@@ -1712,6 +1712,78 @@ class GRPOTrainerTester(TrlTestCase):
         self.assertEqual(len(trainer.reward_processing_classes), 1)
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
 
+    @unittest.skip("We should add a mock for the vLLM server.")
+    @require_vllm
+    def test_vllm_colocate_tis_ratio_valid_low_temp(self, MAX_PERC_BAD=0.3):
+        """
+        With vLLM colocation and temperature=0.6 (sampling enabled), ensure the first-token importance-sampling ratios
+        are all in [0.85, 1.15].
+
+        This checks that the HF-vs-vLLM logprobs are ~the same even when the logits are processed.
+        """
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        # Subclass to capture first-token IS ratios every time we generate
+        class _DebugGRPOTrainer(GRPOTrainer):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self._captured_is_ratios = []
+
+            def _generate_and_score_completions(self, inputs):
+                batch = super()._generate_and_score_completions(inputs)
+                # first tokens would likely have the highest variability in their log probs if there's a mismatch
+                ratios = batch["importance_sampling_ratio"][:, 0].detach().float().cpu()
+                self._captured_is_ratios.append(ratios)
+                return batch
+
+        args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            max_steps=5,
+            # make sure to have a non-1 temperature so if vLLM uses raw logprobs there'll be a big difference
+            temperature=0.6,
+            use_vllm=True,
+            vllm_mode="colocate",
+            report_to="none",
+            logging_steps=-1,
+            vllm_importance_sampling_correction=True,
+        )
+
+        trainer = _DebugGRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[reward_func],
+            args=args,
+            train_dataset=dataset,
+        )
+
+        trainer.train()
+
+        self.assertTrue(
+            hasattr(trainer, "_captured_is_ratios") and len(trainer._captured_is_ratios) > 0,
+            "No IS ratios captured during training.",
+        )
+        ratios = torch.cat(trainer._captured_is_ratios)  # shape [N]
+
+        # sanity checks
+        self.assertGreater(ratios.numel(), 0, "No IS ratios recorded.")
+        self.assertTrue(torch.isfinite(ratios).all().item(), "NaN/Inf found in IS ratios.")
+
+        ok_mask = (ratios >= 0.85) & (ratios <= 1.15) # expect it not to be exactly 1 but should be close
+        if ok_mask.mean() < 1 - MAX_PERC_BAD:
+            bad = ratios[~ok_mask]
+            self.fail(
+                f"{(~ok_mask).sum().item()} / {ratios.numel()} ratios out of range; "
+                f"min={ratios.min().item():.4f}, median={ratios.median().item():.4f}, "
+                f"max={ratios.max().item():.4f}. First few offenders: {bad[:10].tolist()}"
+            )
+
 
 @pytest.mark.low_priority
 class TestReplayBuffer(unittest.TestCase):
