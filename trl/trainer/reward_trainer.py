@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import contextlib
+import logging
+import os
+import re
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -36,16 +40,16 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..models import prepare_peft_model
+from ..data_utils import is_conversational
+from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
 from .base_trainer import BaseTrainer
 from .reward_config import RewardConfig
-from .utils import disable_dropout_in_model
+from .utils import disable_dropout_in_model, pad, remove_none_values
+
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
 
-if is_wandb_available():
-    import wandb
 
 logger = get_logger(__name__)
 
