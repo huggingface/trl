@@ -96,6 +96,7 @@ jobs:
         run: |
           source .venv/bin/activate
           uv pip install ".[dev]"
+          uv pip install flash-attn --no-build-isolation
           uv pip install pytest-reportlog parameterized
 
       - name: Run slow SFT tests on Multi GPU
