@@ -57,7 +57,7 @@ if is_peft_available():
 
 class XPOTrainer(OnlineDPOTrainer):
     r"""
-    Initialize XPOTrainer as a subclass of [`OnlineDPOConfig`].
+    Initialize XPOTrainer as a subclass of [`OnlineDPOTrainer`].
 
     Args:
         model (`transformers.PreTrainedModel`):
