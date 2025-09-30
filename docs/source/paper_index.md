@@ -1,10 +1,7 @@
 # Paper Index
 
-<Tip warning={true}>
-
-Section under construction. Feel free to contribute!
-
-</Tip>
+> [!WARNING]
+> Section under construction. Feel free to contribute!
 
 ## Group Relative Policy Optimization
 
@@ -31,6 +28,8 @@ training_args = GRPOConfig(
 ```
 
 Note that this method only has an effect when training goes slightly off-policy—for example, when `steps_per_generation > gradient_accumulation_steps` or `num_iterations > 1`. Otherwise, it is effectively equivalent to no modification.
+
+TRL also provide an experimental implementation of GSPO-token, see [Experimental - GSPO-Token](experimental#gspo-token).
 
 #### Policy ratio: GRPO vs. GSPO
 

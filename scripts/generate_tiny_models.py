@@ -323,6 +323,10 @@ for model_id, model_class in [
 
     if issubclass(model_class.config_class, Qwen2_5_VLConfig):
         vision_config["out_hidden_size"] = 16
+        # Different dict object at the config root; see GH-4101 and transformers#41020
+        kwargs["num_hidden_layers"] = 2
+        kwargs["hidden_size"] = 16
+        kwargs["num_attention_heads"] = 4
 
     if issubclass(model_class.config_class, Idefics2Config):
         kwargs["perceiver_config"] = {"hidden_size": 16}

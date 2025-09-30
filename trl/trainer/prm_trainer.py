@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import textwrap
 from itertools import chain
 from pathlib import Path
@@ -30,26 +29,22 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
-    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
 from ..models import prepare_peft_model
+from .base_trainer import BaseTrainer
 from .prm_config import PRMConfig
-from .utils import compute_accuracy, disable_dropout_in_model, generate_model_card
+from .utils import compute_accuracy, disable_dropout_in_model
 
 
 if is_peft_available():
     from peft import PeftModel
 
-if is_wandb_available():
-    import wandb
 
-
-class PRMTrainer(Trainer):
+class PRMTrainer(BaseTrainer):
     """
     Initialize PRMTrainer.
 
@@ -88,6 +83,19 @@ class PRMTrainer(Trainer):
     """
 
     _tag_names = ["trl", "prm"]
+    _name = "PRM"
+    _paper = {
+        "title": "Solving math word problems with process-and outcome-based feedback",
+        "id": "2211.14275",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{uesato2022solving,
+                title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
+                author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
+                year         = 2022,
+                journal      = {arXiv preprint arXiv:2211.14275}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -288,67 +296,3 @@ class PRMTrainer(Trainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{uesato2022solving,
-            title        = {{Solving Math Word Problems With Process- and Outcome-Based Feedback}},
-            author       = {Uesato, Jonathan and Kushman, Nate and Kumar, Ramana and Song, Francis and Siegel, Noah and Wang, Lisa and Creswell, Antonia and Irving, Geoffrey and Higgins, Irina},
-            year         = 2022,
-            journal      = {arXiv preprint arXiv:2211.14275}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            trainer_name="PRM",
-            trainer_citation=citation,
-            paper_title="Solving math word problems with process-and outcome-based feedback",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

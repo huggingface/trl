@@ -12,10 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import contextlib
-import logging
-import os
-import re
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -34,18 +30,25 @@ from transformers import (
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    Trainer,
-    is_wandb_available,
+    ProcessorMixin,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import is_conversational
-from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
+from ..data_utils import maybe_apply_chat_template
+from ..models import prepare_peft_model
+from .base_trainer import BaseTrainer
 from .reward_config import RewardConfig
-from .utils import disable_dropout_in_model, generate_model_card, get_comet_experiment_url, pad, remove_none_values
+from .utils import (
+    RewardDataCollatorWithPadding,
+    compute_accuracy,
+    decode_and_strip_padding,
+    disable_dropout_in_model,
+    log_table_to_comet_experiment,
+    print_rich_table,
+)
 
 
 if is_peft_available():
@@ -171,7 +174,7 @@ class DataCollatorForPreference(DataCollatorMixin):
         return output
 
 
-class RewardTrainer(Trainer):
+class RewardTrainer(BaseTrainer):
     """
     Trainer for Outcome-supervised Reward Models (ORM).
 
@@ -256,6 +259,7 @@ class RewardTrainer(Trainer):
     """
 
     _tag_names = ["trl", "reward-trainer"]
+    _name = "Reward"
 
     def __init__(
         self,
