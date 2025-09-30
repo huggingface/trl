@@ -165,7 +165,7 @@ class DPOConfig(TrainingArguments):
             Parameter controlling the deviation from the reference model. Higher β means less deviation from the
             reference model. For the IPO loss (`loss_type="ipo"`), β is the regularization parameter denoted by τ in
             the [paper](https://huggingface.co/papers/2310.12036).
-        f_divergence_type ([`FDivergenceType`], *optional*, defaults to `FDivergenceType.REVERSE_KL`):
+        f_divergence_type ([`FDivergenceType`] or `str`, *optional*, defaults to `FDivergenceType.REVERSE_KL`):
             Type of f-divergence regularization function to compute divergence between policy and reference model.
         f_alpha_divergence_coef (`float`, *optional*, defaults to `1.0`):
             α coefficient in the α-divergence u^-α regularization function for DPO loss.
