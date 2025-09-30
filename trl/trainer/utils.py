@@ -1911,7 +1911,7 @@ def truncate_with_protected_tokens(ids: list[int], target_length: int, protected
 
     Returns:
         `list[int]`: Truncated sequence.
-        
+
     Raises:
         `ValueError`: If `len(protected_tokens ∩ seq) > target_length`.
     """
