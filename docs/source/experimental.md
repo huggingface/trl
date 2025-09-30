@@ -2,11 +2,8 @@
 
 The `trl.experimental` namespace provides a minimal, clearly separated space for fast iteration on new ideas.
 
-<Tip warning={true}>
-
-**Stability contract:** Anything under `trl.experimental` may change or be removed in *any* release (including patch versions) without prior deprecation. Do not rely on these APIs for production workloads.
-
-</Tip>
+> [!WARNING]
+> **Stability contract:** Anything under `trl.experimental` may change or be removed in *any* release (including patch versions) without prior deprecation. Do not rely on these APIs for production workloads.
 
 ## Current Experimental Features
 
@@ -95,11 +92,8 @@ training_args = GRPOConfig(
 )
 ```
 
-<Tip warning={true}>
-
-To leverage GSPO-token, the user will need to provide the per-token advantage  \\( \hat{A_{i,t}} \\) for each token  \\( t \\) in the sequence  \\( i \\) (i.e., make  \\( \hat{A_{i,t}} \\) varies with  \\( t \\)—which isn't the case here,  \\( \hat{A_{i,t}}=\hat{A_{i}} \\)). Otherwise, GSPO-Token gradient is just equivalent to the original GSPO implementation.
-
-</Tip>
+> [!WARNING]
+> To leverage GSPO-token, the user will need to provide the per-token advantage  \\( \hat{A_{i,t}} \\) for each token  \\( t \\) in the sequence  \\( i \\) (i.e., make  \\( \hat{A_{i,t}} \\) varies with  \\( t \\)—which isn't the case here,  \\( \hat{A_{i,t}}=\hat{A_{i}} \\)). Otherwise, GSPO-Token gradient is just equivalent to the original GSPO implementation.
 
 ### GRPO With Replay Buffer
 

@@ -743,6 +743,94 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         ]
         self.assertIn(output, possible_outputs)
 
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages(self, mock_stdout):
+        prompts = [
+            [
+                {"role": "system", "content": "You are an helpful assistant."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            [
+                {"role": "system", "content": "You are an helpful assistant."},
+                {"role": "user", "content": "Where is the sun?"},
+            ],
+        ]
+        completions = [
+            [{"role": "assistant", "content": "It is blue."}],
+            [{"role": "assistant", "content": "In the sky."}],
+        ]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                  ┃ Completion  ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ SYSTEM                  │ ASSISTANT   │        0.12 │   0.79 │      0.99 │ │
+        │ │ You are an helpful      │ It is blue. │             │        │           │ │
+        │ │ assistant.              │             │             │        │           │ │
+        │ │                         │             │             │        │           │ │
+        │ │ USER                    │             │             │        │           │ │
+        │ │ What color is the sky?  │             │             │        │           │ │
+        │ ├─────────────────────────┼─────────────┼─────────────┼────────┼───────────┤ │
+        │ │ SYSTEM                  │ ASSISTANT   │        0.46 │   0.10 │      0.65 │ │
+        │ │ You are an helpful      │ In the sky. │             │        │           │ │
+        │ │ assistant.              │             │             │        │           │ │
+        │ │                         │             │             │        │           │ │
+        │ │ USER                    │             │             │        │           │ │
+        │ │ Where is the sun?       │             │             │        │           │ │
+        │ └─────────────────────────┴─────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        self.assertEqual(output, expected_output)
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_tools(self, mock_stdout):
+        prompts = [
+            [{"role": "user", "content": "What is the temperature in Paris?"}],
+            [{"role": "user", "content": "What is the weather in London?"}],
+        ]
+        completions = [
+            [{"role": "tool", "name": "get_temperature", "args": {"location": "Paris"}}],
+            [{"role": "tool", "name": "get_weather", "args": {"location": "London"}}],
+        ]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt            ┃ Completion        ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER              │ TOOL              │        0.12 │   0.79 │      0.99 │ │
+        │ │ What is the       │ get_temperature(… │             │        │           │ │
+        │ │ temperature in    │ 'Paris'})         │             │        │           │ │
+        │ │ Paris?            │                   │             │        │           │ │
+        │ ├───────────────────┼───────────────────┼─────────────┼────────┼───────────┤ │
+        │ │ USER              │ TOOL              │        0.46 │   0.10 │      0.65 │ │
+        │ │ What is the       │ get_weather({'lo… │             │        │           │ │
+        │ │ weather in        │ 'London'})        │             │        │           │ │
+        │ │ London?           │                   │             │        │           │ │
+        │ └───────────────────┴───────────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        self.assertEqual(output, expected_output)
+
 
 class TestSelectiveLogSoftmax(TrlTestCase):
     @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])

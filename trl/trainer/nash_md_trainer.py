@@ -30,7 +30,7 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_apex_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
@@ -47,17 +47,15 @@ from .utils import (
 )
 
 
-if is_apex_available():
-    from apex import amp
-
-
 if is_peft_available():
     from peft import PeftModel
 
 
 class NashMDTrainer(OnlineDPOTrainer):
-    r"""
-    Initialize NashMDTrainer as a subclass of [`OnlineDPOConfig`].
+    """
+    Trainer for the Nash-MD method.
+
+    It is implemented as a subclass of [`OnlineDPOTrainer`].
 
     Args:
         model (`transformers.PreTrainedModel`):
@@ -96,10 +94,13 @@ class NashMDTrainer(OnlineDPOTrainer):
         preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
             The function to use to preprocess the logits before computing the metrics.
 
-    .. deprecated:: 0.22.0
-        The following parameters are deprecated and will be removed in a future version:
+        reward_model:
 
-        * `reward_model`: Use `reward_funcs` instead. For example, change `reward_model=model` to `reward_funcs=model`.
+            <Deprecated version="0.22.0">
+
+            This parameter is deprecated and will be removed in version 0.25.0. Use `reward_funcs` instead.
+
+            </Deprecated>
     """
 
     _tag_names = ["trl", "nash-md"]
@@ -496,10 +497,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss, **kwargs)
+        self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
