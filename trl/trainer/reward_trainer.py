@@ -30,26 +30,16 @@ from transformers import (
     DataCollator,
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    ProcessorMixin,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import maybe_apply_chat_template
 from ..models import prepare_peft_model
 from .base_trainer import BaseTrainer
 from .reward_config import RewardConfig
-from .utils import (
-    RewardDataCollatorWithPadding,
-    compute_accuracy,
-    decode_and_strip_padding,
-    disable_dropout_in_model,
-    log_table_to_comet_experiment,
-    print_rich_table,
-)
-
+from .utils import disable_dropout_in_model
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
@@ -260,6 +250,7 @@ class RewardTrainer(BaseTrainer):
 
     _tag_names = ["trl", "reward-trainer"]
     _name = "Reward"
+    _template_file = "rm_model_card.md"
 
     def __init__(
         self,
@@ -600,58 +591,3 @@ class RewardTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="Reward",
-            template_file="rm_model_card.md",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
