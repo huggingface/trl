@@ -1902,7 +1902,7 @@ def truncate_with_protected_tokens(ids: list[int], target_length: int, protected
     Truncate list to target length while preserving protected tokens.
 
     Args:
-        sequences (`list[int]`):
+        ids (`list[int]`):
             Input sequence of token IDs.
         target_length (`int`):
             Desired length of the output sequence.
