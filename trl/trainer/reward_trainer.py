@@ -139,7 +139,7 @@ class DataCollatorForPreference(DataCollatorMixin):
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         # Convert to tensor
         chosen_input_ids = [torch.tensor(example["chosen_input_ids"]) for example in examples]
         rejected_input_ids = [torch.tensor(example["rejected_input_ids"]) for example in examples]
@@ -258,9 +258,9 @@ class RewardTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, nn.Module, PreTrainedModel],
+        model: Union[str, PreTrainedModel],
         args: Optional[RewardConfig] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
+        data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[PreTrainedTokenizerBase] = None,
@@ -525,7 +525,13 @@ class RewardTrainer(BaseTrainer):
         if self._signature_columns is None:
             self._signature_columns = ["chosen_input_ids", "rejected_input_ids", "margin"]
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[torch.Tensor] = None,
+    ):
         """
         Compute training loss and additionally compute token accuracies
         """
