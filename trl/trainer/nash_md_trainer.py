@@ -30,7 +30,7 @@ from transformers import (
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
-from transformers.utils import is_apex_available, is_peft_available
+from transformers.utils import is_peft_available
 
 from ..data_utils import is_conversational, maybe_apply_chat_template
 from ..models.modeling_base import GeometricMixtureWrapper
@@ -45,10 +45,6 @@ from .utils import (
     selective_log_softmax,
     truncate_right,
 )
-
-
-if is_apex_available():
-    from apex import amp
 
 
 if is_peft_available():
@@ -501,10 +497,6 @@ class NashMDTrainer(OnlineDPOTrainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss, **kwargs)
+        self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps

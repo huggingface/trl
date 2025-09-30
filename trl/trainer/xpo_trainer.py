@@ -27,7 +27,6 @@ from transformers import (
     PreTrainedTokenizerBase,
     ProcessorMixin,
     TrainerCallback,
-    is_apex_available,
 )
 from transformers.trainer_utils import EvalPrediction
 from transformers.training_args import OptimizerNames
@@ -45,10 +44,6 @@ from .utils import (
     truncate_right,
 )
 from .xpo_config import XPOConfig
-
-
-if is_apex_available():
-    from apex import amp
 
 
 if is_peft_available():
@@ -545,10 +540,6 @@ class XPOTrainer(OnlineDPOTrainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss, **kwargs)
+        self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
