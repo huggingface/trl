@@ -1514,20 +1514,21 @@ class DPOVisionTrainerTester(TrlTestCase):
                 self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
 
 
-class TestDPOConfig:
-    @pytest.mark.parametrize("f_divergence_type", list(FDivergenceType))
-    @pytest.mark.parametrize("as_string", [False, True])
-    def test_f_divergence_type(self, f_divergence_type, as_string: bool, tmp_path):
-        kwargs = {"output_dir": str(tmp_path), "report_to": "none"}
-        config = DPOConfig(
+class TestDPOConfig(TrlTestCase):
+    @parameterized.expand([(f_div_type, as_str) for f_div_type in list(FDivergenceType) for as_str in [False, True]])
+    def test_f_divergence_type(self, f_divergence_type, as_string: bool):
+        training_args = DPOConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
             f_divergence_type=f_divergence_type.value if as_string else f_divergence_type,
-            **kwargs,
         )
+
         # Internal normalization: keep Enum member
-        assert isinstance(config.f_divergence_type, FDivergenceType)
-        assert config.f_divergence_type == f_divergence_type
+        assert isinstance(training_args.f_divergence_type, FDivergenceType)
+        assert training_args.f_divergence_type == f_divergence_type
+
         # Serialization: TrainingArguments.to_dict should yield the enum's string value
-        configparser_dict = config.to_dict()
+        configparser_dict = training_args.to_dict()
         assert configparser_dict["f_divergence_type"] == f_divergence_type.value
 
 
