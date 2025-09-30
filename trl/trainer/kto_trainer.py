@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import inspect
-import os
 import random
 import textwrap
 from collections import defaultdict
@@ -40,7 +39,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     TrainerCallback,
     TrainingArguments,
     is_comet_available,
@@ -52,12 +50,11 @@ from transformers.utils import is_peft_available
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset
 from ..import_utils import is_liger_kernel_available
 from ..models import create_reference_model, prepare_deepspeed
+from .base_trainer import BaseTrainer
 from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     disable_dropout_in_model,
-    generate_model_card,
-    get_comet_experiment_url,
     log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -275,7 +272,7 @@ def _process_tokens(example: dict[str, Any], model: "PreTrainedModel" = None, **
     return batch
 
 
-class KTOTrainer(Trainer):
+class KTOTrainer(BaseTrainer):
     r"""
     Initialize KTOTrainer.
 
@@ -322,6 +319,19 @@ class KTOTrainer(Trainer):
     """
 
     _tag_names = ["trl", "kto"]
+    _name = "KTO"
+    _paper = {
+        "title": "KTO: Model Alignment as Prospect Theoretic Optimization",
+        "id": "2402.01306",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{ethayarajh2024kto,
+                title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
+                author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
+                year         = 2024,
+                eprint       = {arXiv:2402.01306},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1677,69 +1687,3 @@ class KTOTrainer(Trainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{ethayarajh2024kto,
-            title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
-            author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
-            year         = 2024,
-            eprint       = {arXiv:2402.01306},
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="KTO",
-            trainer_citation=citation,
-            paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",
-            paper_id="2402.01306",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
