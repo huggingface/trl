@@ -85,7 +85,7 @@ class GKDTrainer(SFTTrainer):
         preprocess_logits_for_metrics (`Callable`, *optional*):
             Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
             return the logits to be used for metrics computation.
-        peft_config ([`~peft.config.PeftConfig`], *optional*):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
             wrapped with the specified PEFT adapter.
         formatting_func (`Callable`, *optional*):
