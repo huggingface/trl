@@ -20,19 +20,13 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import (
-    require_bitsandbytes,
-    require_flash_attn,
-    require_liger_kernel,
-    require_peft,
-    require_vision,
-)
+from transformers.testing_utils import require_flash_attn, require_liger_kernel, require_peft, require_vision
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 
-from .testing_utils import TrlTestCase, ignore_warnings
+from .testing_utils import TrlTestCase, ignore_warnings, require_bitsandbytes
 
 
 if is_peft_available():
@@ -898,8 +892,8 @@ class SFTTrainerTester(TrlTestCase):
         )
 
         # Check the number of sequences in train and eval datasets
-        num_train_seqs = sum([len(x) for x in trainer.train_dataset["seq_lengths"]])
-        num_eval_seqs = sum([len(x) for x in trainer.eval_dataset["seq_lengths"]])
+        num_train_seqs = sum(len(x) for x in trainer.train_dataset["seq_lengths"])
+        num_eval_seqs = sum(len(x) for x in trainer.eval_dataset["seq_lengths"])
         self.assertEqual(num_train_seqs, 17)  # we should still have 17 seqs
         self.assertEqual(num_eval_seqs, 2)  # we should still have 2 seqs
 
@@ -933,7 +927,7 @@ class SFTTrainerTester(TrlTestCase):
         )
 
         # Check the number of sequences in train dataset
-        num_train_seqs = sum([len(x) for x in trainer.train_dataset["seq_lengths"]])
+        num_train_seqs = sum(len(x) for x in trainer.train_dataset["seq_lengths"])
         self.assertEqual(num_train_seqs, 17)  # we should still have 17 seqs
 
         # We expect eval dataset not having "seq_lengths" as eval_packing is False

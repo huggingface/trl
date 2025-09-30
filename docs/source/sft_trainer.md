@@ -105,11 +105,9 @@ $$
   
 where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is trained to predict the next token given the previous ones. In practice, padding tokens are masked out during loss computation.
 
-<Tip>
-
-[On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
-
-</Tip>
+> [!TIP]
+> 
+> [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
 
 ### Label shifting and masking
 
@@ -180,11 +178,8 @@ To train on completion only, use a [prompt-completion](dataset_formats#prompt-co
 
 ![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
 
-<Tip>
-
-Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
-
-</Tip>
+> [!TIP]
+> Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
 
 ### Train adapters with PEFT
 
@@ -206,7 +201,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-You can also continue training your [`peft.PeftModel`]. For that, first load a `PeftModel` outside [`SFTTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
+You can also continue training your [`~peft.PeftModel`]. For that, first load a `PeftModel` outside [`SFTTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
 
 ```python
 from datasets import load_dataset
@@ -224,15 +219,12 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<Tip>
-
-When training adapters, you typically use a higher learning rate (≈1e‑4) since only new parameters are being learned.
-
-```python
-SFTConfig(learning_rate=1e-4, ...)
-```
-
-</Tip>
+> [!TIP]
+> When training adapters, you typically use a higher learning rate (≈1e‑4) since only new parameters are being learned.
+>
+> ```python
+> SFTConfig(learning_rate=1e-4, ...)
+> ```
 
 ### Train with Liger Kernel
 
@@ -315,17 +307,14 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<Tip>
-
-For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`SFTConfig`]. This allows the model to process the full sequence length without truncating image tokens.
-
-```python
-SFTConfig(max_length=None, ...)
-```
-
-Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
-
-</Tip>
+> [!TIP]
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`SFTConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+>
+> ```python
+> SFTConfig(max_length=None, ...)
+> ```
+>
+> Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 ## SFTTrainer
 

@@ -696,6 +696,15 @@ SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitaliz
 
 @dataclass
 class OnlineTrainerState(TrainerState):
+    """
+    Training state for online/on-policy trainers.
+
+    Extends [`~transformers.TrainerState`] with an `episode` counter to track the current rollout/episode.
+
+    Args:
+        episode (`int`, defaults to 0): Zero-based episode index.
+    """
+
     episode: int = 0
 
 
@@ -1519,8 +1528,8 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
 
 def print_prompt_completions_sample(
-    prompts: list[str],
-    completions: list[str],
+    prompts: list,
+    completions: list,
     rewards: dict[str, list[float]],
     advantages: list[float],
     step: int,
@@ -1533,10 +1542,10 @@ def print_prompt_completions_sample(
     during training. It requires the `rich` library to be installed.
 
     Args:
-        prompts (`list[str]`):
-            List of prompts.
-        completions (`list[str]`):
-            List of completions corresponding to the prompts.
+        prompts (`list`):
+            List of prompts. Can be either strings or lists of messages.
+        completions (`list`):
+            List of completions corresponding to the prompts. Can be either strings or lists of messages.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
         advantages (`list[float]`):
@@ -1581,6 +1590,28 @@ def print_prompt_completions_sample(
         table.add_column(reward_name, style="bold cyan", justify="right")
     table.add_column("Advantage", style="bold magenta", justify="right")
 
+    def format_entry(entry) -> Text:
+        t = Text()
+        if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
+            for j, msg in enumerate(entry):
+                role = msg.get("role", "")
+                if "content" in msg:
+                    # Chat message
+                    t.append(f"{role.upper()}\n", style="bold red")
+                    t.append(msg["content"])
+                elif "name" in msg and "args" in msg:
+                    # Tool call
+                    t.append(f"{role.upper()}\n", style="bold red")
+                    t.append(f"{msg['name']}({msg['args']})")
+                else:
+                    # Fallback
+                    t.append(str(msg))
+                if j < len(entry) - 1:
+                    t.append("\n\n")
+        else:
+            t.append(str(entry))
+        return t
+
     # Some basic input validation
     if num_samples is not None:
         if num_samples >= len(prompts):
@@ -1598,7 +1629,12 @@ def print_prompt_completions_sample(
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
-        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values, f"{advantages[i]:.2f}")
+        table.add_row(
+            format_entry(prompts[i]),
+            format_entry(completions[i]),
+            *reward_values,
+            f"{advantages[i]:.2f}",
+        )
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
