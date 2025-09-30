@@ -97,8 +97,8 @@ RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 class RLOOTrainer(BaseTrainer):
     """
     Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the paper [Back to
-    Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs]
-    (https://huggingface.co/papers/2402.14740).
+    Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in
+    LLMs](https://huggingface.co/papers/2402.14740).
 
     Example:
 
