@@ -25,6 +25,8 @@
     title: Training using Jobs
   - local: customization
     title: Customizing the Training
+  - local: lora_without_regret
+    title: LoRA Without Regret
   - local: reducing_memory_usage
     title: Reducing Memory Usage
   - local: speeding_up_training
