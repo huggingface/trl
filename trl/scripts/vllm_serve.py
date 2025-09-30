@@ -499,6 +499,7 @@ def main(script_args: ScriptArguments):
         generation_kwargs: dict = field(default_factory=dict)
 
     class GenerateResponse(BaseModel):
+        prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
         logprobs: list[list[float]]
 
@@ -532,6 +533,7 @@ def main(script_args: ScriptArguments):
 
         Returns:
             `GenerateResponse`:
+                - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
                 - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
                   generated completions.
@@ -543,7 +545,11 @@ def main(script_args: ScriptArguments):
 
         Example response:
         ```json
-        {"completion_ids": [[101, 102, 103], [201, 202, 203]], "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]}
+        {
+          "prompt_ids": [[101, 102], [201, 202]],
+          "completion_ids": [[103, 104, 105], [203, 204, 205]],
+          "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]
+        }
         ```
         """
         request.images = request.images or [None] * len(request.prompts)
