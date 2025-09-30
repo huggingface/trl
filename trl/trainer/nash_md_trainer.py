@@ -56,8 +56,10 @@ if is_peft_available():
 
 
 class NashMDTrainer(OnlineDPOTrainer):
-    r"""
-    Initialize NashMDTrainer as a subclass of [`OnlineDPOTrainer`].
+    """
+    Trainer for the Nash-MD method.
+
+    It is implemented as a subclass of [`OnlineDPOTrainer`].
 
     Args:
         model (`transformers.PreTrainedModel`):
