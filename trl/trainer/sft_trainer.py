@@ -68,6 +68,14 @@ logger = logging.get_logger(__name__)
 
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
+FLASH_ATTENTION_VARIANTS = {
+    "flash_attention_2",
+    "flash_attention_3",
+    "kernels-community/flash-attn",
+    "kernels-community/vllm-flash-attn3",
+    "kernels-community/flash-attn3",
+}
+
 
 def remove_none_values(example: TListOrMapping) -> TListOrMapping:
     """
@@ -709,14 +717,7 @@ class SFTTrainer(BaseTrainer):
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
-        use_flash_attention = model.config._attn_implementation in [
-            "flash_attention_2",
-            "flash_attention_3",
-            "kernels-community/flash-attn",
-            "kernels-community/vllm-flash-attn3",
-            "kernels-community/flash-attn3",
-            "kernels-community/vllm-flash-attn3",
-        ]
+        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -729,12 +730,11 @@ class SFTTrainer(BaseTrainer):
                 logger.warning(
                     "Padding-free training is enabled, but the attention implementation is not set to a supported "
                     "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
-                    "the following implementations are known to reliably support this: 'flash_attention_2', "
-                    "'flash_attention_3', 'kernels-community/flash-attn', 'kernels-community/flash-attn3', or "
-                    "'kernels-community/vllm-flash-attn3'. Using other implementations may lead to unexpected "
-                    "behavior. To ensure compatibility, set `attn_implementation` in the model configuration to one "
-                    "of these supported options or verify that your attention mechanism can handle flattened "
-                    "sequences."
+                    "the following implementations are known to reliably support this: "
+                    f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
+                    "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
+                    "configuration to one of these supported options or verify that your attention mechanism can "
+                    "handle flattened sequences."
                 )
 
             if args.per_device_train_batch_size == 1 and not args.packing:
@@ -789,11 +789,10 @@ class SFTTrainer(BaseTrainer):
             logger.warning(
                 "You are using packing, but the attention implementation is not set to a supported flash attention "
                 "variant. Packing gathers multiple samples into a single sequence, and only the following "
-                "implementations are known to reliably support this: 'flash_attention_2', 'flash_attention_3', "
-                "'kernels-community/flash-attn', 'kernels-community/flash-attn3', or "
-                "'kernels-community/vllm-flash-attn3'. Using other implementations may lead to cross-contamination "
-                "between samples. To avoid this, either disable packing by setting `packing=False`, or set "
-                "`attn_implementation` in the model configuration to one of these supported options."
+                f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
+                "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
+                "disable packing by setting `packing=False`, or set `attn_implementation` in the model configuration "
+                "to one of these supported options."
             )
         if args.assistant_only_loss and not is_conversational(dataset_sample):
             raise ValueError(
