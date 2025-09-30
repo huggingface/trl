@@ -243,15 +243,20 @@ for model_id, model_class, suffix in [
     ("Qwen/Qwen3-4B", Qwen3ForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    config = AutoConfig.from_pretrained(model_id)
-    config.hidden_size = 16
-    config.num_attention_heads = 4
-    config.num_key_value_heads = 2
-    config.num_hidden_layers = 2
-    config.num_labels = 1
+    kwargs = {
+        "num_labels": 1,
+        "hidden_size": 16,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "num_hidden_layers": 2,
+        "intermediate_size": 32,
+    }
+    config = AutoConfig.from_pretrained(model_id, **kwargs)
+    # Bug in transformers: it ignores num_hidden_layers to build layer_types
     if model_id in ("Qwen/Qwen2.5-32B-Instruct", "Qwen/Qwen3-4B"):
         config.layer_types = config.layer_types[:2]
-    model = model_class(config)
+    model = model_class(config).to(dtype=torch.bfloat16)
+    init_weights_tiny_model(model)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
 # MoE Reward models
@@ -259,15 +264,19 @@ for model_id, model_class, suffix in [
     ("Qwen/Qwen3-30B-A3B", Qwen3MoeForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    config = AutoConfig.from_pretrained(model_id)
-    config.hidden_size = 16
-    config.num_attention_heads = 4
-    config.num_hidden_layers = 2
-    config.num_labels = 1
-    config.num_experts = 4
-    config.num_experts_per_tok = 2
-    model = model_class(config)
-    push_to_hub(model, tokenizer, "tiny", suffix)
+    kwargs = {
+        "num_labels": 1,
+        "hidden_size": 16,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "num_hidden_layers": 2,
+        "intermediate_size": 32,
+        "num_experts": 4,
+        "num_experts_per_tok": 2,
+    }
+    config = AutoConfig.from_pretrained(model_id, **kwargs)
+    model = model_class(config).to(dtype=torch.bfloat16)
+    push_to_hub(model, tokenizer, "tiny", suffix, force=True)
 
 
 # Encoder-decoder models
@@ -332,7 +341,5 @@ for model_id, model_class in [
         kwargs["perceiver_config"] = {"hidden_size": 16}
 
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
-
     model = model_class(config).to(dtype=torch.bfloat16)
-
     push_to_hub(model, processor, "tiny")
