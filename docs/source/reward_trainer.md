@@ -127,11 +127,8 @@ $$
 \mathcal{L}(\theta) = - \mathbb{E}_{(x,y^+,y^-) \sim \mathcal{D}} \left[ \log \sigma(r_\theta(x, y^+) - r_\theta(x, y^-)) \right].
 $$
 
-<Tip>
-
-The Bradley-Terry model is underdetermined, meaning that adding a constant to all rewards does not change the preference probabilities. To address this, [Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking](https://huggingface.co/papers/2312.09244) proposes adding an auxiliary loss term that encourages the rewards to be centered around zero. This is controlled by the `center_rewards_coefficient` parameter in the [`RewardConfig`]. The recomended value is `1e-2`.
-
-</Tip>
+> [!TIP]
+> The Bradley-Terry model is underdetermined, meaning that adding a constant to all rewards does not change the preference probabilities. To address this, [Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking](https://huggingface.co/papers/2312.09244) proposes adding an auxiliary loss term that encourages the rewards to be centered around zero. This is controlled by the `center_rewards_coefficient` parameter in the [`RewardConfig`]. The recomended value is `1e-2`.
 
 ## Logged metrics
 
@@ -209,15 +206,12 @@ trainer = RewardTrainer(
 trainer.train()
 ```
 
-<Tip>
-
-When training adapters, you typically use a higher learning rate (≈1e‑3) since only new parameters are being learned.
-
-```python
-RewardConfig(learning_rate=1e-3, ...)
-```
-
-</Tip>
+> [!TIP]
+> When training adapters, you typically use a higher learning rate (≈1e‑3) since only new parameters are being learned.
+>
+> ```python
+> RewardConfig(learning_rate=1e-3, ...)
+> ```
 
 ## Tool Calling with Reward Modeling
 

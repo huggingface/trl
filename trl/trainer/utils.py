@@ -220,12 +220,9 @@ class RewardDataCollatorWithPadding:
     r"""
     Reward DataCollator class that pads the inputs to the maximum length of the batch.
 
-    <Tip warning={true}>
-
-    This class is deprecated and will be removed in version 0.27.0. Please use
+    > [!WARNING]
+    > This class is deprecated and will be removed in version 0.27.0. Please use
     `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
-
-    </Tip>
 
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
@@ -1257,12 +1254,9 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     """
     Decodes the input tensor and strips the padding tokens.
 
-    <Tip warning={true}>
-
-    This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy the
-    code into your codebase and use it from there.
-
-    </Tip>
+    > [!WARNING]
+    > This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy
+    > the code into your codebase and use it from there.
 
     Args:
         inputs (`torch.Tensor`):
