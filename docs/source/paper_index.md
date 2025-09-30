@@ -1,10 +1,7 @@
 # Paper Index
 
-<Tip warning={true}>
-
-Section under construction. Feel free to contribute!
-
-</Tip>
+> [!WARNING]
+> Section under construction. Feel free to contribute!
 
 ## Group Relative Policy Optimization
 
