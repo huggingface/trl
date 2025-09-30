@@ -276,7 +276,7 @@ for model_id, model_class, suffix in [
     }
     config = AutoConfig.from_pretrained(model_id, **kwargs)
     model = model_class(config).to(dtype=torch.bfloat16)
-    push_to_hub(model, tokenizer, "tiny", suffix, force=True)
+    push_to_hub(model, tokenizer, "tiny", suffix)
 
 
 # Encoder-decoder models
