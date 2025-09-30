@@ -14,6 +14,7 @@ This document will guide you through the process of using vLLM with TRL for fast
 > - [`XPOTrainer`]
 > - [`RLOOTrainer`]
 
+
 ## 🚀 How can I use vLLM with TRL to speed up training?
 
 💡 **Note**: Resources required for this specific example: a single node with 8 GPUs.

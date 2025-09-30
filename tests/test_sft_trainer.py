@@ -898,8 +898,8 @@ class SFTTrainerTester(TrlTestCase):
         )
 
         # Check the number of sequences in train and eval datasets
-        num_train_seqs = sum([len(x) for x in trainer.train_dataset["seq_lengths"]])
-        num_eval_seqs = sum([len(x) for x in trainer.eval_dataset["seq_lengths"]])
+        num_train_seqs = sum(len(x) for x in trainer.train_dataset["seq_lengths"])
+        num_eval_seqs = sum(len(x) for x in trainer.eval_dataset["seq_lengths"])
         self.assertEqual(num_train_seqs, 17)  # we should still have 17 seqs
         self.assertEqual(num_eval_seqs, 2)  # we should still have 2 seqs
 
@@ -933,7 +933,7 @@ class SFTTrainerTester(TrlTestCase):
         )
 
         # Check the number of sequences in train dataset
-        num_train_seqs = sum([len(x) for x in trainer.train_dataset["seq_lengths"]])
+        num_train_seqs = sum(len(x) for x in trainer.train_dataset["seq_lengths"])
         self.assertEqual(num_train_seqs, 17)  # we should still have 17 seqs
 
         # We expect eval dataset not having "seq_lengths" as eval_packing is False
