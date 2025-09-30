@@ -38,7 +38,6 @@ from transformers.testing_utils import (
     require_liger_kernel,
     require_peft,
     require_torch_accelerator,
-    require_torch_bf16_gpu,
     torch_device,
 )
 from transformers.utils import is_peft_available
@@ -214,7 +213,6 @@ class GRPOTrainerSlowTester(TrlTestCase):
             ("HuggingFaceTB/SmolVLM-Instruct",),  # Only test the smaller model to avoid OOM
         ]
     )
-    # @require_torch_bf16_gpu  # FlashAttention only supports Ampere GPUs or newer
     @require_flash_attn
     @require_bitsandbytes
     @require_peft
