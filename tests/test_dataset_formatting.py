@@ -14,6 +14,7 @@
 
 from typing import Callable
 
+import pytest
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
@@ -170,6 +171,7 @@ class CloneChatTemplateTestCase(TrlTestCase):
         # Check if special tokens are correctly set
         self.assertEqual(modified_tokenizer.eos_token, "<|im_end|>")
 
+    @pytest.mark.slow
     def test_clone_with_resize(self):
         # This tokenizer doesn't have a chat_template by default
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
@@ -185,6 +187,7 @@ class CloneChatTemplateTestCase(TrlTestCase):
         # Check that the input embeddings size matches the tokenizer vocabulary size
         self.assertEqual(model.vocab_size, len(modified_tokenizer.vocab))
 
+    @pytest.mark.slow
     def test_clone_with_resize_and_extra_tokens_already_in_vocab(self):
         # This tokenizer doesn't have a chat_template by default
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")
