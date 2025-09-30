@@ -1923,63 +1923,45 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
     return batch
 
 
-def truncate_with_protected_tokens(
-    ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
-) -> tuple[torch.Tensor, torch.Tensor]:
+def truncate_with_protected_tokens(ids: list[int], target_length: int, protected_tokens: list[int]) -> list[int]:
     """
-    Truncate tensors to target length while preserving protected tokens.
+    Truncate list to target length while preserving protected tokens.
 
     Args:
-        ids (`torch.Tensor`):
-            Input tensor of token IDs, shape (batch_size, sequence_length).
-        mask (`torch.Tensor`):
-            Input tensor of attention masks, shape (batch_size, sequence_length).
+        ids (`list[int]`):
+            Input sequence of token IDs.
         target_length (`int`):
-            Desired length of the output sequences.
+            Desired length of the output sequence.
         protected_tokens (`list[int]`):
             List of token IDs that should be preserved in the output.
+
+    Returns:
+        `list[int]`: Truncated sequence.
+
+    Raises:
+        `ValueError`: If `len(protected_tokens ∩ seq) > target_length`.
     """
     protected_set = set(protected_tokens)
-    # Create protected_tokens tensor once to avoid recreating it on every call
-    protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
 
-    def process_sequence(ids, mask):
-        # Create boolean masks
-        is_protected = torch.isin(ids, protected_tokens_tensor)
-        is_non_protected = ~is_protected
+    # Count protected tokens
+    num_protected = sum(1 for t in ids if t in protected_set)
+    if num_protected > target_length:
+        raise ValueError(
+            f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
+            f"Please increase target length to at least {num_protected} or disable truncation."
+        )
+    num_non_protected_needed = target_length - num_protected
+    result = []
 
-        # Count tokens
-        num_protected = is_protected.sum().item()
-        num_non_protected_needed = target_length - num_protected
-
-        if num_non_protected_needed < 0:
-            raise ValueError(
-                f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-                f"Please increase target length to at least {num_protected} or disable truncation."
-            )
-
-        # Select which non-protected tokens to keep (rightmost ones)
-        non_protected_indices = torch.where(is_non_protected)[0]
-        keep_non_protected = torch.zeros_like(is_non_protected)
-        if num_non_protected_needed > 0:
-            keep_indices = non_protected_indices[-num_non_protected_needed:]
-            keep_non_protected[keep_indices] = True
-
-        # Final mask: protected OR selected non-protected
-        keep_mask = is_protected | keep_non_protected
-
-        return ids[keep_mask], mask[keep_mask]
-
-    # Process each sequence in the batch
-    truncated_seq = []
-    truncated_mask = []
-
-    for i in range(ids.shape[0]):
-        new_ids, new_mask = process_sequence(ids[i], mask[i])
-        truncated_seq.append(new_ids)
-        truncated_mask.append(new_mask)
-
-    return torch.stack(truncated_seq), torch.stack(truncated_mask)
+    # Iterate backward to select all protected tokens and rightmost non-protected tokens
+    for t in reversed(ids):
+        if t in protected_set:
+            result.append(t)
+        elif num_non_protected_needed > 0:
+            result.append(t)
+            num_non_protected_needed -= 1
+    # Reverse to restore original order
+    return result[::-1]
 
 
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)

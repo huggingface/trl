@@ -1064,9 +1064,8 @@ class RLOOTrainer(BaseTrainer):
         rewards_per_func = gather(rewards_per_func)
         return rewards_per_func
 
-    def _generate(self, prompts: list[str], images: Optional[list]):
+    def _generate_single_turn(self, prompts: list[str], images: Optional[list]):
         device = self.accelerator.device
-        mode = "train" if self.model.training else "eval"
 
         # If the prompts are conversational and the inputs contain images, we need to convert the prompts from
         # [{"role": "user", "content": "What color is the sky?"}] to
@@ -1093,21 +1092,19 @@ class RLOOTrainer(BaseTrainer):
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
         forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
 
         if self.max_prompt_length is not None:
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
-            # Then we decode those tokens back into text. We manually remove leading pad tokens from the decoded text,
-            # because we can't use `skip_special_tokens=True` (some special tokens are still needed for generation).
+            # Then we decode those tokens back into text. We set `skip_special_tokens=False` because some special
+            # tokens are needed for generation.
             protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
             protected = [token for token in protected if token is not None]
-            prompt_ids, prompt_mask = truncate_with_protected_tokens(
-                prompt_ids, prompt_mask, self.max_prompt_length, protected
-            )
+            prompt_ids = [truncate_with_protected_tokens(ids, self.max_prompt_length, protected) for ids in prompt_ids]
 
             prompts_text = self.processing_class.batch_decode(
                 prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
             )
-            prompts_text = [re.sub(rf"^({re.escape(self.pad_token)})+", "", text) for text in prompts_text]
 
             # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
             # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
@@ -1186,13 +1183,13 @@ class RLOOTrainer(BaseTrainer):
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
                 obj_list = [payload]
                 broadcast_object_list(obj_list, from_process=0)
-                completion_ids, _ = obj_list[0]
+                all_completion_ids, _ = obj_list[0]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
-                completion_ids = completion_ids[process_slice]
+                completion_ids = all_completion_ids[process_slice]
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
             elif self.vllm_mode == "colocate":
@@ -1244,23 +1241,19 @@ class RLOOTrainer(BaseTrainer):
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
-                completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
+                all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
                 if self.vllm_tensor_parallel_size > 1:
                     # Slice completions for this rank within its TP group.
                     # Each rank generates all outputs — we keep only our share.
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
-                    completion_ids = completion_ids[tp_slice]
+                    completion_ids = all_completion_ids[tp_slice]
+                else:
+                    completion_ids = all_completion_ids
 
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.sleep(level=1)
-
-            # Pad the completions, and concatenate them with the prompts
-            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_mask = [torch.ones(len(ids), device=device, dtype=torch.long) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.pad_token_id)
-            completion_mask = pad(completion_mask, padding_value=0)
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
@@ -1291,15 +1284,17 @@ class RLOOTrainer(BaseTrainer):
                     )
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-            completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
-            prompt_ids = [torch.tensor(ids, device=device) for ids in paged_prompt_inputs.input_ids]
-            prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+            prompt_ids = paged_prompt_inputs.input_ids
             # Restore the original attention implementation, training mode
             self.model_wrapped.config._attn_implementation = previous_attn
 
         else:
             # Regular generation path
+            prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids]
+            prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+            prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+            prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
+
             with (
                 profiling_context(self, "transformers.generate"),
                 unwrap_model_for_generation(
@@ -1320,25 +1315,34 @@ class RLOOTrainer(BaseTrainer):
             prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
-        # Mask everything after the first EOS token
-        is_eos = completion_ids == self.eos_token_id
-        eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
-        eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
-        sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
-        completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+            # Mask everything after the first EOS token
+            is_eos = completion_ids == self.eos_token_id
+            eos_idx = torch.full((is_eos.size(0),), is_eos.size(1), dtype=torch.long, device=device)
+            eos_idx[is_eos.any(dim=1)] = is_eos.int().argmax(dim=1)[is_eos.any(dim=1)]
+            sequence_indices = torch.arange(is_eos.size(1), device=device).expand(is_eos.size(0), -1)
+            completion_mask = (sequence_indices <= eos_idx.unsqueeze(1)).int()
+            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
+            completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
 
-        # Sum along sequence dimension (dim=1) to get completion length per sequence, used for logging
-        completion_lengths = completion_mask.sum(1)
+        return prompt_ids, completion_ids, forward_kwargs
 
-        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
-        if self.mask_truncated_completions:
-            truncated_completions = ~is_eos.any(dim=1)
-            completion_mask = completion_mask * (~truncated_completions).unsqueeze(1).int()
+    def _generate(self, prompts: list[str], images: Optional[list]):
+        device = self.accelerator.device
+        mode = "train" if self.model.training else "eval"
+
+        prompt_ids, completion_ids, forward_kwargs = self._generate_single_turn(prompts, images)
+
+        # Get completion length per sequence, used for logging
+        prompt_lengths = torch.tensor([len(ids) for ids in prompt_ids], device=device)
+        completion_lengths = torch.tensor([len(ids) for ids in completion_ids], device=device)
+        agg_prompt_lengths = self.accelerator.gather(prompt_lengths)
+        agg_completion_lengths = self.accelerator.gather(completion_lengths)
+        total_prompt_tokens = agg_prompt_lengths.sum()
+        total_completion_tokens = agg_completion_lengths.sum()  # = num_items_in_batch, required for the DAPO loss
 
         # Log the metrics
         if mode == "train":
-            attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-            self.state.num_input_tokens_seen += self.accelerator.gather(attention_mask.sum()).sum().item()
+            self.state.num_input_tokens_seen += (total_prompt_tokens + total_completion_tokens).item()
         self._metrics[mode]["num_tokens"] = [self.state.num_input_tokens_seen]
 
         # Log completion lengths, mean, min, max
@@ -1348,17 +1352,18 @@ class RLOOTrainer(BaseTrainer):
         self._metrics[mode]["completions/max_length"].append(agg_completion_lengths.float().max().item())
 
         # Identify sequences that terminated with EOS and log their lengths
-        agg_terminated_with_eos = self.accelerator.gather(is_eos.any(dim=1))
-        term_completion_lengths = agg_completion_lengths[agg_terminated_with_eos]
-        clipped_completions_ratio = 1 - len(term_completion_lengths) / len(agg_completion_lengths)
-        self._metrics[mode]["completions/clipped_ratio"].append(clipped_completions_ratio)
+        eos_and_pad = [self.eos_token_id, self.pad_token_id]
+        is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids], device=device)
+        agg_is_truncated = self.accelerator.gather(is_truncated)
+        self._metrics[mode]["completions/clipped_ratio"].append(agg_is_truncated.float().mean().item())
+        term_completion_lengths = agg_completion_lengths[~agg_is_truncated]
         if len(term_completion_lengths) == 0:  # edge case where no terminated sequences are found
             term_completion_lengths = torch.zeros(1, device=device)
         self._metrics[mode]["completions/mean_terminated_length"].append(term_completion_lengths.float().mean().item())
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, prompt_mask, completion_mask, forward_kwargs
+        return prompt_ids, completion_ids, forward_kwargs
 
     def _generate_and_score_completions(
         self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
@@ -1375,11 +1380,23 @@ class RLOOTrainer(BaseTrainer):
         else:
             images = None
 
-        prompt_ids, completion_ids, prompt_mask, completion_mask, forward_kwargs = self._generate(prompts, images)
+        prompt_ids_list, completion_ids_list, forward_kwargs = self._generate(prompts, images)
 
-        # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
-        # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
+        # Convert lists of token IDs to padded tensors
+        prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
+        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+        prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
+        completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
+        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+        completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
+        completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
+
+        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        if self.mask_truncated_completions:
+            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)

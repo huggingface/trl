@@ -20,7 +20,7 @@ from accelerate.utils import gather_object
 
 from ...data_utils import is_conversational
 from ...trainer.grpo_trainer import GRPOTrainer as _GRPOTrainer
-from ...trainer.utils import nanmax, nanmin, nanstd
+from ...trainer.utils import nanmax, nanmin, nanstd, pad
 
 
 logger = logging.getLogger(__name__)
@@ -78,18 +78,33 @@ class GFPOTrainer(_GRPOTrainer):
             images = None
 
         (
-            prompt_ids,
-            completion_ids,
-            prompt_mask,
-            completion_mask,
+            prompt_ids_list,
+            completion_ids_list,
             num_items_in_batch,
-            sampling_per_token_logps,
+            sampling_per_token_logps_list,
             forward_kwargs,
         ) = self._generate(prompts, images)
 
-        # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
-        # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
+        # Convert lists of token IDs to padded tensors
+        prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids_list]
+        prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+        prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
+        prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
+        completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids_list]
+        completion_mask = [torch.ones_like(ids, dtype=torch.long) for ids in completion_ids]
+        completion_ids = pad(completion_ids, padding_value=self.pad_token_id, padding_side="right")
+        completion_mask = pad(completion_mask, padding_value=0, padding_side="right")
+        if sampling_per_token_logps_list is not None:
+            sampling_per_token_logps = [torch.tensor(logps, device=device) for logps in sampling_per_token_logps_list]
+            sampling_per_token_logps = pad(sampling_per_token_logps, padding_value=0.0, padding_side="right")
+        else:
+            sampling_per_token_logps = None
+
+        # If mask_truncated_completions is enabled, zero out truncated completions in completion_mask
+        if self.mask_truncated_completions:
+            eos_and_pad = [self.eos_token_id, self.pad_token_id]
+            is_truncated = torch.tensor([ids[-1] not in eos_and_pad for ids in completion_ids_list], device=device)
+            completion_mask = completion_mask * (~is_truncated).unsqueeze(1).int()
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
