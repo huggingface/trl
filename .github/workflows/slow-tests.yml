@@ -64,6 +64,7 @@ jobs:
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
 
   run_all_tests_multi_gpu:
+    if: github.event.pull_request.draft == false
     runs-on:
       group: aws-g4dn-2xlarge
     env:
