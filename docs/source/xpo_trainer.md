@@ -84,11 +84,8 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
   )
 ```
 
-<Tip warning={true}>
-
-Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
-
-</Tip>
+> [!WARNING]
+> Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
 
 ### Encourage EOS token generation
 

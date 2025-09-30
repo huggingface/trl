@@ -43,8 +43,6 @@ from transformers import (
     ProcessorMixin,
     Trainer,
     TrainerCallback,
-    is_apex_available,
-    is_wandb_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction, seed_worker
@@ -61,6 +59,7 @@ from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_peft_model
 from ..models.utils import unwrap_model_for_generation
+from .base_trainer import BaseTrainer
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
 from .utils import (
@@ -69,8 +68,6 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
-    generate_model_card,
-    get_comet_experiment_url,
     pad,
     prepare_deepspeed,
     truncate_right,
@@ -79,9 +76,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
-
-if is_apex_available():
-    from apex import amp
 
 
 if is_sagemaker_mp_enabled():
@@ -97,8 +91,6 @@ if is_vllm_available():
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import GuidedDecodingParams
 
-if is_wandb_available():
-    import wandb
 
 logger = logging.get_logger(__name__)
 
@@ -107,7 +99,7 @@ logger = logging.get_logger(__name__)
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
 
-class OnlineDPOTrainer(Trainer):
+class OnlineDPOTrainer(BaseTrainer):
     r"""
     Initialize OnlineDPOTrainer.
 
@@ -179,6 +171,19 @@ class OnlineDPOTrainer(Trainer):
     """
 
     _tag_names = ["trl", "online-dpo"]
+    _name = "Online DPO"
+    _paper = {
+        "title": "Direct Language Model Alignment from Online AI Feedback",
+        "id": "2402.04792",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{guo2024direct,
+                title        = {{Direct Language Model Alignment from Online AI Feedback}},
+                author       = {Shangmin Guo and Biao Zhang and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel},
+                year         = 2024,
+                eprint       = {arXiv:2402.04792}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -1448,11 +1453,7 @@ class OnlineDPOTrainer(Trainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss, **kwargs)
+        self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
 
@@ -1507,68 +1508,3 @@ class OnlineDPOTrainer(Trainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{guo2024direct,
-            title        = {{Direct Language Model Alignment from Online AI Feedback}},
-            author       = {Shangmin Guo and Biao Zhang and Tianlin Liu and Tianqi Liu and Misha Khalman and Felipe Llinares and Alexandre Ram{\'{e}} and Thomas Mesnard and Yao Zhao and Bilal Piot and Johan Ferret and Mathieu Blondel},
-            year         = 2024,
-            eprint       = {arXiv:2402.04792}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="Online DPO",
-            trainer_citation=citation,
-            paper_title="Direct Language Model Alignment from Online AI Feedback",
-            paper_id="2402.04792",
-        )
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

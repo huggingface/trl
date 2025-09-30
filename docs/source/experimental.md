@@ -2,11 +2,8 @@
 
 The `trl.experimental` namespace provides a minimal, clearly separated space for fast iteration on new ideas.
 
-<Tip warning={true}>
-
-**Stability contract:** Anything under `trl.experimental` may change or be removed in *any* release (including patch versions) without prior deprecation. Do not rely on these APIs for production workloads.
-
-</Tip>
+> [!WARNING]
+> **Stability contract:** Anything under `trl.experimental` may change or be removed in *any* release (including patch versions) without prior deprecation. Do not rely on these APIs for production workloads.
 
 ## Current Experimental Features
 
@@ -66,7 +63,7 @@ class GroupFilter:
         return group_scores
 
 training_args = GFPOConfig(
-    output_dir="Qwen3-0.6B-GFPO"
+    output_dir="Qwen3-0.6B-GFPO",
     per_device_train_batch_size=4,
     num_remains_in_group=2,
     bf16=True,
@@ -81,10 +78,61 @@ trainer = GFPOTrainer(
 trainer.train()
 ```
 
-## Usage
+### GSPO-token
+
+In the paper [Group Sequence Policy Optimization](https://huggingface.co/papers/2507.18071), the authors propose a token-level objective variant to GSPO, called GSPO-token. To use GSPO-token, you can use the `GRPOTrainer` class in `trl.experimental.gspo_token`.
 
 ```python
-from trl.experimental.new_trainer import NewTrainer
+from trl.experimental.gspo_token import GRPOTrainer
+from trl import GRPOConfig
+
+training_args = GRPOConfig(
+    importance_sampling_level="sequence_token",
+    ...
+)
+```
+
+> [!WARNING]
+> To leverage GSPO-token, the user will need to provide the per-token advantage  \\( \hat{A_{i,t}} \\) for each token  \\( t \\) in the sequence  \\( i \\) (i.e., make  \\( \hat{A_{i,t}} \\) varies with  \\( t \\)—which isn't the case here,  \\( \hat{A_{i,t}}=\hat{A_{i}} \\)). Otherwise, GSPO-Token gradient is just equivalent to the original GSPO implementation.
+
+### GRPO With Replay Buffer
+
+This experimental trainer, trains a model with GRPO but replaces groups (and corresponding completions) that have 0 standard deviation with groups with high rewards and standard deviation that've been used to train a model in prior batches.
+
+#### Usage
+
+```python
+from trl.experimental.grpo_with_replay_buffer import GRPOWithReplayBufferTrainer
+from datasets import load_dataset
+
+dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+# Guarantee that some rewards have 0 std
+def custom_reward_func(completions, **kwargs):
+    if torch.rand(1).item() < 0.25:
+        return [0] * len(completions)  # simulate some None rewards
+    else:
+        return torch.rand(len(completions)).tolist()
+
+training_args = GRPOWithReplayBufferConfig(
+    output_dir=self.tmp_dir,
+    learning_rate=1e-4,
+    per_device_train_batch_size=4,
+    num_generations=4,
+    max_completion_length=8,
+    replay_buffer_size=8,
+    report_to="none",
+)
+trainer = GRPOTrainer(
+    model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+    reward_funcs=[custom_reward_func],
+    args=training_args,
+    train_dataset=dataset,
+)
+
+previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+trainer.train()
 ```
 
 To silence the runtime notice:
