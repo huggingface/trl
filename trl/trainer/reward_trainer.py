@@ -480,7 +480,7 @@ class RewardTrainer(BaseTrainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class):
+                def tokenize_fn(example, processing_class):
                     if "prompt" in example:  # explicit prompt case
                         example["chosen"] = example["prompt"] + example["chosen"]
                         example["rejected"] = example["prompt"] + example["rejected"]
@@ -504,7 +504,7 @@ class RewardTrainer(BaseTrainer):
                         }
                     return output
 
-                dataset = dataset.map(tokenize, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+                dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
             # Filter samples that are longer than `max_length`
             if args.max_length is not None:
