@@ -17,8 +17,8 @@ import unittest
 from unittest.mock import MagicMock
 
 import numpy as np
-import torch
 import pytest
+import torch
 from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
 from transformers import (
