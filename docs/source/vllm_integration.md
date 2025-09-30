@@ -35,11 +35,14 @@ Then run the server on specific GPUs (e.g., GPUs 0-3):
 CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model Qwen/Qwen2.5-7B --tensor-parallel-size 2 --data-parallel-size 2
 ```
 
-Once the server is running, you can use it to generate completions for training. In the example below, we are using the `GRPOTrainer` to train a model using the vLLM server for generation. The `--tensor-parallel-size` and `--data-parallel-size` arguments control how the model and data are sharded across GPUs.
+Once the server is running, you can use it to generate completions for training. In the example below, we are using the different supported trainers using the vLLM server for generation. The `--tensor-parallel-size` and `--data-parallel-size` arguments control how the model and data are sharded across GPUs.
 
 In this example, we are sharding two copies of the model across 4 GPUs. Increasing data parallelism increases throughput, while increasing tensor parallelism allows for serving larger models. Then, run the training script on different GPUs (e.g., GPUs 4-7) by passing `use_vllm=True` in the training arguments as follows:
 
 Sample of a simple `train.py` script:
+
+<hfoptions id="vllm examples">
+<hfoption id="GRPO">
 
 ```python
 from datasets import load_dataset
@@ -67,6 +70,129 @@ trainer = GRPOTrainer(
 
 trainer.train()
 ```
+
+</hfoption>
+<hfoption id="OnlineDPO">
+
+```python
+from datasets import load_dataset
+from trl import OnlineDPOTrainer, OnlineDPOConfig
+
+dataset = load_dataset("trl-lib/tldr", split="train")
+
+# Dummy reward function: count the number of unique characters in the completions
+def reward_num_unique_chars(completions, **kwargs):
+    return [len(set(c)) for c in completions]
+
+training_args = OnlineDPOConfig(
+    output_dir="my_test",
+    use_vllm=True,
+    bf16=True,
+    gradient_checkpointing=True,
+)
+
+trainer = OnlineDPOTrainer(
+    model="Qwen/Qwen2.5-7B",
+    args=training_args,
+    reward_funcs=reward_num_unique_chars,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+</hfoption>
+<hfoption id="NashMD">
+
+```python
+from datasets import load_dataset
+from trl import NashMDTrainer, NashMDConfig
+
+dataset = load_dataset("trl-lib/tldr", split="train")
+
+# Dummy reward function: count the number of unique characters in the completions
+def reward_num_unique_chars(completions, **kwargs):
+    return [len(set(c)) for c in completions]
+
+training_args = NashMDConfig(
+    output_dir="my_test",
+    use_vllm=True,
+    bf16=True,
+    gradient_checkpointing=True,
+)
+
+trainer = NashMDTrainer(
+    model="Qwen/Qwen2.5-7B",
+    args=training_args,
+    reward_funcs=reward_num_unique_chars,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+</hfoption>
+<hfoption id="XPO">
+
+```python
+from datasets import load_dataset
+from trl import XPOTrainer, XPOConfig
+
+dataset = load_dataset("trl-lib/tldr", split="train")
+
+# Dummy reward function: count the number of unique characters in the completions
+def reward_num_unique_chars(completions, **kwargs):
+    return [len(set(c)) for c in completions]
+
+training_args = XPOConfig(
+    output_dir="my_test",
+    use_vllm=True,
+    bf16=True,
+    gradient_checkpointing=True,
+)
+
+trainer = XPOTrainer(
+    model="Qwen/Qwen2.5-7B",
+    args=training_args,
+    reward_funcs=reward_num_unique_chars,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from datasets import load_dataset
+from trl import RLOOTrainer, RLOOConfig
+
+dataset = load_dataset("trl-lib/tldr", split="train")
+
+# Dummy reward function: count the number of unique characters in the completions
+def reward_num_unique_chars(completions, **kwargs):
+    return [len(set(c)) for c in completions]
+
+training_args = RLOOConfig(
+    output_dir="my_test",
+    use_vllm=True,
+    bf16=True,
+    gradient_checkpointing=True,
+)
+
+trainer = RLOOTrainer(
+    model="Qwen/Qwen2.5-7B",
+    args=training_args,
+    reward_funcs=reward_num_unique_chars,
+    train_dataset=dataset,
+)
+
+trainer.train()
+```
+
+</hfoption>
+</hfoptions>
 
 And the train command on separate GPUs from the server:
 
@@ -224,6 +350,9 @@ This setup is ideal if you have GPUs dedicated to inference.
 
 Example configuration:
 
+<hfoptions id="vllm examples">
+<hfoption id="GRPO">
+
 ```python
 from trl import GRPOConfig
 
@@ -234,11 +363,70 @@ training_args = GRPOConfig(
 )
 ```
 
+</hfoption>
+<hfoption id="OnlineDPO">
+
+```python
+from trl import OnlineDPOConfig
+
+training_args = OnlineDPOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="server",  # default value, can be omitted
+)
+```
+
+</hfoption>
+<hfoption id="NashMD">
+
+```python
+from trl import NashMDConfig
+
+training_args = NashMDConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="server",  # default value, can be omitted
+)
+```
+
+</hfoption>
+<hfoption id="XPO">
+
+```python
+from trl import XPOConfig
+
+training_args = XPOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="server",  # default value, can be omitted
+)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="server",  # default value, can be omitted
+)
+```
+
+</hfoption>
+</hfoptions>
+
 #### Colocate Mode
 
 In **colocate mode**, vLLM runs inside the trainer process and shares GPU memory with the training model.
 This avoids launching a separate server and can improve GPU utilization, but may lead to memory contention on the training GPUs.
 
+Example configuration:
+
+<hfoptions id="vllm examples">
+<hfoption id="GRPO">
 
 ```python
 from trl import GRPOConfig
@@ -249,6 +437,61 @@ training_args = GRPOConfig(
     vllm_mode="colocate",
 )
 ```
+
+</hfoption>
+<hfoption id="OnlineDPO">
+
+```python
+from trl import OnlineDPOConfig
+
+training_args = OnlineDPOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="colocate",
+)
+```
+
+</hfoption>
+<hfoption id="NashMD">
+
+```python
+from trl import NashMDConfig
+
+training_args = NashMDConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="colocate",
+)
+```
+
+</hfoption>
+<hfoption id="XPO">
+
+```python
+from trl import XPOConfig
+
+training_args = XPOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="colocate",
+)
+```
+
+</hfoption>
+<hfoption id="RLOO">
+
+```python
+from trl import RLOOConfig
+
+training_args = RLOOConfig(
+    ...,
+    use_vllm=True,
+    vllm_mode="colocate",
+)
+```
+
+</hfoption>
+</hfoptions>
 
 > [!WARNING]
 > Check the documentation of the trainer you are using for specific details on vLLM usage and parameters.
