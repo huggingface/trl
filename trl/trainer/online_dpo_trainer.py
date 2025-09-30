@@ -68,6 +68,7 @@ from .utils import (
     disable_dropout_in_model,
     empty_cache,
     ensure_master_addr_port,
+    pad,
     prepare_deepspeed,
     truncate_right,
 )
