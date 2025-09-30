@@ -9,7 +9,7 @@ This document will guide you through the process of using vLLM with TRL for fast
 > The following trainers currently support generation with vLLM:
 > 
 > - [`GRPOTrainer`]
-> - [`OnlineDPO`]
+> - [`OnlineDPOTrainer`]
 > - [`NashMDTrainer`]
 > - [`XPOTrainer`]
 > - [`RLOOTrainer`]
@@ -135,7 +135,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 
 You can customize the server configuration by passing additional arguments.
 
-```
+```txt
 $ trl vllm-serve --help
 usage: trl vllm-serve [-h] --model MODEL [--revision REVISION] [--tensor_parallel_size TENSOR_PARALLEL_SIZE] [--data_parallel_size DATA_PARALLEL_SIZE] [--host HOST]
                       [--port PORT] [--gpu_memory_utilization GPU_MEMORY_UTILIZATION] [--dtype DTYPE] [--max_model_len MAX_MODEL_LEN]
