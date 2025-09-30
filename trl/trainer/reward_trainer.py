@@ -285,8 +285,7 @@ class RewardTrainer(BaseTrainer):
             if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
                 pass  # dtype is already a torch.dtype or "auto" or None
             elif isinstance(dtype, str) and dtype in ["bfloat16", "float16", "float32"]:
-                dtype = getattr(torch, dtype)
-                model_init_kwargs["dtype"] = dtype
+                model_init_kwargs["dtype"] = getattr(torch, dtype)
             else:
                 raise ValueError(
                     "Invalid `dtype` passed to `RewardConfig`. Expected either 'auto' or a string representing "
