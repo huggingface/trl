@@ -191,7 +191,7 @@ trainer = RewardTrainer(
 trainer.train()
 ```
 
-You can also continue training your [`peft.PeftModel`]. For that, first load a `PeftModel` outside [`RewardTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
+You can also continue training your [`~peft.PeftModel`]. For that, first load a `PeftModel` outside [`RewardTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
 
 ```python
 from datasets import load_dataset
