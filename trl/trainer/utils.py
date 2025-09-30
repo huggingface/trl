@@ -18,11 +18,12 @@ import json
 import os
 import random
 import socket
-from collections.abc import Sequence, Sized
+import warnings
+from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from itertools import accumulate
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, TypeVar, Union
 
 import numpy as np
 import pandas as pd
@@ -219,6 +220,10 @@ class RewardDataCollatorWithPadding:
     r"""
     Reward DataCollator class that pads the inputs to the maximum length of the batch.
 
+    > [!WARNING]
+    > This class is deprecated and will be removed in version 0.27.0. Please use
+    `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
+
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
@@ -234,6 +239,14 @@ class RewardDataCollatorWithPadding:
     padding: Union[bool, str] = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
+
+    def __init__(self, *args, **kwargs) -> None:
+        warnings.warn(
+            "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
+            "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
+            DeprecationWarning,
+        )
+        super().__init__(*args, **kwargs)
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_chosen = []
@@ -1241,6 +1254,10 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     """
     Decodes the input tensor and strips the padding tokens.
 
+    > [!WARNING]
+    > This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy
+    > the code into your codebase and use it from there.
+
     Args:
         inputs (`torch.Tensor`):
             The input tensor to be decoded.
@@ -1251,6 +1268,11 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
         `list[str]`:
             The list of decoded strings with padding tokens stripped.
     """
+    warnings.warn(
+        "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
+        "to keep using it, please copy the code into your codebase and use it from there.",
+        DeprecationWarning,
+    )
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
     return [d.replace(tokenizer.pad_token, "") for d in decoded]
 
@@ -1264,6 +1286,7 @@ def generate_model_card(
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
+    template_file: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
     comet_url: Optional[str] = None,
@@ -1290,6 +1313,8 @@ def generate_model_card(
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
             Trainer citation as a BibTeX entry.
+        template_file (`str` *optional*):
+            Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
         paper_title (`str` or `None`, defaults to `None`):
             Paper title.
         paper_id (`str` or `None`, defaults to `None`):
@@ -1307,9 +1332,10 @@ def generate_model_card(
         model_name=model_name,
         tags=["generated_from_trainer", *tags],
     )
+    template_file = template_file or "lm_model_card.md"
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath("templates/lm_model_card.md")),
+        template_path=str(pkg_resources.files("trl").joinpath(f"templates/{template_file}")),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,
@@ -1936,6 +1962,41 @@ def truncate_with_protected_tokens(ids: list[int], target_length: int, protected
             num_non_protected_needed -= 1
     # Reverse to restore original order
     return result[::-1]
+
+
+TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
+
+
+def remove_none_values(example: TListOrMapping) -> TListOrMapping:
+    """
+    Recursively removes entries with `None` values from a nested structure (list or dictionary).
+
+    Args:
+        example (`list` or `Mapping`):
+            Input nested structure (list or dictionary) from which to remove `None`.
+
+    Example:
+    ```python
+    >>> [
+    ...     {
+    ...         "a": {"aa": None, "ab": 1},
+    ...         "b": "my_string",
+    ...     }
+    ... ]
+    >>> remove_none_values(example)
+    [{'a': {'ab': 1}, 'b': 'my_string'}]
+    ```
+    """
+    if isinstance(example, list):
+        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
+    elif isinstance(example, Mapping):
+        return {
+            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
+            for key, value in example.items()
+            if value is not None
+        }
+    else:
+        raise TypeError("Input must be a list or a dictionary.")
 
 
 def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
