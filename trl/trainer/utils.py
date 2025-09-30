@@ -1908,6 +1908,12 @@ def truncate_with_protected_tokens(ids: list[int], target_length: int, protected
             Desired length of the output sequence.
         protected_tokens (`list[int]`):
             List of token IDs that should be preserved in the output.
+
+    Returns:
+        `list[int]`: Truncated sequence.
+        
+    Raises:
+        `ValueError`: If `len(protected_tokens ∩ seq) > target_length`.
     """
     protected_set = set(protected_tokens)
 
