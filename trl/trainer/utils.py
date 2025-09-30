@@ -1927,7 +1927,7 @@ def truncate_with_protected_tokens(ids: list[int], target_length: int, protected
     num_non_protected_needed = target_length - num_protected
     result = []
 
-    # Iterate backward to select rightmost non-protected tokens
+    # Iterate backward to select all protected tokens and rightmost non-protected tokens
     for t in reversed(ids):
         if t in protected_set:
             result.append(t)
