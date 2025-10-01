@@ -1027,7 +1027,7 @@ class TestGRPOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
-    def test_warning_raised_all_rewards_none(self):
+    def test_warning_raised_all_rewards_none(self, caplog):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1050,11 +1050,11 @@ class TestGRPOTrainer(TrlTestCase):
             train_dataset=dataset,
         )
 
-        with self.assertLogs("trl.trainer.grpo_trainer", level="WARNING") as cm:
+        with caplog.at_level("WARNING", logger="trl.trainer.grpo_trainer"):
             trainer.train()
 
         expected_warning = "All reward functions returned None for the following kwargs:"
-        assert expected_warning in cm.output[0]
+        assert expected_warning in caplog.text
 
     def test_training_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

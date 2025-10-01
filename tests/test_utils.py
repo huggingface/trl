@@ -422,7 +422,7 @@ class TestComputeAccuracy(TrlTestCase):
         result = compute_accuracy(eval_pred)
         assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
 
-    def test_rewards_comparison_task(self):
+    def test_rewards_comparison_task(self, caplog):
         eval_pred = (
             np.array(
                 [
@@ -435,7 +435,7 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
 
-        with self.assertLogs("trl.trainer.utils", level="WARNING") as cm:
+        with caplog.at_level("WARNING", logger="trl.trainer.utils"):
             result = compute_accuracy(eval_pred)
 
         assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
@@ -443,7 +443,7 @@ class TestComputeAccuracy(TrlTestCase):
             "There are 1 out of 3 instances where the predictions for both options are equal. "
             "These instances are ignored in the accuracy computation."
         )
-        assert expected_warning in cm.output[0]
+        assert expected_warning in caplog.text
 
 
 class TestFlushLeft(TrlTestCase):
