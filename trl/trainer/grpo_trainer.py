@@ -1100,7 +1100,6 @@ class GRPOTrainer(BaseTrainer):
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
         forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
-        prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
 
         if self.max_prompt_length is not None:
             prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
@@ -1195,7 +1194,9 @@ class GRPOTrainer(BaseTrainer):
                 obj_list = [payload]
                 broadcast_object_list(obj_list, from_process=0)
                 all_prompt_ids, all_completion_ids, all_logprobs = obj_list[0]
-                all_completion_ids, all_logprobs = obj_list[0]
+
+                # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
