@@ -1317,6 +1317,7 @@ class GRPOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
+            prompt_ids = prompt_inputs["input_ids"]
             prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids]
             prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
             prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
