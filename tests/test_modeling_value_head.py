@@ -50,7 +50,7 @@ ALL_SEQ2SEQ_MODELS = [
 
 
 class BaseTester:
-    class VHeadModelTester(TrlTestCase):
+    class TestVHeadModel(TrlTestCase):
         all_model_names = None
         trl_model_class = None
         transformers_model_class = None
@@ -179,7 +179,7 @@ class BaseTester:
                 )
 
 
-class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
+class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -292,7 +292,7 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
                 )
 
 
-class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
+class TestSeq2SeqValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -405,7 +405,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
             _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)
 
 
-class ReferenceModelTest(TrlTestCase):
+class TestReferenceModel(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLMWithValueHead.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])

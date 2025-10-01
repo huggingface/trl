@@ -44,7 +44,7 @@ from trl import (
 from .testing_utils import TrlTestCase, require_sklearn
 
 
-class TrainerArgTester(TrlTestCase):
+class TestTrainerArg(TrlTestCase):
     @require_sklearn
     def test_bco(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

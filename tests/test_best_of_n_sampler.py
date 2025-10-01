@@ -27,7 +27,7 @@ def queries_to_scores(list_of_strings):
     return [torch.rand(1).item() for _ in list_of_strings]
 
 
-class BestOfNSamplerTester(TrlTestCase):
+class TestBestOfNSampler(TrlTestCase):
     """
     Tests the BestOfNSampler class
     """

@@ -482,7 +482,7 @@ class TestOnlineDPOTrainer(TrlTestCase):
 
 
 @require_vision
-class OnlineDPOVisionTrainerTester(TrlTestCase):
+class TestOnlineDPOVisionTrainer(TrlTestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),

@@ -54,7 +54,7 @@ if is_peft_available():
 
 @pytest.mark.slow
 @require_torch_accelerator
-class GRPOTrainerSlowTester(TrlTestCase):
+class TestGRPOTrainerSlow(TrlTestCase):
     def setup_method(self):
         self.train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         self.eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test")

@@ -27,7 +27,7 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 from .testing_utils import TrlTestCase
 
 
-class TestGKDTrainer(TrlTestCase):
+class TestGKDTrainerGenerateOnPolicy(TrlTestCase):
     @classmethod
     def setup_class(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -198,7 +198,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
         assert round(abs(loss.item() - 0), 6) == 0
 
 
-class GKDTrainerTester(TrlTestCase):
+class TestGKDTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)

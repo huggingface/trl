@@ -33,7 +33,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
 
 
-class DFTLossTester(TrlTestCase):
+class TestDFTLoss(TrlTestCase):
     def test_dft_loss(self):
         batch_size = 2
         seq_len = 3
@@ -239,7 +239,7 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         assert torch.equal(result[1], torch.arange(3))
 
 
-class SFTTrainerTester(TrlTestCase):
+class TestSFTTrainer(TrlTestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",),

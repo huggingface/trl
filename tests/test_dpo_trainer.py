@@ -152,7 +152,7 @@ class TestTokenizeRow(TrlTestCase):
         }
 
 
-class DPOTrainerTester(TrlTestCase):
+class TestDPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -1406,7 +1406,7 @@ class DPOTrainerTester(TrlTestCase):
 
 
 @require_vision
-class DPOVisionTrainerTester(TrlTestCase):
+class TestDPOVisionTrainer(TrlTestCase):
     @parameterized.expand(
         [
             # ("trl-internal-testing/tiny-Idefics2ForConditionalGeneration",),  device issue from transformers, see https://github.com/huggingface/transformers/pull/39975

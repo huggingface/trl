@@ -26,7 +26,7 @@ from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 from .testing_utils import TrlTestCase, require_no_wandb
 
 
-class KTOTrainerTester(TrlTestCase):
+class TestKTOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)

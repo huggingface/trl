@@ -19,7 +19,7 @@ from trl.rewards import get_soft_overlong_punishment, think_format_reward
 from .testing_utils import TrlTestCase
 
 
-class ThinkFormatRewardTester(TrlTestCase):
+class TestThinkFormatReward(TrlTestCase):
     def test_valid_format(self):
         completions = [
             "<think>This is my reasoning.</think>This is my answer.",  # Simple, one-line reasoning

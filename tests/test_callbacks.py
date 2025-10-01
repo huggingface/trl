@@ -66,7 +66,7 @@ class TrainerWithRefModel(Trainer):
         self.ref_model = ref_model
 
 
-class WinRateCallbackTester(TrlTestCase):
+class TestWinRateCallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.ref_model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -224,7 +224,7 @@ class WinRateCallbackTester(TrlTestCase):
             assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
 
-class LogCompletionsCallbackTester(TrlTestCase):
+class TestLogCompletionsCallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -318,7 +318,7 @@ class LogCompletionsCallbackTester(TrlTestCase):
 
 
 @require_mergekit
-class MergeModelCallbackTester(TrlTestCase):
+class TestMergeModelCallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -374,7 +374,7 @@ class MergeModelCallbackTester(TrlTestCase):
             assert os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}."
 
 
-class BEMACallbackTester(TrlTestCase):
+class TestBEMACallback(TrlTestCase):
     def setup_method(self):
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")

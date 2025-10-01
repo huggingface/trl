@@ -20,7 +20,7 @@ from trl.core import masked_mean, masked_var, masked_whiten
 from .testing_utils import TrlTestCase
 
 
-class CoreTester(TrlTestCase):
+class TestCore(TrlTestCase):
     """
     A wrapper class for testing core utils functions
     """

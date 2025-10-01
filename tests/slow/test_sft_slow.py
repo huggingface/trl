@@ -44,7 +44,7 @@ if is_peft_available():
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
-class SFTTrainerSlowTester(TrlTestCase):
+class TestSFTTrainerSlow(TrlTestCase):
     def setup_method(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")

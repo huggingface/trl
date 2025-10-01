@@ -108,7 +108,7 @@ class TestDataCollatorForPreference(TrlTestCase):
         torch.testing.assert_close(result["margin"], torch.tensor([0.1, 0.2]))
 
 
-class RewardTrainerTester(TrlTestCase):
+class TestRewardTrainer(TrlTestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",),

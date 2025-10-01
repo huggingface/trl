@@ -23,7 +23,7 @@ from trl.models.utils import ChatMlSpecialTokens, clone_chat_template, setup_cha
 from .testing_utils import TrlTestCase
 
 
-class DatasetFormattingTestCase(TrlTestCase):
+class TestDatasetFormatting(TrlTestCase):
     def setup_method(self):
         self.llama_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.1")
         self.chatml_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -116,7 +116,7 @@ class DatasetFormattingTestCase(TrlTestCase):
         assert formatting_func is None
 
 
-class SetupChatFormatTestCase(TrlTestCase):
+class TestSetupChatFormat(TrlTestCase):
     def setup_method(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
@@ -156,7 +156,7 @@ class SetupChatFormatTestCase(TrlTestCase):
         )
 
 
-class CloneChatTemplateTestCase(TrlTestCase):
+class TestCloneChatTemplate(TrlTestCase):
     def test_clone(self):
         # This tokenizer doesn't have a chat_template by default
         tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-BloomForCausalLM")

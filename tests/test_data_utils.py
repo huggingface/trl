@@ -147,7 +147,7 @@ class TestPrepareMultimodalMessages:
         assert messages == expected
 
 
-class IsConversationalTester(TrlTestCase):
+class TestIsConversational(TrlTestCase):
     conversational_examples = [
         {  # Language modeling
             "messages": [
@@ -257,7 +257,7 @@ class IsConversationalTester(TrlTestCase):
         assert not is_conversational(example)
 
 
-class IsConversationalFromValueTester(TrlTestCase):
+class TestIsConversationalFromValue(TrlTestCase):
     def test_positive_1(self):
         example = {
             "conversations": [
@@ -281,7 +281,7 @@ class IsConversationalFromValueTester(TrlTestCase):
         assert not is_conversational_from_value(example)
 
 
-class ApplyChatTemplateTester(TrlTestCase):
+class TestApplyChatTemplate(TrlTestCase):
     tokenizers = [
         "trl-internal-testing/tiny-CohereForCausalLM",
         "trl-internal-testing/tiny-DbrxForCausalLM",
@@ -429,7 +429,7 @@ class ApplyChatTemplateTester(TrlTestCase):
         assert "get_current_temperature" not in result_without_tools["prompt"]
 
 
-class ApplyChatTemplateHarmonyTester(TrlTestCase):
+class TestApplyChatTemplateHarmony(TrlTestCase):
     def test_language_modeling(self):
         messages = {
             "messages": [
@@ -655,7 +655,7 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
         assert output["label"]
 
 
-class UnpairPreferenceDatasetTester(TrlTestCase):
+class TestUnpairPreferenceDataset(TrlTestCase):
     paired_dataset = Dataset.from_dict(
         {
             "prompt": ["The sky is", "The sun is"],
@@ -717,7 +717,7 @@ class UnpairPreferenceDatasetTester(TrlTestCase):
         )
 
 
-class ExtractPromptTester(TrlTestCase):
+class TestExtractPrompt(TrlTestCase):
     example_implicit_prompt_conversational = {
         "chosen": [
             {"role": "user", "content": "What color is the sky?"},

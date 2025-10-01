@@ -43,7 +43,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-class GetHighEntropyMaskTester(TrlTestCase):
+class TestGetHighEntropyMask(TrlTestCase):
     def get_high_entropy_mask(self, entropies, mask, threshold):
         """Helper method to test the get_high_entropy_mask functionality."""
         # Create a mock trainer with minimal setup
@@ -115,7 +115,7 @@ class GetHighEntropyMaskTester(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
-class GRPOTrainerTester(TrlTestCase):
+class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1975,7 +1975,7 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
-class GSPOTokenTrainerTester(TrlTestCase):
+class TestGSPOTokenTrainer(TrlTestCase):
     def test_training(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 

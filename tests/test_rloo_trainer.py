@@ -37,7 +37,7 @@ if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-class RLOOTrainerTester(TrlTestCase):
+class TestRLOOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that RLOOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")

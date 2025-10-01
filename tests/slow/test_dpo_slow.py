@@ -37,7 +37,7 @@ if is_peft_available():
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
-class DPOTrainerSlowTester(TrlTestCase):
+class TestDPOTrainerSlow(TrlTestCase):
     def setup_method(self):
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         self.peft_config = LoraConfig(

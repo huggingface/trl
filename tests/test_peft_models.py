@@ -32,7 +32,7 @@ if is_peft_available():
 
 
 @require_peft
-class PeftModelTester(TrlTestCase):
+class TestPeftModel(TrlTestCase):
     def setup_method(self):
         self.causal_lm_model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.lora_config = LoraConfig(

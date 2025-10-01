@@ -33,7 +33,7 @@ if is_peft_available():
     from peft import LoraConfig
 
 
-class BCOTrainerTester(TrlTestCase):
+class TestBCOTrainer(TrlTestCase):
     @parameterized.expand(
         [
             ("standard_preference",),

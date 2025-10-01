@@ -25,7 +25,7 @@ from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 from .testing_utils import TrlTestCase
 
 
-class CPOTrainerTester(TrlTestCase):
+class TestCPOTrainer(TrlTestCase):
     def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)

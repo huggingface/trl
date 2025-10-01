@@ -534,7 +534,7 @@ class TestFlushRight(TrlTestCase):
         assert torch.equal(new_mask, expected_mask)
 
 
-class RepeatRandomSamplerTester(TrlTestCase):
+class TestRepeatRandomSampler(TrlTestCase):
     def test_sampler(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=2)
@@ -841,7 +841,7 @@ class TestSelectiveLogSoftmax(TrlTestCase):
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
 
-class ShuffleSequenceDictTester(TrlTestCase):
+class TestShuffleSequenceDict(TrlTestCase):
     def test_shuffle_preserves_shape(self):
         x = torch.arange(6).reshape(3, 2)
         y = torch.arange(3).reshape(3, 1)
@@ -906,7 +906,7 @@ class ShuffleSequenceDictTester(TrlTestCase):
                 pytest.fail("Unexpected x row in shuffled output.")
 
 
-class SplitTensorDictTester(TrlTestCase):
+class TestSplitTensorDict(TrlTestCase):
     def test_split_equal_chunks(self):
         x = torch.arange(12).reshape(6, 2)
         y = torch.arange(6).reshape(6, 1)
@@ -946,7 +946,7 @@ class SplitTensorDictTester(TrlTestCase):
             assert torch.equal(result[i]["y"], torch.tensor(1))
 
 
-class SplitPixelValuesByGridTester(TrlTestCase):
+class TestSplitPixelValuesByGrid(TrlTestCase):
     def test_split_correctly_0(self):
         batch = {
             "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]]),
@@ -1010,7 +1010,7 @@ class SplitPixelValuesByGridTester(TrlTestCase):
         assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
 
 
-class TruncateWithProtectedTokensTester(TrlTestCase):
+class TestTruncateWithProtectedTokens(TrlTestCase):
     def test_basic_example(self):
         """Test the basic example from the problem description."""
         prompt_ids = [1, 2, 3, 4, 5]
@@ -1088,7 +1088,7 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         assert new_ids == expected_ids
 
 
-class UnsplitPixelValuesByGridTester(TrlTestCase):
+class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
         pixel_values = [torch.randn(4, 5), torch.randn(2, 5)]
         pixel_values_merged = torch.cat(pixel_values, dim=0)
