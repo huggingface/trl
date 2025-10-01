@@ -273,7 +273,7 @@ class GRPOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side = "left")
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -1267,7 +1267,6 @@ class GRPOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            self.processing_class.truncation_side = "left"
             generate_inputs = self.processing_class(
                 text=prompts_text,
                 return_tensors="pt",
