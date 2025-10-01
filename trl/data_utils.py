@@ -22,7 +22,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.types
 from datasets import Dataset, DatasetDict
-from transformers import PreTrainedTokenizerBase
+from transformers import PreTrainedTokenizerBase, ProcessorMixin
 
 
 DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
@@ -119,7 +119,7 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
 def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: PreTrainedTokenizerBase,
+    tokenizer: Union[PreTrainedTokenizerBase, ProcessorMixin],
     tools: Optional[list[Union[dict, Callable]]] = None,
     **template_kwargs,
 ) -> dict[str, str]:
@@ -242,7 +242,7 @@ def maybe_apply_chat_template(
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
         tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer to apply the chat template with.
-        tools (`list[Union[dict, Callable]]` or `None`, *optional*, defaults to `None`):
+        tools (`list[Union[dict, Callable]]`, *optional*):
             A list of tools (callable functions) that will be accessible to the model. If the template does not support
             function calling, this argument will have no effect.
         **template_kwargs (`Any`, *optional*):
@@ -300,9 +300,9 @@ def unpair_preference_dataset(
         dataset (`Dataset` or `DatasetDict`):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
-        num_proc (`int` or `None`, *optional*, defaults to `None`):
+        num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        desc (`str` or `None`, *optional*, defaults to `None`):
+        desc (`str`, *optional*):
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
@@ -343,9 +343,9 @@ def maybe_unpair_preference_dataset(
         dataset (`Dataset` or `DatasetDict`):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
-        num_proc (`int` or `None`, *optional*, defaults to `None`):
+        num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
-        desc (`str` or `None`, *optional*, defaults to `None`):
+        desc (`str`, *optional*):
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
@@ -644,7 +644,7 @@ def pack_dataset(
                 middle.
             - `"wrapped"`: Faster but more aggressive. Ignores sequence boundaries and will cut sequences in the middle
                 to completely fill each packed sequence with data.
-        map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
+        map_kwargs (`dict`, *optional*):
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
     Returns:
@@ -663,8 +663,9 @@ def pack_dataset(
     >>> dataset = Dataset.from_dict(examples)
     >>> packed_dataset = pack_dataset(dataset, seq_length=4, strategy="bfd")
     >>> packed_dataset[:]
-    {'input_ids': [[1, 2, 3, 9], [6, 7, 8, 4, 5]],
-     'attention_mask': [[1, 1, 0, 1], [1, 0, 0, 1, 0]]}
+    {'input_ids': [[1, 2, 3, 9], [6, 7, 8], [4, 5]],
+    'attention_mask': [[1, 1, 0, 1], [1, 0, 0], [1, 0]],
+    'seq_lengths': [[3, 1], [3], [2]]}
     ```
     """
     if map_kwargs is None:
@@ -690,9 +691,9 @@ def truncate_dataset(
     Args:
         dataset (`Dataset` or `DatasetDict`):
             Dataset to truncate.
-        seq_length (`int`):
+        max_length (`int`):
             Maximum sequence length to truncate to.
-        map_kwargs (`dict` or `None`, *optional*, defaults to `None`):
+        map_kwargs (`dict`, *optional*):
             Additional keyword arguments to pass to the dataset's map method when truncating examples.
 
     Returns:

@@ -19,8 +19,10 @@ import warnings
 import numpy as np
 import pytest
 import torch
+import transformers
 from accelerate.utils.memory import release_memory
 from datasets import Dataset, Features, Image, Value, load_dataset
+from packaging.version import Version
 from parameterized import parameterized
 from transformers import (
     AutoModelForCausalLM,
@@ -31,7 +33,6 @@ from transformers import (
 )
 from transformers.testing_utils import (
     backend_empty_cache,
-    require_bitsandbytes,
     require_flash_attn,
     require_liger_kernel,
     require_peft,
@@ -43,7 +44,7 @@ from transformers.utils import is_peft_available
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.utils import get_kbit_device_map
 
-from ..testing_utils import TrlTestCase, require_vllm
+from ..testing_utils import TrlTestCase, require_bitsandbytes, require_vllm
 from .testing_constants import MODELS_TO_TEST
 
 
@@ -77,6 +78,7 @@ class GRPOTrainerSlowTester(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
+            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -171,6 +173,8 @@ class GRPOTrainerSlowTester(TrlTestCase):
     @parameterized.expand(MODELS_TO_TEST)
     def test_training_with_transformers_paged(self, model_name):
         """Test that training works with transformers paged implementation (requires GPU)."""
+        if Version(transformers.__version__) < Version("4.57.0"):
+            pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.57.0")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -204,14 +208,14 @@ class GRPOTrainerSlowTester(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @require_flash_attn
-    @require_bitsandbytes
-    @require_peft
     @parameterized.expand(
         [
             ("HuggingFaceTB/SmolVLM-Instruct",),  # Only test the smaller model to avoid OOM
         ]
     )
+    @require_flash_attn
+    @require_bitsandbytes
+    @require_peft
     def test_vlm_training(self, model_name):
         """
         Test VLM training with aggressive memory optimization.
@@ -263,7 +267,7 @@ class GRPOTrainerSlowTester(TrlTestCase):
         model = AutoModelForImageTextToText.from_pretrained(
             model_name,
             attn_implementation="flash_attention_2",
-            torch_dtype="bfloat16",
+            dtype="bfloat16",
             device_map=get_kbit_device_map(),
             quantization_config=quantization_config,
         )
@@ -421,7 +425,7 @@ class GRPOTrainerSlowTester(TrlTestCase):
                     model = AutoModelForCausalLM.from_pretrained(
                         "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                         quantization_config=quantization_config,
-                        torch_dtype=torch.bfloat16,
+                        dtype=torch.bfloat16,
                     )
 
                     trainer = GRPOTrainer(

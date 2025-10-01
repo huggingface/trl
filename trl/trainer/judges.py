@@ -185,6 +185,7 @@ class BaseBinaryJudge(BaseJudge):
 
 
 class PairRMJudge(BasePairwiseJudge):
+    # docstyle-ignore
     """
     LLM judge based on the PairRM model from AllenAI.
 
@@ -206,11 +207,8 @@ class PairRMJudge(BasePairwiseJudge):
     >>> print(results)  # [0, 1] (indicating the first completion is preferred for the first prompt and the second)
     ```
 
-    <Tip>
-
-    This class requires the llm-blender library to be installed. Install it with: `pip install llm-blender`.
-
-    </Tip>
+    > [!TIP]
+    > This class requires the llm-blender library to be installed. Install it with: `pip install llm-blender`.
     """
 
     def __init__(self):
@@ -297,7 +295,7 @@ class HfPairwiseJudge(BasePairwiseJudge):
             Model to use for the judge.
         token (`str`, *optional*):
             Hugging Face API token to use for the [`huggingface_hub.InferenceClient`].
-        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+        system_prompt (`str`, *optional*):
             The system prompt to be used for the judge. If not provided, a default prompt is used. Note that the system
             prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`. Also, the
             inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token
@@ -351,7 +349,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     Args:
         model (`str`, *optional*, defaults to `"gpt-4-turbo-preview"`):
             Model to use for the judge.
-        system_prompt (`str` or `None`, *optional*, defaults to `None`):
+        system_prompt (`str`, *optional*):
             System prompt to be used for the judge. If not provided, a default prompt is used. Note that the system
             prompt should contain the following placeholders: `{prompt}`, `{response0}`, and `{response1}`. Also, the
             inference is called with `max_tokens=1`, consequently the system prompt should ask for a single token
@@ -425,7 +423,7 @@ class AllTrueJudge(BaseBinaryJudge):
     Implements the Mixture of Judges as described in the [CGPO paper](https://huggingface.co/papers/2409.20370).
 
     Args:
-    judges (`list[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
+        judges (`list[BaseBinaryJudge]`): A list of [`BaseBinaryJudge`] instances whose decisions will be unified.
     """
 
     def __init__(self, judges: list[BaseBinaryJudge]):

@@ -12,12 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__version__ = "0.22.0.dev0"
-
+from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from .import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
+from .import_utils import _LazyModule
 
+
+try:
+    __version__ = version("trl")
+except PackageNotFoundError:
+    __version__ = "unknown"
 
 _import_structure = {
     "scripts": ["DatasetMixtureConfig", "ScriptArguments", "TrlParser", "get_dataset", "init_zero_verbose"],
@@ -49,8 +54,6 @@ _import_structure = {
         "MTPExtension",
     ],
     "trainer": [
-        "AlignPropConfig",
-        "AlignPropTrainer",
         "AllTrueJudge",
         "BaseBinaryJudge",
         "BaseJudge",
@@ -69,8 +72,6 @@ _import_structure = {
         "GRPOConfig",
         "GRPOTrainer",
         "HfPairwiseJudge",
-        "IterativeSFTConfig",
-        "IterativeSFTTrainer",
         "KTOConfig",
         "KTOTrainer",
         "LogCompletionsCallback",
@@ -99,25 +100,15 @@ _import_structure = {
         "XPOConfig",
         "XPOTrainer",
     ],
-    "trainer.callbacks": ["BEMACallback", "MergeModelCallback", "RichProgressCallback", "SyncRefModelCallback"],
+    "trainer.callbacks": [
+        "BEMACallback",
+        "MergeModelCallback",
+        "RichProgressCallback",
+        "SyncRefModelCallback",
+        "WeaveCallback",
+    ],
     "trainer.utils": ["get_kbit_device_map", "get_peft_config", "get_quantization_config"],
 }
-
-try:
-    if not is_diffusers_available():
-        raise OptionalDependencyNotAvailable()
-except OptionalDependencyNotAvailable:
-    pass
-else:
-    _import_structure["models"].extend(
-        [
-            "DDPOPipelineOutput",
-            "DDPOSchedulerOutput",
-            "DDPOStableDiffusionPipeline",
-            "DefaultDDPOStableDiffusionPipeline",
-        ]
-    )
-    _import_structure["trainer"].extend(["DDPOConfig", "DDPOTrainer"])
 
 if TYPE_CHECKING:
     from .data_utils import (
@@ -149,8 +140,6 @@ if TYPE_CHECKING:
     )
     from .scripts import DatasetMixtureConfig, ScriptArguments, TrlParser, get_dataset, init_zero_verbose
     from .trainer import (
-        AlignPropConfig,
-        AlignPropTrainer,
         AllTrueJudge,
         BaseBinaryJudge,
         BaseJudge,
@@ -169,8 +158,6 @@ if TYPE_CHECKING:
         GRPOConfig,
         GRPOTrainer,
         HfPairwiseJudge,
-        IterativeSFTConfig,
-        IterativeSFTTrainer,
         KTOConfig,
         KTOTrainer,
         LogCompletionsCallback,
@@ -199,22 +186,14 @@ if TYPE_CHECKING:
         XPOConfig,
         XPOTrainer,
     )
-    from .trainer.callbacks import BEMACallback, MergeModelCallback, RichProgressCallback, SyncRefModelCallback
+    from .trainer.callbacks import (
+        BEMACallback,
+        MergeModelCallback,
+        RichProgressCallback,
+        SyncRefModelCallback,
+        WeaveCallback,
+    )
     from .trainer.utils import get_kbit_device_map, get_peft_config, get_quantization_config
-
-    try:
-        if not is_diffusers_available():
-            raise OptionalDependencyNotAvailable()
-    except OptionalDependencyNotAvailable:
-        pass
-    else:
-        from .models import (
-            DDPOPipelineOutput,
-            DDPOSchedulerOutput,
-            DDPOStableDiffusionPipeline,
-            DefaultDDPOStableDiffusionPipeline,
-        )
-        from .trainer import DDPOConfig, DDPOTrainer
 
 else:
     import sys

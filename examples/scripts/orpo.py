@@ -14,9 +14,10 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 

@@ -15,6 +15,7 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -28,372 +29,18 @@ from transformers.testing_utils import require_liger_kernel, require_peft, requi
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
-from trl.trainer.grpo_trainer import (
-    RepeatSampler,
-    shuffle_sequence_dict,
-    split_pixel_values_by_grid,
-    split_tensor_dict,
-    truncate_with_protected_tokens,
-    unsplit_pixel_values_by_grid,
+from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_config import GRPOWithReplayBufferConfig
+from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_trainer import (
+    GRPOWithReplayBufferTrainer,
+    ReplayBuffer,
 )
+from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
 
 from .testing_utils import TrlTestCase, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
-
-
-class SplitTensorDictTester(TrlTestCase):
-    def test_split_equal_chunks(self):
-        x = torch.arange(12).reshape(6, 2)
-        y = torch.arange(6).reshape(6, 1)
-        tensor_dict = {"x": x, "y": y}
-
-        result = split_tensor_dict(tensor_dict, 3)
-
-        expected_x_chunks = torch.chunk(x, 3, dim=0)
-        expected_y_chunks = torch.chunk(y, 3, dim=0)
-        self.assertEqual(len(result), 3)
-        for i in range(3):
-            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
-            self.assertTrue(torch.equal(result[i]["y"], expected_y_chunks[i]))
-
-    def test_with_none_tensor(self):
-        x = torch.arange(12).reshape(6, 2)
-        tensor_dict = {"x": x, "y": None}
-
-        result = split_tensor_dict(tensor_dict, 2)
-
-        expected_x_chunks = torch.chunk(x, 2, dim=0)
-        self.assertEqual(len(result), 2)
-        for i in range(2):
-            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
-            self.assertIsNone(result[i]["y"])
-
-    def test_with_scalar(self):
-        x = torch.arange(12).reshape(6, 2)
-        tensor_dict = {"x": x, "y": torch.tensor(1)}
-
-        result = split_tensor_dict(tensor_dict, 2)
-
-        expected_x_chunks = torch.chunk(x, 2, dim=0)
-        self.assertEqual(len(result), 2)
-        for i in range(2):
-            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
-            self.assertTrue(torch.equal(result[i]["y"], torch.tensor(1)))
-
-
-class ShuffleSequenceDictTester(TrlTestCase):
-    def test_shuffle_preserves_shape(self):
-        x = torch.arange(6).reshape(3, 2)
-        y = torch.arange(3).reshape(3, 1)
-        tensor_dict = {"x": x.clone(), "y": y.clone()}
-
-        shuffled = shuffle_sequence_dict(tensor_dict)
-
-        self.assertEqual(shuffled["x"].shape, x.shape)
-        self.assertEqual(shuffled["y"].shape, y.shape)
-
-    def test_shuffle_consistent_across_tensors(self):
-        # Use known patterns to check alignment
-        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
-        y = torch.tensor([[1], [2], [3]])
-        tensor_dict = {"x": x.clone(), "y": y.clone()}
-
-        shuffled = shuffle_sequence_dict(tensor_dict)
-
-        # Build a reverse map from shuffled x rows to y values
-        for i in range(3):
-            x_row = shuffled["x"][i]
-            y_val = shuffled["y"][i].item()
-
-            if torch.equal(x_row, torch.tensor([10, 11])):
-                self.assertEqual(y_val, 1)
-            elif torch.equal(x_row, torch.tensor([20, 21])):
-                self.assertEqual(y_val, 2)
-            elif torch.equal(x_row, torch.tensor([30, 31])):
-                self.assertEqual(y_val, 3)
-            else:
-                self.fail("Unexpected x row in shuffled output.")
-
-    def test_none_tensor_remains_none(self):
-        x = torch.arange(6).reshape(3, 2)
-        tensor_dict = {"x": x.clone(), "y": None}
-
-        shuffled = shuffle_sequence_dict(tensor_dict)
-
-        self.assertIsNone(shuffled["y"])
-        self.assertEqual(shuffled["x"].shape, x.shape)
-
-    def test_shuffle_with_list(self):
-        x = torch.tensor([[10, 11], [20, 21], [30, 31]])
-        y = ["a", "b", "c"]
-
-        sequence_dict = {"x": x.clone(), "y": y}
-
-        shuffled = shuffle_sequence_dict(sequence_dict)
-
-        # Check that the list y is shuffled in the same order as x
-        for i in range(3):
-            x_row = shuffled["x"][i]
-            y_val = shuffled["y"][i]
-
-            if torch.equal(x_row, torch.tensor([10, 11])):
-                self.assertEqual(y_val, "a")
-            elif torch.equal(x_row, torch.tensor([20, 21])):
-                self.assertEqual(y_val, "b")
-            elif torch.equal(x_row, torch.tensor([30, 31])):
-                self.assertEqual(y_val, "c")
-            else:
-                self.fail("Unexpected x row in shuffled output.")
-
-
-class RepeatRandomSamplerTester(TrlTestCase):
-    def test_sampler(self):
-        dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatSampler(dataset, mini_repeat_count=2)
-        # Should output something like [4, 4, 3, 3, 0, 0, 1, 1, 2, 2, 6, 6, 5, 5]
-        sampled = list(sampler)
-        # Check that the length is doubled
-        assert len(sampled) == 2 * len(dataset)
-        # Check that all indexes are present
-        assert set(sampled) == set(range(len(dataset)))
-        # Check that each element is repeated twice
-        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
-
-    def test_sampler_no_shuffle(self):
-        dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatSampler(dataset, mini_repeat_count=2, shuffle=False)
-        sampled = list(sampler)
-        expected = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
-        self.assertEqual(sampled, expected)
-
-    def test_sampler_no_repeat(self):
-        dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatSampler(dataset, mini_repeat_count=1)
-        # Should output something like [4, 3, 0, 1, 2, 6, 5]
-        sampled = list(sampler)
-        # Check that the length is the same
-        assert len(sampled) == len(dataset)
-        # Check that all indexes are present
-        assert set(sampled) == set(range(len(dataset)))
-
-    def test_sampler_with_batch_size(self):
-        dataset = ["a", "b", "c", "d", "e", "f", "g", "h"]
-        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
-        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6, 5, 7, 5, 7]
-        sampled = list(sampler)
-        # Check that the length is doubled
-        assert len(sampled) == 2 * len(dataset)
-        # Check that all indexes are present
-        assert set(sampled) == set(range(len(dataset)))
-        # Check that each element is repeated as expected
-        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
-
-    def test_sampler_with_batch_size_and_drop(self):
-        dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatSampler(dataset, mini_repeat_count=1, batch_size=2, repeat_count=2)
-        # Should output something like [4, 3, 4, 3, 0, 1, 0, 1, 2, 6, 2, 6]
-        sampled = list(sampler)
-        # Check that the length is doubled
-        assert len(sampled) == 2 * (
-            len(dataset) - 1
-        )  # one element is dropped, because it's not enough to form a batch
-        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
-        # Check that the sampled indexes are a subset of the dataset indexes
-        assert set(sampled).issubset(set(range(len(dataset))))
-        # Check that each element is repeated as expected
-        assert all(sampled[i : i + 1] == sampled[i + 2 : i + 3] for i in range(0, len(sampled), 4))
-
-    def test_sampler_with_mini_repeat_count_and_batch_size_1(self):
-        dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=3, repeat_count=2)
-        # Should output something like [4, 4, 3, 3, 0, 0, 4, 4, 3, 3, 0, 0,
-        #                               1, 1, 2, 2, 6, 6, 1, 1, 2, 2, 6, 6]
-        sampled = list(sampler)
-        # Check that the length is quadrupled
-        assert len(sampled) == 4 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
-        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
-        # Check that the sampled indexes are a subset of the dataset indexes
-        assert set(sampled).issubset(set(range(len(dataset))))
-        # Check that each element is repeated as expected
-        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
-        # Check that the batch is repeated as expected
-        assert sampled[0:6] == sampled[6:12]
-        assert sampled[12:18] == sampled[18:24]
-
-    def test_sampler_with_mini_repeat_count_and_batch_size_2(self):
-        dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatSampler(dataset, mini_repeat_count=3, batch_size=2, repeat_count=2)
-        # Should output something like [4, 4, 4, 3, 3, 3, 4, 4, 4, 3, 3, 3,
-        #                               0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 1, 1,
-        #                               2, 2, 2, 6, 6, 6, 2, 2, 2, 6, 6, 6]
-        sampled = list(sampler)
-        # Check that the length is sextupled
-        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
-        assert len(sampler) == len(sampled)  # the length should be the same as the sampled length
-        # Check that the sampled indexes are a subset of the dataset indexes
-        assert set(sampled).issubset(set(range(len(dataset))))
-        # Check that each element is repeated as expected
-        assert all(sampled[i] == sampled[i + 1] == sampled[i + 2] for i in range(0, len(sampled), 3))
-        # Check that the batch is repeated as expected
-        assert sampled[0:6] == sampled[6:12]
-        assert sampled[12:18] == sampled[18:24]
-        assert sampled[24:30] == sampled[30:36]
-
-    def test_sampler_with_mini_repeat_count_and_batch_size_3(self):
-        dataset = ["a", "b", "c", "d", "e", "f", "g"]
-        sampler = RepeatSampler(dataset, mini_repeat_count=2, batch_size=2, repeat_count=3)
-        # Should output something like [4, 4, 3, 3, 4, 4, 3, 3, 4, 4, 3, 3,
-        #                               0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1,
-        #                               2, 2, 6, 6, 2, 2, 6, 6, 2, 2, 6, 6]
-        sampled = list(sampler)
-        # Check that the length is sextupled
-        assert len(sampled) == 6 * (len(dataset) - 1)  # 1 element is dropped, because it's not enough to form a batch
-        # Check that the sampled indexes are a subset of the dataset indexes
-        assert set(sampled).issubset(set(range(len(dataset))))
-        # Check that each element is repeated as expected
-        assert all(sampled[i] == sampled[i + 1] for i in range(0, len(sampled), 2))
-        # Check that the batch is repeated as expected
-        assert sampled[0:4] == sampled[4:8] == sampled[8:12]
-        assert sampled[12:16] == sampled[16:20] == sampled[20:24]
-        assert sampled[24:28] == sampled[28:32] == sampled[32:36]
-
-
-class TruncateWithProtectedTokensTester(TrlTestCase):
-    def test_basic_example(self):
-        """Test the basic example from the problem description."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [2, 3, 6]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[2, 3, 5], [6, 9, 10]])
-        expected_mask = torch.ones_like(expected_ids)
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-
-    def test_no_truncation_needed(self):
-        """Test when target length equals current length."""
-        prompt_ids = torch.tensor([[1, 2, 3]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [2]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        self.assertTrue(torch.equal(new_ids, prompt_ids))
-        self.assertTrue(torch.equal(new_mask, prompt_mask))
-
-    def test_no_protected_tokens(self):
-        """Test truncation with no protected tokens (normal right truncation)."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = []
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[3, 4, 5]])  # Last 3 tokens
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-
-    def test_all_tokens_protected(self):
-        """Test when all remaining tokens are protected."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [3, 4, 5]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[3, 4, 5]])
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-
-    def test_too_many_protected_tokens(self):
-        """Test error when too many protected tokens for target length."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [1, 2, 3, 4]
-        target_length = 3
-
-        with self.assertRaises(ValueError):
-            truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-    def test_single_batch_single_token(self):
-        """Test edge case with single batch and single token."""
-        prompt_ids = torch.tensor([[5]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [5]
-        target_length = 1
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        self.assertTrue(torch.equal(new_ids, prompt_ids))
-
-    def test_mask_preservation(self):
-        """Test that mask values are correctly preserved."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.tensor([[1, 0, 1, 0, 1]])  # Mixed mask values
-        protected_tokens = [2, 4]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[2, 4, 5]])
-        expected_mask = torch.tensor([[0, 0, 1]])  # Corresponding mask values
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-
-    def test_multiple_batches_different_protected(self):
-        """Test multiple batches where protected tokens appear differently."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5], [2, 6, 7, 8, 9], [10, 11, 12, 2, 13]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [2]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor(
-            [
-                [2, 4, 5],  # 2 is protected, keep last 2 non-protected (4,5)
-                [2, 8, 9],  # 2 is protected, keep last 2 non-protected (8,9)
-                [12, 2, 13],  # 2 is protected, keep last 2 non-protected (12,13)
-            ]
-        )
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-
-    def test_order_preservation(self):
-        """Test that relative order is preserved."""
-        prompt_ids = torch.tensor([[10, 2, 20, 3, 30, 40]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [2, 3]
-        target_length = 4
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        # Should keep protected tokens 2,3 and last 2 non-protected tokens 30,40
-        # Order should be: 2, 3, 30, 40 (maintaining original relative positions)
-        expected_ids = torch.tensor([[2, 3, 30, 40]])
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-
-    def test_empty_protected_tokens_list(self):
-        """Test with empty protected tokens list."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = []
-        target_length = 2
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[4, 5]])  # Last 2 tokens
-        self.assertTrue(torch.equal(new_ids, expected_ids))
 
 
 class GetHighEntropyMaskTester(TrlTestCase):
@@ -409,7 +56,8 @@ class GetHighEntropyMaskTester(TrlTestCase):
         # Create a minimal trainer instance just to access the method
         trainer = Mock(spec=GRPOTrainer)
         trainer.accelerator = mock_accelerator
-        trainer.accelerator.gather = lambda x: x  # Mock gather to return the input directly
+        trainer.accelerator.gather = lambda x: x
+        trainer.accelerator.pad_across_processes = lambda x, dim, pad_index: x
 
         # Call the actual method from GRPOTrainer
         return GRPOTrainer.get_high_entropy_mask(trainer, entropies, mask, threshold)
@@ -465,60 +113,6 @@ class GetHighEntropyMaskTester(TrlTestCase):
         entropy_mask = self.get_high_entropy_mask(entropies, mask, threshold=0.5)
         expected_mask = torch.tensor([[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0]], dtype=torch.bool)
         torch.testing.assert_close(entropy_mask, expected_mask)
-
-
-class SplitPixelValuesByGridTester(TrlTestCase):
-    def test_split_correctly_0(self):
-        batch = {
-            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 1, 4]]),  # Products: [4, 4]
-            "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
-        }
-        result = split_pixel_values_by_grid(batch)
-        self.assertIsInstance(result["pixel_values"], list)
-        self.assertEqual(len(result["pixel_values"]), 2)
-        self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:4]))
-        self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][4:]))
-
-    def test_split_correctly_1(self):
-        batch = {
-            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 4]]),  # Products: [4, 8]
-            "pixel_values": torch.arange(12 * 3).reshape(12, 3),  # Shape: [12, 3]
-        }
-        result = split_pixel_values_by_grid(batch)
-        self.assertIsInstance(result["pixel_values"], list)
-        self.assertEqual(len(result["pixel_values"]), 2)
-        self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:4]))
-        self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][4:12]))
-
-    def test_missing_keys(self):
-        batch = {"pixel_values": torch.tensor([1.0])}
-        result = split_pixel_values_by_grid(batch)
-        self.assertEqual(result, batch)
-
-    def test_mismatched_length(self):
-        batch = {
-            "image_grid_thw": torch.tensor([[2, 1, 1], [2, 1, 1]]),  # Total = 4
-            "pixel_values": torch.randn(3, 5),  # Only 3 rows
-        }
-        with self.assertRaises(ValueError):
-            split_pixel_values_by_grid(batch)
-
-
-class UnsplitPixelValuesByGridTester(TrlTestCase):
-    def test_unsplit_correctly(self):
-        split = [torch.randn(4, 5), torch.randn(2, 5)]
-        merged = torch.cat(split, dim=0)
-        batch = {"pixel_values": split, "other_key": torch.tensor([1])}
-        result = unsplit_pixel_values_by_grid(batch)
-        self.assertIsInstance(result["pixel_values"], torch.Tensor)
-        self.assertTrue(torch.allclose(result["pixel_values"], merged))
-        self.assertIn("other_key", result)
-
-    def test_no_op_if_not_list(self):
-        original = torch.randn(5, 3)
-        batch = {"pixel_values": original}
-        result = unsplit_pixel_values_by_grid(batch)
-        self.assertTrue(torch.equal(result["pixel_values"], original))
 
 
 class GRPOTrainerTester(TrlTestCase):
@@ -689,7 +283,7 @@ class GRPOTrainerTester(TrlTestCase):
 
         model = AutoModelForCausalLM.from_pretrained(
             "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-            torch_dtype=torch.float32,  # Use float32 for testing to avoid precision issues
+            dtype=torch.float32,  # Use float32 for testing to avoid precision issues
         )
 
         lora_config = LoraConfig(
@@ -1101,7 +695,6 @@ class GRPOTrainerTester(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
-            beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
             learning_rate=0.1,  # increase the learning rate to speed up the test
             per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
             num_generations=3,  # reduce the number of generations to reduce memory usage
@@ -1188,6 +781,41 @@ class GRPOTrainerTester(TrlTestCase):
             report_to="none",
             use_vllm=True,
             vllm_guided_decoding_regex=r"<reasoning>\n.*\n</reasoning>\n<answer>\n.*\n</answer>",
+        )
+        trainer = GRPOTrainer(
+            model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_vllm
+    @unittest.skip("We should add a mock for the vLLM server.")
+    def test_training_vllm_importance_sampling_correction(self):
+        """Test that training works with vLLM for generation with guided decoding."""
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,
+            per_device_train_batch_size=3,
+            num_generations=3,
+            max_completion_length=8,
+            report_to="none",
+            use_vllm=True,
+            vllm_importance_sampling_correction=True,
+            vllm_importance_sampling_cap=3.0,
         )
         trainer = GRPOTrainer(
             model="Qwen/Qwen2.5-0.5B-Instruct",  # tiny model is too small for vLLM
@@ -1637,6 +1265,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm(self, model_id):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -1648,7 +1280,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1666,7 +1298,6 @@ class GRPOTrainerTester(TrlTestCase):
             "model.vision_tower.",
             "model.multi_modal_projector.",
             "model.vision_model.",
-            "model.connector.modality_projection.",
             "model.visual.",
             "model.image_newline",
         )
@@ -1680,6 +1311,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             beta=0.1,  # set beta to non-zero value to test the case where the reference model is used
@@ -1691,7 +1326,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1719,7 +1354,11 @@ class GRPOTrainerTester(TrlTestCase):
             "trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration"
         )
         base_param_names = [f"base_model.model.{n}" for n, _ in model.named_parameters()]
-        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1731,7 +1370,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
             peft_config=LoraConfig(target_modules=["q_proj", "v_proj"]),
@@ -1755,6 +1394,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm_and_importance_sampling(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -1766,7 +1409,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1792,6 +1435,10 @@ class GRPOTrainerTester(TrlTestCase):
     def test_training_vlm_and_liger(self):
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -1804,7 +1451,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1830,6 +1477,10 @@ class GRPOTrainerTester(TrlTestCase):
         # If not handled properly, prompt truncation may truncate image token
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
             learning_rate=0.1,  # increase the learning rate to speed up the test
@@ -1841,7 +1492,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1862,17 +1513,21 @@ class GRPOTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @require_vision
-    @require_vllm
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
             ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
         ]
     )
+    @require_vision
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
 
         training_args = GRPOConfig(
             output_dir=self.tmp_dir,
@@ -1887,7 +1542,7 @@ class GRPOTrainerTester(TrlTestCase):
         )
         trainer = GRPOTrainer(
             model=model_id,
-            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            reward_funcs=reward_func,
             args=training_args,
             train_dataset=dataset,
         )
@@ -1898,6 +1553,46 @@ class GRPOTrainerTester(TrlTestCase):
 
         self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
 
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+    @require_vision
+    def test_training_vlm_multi_image(self):
+        dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
+
+        # For now, mixing image+text and text-only examples is not supported, so we filter out text-only examples
+        dataset = dataset.filter(lambda x: len(x["images"]) > 0)
+
+        def reward_func(completions, **kwargs):
+            """Reward function that rewards longer completions."""
+            return [float(len(completion[0]["content"])) for completion in completions]
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            max_prompt_length=None,  # disable prompt truncation, because usually, models don't support it
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            reward_funcs=reward_func,
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the params have changed
+        # Because of the way the tiny models are initialized, the gradient does not flow properly through the
+        # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
@@ -2016,6 +1711,307 @@ class GRPOTrainerTester(TrlTestCase):
 
         self.assertEqual(len(trainer.reward_processing_classes), 1)
         self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
+
+
+@pytest.mark.low_priority
+class TestReplayBuffer(unittest.TestCase):
+    def setUp(self):
+        self.replay_buffer = ReplayBuffer(max_size=5)
+
+    def test_add(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Check if the buffer contains the correct number of elements
+        self.assertEqual(len(self.replay_buffer.heap), 5)
+
+        # Check if the buffer maintains the min-heap property
+        heap_scores = [item[0] for item in self.replay_buffer.heap]
+        self.assertEqual(heap_scores[0], min(heap_scores))
+        self.assertEqual(heap_scores[0], 0.3)
+
+    def test_add_more_than_maxlen(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7, 0.6, 0.4]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+            {"id": 6},
+            {"id": 7},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Check if the buffer contains the correct number of elements
+        self.assertEqual(len(self.replay_buffer.heap), 5)
+
+        # Check if the buffer maintains the min-heap property
+        heap_scores = [item[0] for item in self.replay_buffer.heap]
+        self.assertEqual(heap_scores[0], min(heap_scores))
+        self.assertEqual(heap_scores[0], 0.5)  # 0.3 and 0.4 should be removed
+
+    def test_sample(self):
+        # Add elements to the replay buffer
+        scores = [0.5, 0.8, 0.3, 0.9, 0.7]
+        data = [
+            {"id": 1},
+            {"id": 2},
+            {"id": 3},
+            {"id": 4},
+            {"id": 5},
+        ]
+        self.replay_buffer.add(scores, data)
+
+        # Sample elements from the buffer
+        sampled = self.replay_buffer.sample(num_samples=3)
+
+        # Check if the sampled elements are from the buffer
+        self.assertEqual(len(sampled), 3)
+        for item in sampled:
+            self.assertIn(item, [entry[1] for entry in self.replay_buffer.heap])
+
+
+@pytest.mark.low_priority
+class TestUpdateWithReplayBuffer(unittest.TestCase):
+    def setUp(self):
+        config = GRPOWithReplayBufferConfig(
+            replay_buffer_size=5,
+        )
+        self.trainer = GRPOWithReplayBufferTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=config,
+            train_dataset=None,
+        )
+        self.trainer.replay_buffer = ReplayBuffer(max_size=5)
+        self.trainer.num_generations = 2
+
+    def _prepopulate_buffer(self, with_pixels=False, with_logprobs=False):
+        scores = [0.1, 0.9]
+        data = [
+            {
+                "prompt_ids": torch.tensor([[100, 101], [102, 103]]),
+                "prompt_mask": torch.ones(2, 2, dtype=torch.long),
+                "completion_ids": torch.tensor([[5, 6], [7, 8]]),
+                "completion_mask": torch.ones(2, 2, dtype=torch.long),
+                "advantages": torch.tensor([[0.5, 0.6]]),
+                **({"pixel_values": torch.randn(2, 3, 224, 224)} if with_pixels else {}),
+                **({"old_per_token_logps": torch.randn(2, 2)} if with_logprobs else {}),
+            },
+            {
+                "prompt_ids": torch.tensor([[104, 105], [106, 107]]),
+                "prompt_mask": torch.ones(2, 2, dtype=torch.long),
+                "completion_ids": torch.tensor([[13, 14], [15, 16]]),
+                "completion_mask": torch.ones(2, 2, dtype=torch.long),
+                "advantages": torch.tensor([[0.8, 0.85]]),
+                **({"pixel_values": torch.randn(2, 3, 224, 224)} if with_pixels else {}),
+                **({"old_per_token_logps": torch.randn(2, 2)} if with_logprobs else {}),
+            },
+        ]
+        self.trainer.replay_buffer.add(scores, data)
+
+    def _make_inputs(self, group_advantages, with_pixels=False, with_logprobs=False):
+        inputs = {
+            "group_advantages": group_advantages,
+            "prompt_ids": torch.tensor([[1, 2], [3, 4], [5, 6], [7, 8]]),
+            "prompt_mask": torch.ones(4, 2, dtype=torch.long),
+            "completion_ids": torch.tensor([[9, 10], [11, 12], [13, 14], [15, 16]]),
+            "completion_mask": torch.ones(4, 2, dtype=torch.long),
+            "prompt_inputs": {"pixel_values": torch.randn(4, 3, 224, 224)} if with_pixels else {},
+            "old_per_token_logps": torch.randn(4, 2) if with_logprobs else None,
+        }
+        inputs["group_std_rewards"] = group_advantages.std(dim=1).expand_as(group_advantages)
+        return inputs
+
+    def test_update_with_replay_buffer_no_variance(self):
+        self._prepopulate_buffer(with_pixels=True, with_logprobs=True)
+        group_advantages = torch.tensor([[0.5, 0.5], [0.8, 0.8]])  # no variance
+        inputs = self._make_inputs(group_advantages, with_pixels=True, with_logprobs=True)
+        original_prompt_ids = inputs["prompt_ids"].clone()
+
+        outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
+
+        self.assertIsNotNone(outputs)
+        self.assertIn("pixel_values", outputs)
+        self.assertIn("old_per_token_logps", outputs)
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 2)
+        for pid in outputs["prompt_ids"]:
+            self.assertNotIn(pid.tolist(), original_prompt_ids.tolist())
+
+    def test_update_with_replay_buffer_with_variance(self):
+        self._prepopulate_buffer()
+        group_advantages = torch.tensor([[0.6, 0.4], [0.7, 1.2]])  # has variance
+        inputs = self._make_inputs(group_advantages)
+
+        sampled = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
+
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 4)  # grew
+        self.assertIsNone(sampled)
+
+    def test_update_with_mixed_variance(self):
+        self._prepopulate_buffer()
+        group_advantages = torch.tensor([[0.6, 0.6], [0.3, 0.45]])  # one no-variance, one variance
+        inputs = self._make_inputs(group_advantages)
+        original_prompt_ids = inputs["prompt_ids"].clone().view(-1, self.trainer.num_generations, 2).tolist()
+
+        outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
+
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 3)  # grew by 1
+        output_prompt_ids = outputs["prompt_ids"].view(-1, self.trainer.num_generations, 2).tolist()
+
+        buffer_ids = [item[1]["prompt_ids"].tolist() for item in self.trainer.replay_buffer.heap]
+        found_from_buffer = any(pid in buffer_ids for pid in output_prompt_ids)
+        found_from_original = any(pid in original_prompt_ids for pid in output_prompt_ids)
+
+        self.assertTrue(found_from_buffer)
+        self.assertTrue(found_from_original)
+        self.assertNotIn([[1, 2], [3, 4]], output_prompt_ids)  # excluded no-variance group
+
+    def test_update_with_inputs_different_seq_len(self):
+        """
+        Test with inputs where the sequence lengths are different from the prepopulated buffer.
+        """
+        self._prepopulate_buffer()
+        pad_token_id = self.trainer.tokenizer.pad_token_id
+        group_advantages = torch.tensor([[0.6, 0.6], [0.3, 0.45]])  # one no-variance, one variance
+        inputs = {
+            "group_advantages": group_advantages,
+            "prompt_ids": torch.tensor(
+                [
+                    [1, 2, pad_token_id],
+                    [1, 2, pad_token_id],
+                    [3, 4, 5],
+                    [3, 4, 5],
+                ]
+            ),
+            "prompt_mask": torch.tensor([[1, 1, 0], [1, 1, 0], [1, 1, 1], [1, 1, 1]], dtype=torch.long),
+            "completion_ids": torch.tensor(
+                [
+                    [1009, 1010, pad_token_id],
+                    [1011, 1012, 1013],
+                    [1013, 1014, pad_token_id],
+                    [1015, 1016, 1017],
+                ]
+            ),
+            "completion_mask": torch.tensor([[1, 1, 0], [1, 1, 1], [1, 1, 0], [1, 1, 1]], dtype=torch.long),
+            "prompt_inputs": {},
+        }
+        inputs["group_std_rewards"] = group_advantages.std(dim=1).expand_as(group_advantages)
+
+        outputs_after_sampling = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
+        # Seq length of current batch should be preserved
+        self.assertEqual(outputs_after_sampling["prompt_ids"].shape[-1], 3)
+        self.assertEqual(len(self.trainer.replay_buffer.heap), 3)
+        output_prompt_ids = outputs_after_sampling["prompt_ids"].view(-1, self.trainer.num_generations, 3).tolist()
+
+        buffered_prompt_completion_ids = [
+            (item[1]["prompt_ids"].tolist(), item[1]["completion_ids"].tolist())
+            for item in self.trainer.replay_buffer.heap
+        ]
+        buffered_prompt_ids, buffered_completion_ids = zip(*buffered_prompt_completion_ids)
+
+        # Check for new entry with seq len 3 in buffer
+        self.assertIn([[3, 4, 5], [3, 4, 5]], buffered_prompt_ids)  # excluded no-variance group
+        self.assertIn(
+            [[1013, 1014, pad_token_id], [1015, 1016, 1017]], buffered_completion_ids
+        )  # excluded no-variance group
+
+        # Check that sampled outputs contain one group with prompt_ids starting with a pad token
+        self.assertTrue(
+            [
+                [pad_token_id, 101, 102],
+                [pad_token_id, 102, 103],
+            ]
+            in output_prompt_ids
+            or [
+                [pad_token_id, 104, 105],
+                [pad_token_id, 106, 107],
+            ]
+            in output_prompt_ids
+        )
+
+
+@pytest.mark.low_priority
+class TestGRPOWithReplayBufferTrainer(TrlTestCase):
+    def test_training_with_replay_buffer(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        # Guarantee that some rewards have 0 std
+        def custom_reward_func(completions, **kwargs):
+            if torch.rand(1).item() < 0.25:
+                return [0] * len(completions)  # simulate some None rewards
+            else:
+                return torch.rand(len(completions)).tolist()
+
+        training_args = GRPOWithReplayBufferConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=4,  # reduce the batch size to reduce memory usage
+            num_generations=4,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            replay_buffer_size=8,
+            report_to="none",
+        )
+        trainer = GRPOTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs=[custom_reward_func],
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+
+
+class GSPOTokenTrainerTester(TrlTestCase):
+    def test_training(self):
+        dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
+
+        training_args = GRPOConfig(
+            output_dir=self.tmp_dir,
+            learning_rate=0.1,  # increase the learning rate to speed up the test
+            per_device_train_batch_size=3,  # reduce the batch size to reduce memory usage
+            num_generations=3,  # reduce the number of generations to reduce memory usage
+            max_completion_length=8,  # reduce the completion length to reduce memory usage
+            num_iterations=2,  # the importance sampling weights won't be 0 in this case
+            importance_sampling_level="sequence_token",
+            report_to="none",
+        )
+        trainer = GSPOTokenTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            reward_funcs="trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check that the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
 
 if __name__ == "__main__":

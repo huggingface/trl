@@ -24,6 +24,7 @@ from trl import (
     CPOTrainer,
     DPOConfig,
     DPOTrainer,
+    FDivergenceType,
     KTOConfig,
     KTOTrainer,
     NashMDConfig,
@@ -143,7 +144,7 @@ class TrainerArgTester(TrlTestCase):
             label_smoothing=0.5,
             loss_type="hinge",
             label_pad_token_id=-99,
-            padding_value=-99,
+            pad_token=".",
             truncation_mode="keep_start",
             max_length=256,
             max_prompt_length=64,
@@ -177,7 +178,7 @@ class TrainerArgTester(TrlTestCase):
         self.assertEqual(trainer.args.label_smoothing, 0.5)
         self.assertEqual(trainer.args.loss_type, "hinge")
         self.assertEqual(trainer.args.label_pad_token_id, -99)
-        self.assertEqual(trainer.args.padding_value, -99)
+        self.assertEqual(trainer.args.pad_token, ".")
         self.assertEqual(trainer.args.truncation_mode, "keep_start")
         self.assertEqual(trainer.args.max_length, 256)
         self.assertEqual(trainer.args.max_prompt_length, 64)
@@ -192,7 +193,7 @@ class TrainerArgTester(TrlTestCase):
         self.assertEqual(trainer.args.ref_adapter_name, "dummy_adapter")
         self.assertEqual(trainer.args.reference_free, True)
         self.assertEqual(trainer.args.force_use_ref_model, True)
-        self.assertEqual(trainer.args.f_divergence_type, "js_divergence")
+        self.assertEqual(trainer.args.f_divergence_type, FDivergenceType.JS_DIVERGENCE)
         self.assertEqual(trainer.args.f_alpha_divergence_coef, 0.5)
         # self.assertEqual(trainer.args.sync_ref_model, True)
         self.assertEqual(trainer.args.ref_model_mixup_alpha, 0.5)
@@ -262,7 +263,7 @@ class TrainerArgTester(TrlTestCase):
             processing_class=tokenizer,
             model=model,
             ref_model=ref_model,
-            reward_model=reward_model,
+            reward_funcs=reward_model,
             train_dataset=dataset,
         )
         self.assertEqual(trainer.args.mixture_coef, 0.5 if not mixtures_coef_list else [0.5, 0.6])
@@ -282,23 +283,21 @@ class TrainerArgTester(TrlTestCase):
             missing_eos_penalty=0.33,
             beta=0.6 if not beta_list else [0.6, 0.7],
             loss_type="hinge",
-            dataset_num_proc=4,
         )
         trainer = OnlineDPOTrainer(
             model=model,
             ref_model=ref_model,
-            reward_model=reward_model,
+            reward_funcs=reward_model,
             args=training_args,
             train_dataset=dataset,
             processing_class=tokenizer,
-            reward_processing_class=tokenizer,
+            reward_processing_classes=tokenizer,
         )
         self.assertEqual(trainer.args.max_new_tokens, 42)
         self.assertEqual(trainer.args.temperature, 0.5)
         self.assertEqual(trainer.args.missing_eos_penalty, 0.33)
         self.assertEqual(trainer.args.beta, 0.6 if not beta_list else [0.6, 0.7])
         self.assertEqual(trainer.args.loss_type, "hinge")
-        self.assertEqual(trainer.args.dataset_num_proc, 4)
 
     def test_orpo(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -390,7 +389,7 @@ class TrainerArgTester(TrlTestCase):
             processing_class=tokenizer,
             model=model,
             ref_model=ref_model,
-            reward_model=reward_model,
+            reward_funcs=reward_model,
             train_dataset=dataset,
         )
         self.assertEqual(trainer.args.alpha, 0.5 if not alpha_list else [0.5, 0.6])

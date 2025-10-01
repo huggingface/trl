@@ -255,7 +255,7 @@ model = AutoModelForCausalLM.from_pretrained(
     load_in_4bit=True,
     quantization_config=bnb_config,
     attn_implementation="flash_attention_2",
-    torch_dtype=torch.bfloat16,
+    dtype=torch.bfloat16,
     device_map="auto",
 )
 
@@ -295,3 +295,7 @@ dpo_trainer = DPOTrainer(
 ## DataCollatorForPreference
 
 [[autodoc]] trainer.dpo_trainer.DataCollatorForPreference
+
+## FDivergenceType
+
+[[autodoc]] trainer.dpo_trainer.FDivergenceType

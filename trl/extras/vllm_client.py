@@ -22,7 +22,9 @@ from typing import Optional, Union
 from urllib.parse import urlparse
 
 import torch
+import torch.distributed.distributed_c10d as c10d
 from torch import nn
+from transformers import is_torch_xpu_available
 
 from ..import_utils import is_requests_available, is_vllm_ascend_available, is_vllm_available
 
@@ -51,7 +53,7 @@ class VLLMClient:
     weights in a distributed setting. Before using it, start the vLLM server with `trl vllm-serve`.
 
     Args:
-        base_url (`str` or `None`, *optional*, defaults to `None`):
+        base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `host` and `server_port` are
             ignored.
         host (`str`, *optional*, defaults to `"0.0.0.0"`):
@@ -112,7 +114,7 @@ class VLLMClient:
         if not is_requests_available():
             raise ImportError("requests is not installed. Please install it with `pip install requests`.")
         if not is_vllm_available():
-            raise ImportError("vLLM is not installed. Please install it with `pip install vllm`.")
+            raise ImportError("vLLM is not installed. Please install it with `pip install trl[vllm]`.")
 
         self.session = requests.Session()
 
@@ -185,7 +187,7 @@ class VLLMClient:
         Args:
             prompts (`list[str]`):
                 List of text prompts for which the model will generate completions.
-            images (`list[PIL.Image]` or `None`, *optional*, defaults to `None`):
+            images (`list[PIL.Image]`, *optional*):
                 List of PIL Images to send along with the prompts.
             n (`int`, *optional*, defaults to `1`):
                 Number of completions to generate for each prompt.
@@ -201,16 +203,19 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
-            guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+            guided_decoding_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
-            generation_kwargs (`dict` or `None`, *optional*, defaults to `None`):
+            generation_kwargs (`dict`, *optional*):
                 Additional generation parameters to pass to the vLLM `SamplingParams`. This can include parameters like
                 `seed`, `frequency_penalty`, etc. If it contains keys that conflict with the other parameters, they
                 will override them.
 
         Returns:
-            `list[list[int]]`:
-                List of lists of token IDs representing the model-generated completions for each prompt.
+            `dict` with keys:
+                - `completion_ids` (`list[list[int]]`):
+                    List of lists of token IDs representing the model-generated completions for each prompt.
+                - `logprobs` (`list[list[float]]`):
+                    List of lists of log probabilities for each generated token.
         """
         url = f"{self.base_url}/generate/"
 
@@ -240,7 +245,8 @@ class VLLMClient:
             },
         )
         if response.status_code == 200:
-            return response.json()["completion_ids"]
+            json_response = response.json()
+            return {"completion_ids": json_response["completion_ids"], "logprobs": json_response["logprobs"]}
         else:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
@@ -266,7 +272,14 @@ class VLLMClient:
 
         # Initialize weight update group
         url = f"{self.base_url}/init_communicator/"
-        client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
+        # Will simplify it after torch xpu 2.9 support get uuid.
+        if is_torch_xpu_available():
+            if hasattr(torch.xpu.get_device_properties(device), "uuid"):
+                client_device_uuid = str(torch.xpu.get_device_properties(device).uuid)
+            else:
+                client_device_uuid = "42"
+        else:
+            client_device_uuid = str(torch.cuda.get_device_properties(device).uuid)
 
         # In the server side, the host is set to 0.0.0.0
         response = self.session.post(
@@ -287,8 +300,22 @@ class VLLMClient:
         time.sleep(0.1)
 
         # Set up the communication group for weight broadcasting
-        pg = StatelessProcessGroup.create(host=self.host, port=self.group_port, rank=self.rank, world_size=world_size)
-        self.pynccl_comm = PyNcclCommunicator(pg, device=device)
+        if is_torch_xpu_available():
+            store = torch.distributed.TCPStore(
+                host_name=self.host, port=self.group_port, world_size=world_size, is_master=(self.rank == 0)
+            )
+            prefixed_store = c10d.PrefixStore("client2server", store)
+            pg = c10d.ProcessGroupXCCL(
+                store=prefixed_store,
+                rank=self.rank,
+                size=world_size,
+            )
+            self.communicator = pg
+        else:
+            pg = StatelessProcessGroup.create(
+                host=self.host, port=self.group_port, rank=self.rank, world_size=world_size
+            )
+            self.communicator = PyNcclCommunicator(pg, device=device)
 
         # When the client object is deleted, close the weight update group
         atexit.register(self.close_communicator)
@@ -309,9 +336,14 @@ class VLLMClient:
         if response.status_code != 200:
             raise Exception(f"Request failed: {response.status_code}, {response.text}")
 
-        # Broadcast the weights to the other processes
-        self.pynccl_comm.broadcast(weights, src=self.rank)
-        self.pynccl_comm.group.barrier()
+        if is_torch_xpu_available():
+            # Use XCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, root=self.rank)
+            self.communicator.barrier()
+        else:
+            # Use NCCL to broadcast the updated weights from the client (src) to all workers.
+            self.communicator.broadcast(weights, src=self.rank)
+            self.communicator.group.barrier()
 
     def update_model_params(self, model: nn.Module):
         """
@@ -354,8 +386,9 @@ class VLLMClient:
 if __name__ == "__main__":
     from vllm import SamplingParams
 
+    device = "xpu" if is_torch_xpu_available() else "cuda"
     client = VLLMClient()
-    client.init_communicator(device="cuda")
+    client.init_communicator(device=device)
 
     # Generate completions
     responses = client.generate(["Hello, AI!", "Tell me a joke"], n=4, max_tokens=32, sampling_params=SamplingParams())
@@ -364,5 +397,5 @@ if __name__ == "__main__":
     # Update model weights
     from transformers import AutoModelForCausalLM
 
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to("cuda")
+    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-7B").to(device)
     client.update_model_params(model)

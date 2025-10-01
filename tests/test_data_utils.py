@@ -455,7 +455,9 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
-        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
+        Respond in a friendly manner.
+
+        <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
 
         self.assertEqual(output["text"], expected)
 
@@ -483,7 +485,9 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
-        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
+        Respond in a friendly manner.
+
+        <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
 
         self.assertEqual(output["prompt"], expected)
 
@@ -514,7 +518,9 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
-        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
+        Respond in a friendly manner.
+
+        <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
         expected_completion = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
 
         self.assertEqual(output["prompt"], expected_prompt)
@@ -550,7 +556,9 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
-        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
+        Respond in a friendly manner.
+
+        <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
         expected_chosen = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
         expected_rejected = "<|channel|>analysis<|message|>The user asks the color of the tree...<|end|><|start|>assistant<|channel|>final<|message|>It is green.<|return|>"
 
@@ -588,7 +596,9 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
-        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
+        Respond in a friendly manner.
+
+        <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>""")
 
         # docstyle-ignore
         expected_rejected = textwrap.dedent(f"""\
@@ -600,7 +610,9 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
-        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the tree...<|end|><|start|>assistant<|channel|>final<|message|>It is green.<|return|>""")
+        Respond in a friendly manner.
+
+        <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant<|channel|>analysis<|message|>The user asks the color of the tree...<|end|><|start|>assistant<|channel|>final<|message|>It is green.<|return|>""")
 
         self.assertEqual(output["chosen"], expected_chosen)
         self.assertEqual(output["rejected"], expected_rejected)
@@ -633,7 +645,9 @@ class ApplyChatTemplateHarmonyTester(TrlTestCase):
 
         # Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|><|start|>developer<|message|># Instructions
 
-        Respond in a friendly manner.<|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
+        Respond in a friendly manner.
+
+        <|end|><|start|>user<|message|>What color is the sky?<|end|><|start|>assistant""")
         expected_completion = "<|channel|>analysis<|message|>The user asks the color of the sky...<|end|><|start|>assistant<|channel|>final<|message|>It is blue.<|return|>"
 
         self.assertEqual(output["prompt"], expected_prompt)

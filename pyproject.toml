@@ -1,6 +1,7 @@
 [tool.ruff]
 target-version = "py39"
 line-length = 119
+src = ["trl"]
 
 [tool.ruff.lint]
 ignore = [
@@ -25,5 +26,8 @@ known-first-party = ["trl"]
 [tool.pytest.ini_options]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
-    "low-priority: marks tests as low priority (deselect with '-m \"not low-priority\"')"
+    "low_priority: marks tests as low priority (deselect with '-m \"not low_priority\"')"
+]
+addopts = [
+    "-k", "not experimental",
 ]

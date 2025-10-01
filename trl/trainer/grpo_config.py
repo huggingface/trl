@@ -34,7 +34,7 @@ class GRPOConfig(TrainingArguments):
     Parameters:
         > Parameters that control the model and reference model
 
-        model_init_kwargs (`str`, `dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        model_init_kwargs (`str`, `dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
             argument of the [`GRPOTrainer`] is provided as a string.
         disable_dropout (`bool`, *optional*, defaults to `False`):
@@ -63,11 +63,11 @@ class GRPOConfig(TrainingArguments):
 
         > Parameters that control generation
 
-        generation_batch_size: (`int` or `None`, *optional*, defaults to `None`):
+        generation_batch_size: (`int`, *optional*):
             Batch size to use for generation. If `None`, it defaults to the effective training batch size:
             `per_device_train_batch_size * num_processes * steps_per_generation`. In other words, there is one
             generation batch processed per optimization step. Mutually exclusive with `steps_per_generation`.
-        steps_per_generation: (`int` or `None`, *optional*, defaults to `None`):
+        steps_per_generation: (`int`, *optional*):
             Number of steps per generation. If `None`, it defaults to `gradient_accumulation_steps`. Mutually exclusive
             with `generation_batch_size`.
         temperature (`float`, defaults to `1.0`):
@@ -75,10 +75,10 @@ class GRPOConfig(TrainingArguments):
         top_p (`float`, *optional*, defaults to `1.0`):
             Float that controls the cumulative probability of the top tokens to consider. Must be in (0, 1]. Set to
             `1.0` to consider all tokens.
-        top_k (`int` or `None`, *optional*, defaults to `None`):
+        top_k (`int`, *optional*):
             Number of highest probability vocabulary tokens to keep for top-k-filtering. If `None`, top-k-filtering is
             disabled and all tokens are considered.
-        min_p (`float` or `None`, *optional*, defaults to `None`):
+        min_p (`float`, *optional*):
             Minimum token probability, which will be scaled by the probability of the most likely token. It must be a
             value between `0.0` and `1.0`. Typical values are in the `0.01-0.2` range.
         repetition_penalty (`float`, *optional*, defaults to `1.0`):
@@ -89,9 +89,9 @@ class GRPOConfig(TrainingArguments):
             Whether to use the `transformers` paged implementation for generation. If set to `True`, the `transformers`
             paged implementation will be used for generation instead of the default padded implementation. This
             parameter is only effective when `use_vllm` is set to `False`.
-        cache_implementation (`str` or `None`, *optional*, defaults to `None`):
+        cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
-        generation_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        generation_kwargs (`dict[str, Any]`, *optional*):
             Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
             using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
             as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
@@ -110,12 +110,16 @@ class GRPOConfig(TrainingArguments):
               server is running (start with `trl vllm-serve`).
             - `"colocate"`: vLLM will run in the same process and share the training GPUs. This avoids the need for a
               separate server but may cause resource contention with training.
-        vllm_guided_decoding_regex (`str` or `None`, *optional*, defaults to `None`):
+        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
+            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
+            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
+            implementation.
+        vllm_guided_decoding_regex (`str`, *optional*):
             Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled.
 
         > Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
 
-        vllm_server_base_url (`str` or `None`, *optional*, defaults to `None`):
+        vllm_server_base_url (`str`, *optional*):
             Base URL for the vLLM server (e.g., `"http://localhost:8000"`). If provided, `vllm_server_host` and
             `vllm_server_port` are ignored.
         vllm_server_host (`str`, *optional*, defaults to `"0.0.0.0"`):
@@ -136,10 +140,9 @@ class GRPOConfig(TrainingArguments):
             Control the tensor parallel size for vLLM. This setting only applies when `vllm_mode` is set to
             `"colocate"`. If you are using `vllm_mode="server"`, this parameter must be passed separately when
             launching the vLLM server via the `--vllm_tensor_parallel_size` flag.
-        vllm_model_impl (`str`, *optional*, defaults to `"vllm"`):
-            Model implementation to use for vLLM. Must be one of `"transformers"` or `"vllm"`. `"transformers"`: Use
-            the `transformers` backend for model implementation. `"vllm"`: Use the `vllm` library for model
-            implementation.
+        vllm_enable_sleep_mode (`bool`, *optional*, defaults to `False`):
+            Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step and woken
+            for weight sync and generation.
 
         > Parameters that control the training
 
@@ -150,11 +153,11 @@ class GRPOConfig(TrainingArguments):
             Number of iterations per batch (denoted as μ in the algorithm).
         epsilon (`float`, *optional*, defaults to `0.2`):
             Epsilon value for clipping.
-        delta (`float` or `None`, *optional*, defaults to `None`):
+        delta (`float`, *optional*):
             Enables the upper clipping bound in two-sided GRPO loss when set to a float. If `None` (default), standard
             GRPO clipping is used. Recommended to be greater than `1 + ε` when enabled. This method is introduced in
             the [INTELLECT-2 tech report](https://huggingface.co/papers/2505.07291).
-        epsilon_high (`float` or `None`, *optional*, defaults to `None`):
+        epsilon_high (`float`, *optional*):
             Upper-bound epsilon value for clipping. If not specified, it defaults to the same value as the lower-bound
             specified in argument `epsilon`. Paper [DAPO](https://huggingface.co/papers/2503.14476) recommends `0.28`.
         importance_sampling_level (`str`, *optional*, defaults to `"token"`):
@@ -163,7 +166,7 @@ class GRPOConfig(TrainingArguments):
             log-probability ratios across valid tokens to produce a single ratio per sequence. The [GSPO
             paper](https://huggingface.co/papers/2507.18071) shows that sequence-level sampling often yields more
             stable training and better alignment with sequence-level rewards.
-        reward_weights (`list[float]` or `None`, *optional*, defaults to `None`):
+        reward_weights (`list[float]`, *optional*):
             Weights for each reward function. Must match the number of reward functions. If `None`, all rewards are
             weighted equally with weight `1.0`.
         scale_rewards (`str` or `bool`, *optional*, defaults to `"group"`):
@@ -217,13 +220,22 @@ class GRPOConfig(TrainingArguments):
             `mask_truncated_completions=True`, only tokens from non-truncated completions are considered.
         use_liger_loss (`bool`, *optional*, defaults to `False`):
             Whether to use the Liger GRPO loss.
+        vllm_importance_sampling_correction (`bool`, *optional*, defaults to `True`):
+            Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and recomputed
+            logprobs. [Your Efficient RL Framework Secretly Brings You Off-Policy RL
+            Training](https://fengyao.notion.site/off-policy-rl) highlights that using a separate generation framework
+            (such as vLLM) can introduce off-policy effects due to subtle implementation differences between generation
+            and training backends. TIS is proposed as a remedy for this issue.
+        vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
+            Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
+            sampling ratio, improving training stability.
 
         > Parameters that control the logging
 
         log_completions (`bool`, *optional*, defaults to `False`):
             Whether to log a sample of (prompt, completion) pairs every `logging_steps` steps. If `rich` is installed,
             it prints the sample. If `wandb` logging is enabled, it logs it to `wandb`.
-        num_completions_to_print (`int` or `None`, *optional*, defaults to `None`):
+        num_completions_to_print (`int`, *optional*):
             Number of completions to print with `rich`. If `None`, all completions are logged.
         wandb_log_unique_prompts (`bool`, *optional*, defaults to `False`):
             Whether to log unique prompts in wandb. If `True`, only unique prompts are logged. If `False`, all prompts
@@ -391,17 +403,10 @@ class GRPOConfig(TrainingArguments):
             "generation instead of the default model.generate(). Requires `vllm` to be installed."
         },
     )
-    vllm_server_base_url: Optional[str] = field(
-        default=None,
-        metadata={
-            "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
-            "and `vllm_server_port` are ignored."
-        },
-    )
     vllm_mode: str = field(
         default="server",
         metadata={
-            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `server` or "
+            "help": "Mode to use for vLLM integration when `use_vllm` is set to `True`. Must be one of `'server'` or "
             "`'colocate'`. `'server'`: The trainer will send generation requests to a separate vLLM server. Make sure "
             "a TRL vLLM server is running (start with `trl vllm-serve`). `'colocate'`: vLLM will run in the same "
             "process and share the training GPUs. This avoids the need for a separate server but may cause resource "
@@ -416,12 +421,26 @@ class GRPOConfig(TrainingArguments):
             "model implementation."
         },
     )
+    vllm_enable_sleep_mode: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to enable sleep mode for vLLM. If `True`, vLLM will sleep during the optimization step "
+            "and woken for weight sync and generation."
+        },
+    )
     vllm_guided_decoding_regex: Optional[str] = field(
         default=None,
         metadata={"help": "Regex for vLLM guided decoding. If `None` (default), guided decoding is disabled."},
     )
 
     # Parameters that control the vLLM server (only used when `vllm_mode` is `"server"`)
+    vllm_server_base_url: Optional[str] = field(
+        default=None,
+        metadata={
+            "help": "Base URL for the vLLM server (e.g., 'http://localhost:8000'). If provided, `vllm_server_host` "
+            "and `vllm_server_port` are ignored."
+        },
+    )
     vllm_server_host: str = field(
         default="0.0.0.0",
         metadata={"help": "Host of the vLLM server to connect to. Ignored if vllm_server_base_url is provided."},
@@ -579,6 +598,23 @@ class GRPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to use the Liger GRPO loss."},
     )
+    vllm_importance_sampling_correction: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to apply Truncated Importance Sampling (TIS) between vLLM completion logprobs and "
+            "recomputed logprobs. Your Efficient RL Framework Secretly Brings You Off-Policy RL "
+            "Training highlights that using a separate generation framework (such as vLLM) can introduce off-policy "
+            "effects due to subtle implementation differences between generation and training backends. TIS is "
+            "proposed as a remedy for this issue."
+        },
+    )
+    vllm_importance_sampling_cap: float = field(
+        default=2.0,
+        metadata={
+            "help": "Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the "
+            "importance sampling ratio, improving training stability."
+        },
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
@@ -604,6 +640,8 @@ class GRPOConfig(TrainingArguments):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
 
         super().__post_init__()
+
+        self.scale_rewards = {True: "group", False: "none"}.get(self.scale_rewards, self.scale_rewards)
 
         num_processes = self.world_size
         # The current default effective batch size

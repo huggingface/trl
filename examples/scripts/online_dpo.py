@@ -14,16 +14,17 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
 """
 Usage:
 
-python examples/scripts/dpo_online.py \
+python examples/scripts/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
@@ -35,7 +36,7 @@ python examples/scripts/dpo_online.py \
     --missing_eos_penalty 1.0
 
 With LoRA:
-python examples/scripts/dpo_online.py \
+python examples/scripts/online_dpo.py \
     --model_name_or_path trl-lib/pythia-1b-deduped-tldr-sft  \
     --reward_model_path trl-lib/pythia-1b-deduped-tldr-rm \
     --dataset_name trl-lib/tldr \
@@ -82,18 +83,18 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
     training_args.gradient_checkpointing_kwargs = {"use_reentrant": True}
 
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
         use_cache=False if training_args.gradient_checkpointing else True,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
 
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
@@ -112,6 +113,8 @@ if __name__ == "__main__":
             truncation=True,
             truncation_side="left",  # since we judge the completion, truncating left is more appropriate
         )
+        if reward_tokenizer.pad_token_id is None:
+            reward_tokenizer.pad_token = reward_tokenizer.eos_token
     else:
         reward_model = None
         reward_tokenizer = None
@@ -137,13 +140,13 @@ if __name__ == "__main__":
 
     trainer = OnlineDPOTrainer(
         model=model,
-        reward_model=reward_model,
+        reward_funcs=reward_model,
         judge=judge,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
         processing_class=tokenizer,
-        reward_processing_class=reward_tokenizer,
+        reward_processing_classes=reward_tokenizer,
         peft_config=get_peft_config(model_args),
     )
 

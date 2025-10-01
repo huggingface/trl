@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import pathlib
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -23,13 +24,36 @@ from transformers.testing_utils import require_flash_attn, require_liger_kernel,
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
-from trl.trainer.sft_trainer import DataCollatorForLanguageModeling
+from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 
-from .testing_utils import TrlTestCase, ignore_warnings
+from .testing_utils import TrlTestCase, ignore_warnings, require_bitsandbytes
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
+
+
+class DFTLossTester(TrlTestCase):
+    def test_dft_loss(self):
+        batch_size = 2
+        seq_len = 3
+        vocab_size = 2
+        # All tokens have the same probability
+        logits = torch.fill(torch.empty(batch_size, seq_len, vocab_size), torch.rand(1).item())
+        outputs = MagicMock()
+        outputs.logits = logits
+        labels = torch.tensor([[1, 0, 0], [0, 1, -100]])
+        ce_loss = torch.nn.functional.cross_entropy(
+            logits.view(-1, vocab_size), labels.view(-1), ignore_index=-100, reduction="mean"
+        )
+        # We need to account for the logits shift operation so we don't consider the first tokens
+        # in each row of the batch
+        num_items_in_batch = 3
+        # Dft loss
+        predicted_dft_loss = dft_loss(outputs, labels, num_items_in_batch)
+        # If we have just two tokens in our vocab and all logits are the same,
+        # dft scales the ce_loss per token by 0.5. So the dft_loss should be ce_loss/2
+        torch.testing.assert_close(ce_loss / 2.0, predicted_dft_loss, atol=1e-4, rtol=1e-4)
 
 
 class TestDataCollatorForLanguageModeling(TrlTestCase):
@@ -40,9 +64,9 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = self.collator(examples)
 
+        self.assertEqual(set(result.keys()), {"input_ids", "attention_mask", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
     def test_completion_mask(self):
@@ -55,9 +79,9 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = self.collator(examples)
 
+        self.assertEqual(set(result.keys()), {"input_ids", "attention_mask", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
 
     def test_completion_only_loss_disabled(self):
@@ -71,9 +95,9 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
         result = collator(examples)
 
         # Labels should not be masked when completion_only_loss=False
+        self.assertEqual(set(result.keys()), {"input_ids", "attention_mask", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
     def test_padding_free_mode(self):
@@ -83,72 +107,42 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
+        self.assertEqual(set(result.keys()), {"input_ids", "position_ids", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4, 5]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5]]))
 
     def test_padding_free_with_completion_mask(self):
         """Test padding-free mode with completion masks."""
         collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
         examples = [
-            {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
+            {"input_ids": [1, 2, 3], "completion_mask": [0, 0, 1]},
             {"input_ids": [4, 5], "completion_mask": [1, 1]},
         ]
 
         result = collator(examples)
 
+        self.assertEqual(set(result.keys()), {"input_ids", "position_ids", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
         torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, 4, 5]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, -100, 3, -100, 5]]))
 
-    def test_packing_drops_attention_mask_for_flash_attention(self):
+    def test_packing(self):
         """Test that when using packing with position_ids, attention_mask is dropped with fa2."""
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, return_position_ids=True)
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
 
         # Simulate packed sequences with position_ids that restart (typical of BFD packing)
         examples = [
-            {
-                "input_ids": [1, 2, 3, 4, 5, 6, 7, 8],  # Packed: [1,2,3] + [4,5] + [6,7,8]
-                "seq_lengths": [3, 2, 3],
-            }
+            {"input_ids": [1, 2, 3, 4, 5, 6], "seq_lengths": [3, 3]},
+            {"input_ids": [7, 8, 9, 10, 11], "seq_lengths": [4, 1]},
         ]
 
         result = collator(examples)
 
-        # Verify that attention_mask is NOT present - this allows FlashAttention to use position_ids
-        self.assertNotIn("attention_mask", result, "attention_mask should be dropped for packing with position_ids")
-
-        # Verify essential keys are present
-        self.assertIn("input_ids", result)
-        self.assertIn("position_ids", result)
-        self.assertIn("labels", result)
-
-        # Verify the data is correctly processed
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 0, 1, 2]]))
-        torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]]))
-
-    def test_padding_free_without_position_ids_keeps_attention_mask(self):
-        """
-        Test that padding_free mode without explicit position_ids still creates attention_mask.
-        """
-        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, return_position_ids=True)
-
-        # Examples without position_ids (not packed)
-        examples = [{"input_ids": [1, 2, 3, 4, 5]}]
-
-        result = collator(examples)
-
-        # Should still have attention_mask since no packed position_ids
-        self.assertIn("attention_mask", result, "attention_mask should be present when no packed position_ids")
-        self.assertIn("position_ids", result)
-        self.assertIn("input_ids", result)
-
-        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5]]))
-        torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1, 1]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 3, 4]]))
+        self.assertEqual(set(result.keys()), {"input_ids", "position_ids", "labels"})
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 2, 0, 1, 2, 3, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5, 6, -100, 8, 9, 10, -100]]))
 
     def test_pad_to_multiple_of(self):
         """Test padding to multiple of specified value."""
@@ -157,21 +151,33 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
+        self.assertEqual(set(result.keys()), {"input_ids", "attention_mask", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 0], [1, 1, 0, 0]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0], [0, 1, 0, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, -100], [4, 5, -100, -100]]))
 
-    def test_custom_position_ids(self):
-        """Test handling of custom position IDs in examples."""
+    def test_pad_to_multiple_of_and_padding_free(self):
+        """Test padding to multiple of specified value."""
+        collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True, pad_to_multiple_of=4)
+        examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+
+        result = collator(examples)
+
+        self.assertEqual(set(result.keys()), {"input_ids", "position_ids", "labels"})
+        torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0]]))
+        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 0, 1, 0, 0, 0]]))
+        torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3, -100, 5, -100, -100, -100]]))
+
+    def test_custom_position_ids_but_no_padding_free(self):
+        """Test that custom position_ids are ignored if padding_free is False."""
         self.collator = DataCollatorForLanguageModeling(pad_token_id=0)
         examples = [{"input_ids": [1, 2, 3], "seq_lengths": [1, 2]}, {"input_ids": [4, 5], "seq_lengths": [2]}]
 
         result = self.collator(examples)
 
+        self.assertEqual(set(result.keys()), {"input_ids", "attention_mask", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 0, 1], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
     def test_single_example(self):
@@ -181,9 +187,9 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = self.collator(examples)
 
+        self.assertEqual(set(result.keys()), {"input_ids", "attention_mask", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3, 4]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1, 1]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2, 3]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3, 4]]))
 
     def test_different_pad_token_id(self):
@@ -193,9 +199,9 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         result = collator(examples)
 
+        self.assertEqual(set(result.keys()), {"input_ids", "attention_mask", "labels"})
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 999]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[1, 2, 3], [4, 5, -100]]))
 
     def test_assistant_masks(self):
@@ -210,7 +216,6 @@ class TestDataCollatorForLanguageModeling(TrlTestCase):
 
         torch.testing.assert_close(result["input_ids"], torch.tensor([[1, 2, 3], [4, 5, 0]]))
         torch.testing.assert_close(result["attention_mask"], torch.tensor([[1, 1, 1], [1, 1, 0]]))
-        torch.testing.assert_close(result["position_ids"], torch.tensor([[0, 1, 2], [0, 1, 0]]))
         torch.testing.assert_close(result["labels"], torch.tensor([[-100, 2, 3], [-100, 5, -100]]))
 
     def test_single_example_single_doc(self):
@@ -314,6 +319,70 @@ class SFTTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
+    def test_train_dft_loss(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling")
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            loss_type="dft",
+            # DFT loss scale is smaller, especially with randomly initialized models, so increase learning rate to
+            # ensure params change
+            learning_rate=1e-3,
+            report_to="none",
+            eval_strategy="steps",
+            eval_steps=3,
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            args=training_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    def test_train_moe_model_with_aux_loss(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            report_to="none",
+            model_init_kwargs={"output_router_logits": True},
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen3MoeForCausalLM", args=training_args, train_dataset=dataset
+        )
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss and aux loss are not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        self.assertIsNotNone(trainer.state.log_history[-1]["aux_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
     def test_train_with_formatting_func(self):
         # Dummy formatting function
         def formatting_prompts_func(example):
@@ -346,14 +415,14 @@ class SFTTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
-    def test_train_model_torch_dtype(self):
+    def test_train_model_dtype(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer
         training_args = SFTConfig(
             output_dir=self.tmp_dir,
-            model_init_kwargs={"torch_dtype": torch.float16},
+            model_init_kwargs={"dtype": torch.float16},
             learning_rate=0.1,
             report_to="none",
         )
@@ -792,8 +861,8 @@ class SFTTrainerTester(TrlTestCase):
         )
 
         # Check the number of sequences in train and eval datasets
-        num_train_seqs = sum([len(x) for x in trainer.train_dataset["seq_lengths"]])
-        num_eval_seqs = sum([len(x) for x in trainer.eval_dataset["seq_lengths"]])
+        num_train_seqs = sum(len(x) for x in trainer.train_dataset["seq_lengths"])
+        num_eval_seqs = sum(len(x) for x in trainer.eval_dataset["seq_lengths"])
         self.assertEqual(num_train_seqs, 17)  # we should still have 17 seqs
         self.assertEqual(num_eval_seqs, 2)  # we should still have 2 seqs
 
@@ -827,7 +896,7 @@ class SFTTrainerTester(TrlTestCase):
         )
 
         # Check the number of sequences in train dataset
-        num_train_seqs = sum([len(x) for x in trainer.train_dataset["seq_lengths"]])
+        num_train_seqs = sum(len(x) for x in trainer.train_dataset["seq_lengths"])
         self.assertEqual(num_train_seqs, 17)  # we should still have 17 seqs
 
         # We expect eval dataset not having "seq_lengths" as eval_packing is False
@@ -1282,7 +1351,7 @@ class SFTTrainerTester(TrlTestCase):
             max_length=None,
             per_device_train_batch_size=1,
             gradient_checkpointing=True,
-            model_init_kwargs={"torch_dtype": "bfloat16"},
+            model_init_kwargs={"dtype": "bfloat16"},
             report_to="none",
         )
         trainer = SFTTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
@@ -1303,6 +1372,36 @@ class SFTTrainerTester(TrlTestCase):
                 # The vision tower is not updated, not sure why at this point.
                 continue
             self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
+
+    @require_vision
+    def test_train_vlm_text_only_data(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none")
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n.startswith("model.visual"):
+                self.assertTrue(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is updated")
+            else:
+                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
 
     @require_peft
     def test_prompt_tuning(self):
@@ -1335,6 +1434,106 @@ class SFTTrainerTester(TrlTestCase):
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
             else:
                 raise ValueError(f"Unexpected parameter {n} in model: {trainer.model}")
+
+    @require_peft
+    @require_bitsandbytes
+    def test_peft_model_with_quantization(self):
+        """SFTTrainer should not freeze layers of existing PeftModel.
+
+        This test simulates a realistic QLoRA scenario where a quantized base model is first converted to a PeftModel,
+        then passed to SFTTrainer. The issue was that prepare_model_for_kbit_training would freeze all parameters
+        including the LoRA adapters, making training impossible.
+        """
+        # Get the base model
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+
+        # Simulate a realistic QLoRA setup by mocking quantization attributes
+        # This mimics what happens when loading a model with load_in_4bit=True
+        model.is_loaded_in_4bit = True
+        model.is_loaded_in_8bit = False
+
+        # Verify that this triggers the is_qlora condition
+        is_qlora = getattr(model, "is_loaded_in_4bit", False) or getattr(model, "is_loaded_in_8bit", False)
+        self.assertTrue(is_qlora, "Model should be detected as QLoRA (quantized)")
+
+        # Create LoRA configuration suitable for QLoRA
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            target_modules=["q_proj", "v_proj"],
+            r=16,
+            lora_alpha=32,
+            lora_dropout=0.1,
+        )
+
+        # Convert the quantized model to a PeftModel (typical QLoRA workflow)
+        peft_model = get_peft_model(model, lora_config)
+
+        # Verify the quantization attributes are preserved on the PeftModel
+        self.assertTrue(getattr(peft_model, "is_loaded_in_4bit", False), "PeftModel should preserve quantization flag")
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Analyze parameters before SFTTrainer initialization
+        trainable_params_before = []
+        base_params_before = []
+        lora_params_before = []
+
+        for name, param in peft_model.named_parameters():
+            if param.requires_grad:
+                trainable_params_before.append(name)
+                if "lora" in name.lower():
+                    lora_params_before.append(name)
+                else:
+                    base_params_before.append(name)
+
+        # Ensure we have the expected parameter distribution for QLoRA
+        self.assertTrue(len(trainable_params_before) > 0, "PeftModel should have trainable parameters initially")
+        self.assertTrue(len(lora_params_before) > 0, "PeftModel should have trainable LoRA parameters")
+        self.assertEqual(len(base_params_before), 0, "Base model parameters should already be frozen in PeftModel")
+
+        # Initialize the trainer with the already configured PeftModel
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", max_steps=1)
+        trainer = SFTTrainer(model=peft_model, args=training_args, train_dataset=dataset)
+
+        # Analyze parameters after SFTTrainer initialization
+        trainable_params_after = []
+        lora_params_after = []
+
+        for name, param in trainer.model.named_parameters():
+            if param.requires_grad:
+                trainable_params_after.append(name)
+                if "lora" in name.lower():
+                    lora_params_after.append(name)
+
+        # LoRA parameters should remain trainable
+        self.assertTrue(
+            len(trainable_params_after) > 0,
+            f"PeftModel should still have trainable parameters after SFTTrainer initialization. "
+            f"Found {len(trainable_params_after)} trainable params. "
+            f"This test fails without the fix for issue #3926.",
+        )
+
+        self.assertTrue(
+            len(lora_params_after) > 0,
+            f"LoRA adapter parameters should remain trainable. "
+            f"Found {len(lora_params_after)} trainable LoRA params out of {len(lora_params_before)} original.",
+        )
+
+        # Ensure the parameter counts are preserved (no additional freezing occurred)
+        self.assertEqual(
+            len(trainable_params_before),
+            len(trainable_params_after),
+            "Number of trainable parameters should not change after SFTTrainer initialization",
+        )
+
+        # Verify that all original LoRA parameters are still trainable
+        self.assertEqual(
+            set(lora_params_before),
+            set(lora_params_after),
+            "All original LoRA parameters should remain trainable after SFTTrainer initialization",
+        )
 
     @require_peft
     def test_prompt_tuning_peft_model(self):

@@ -14,9 +14,10 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -63,6 +64,7 @@ python trl/scripts/sft.py \
 
 import argparse
 import os
+from typing import Optional
 
 from accelerate import logging
 from datasets import load_dataset
@@ -76,7 +78,6 @@ from trl import (
     SFTConfig,
     SFTTrainer,
     TrlParser,
-    clone_chat_template,
     get_dataset,
     get_kbit_device_map,
     get_peft_config,
@@ -94,15 +95,17 @@ def main(script_args, training_args, model_args, dataset_args):
     ################
     # Model init kwargs & Tokenizer
     ################
-    quantization_config = get_quantization_config(model_args)
     model_kwargs = dict(
         revision=model_args.model_revision,
         trust_remote_code=model_args.trust_remote_code,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=model_args.torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
+        dtype=model_args.dtype,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
 
     # Create model
     config = AutoConfig.from_pretrained(model_args.model_name_or_path)
@@ -120,17 +123,13 @@ def main(script_args, training_args, model_args, dataset_args):
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
     )
 
-    # Set default chat template if needed
-    if tokenizer.chat_template is None:
-        # TODO: source should be passed as an argument
-        model, tokenizer = clone_chat_template(model, tokenizer, "Qwen/Qwen3-0.6B")
-
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         logger.warning(
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
             "dataset and `dataset_name` will be ignored."
         )
+        dataset = get_dataset(dataset_args)
     elif dataset_args.datasets and not script_args.dataset_name:
         dataset = get_dataset(dataset_args)
     elif not dataset_args.datasets and script_args.dataset_name:
@@ -153,13 +152,19 @@ def main(script_args, training_args, model_args, dataset_args):
     # Train the model
     trainer.train()
 
+    # Log training complete
+    trainer.accelerator.print("✅ Training completed.")
+
     # Save and push to Hub
     trainer.save_model(training_args.output_dir)
+    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: argparse._SubParsersAction = None):
+def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
     dataclass_types = (ScriptArguments, SFTConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("sft", help="Run the SFT training script", dataclass_types=dataclass_types)

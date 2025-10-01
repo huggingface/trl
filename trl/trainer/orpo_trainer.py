@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import inspect
-import os
 import random
 import textwrap
 from collections import defaultdict
@@ -38,7 +37,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     is_comet_available,
     is_torch_xla_available,
     is_wandb_available,
@@ -48,14 +46,13 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
+from .base_trainer import BaseTrainer
 from .orpo_config import ORPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     add_bos_token_if_needed,
     add_eos_token_if_needed,
     disable_dropout_in_model,
-    generate_model_card,
-    get_comet_experiment_url,
     log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -77,7 +74,7 @@ if is_torch_xla_available():
 logger = logging.get_logger(__name__)
 
 
-class ORPOTrainer(Trainer):
+class ORPOTrainer(BaseTrainer):
     r"""
     Initialize ORPOTrainer.
 
@@ -94,7 +91,7 @@ class ORPOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
@@ -116,6 +113,19 @@ class ORPOTrainer(Trainer):
     """
 
     _tag_names = ["trl", "orpo"]
+    _name = "ORPO"
+    _paper = {
+        "title": "ORPO: Monolithic Preference Optimization without Reference Model",
+        "id": "2403.07691",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{hong2024orpo,
+                title        = {{ORPO: Monolithic Preference Optimization without Reference Model}},
+                author       = {Jiwoo Hong and Noah Lee and James Thorne},
+                year         = 2024,
+                eprint       = {arXiv:2403.07691}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -140,16 +150,16 @@ class ORPOTrainer(Trainer):
             raise ValueError("You passed model_kwargs to the ORPOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
+            dtype = model_init_kwargs.get("dtype")
+            if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                if isinstance(dtype, str) and dtype != "auto":
+                    dtype = getattr(torch, dtype)
+                if dtype != "auto" and not isinstance(dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `torch_dtype` passed to the ORPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                        f"Invalid `dtype` passed to the ORPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
-                model_init_kwargs["torch_dtype"] = torch_dtype
+                model_init_kwargs["dtype"] = dtype
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -453,7 +463,7 @@ class ORPOTrainer(Trainer):
             # Make sure prompts only have one different token at most an
             # and length only differs by 1 at most
             num_diff_tokens = sum(
-                [a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])]
+                a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])
             )
             num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
             if num_diff_tokens > 1 or num_diff_len > 1:
@@ -989,7 +999,7 @@ class ORPOTrainer(Trainer):
         Args:
             logs (`dict[str, float]`):
                 The values to log.
-            start_time (`float` or `None`, *optional*, defaults to `None`):
+            start_time (`float`, *optional*):
                 Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
@@ -1031,66 +1041,3 @@ class ORPOTrainer(Trainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{hong2024orpo,
-            title        = {{ORPO: Monolithic Preference Optimization without Reference Model}},
-            author       = {Jiwoo Hong and Noah Lee and James Thorne},
-            year         = 2024,
-            eprint       = {arXiv:2403.07691}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="ORPO",
-            trainer_citation=citation,
-            paper_title="ORPO: Monolithic Preference Optimization without Reference Model",
-            paper_id="2403.07691",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

@@ -67,6 +67,20 @@ class TestCLI(TrlTestCase):
         with patch("sys.argv", command.split(" ")):
             main()
 
+    def test_reward(self):
+        from trl.cli import main
+
+        command = f"trl reward --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_implicit_prompt_preference --report_to none"
+        with patch("sys.argv", command.split(" ")):
+            main()
+
+    def test_rloo(self):
+        from trl.cli import main
+
+        command = f"trl rloo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 2 --max_completion_length 32 --report_to none"
+        with patch("sys.argv", command.split(" ")):
+            main()
+
     def test_sft(self):
         from trl.cli import main
 

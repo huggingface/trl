@@ -84,7 +84,7 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
   trainer = OnlineDPOTrainer(
       ...
 -     judge=judge,
-+     reward_model=reward_model,
++     reward_funcs=reward_model,
 +     reward_processing_class=reward_tokenizer,
       ...
   )
@@ -258,8 +258,6 @@ plt.grid(True, which="both", ls="--", c="0.7")
 plt.tight_layout()
 plt.show()
 ```
-
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/online_dpo_scaling.png)
 
 The online DPO checkpoint gets increasingly more win rate as we scale up the model sizes. This is a good sign that the online DPO implementation is working as intended.
 

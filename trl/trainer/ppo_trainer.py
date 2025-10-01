@@ -37,10 +37,8 @@ from transformers import (
     GenerationConfig,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     TrainerCallback,
     TrainerControl,
-    is_wandb_available,
 )
 from transformers.integrations import get_reporting_integration_callbacks
 from transformers.trainer import DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK
@@ -50,6 +48,7 @@ from transformers.utils import is_peft_available, is_rich_available
 from ..core import masked_mean, masked_whiten
 from ..models import create_reference_model
 from ..models.utils import unwrap_model_for_generation
+from .base_trainer import BaseTrainer
 from .ppo_config import PPOConfig
 from .utils import (
     OnlineTrainerState,
@@ -59,8 +58,6 @@ from .utils import (
     exact_div,
     first_true_indices,
     forward,
-    generate_model_card,
-    get_comet_experiment_url,
     get_reward,
     log_table_to_comet_experiment,
     peft_module_casting_to_bf16,
@@ -73,9 +70,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel, get_peft_model
-
-if is_wandb_available():
-    import wandb
 
 
 INVALID_LOGPROB = 1.0
@@ -97,8 +91,57 @@ class PolicyAndValueWrapper(nn.Module):
         return self.policy(**kwargs), logits
 
 
-class PPOTrainer(Trainer):
+class PPOTrainer(BaseTrainer):
+    """Trainer for Proximal Policy Optimization (PPO).
+
+    For details on PPO, see the paper: [Proximal Policy Optimization
+    Algorithms](https://huggingface.co/papers/1707.06347).
+
+    Args:
+        args ([`PPOConfig`]):
+            Training arguments.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
+            Class to process the data.
+        model (`torch.nn.Module`):
+            Model to be trained. This is the policy model.
+        ref_model (`torch.nn.Module`, *optional*):
+            Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
+        reward_model (`torch.nn.Module`):
+            Reward model used to compute the rewards.
+        train_dataset ([`~datasets.Dataset`]):
+            Dataset for training.
+        value_model (`torch.nn.Module`):
+            Value model used to predict the value of a state.
+        data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
+            Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
+            using the `processing_class`.
+        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
+            Dataset for evaluation.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`, the
+            optimizer and the learning rate scheduler are created using the
+            [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
+        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
+            Callbacks to use during training.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
+            will be wrapped with the specified PEFT adapter.
+    """
+
     _tag_names = ["trl", "ppo"]
+    _name = "PPO"
+    _paper = {
+        "title": "Fine-Tuning Language Models from Human Preferences",
+        "id": "1909.08593",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @article{mziegler2019fine-tuning,
+                title        = {{Fine-Tuning Language Models from Human Preferences}},
+                author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
+                year         = 2019,
+                eprint       = {arXiv:1909.08593}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -235,7 +278,7 @@ class PPOTrainer(Trainer):
         )  # note that we are calling `self.lr_scheduler.step()` manually only at the batch level
 
         #########
-        ### trainer specifics
+        # trainer specifics
         #########
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
@@ -267,7 +310,7 @@ class PPOTrainer(Trainer):
             self.model.add_model_tags(self._tag_names)
 
         #########
-        ### setup dataloader
+        # setup dataloader
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
@@ -682,7 +725,7 @@ class PPOTrainer(Trainer):
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
         if self.control.should_save:
-            self._save_checkpoint(model, trial=None, metrics=None)
+            self._save_checkpoint(model, trial=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
@@ -757,66 +800,3 @@ class PPOTrainer(Trainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @article{mziegler2019fine-tuning,
-            title        = {{Fine-Tuning Language Models from Human Preferences}},
-            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
-            year         = 2019,
-            eprint       = {arXiv:1909.08593}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="PPO",
-            trainer_citation=citation,
-            paper_title="Fine-Tuning Language Models from Human Preferences",
-            paper_id="1909.08593",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

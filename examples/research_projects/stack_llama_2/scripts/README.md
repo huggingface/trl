@@ -67,7 +67,7 @@ from peft import AutoPeftModelForCausalLM
 model = AutoPeftModelForCausalLM.from_pretrained(
     "dpo/final_checkpoint",
     low_cpu_mem_usage=True,
-    torch_dtype=torch.float16,
+    dtype=torch.float16,
     load_in_4bit=True,
 )
 

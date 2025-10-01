@@ -14,9 +14,10 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
 #     "peft",
 #     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -25,7 +26,6 @@
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-7 \
     --num_train_epochs 1 \
@@ -43,7 +43,6 @@ python trl/scripts/dpo.py \
 ```bash
 python trl/scripts/dpo.py \
     --dataset_name trl-lib/ultrafeedback_binarized \
-    --dataset_streaming \
     --model_name_or_path Qwen/Qwen2-0.5B-Instruct \
     --learning_rate 5.0e-6 \
     --num_train_epochs 1 \
@@ -63,6 +62,7 @@ python trl/scripts/dpo.py \
 
 import argparse
 import os
+from typing import Optional
 
 import torch
 from accelerate import logging
@@ -94,17 +94,18 @@ def main(script_args, training_args, model_args, dataset_args):
     ################
     # Model & Tokenizer
     ###################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
         attn_implementation=model_args.attn_implementation,
-        torch_dtype=torch_dtype,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
+        dtype=dtype,
     )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
@@ -134,6 +135,7 @@ def main(script_args, training_args, model_args, dataset_args):
             "Both `datasets` and `dataset_name` are provided. The `datasets` argument will be used to load the "
             "dataset and `dataset_name` will be ignored."
         )
+        dataset = get_dataset(dataset_args)
     elif dataset_args.datasets and not script_args.dataset_name:
         dataset = get_dataset(dataset_args)
     elif not dataset_args.datasets and script_args.dataset_name:
@@ -157,6 +159,9 @@ def main(script_args, training_args, model_args, dataset_args):
     # Train the model
     trainer.train()
 
+    # Log training complete
+    trainer.accelerator.print("✅ Training completed.")
+
     if training_args.eval_strategy != "no":
         metrics = trainer.evaluate()
         trainer.log_metrics("eval", metrics)
@@ -164,11 +169,14 @@ def main(script_args, training_args, model_args, dataset_args):
 
     # Save and push to Hub
     trainer.save_model(training_args.output_dir)
+    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: argparse._SubParsersAction = None):
+def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
     dataclass_types = (ScriptArguments, DPOConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
         parser = subparsers.add_parser("dpo", help="Run the DPO training script", dataclass_types=dataclass_types)

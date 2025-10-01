@@ -14,12 +14,10 @@
 
 from typing import TYPE_CHECKING
 
-from ..import_utils import OptionalDependencyNotAvailable, _LazyModule, is_diffusers_available
+from ..import_utils import _LazyModule
 
 
 _import_structure = {
-    "alignprop_config": ["AlignPropConfig"],
-    "alignprop_trainer": ["AlignPropTrainer"],
     "bco_config": ["BCOConfig"],
     "bco_trainer": ["BCOTrainer"],
     "callbacks": [
@@ -28,19 +26,17 @@ _import_structure = {
         "MergeModelCallback",
         "RichProgressCallback",
         "SyncRefModelCallback",
+        "WeaveCallback",
         "WinRateCallback",
     ],
     "cpo_config": ["CPOConfig"],
     "cpo_trainer": ["CPOTrainer"],
-    "ddpo_config": ["DDPOConfig"],
     "dpo_config": ["DPOConfig", "FDivergenceConstants", "FDivergenceType"],
     "dpo_trainer": ["DPOTrainer"],
     "gkd_config": ["GKDConfig"],
     "gkd_trainer": ["GKDTrainer"],
     "grpo_config": ["GRPOConfig"],
     "grpo_trainer": ["GRPOTrainer"],
-    "iterative_sft_config": ["IterativeSFTConfig"],
-    "iterative_sft_trainer": ["IterativeSFTTrainer"],
     "judges": [
         "AllTrueJudge",
         "BaseBinaryJudge",
@@ -82,17 +78,8 @@ _import_structure = {
     "xpo_config": ["XPOConfig"],
     "xpo_trainer": ["XPOTrainer"],
 }
-try:
-    if not is_diffusers_available():
-        raise OptionalDependencyNotAvailable()
-except OptionalDependencyNotAvailable:
-    pass
-else:
-    _import_structure["ddpo_trainer"] = ["DDPOTrainer"]
 
 if TYPE_CHECKING:
-    from .alignprop_config import AlignPropConfig
-    from .alignprop_trainer import AlignPropTrainer
     from .bco_config import BCOConfig
     from .bco_trainer import BCOTrainer
     from .callbacks import (
@@ -101,18 +88,17 @@ if TYPE_CHECKING:
         MergeModelCallback,
         RichProgressCallback,
         SyncRefModelCallback,
+        WeaveCallback,
         WinRateCallback,
     )
     from .cpo_config import CPOConfig
     from .cpo_trainer import CPOTrainer
-    from .ddpo_config import DDPOConfig
     from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
     from .dpo_trainer import DPOTrainer
     from .gkd_config import GKDConfig
     from .gkd_trainer import GKDTrainer
     from .grpo_config import GRPOConfig
     from .grpo_trainer import GRPOTrainer
-    from .iterative_sft_trainer import IterativeSFTConfig, IterativeSFTTrainer
     from .judges import (
         AllTrueJudge,
         BaseBinaryJudge,
@@ -153,14 +139,6 @@ if TYPE_CHECKING:
     )
     from .xpo_config import XPOConfig
     from .xpo_trainer import XPOTrainer
-
-    try:
-        if not is_diffusers_available():
-            raise OptionalDependencyNotAvailable()
-    except OptionalDependencyNotAvailable:
-        pass
-    else:
-        from .ddpo_trainer import DDPOTrainer
 else:
     import sys
 
