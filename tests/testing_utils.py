@@ -14,13 +14,12 @@
 
 import functools
 import random
-import shutil
 import signal
-import tempfile
 import unittest
 import warnings
 
 import psutil
+import pytest
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import torch_device
@@ -119,18 +118,10 @@ class RandomPairwiseJudge(BasePairwiseJudge):
             return [random.random() for _ in range(len(prompts))]
 
 
-class TrlTestCase(unittest.TestCase):
-    """
-    Base test case for TRL tests. Sets up a temporary directory for testing.
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.tmp_dir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp_dir)
-        super().tearDown()
+class TrlTestCase:
+    @pytest.fixture(autouse=True)
+    def set_tmp_dir(self, tmp_path):
+        self.tmp_dir = str(tmp_path)
 
 
 def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> callable:
