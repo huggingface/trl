@@ -4,7 +4,7 @@ This document will guide you through the process of using vLLM with TRL for fast
 
 <Tip warning={true}>
 
-TRL currently only supports vLLM versions `0.10.0`, `0.10.1`, and `0.10.2`. Please ensure you have one of these versions installed to avoid compatibility issues.
+TRL currently only supports vLLM version `0.10.2`. Please ensure you have this version installed to avoid compatibility issues.
 
 </Tip>
 
