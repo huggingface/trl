@@ -20,13 +20,13 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_flash_attn, require_liger_kernel, require_vision
+from transformers.testing_utils import require_flash_attn, require_liger_kernel
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 from trl.trainer.sft_trainer import DataCollatorForLanguageModeling, dft_loss
 
-from .testing_utils import TrlTestCase, ignore_warnings, require_bitsandbytes, require_peft
+from .testing_utils import TrlTestCase, ignore_warnings, require_bitsandbytes, require_peft, require_vision
 
 
 if is_peft_available():
