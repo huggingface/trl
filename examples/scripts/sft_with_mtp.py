@@ -26,12 +26,13 @@ This script demonstrates how to fine-tune mainstream language models with enhanc
 Supported models include Llama, Qwen, DeepSeek, Mistral, and other popular architectures.
 
 Example usage:
-    # Complete MTP training with Qwen2.5
+    # Complete MTP training with Qwen2.5 and evaluation
     CUDA_VISIBLE_DEVICES=0 python examples/scripts/sft_with_mtp.py \
         --model_name_or_path Qwen/Qwen2.5-0.5B \
         --dataset_name trl-lib/Capybara \
         --train_split train \
-        --output_dir ./results/qwen-identical-mtp \
+        --eval_split test \
+        --output_dir /root/autodl-tmp/qwen-identical-mtp \
         --mtp_enabled \
         --mtp_head_type identical \
         --mtp_init_strategy copy_lm_head \
@@ -48,28 +49,60 @@ Example usage:
         --lr_scheduler_type cosine \
         --max_length 512 \
         --save_steps 100 \
-        --logging_steps 10
+        --logging_steps 10 \
+        --eval_steps 100
+
+    # MTP training with UltraChat dataset
+    python examples/scripts/sft_with_mtp.py \
+        --model_name_or_path Qwen/Qwen2.5-0.5B \
+        --dataset_name HuggingFaceH4/ultrachat_200k \
+        --train_split train_sft \
+        --eval_split test_sft \
+        --mtp_enabled \
+        --mtp_head_type identical \
+        --mtp_num_predictions 2 \
+        --output_dir /root/autodl-tmp/qwen-mtp-ultrachat
+
+    # MTP training with math problems dataset  
+    python examples/scripts/sft_with_mtp.py \
+        --model_name_or_path Qwen/Qwen2.5-0.5B \
+        --dataset_name microsoft/orca-math-word-problems-200k \
+        --train_split train \
+        --mtp_enabled \
+        --mtp_head_type ffn \
+        --mtp_num_predictions 3 \
+        --output_dir /root/autodl-tmp/qwen-mtp-math
+
+    # --dataset_name trl-lib/Capybara \
+    # --train_split train \
+    # --eval_split test \
+    # --output_dir /root/autodl-tmp/Qwen2.5-0.5B-MTP-Identical-Capybara \
         
-    # Multi GPU training using accelerate config
-    accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml \
+    # Multi GPU training using accelerate config with evaluation
+    nohup accelerate launch \
+        --config_file examples/accelerate_configs/multi_gpu.yaml \
         examples/scripts/sft_with_mtp.py \
         --model_name_or_path Qwen/Qwen2.5-0.5B \
         --dataset_name trl-lib/Capybara \
         --train_split train \
-        --output_dir ./results/qwen-mtp-multi-gpu \
+        --eval_split test \
+        --output_dir /root/autodl-tmp/Qwen2.5-0.5B-MTP-Identical-Capybara \
         --mtp_enabled \
         --mtp_num_predictions 2 \
-        --mtp_head_type ffn \
+        --mtp_head_type identical \
+        --mtp_init_strategy copy_lm_head \
         --mtp_num_layers 2 \
         --mtp_loss_weight 0.5 \
         --learning_rate 2e-5 \
-        --per_device_train_batch_size 1 \
+        --per_device_train_batch_size 4 \
+        --per_device_eval_batch_size 4 \
         --gradient_accumulation_steps 4 \
         --num_train_epochs 1 \
         --warmup_steps 50 \
-        --max_length 512 \
-        --save_steps 100 \
+        --max_length 1024 \
+        --save_steps 250 \
         --logging_steps 10 \
+        --eval_strategy epoch \
         --bf16 true
 
     # Identical head structure with parameter copying
@@ -80,7 +113,7 @@ Example usage:
         --mtp_head_type identical \
         --mtp_init_strategy copy_lm_head \
         --mtp_num_layers 1 \
-        --output_dir ./results/qwen-identical-mtp
+        --output_dir /root/autodl-tmp/qwen-identical-mtp
 
     # Multi-layer FFN heads with advanced initialization
     python sft_with_mtp.py \
@@ -91,7 +124,7 @@ Example usage:
         --mtp_num_layers 3 \
         --mtp_init_strategy kaiming_uniform \
         --mtp_weight_decay_strategy harmonic \
-        --output_dir ./results/llama-multilayer-mtp
+        --output_dir /root/autodl-tmp/llama-multilayer-mtp
 
     # Deep MHA+FFN heads for complex modeling (NEW!)
     python sft_with_mtp.py \
@@ -102,7 +135,7 @@ Example usage:
         --mtp_num_layers 4 \
         --mtp_num_predictions 4 \
         --mtp_init_strategy xavier_normal \
-        --output_dir ./results/deepseek-deep-mtp
+        --output_dir /root/autodl-tmp/deepseek-deep-mtp
 
     # Parameter-efficient setup with weight tying
     python sft_with_mtp.py \
@@ -113,7 +146,7 @@ Example usage:
 
         --mtp_num_layers 1 \
         --mtp_dropout_prob 0.0 \
-        --output_dir ./results/mistral-efficient-mtp
+        --output_dir /root/autodl-tmp/mistral-efficient-mtp
 """
 
 import logging
@@ -176,7 +209,7 @@ class DataArguments:
         metadata={"help": "The name of the train split in the dataset."}
     )
     eval_split: Optional[str] = field(
-        default=None,
+        default="test",
         metadata={"help": "The name of the evaluation split in the dataset."}
     )
     max_train_samples: Optional[int] = field(
@@ -303,6 +336,87 @@ def test_mtp_predictions(trainer, tokenizer, training_args):
     logger.info("=" * 40)
 
 
+def evaluate_model_on_test_set(trainer, eval_dataset, training_args):
+    """Evaluate model performance on test set and output detailed results."""
+    logger.info("=" * 60)
+    logger.info("EVALUATING MODEL ON TEST SET")
+    logger.info("=" * 60)
+    
+    if eval_dataset is None:
+        logger.warning("No evaluation dataset provided, skipping evaluation.")
+        return None
+    
+    logger.info(f"Evaluating on {len(eval_dataset)} test samples...")
+    
+    # Use trainer's evaluate method without passing eval_dataset parameter
+    # This will use the eval_dataset that was already processed during trainer initialization
+    eval_results = trainer.evaluate()
+    
+    logger.info("=" * 50)
+    logger.info("EVALUATION RESULTS")
+    logger.info("=" * 50)
+    
+    # Separate standard metrics and MTP metrics
+    standard_metrics = {}
+    mtp_metrics = {}
+    
+    for key, value in eval_results.items():
+        if isinstance(value, (int, float)):
+            if "mtp" in key.lower() or "ntp" in key.lower():
+                mtp_metrics[key] = value
+            else:
+                standard_metrics[key] = value
+    
+    # Output standard evaluation metrics
+    logger.info("Standard Evaluation Metrics:")
+    for key, value in standard_metrics.items():
+        if isinstance(value, float):
+            logger.info(f"  {key}: {value:.6f}")
+        else:
+            logger.info(f"  {key}: {value}")
+    
+    # Output MTP specific metrics
+    if mtp_metrics:
+        logger.info("\nMTP-Specific Evaluation Metrics:")
+        for key, value in mtp_metrics.items():
+            if isinstance(value, float):
+                logger.info(f"  {key}: {value:.6f}")
+            else:
+                logger.info(f"  {key}: {value}")
+    
+    # Calculate improvement metrics (if MTP is enabled)
+    if training_args.mtp_enabled and mtp_metrics:
+        logger.info("\nMTP PERFORMANCE ANALYSIS:")
+        logger.info("-" * 30)
+        
+        # Compare standard loss and MTP loss
+        if 'eval_loss' in standard_metrics:
+            base_loss = standard_metrics['eval_loss']
+            logger.info(f"Standard Loss: {base_loss:.6f}")
+            
+            # Find MTP loss
+            mtp_loss_keys = [k for k in mtp_metrics.keys() if 'loss' in k.lower()]
+            if mtp_loss_keys:
+                for mtp_key in mtp_loss_keys:
+                    mtp_loss = mtp_metrics[mtp_key]
+                    logger.info(f"{mtp_key}: {mtp_loss:.6f}")
+                    
+                    # Calculate relative improvement
+                    if base_loss > 0:
+                        improvement = ((base_loss - mtp_loss) / base_loss) * 100
+                        logger.info(f"Relative improvement: {improvement:.2f}%")
+        
+        # Output MTP head configuration summary
+        logger.info(f"\nMTP Configuration Summary:")
+        logger.info(f"  Head Type: {training_args.mtp_head_type}")
+        logger.info(f"  Predictions: {training_args.mtp_num_predictions}")
+        logger.info(f"  Layers: {training_args.mtp_num_layers}")
+        logger.info(f"  Loss Weight: {training_args.mtp_loss_weight}")
+    
+    logger.info("=" * 60)
+    return eval_results
+
+
 def main():
     # Parse arguments
     parser = HfArgumentParser((ModelArguments, DataArguments, SFTConfig))
@@ -364,13 +478,31 @@ def main():
         
         eval_dataset = None
         if data_args.eval_split is not None:
-            eval_dataset = load_dataset(
-                data_args.dataset_name,
-                data_args.dataset_config_name,
-                split=data_args.eval_split,
-            )
-            if data_args.max_eval_samples is not None:
-                eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+            try:
+                eval_dataset = load_dataset(
+                    data_args.dataset_name,
+                    data_args.dataset_config_name,
+                    split=data_args.eval_split,
+                )
+                if data_args.max_eval_samples is not None:
+                    eval_dataset = eval_dataset.select(range(data_args.max_eval_samples))
+                logger.info(f"Successfully loaded evaluation dataset: {data_args.eval_split}")
+            except Exception as e:
+                logger.warning(f"Failed to load evaluation split '{data_args.eval_split}': {e}")
+                logger.info("Available splits will be checked...")
+                try:
+                    dataset_info = load_dataset(data_args.dataset_name, data_args.dataset_config_name)
+                    available_splits = list(dataset_info.keys())
+                    logger.info(f"Available splits: {available_splits}")
+                    if 'test' in available_splits:
+                        eval_dataset = dataset_info['test']
+                        logger.info("Using 'test' split for evaluation")
+                    elif 'validation' in available_splits:
+                        eval_dataset = dataset_info['validation']  
+                        logger.info("Using 'validation' split for evaluation")
+                except Exception as e2:
+                    logger.warning(f"Could not determine available splits: {e2}")
+                    eval_dataset = None
     else:
         raise ValueError("You must specify a dataset_name")
     
@@ -399,6 +531,54 @@ def main():
         model_init_kwargs["trust_remote_code"] = model_args.trust_remote_code
     
     training_args.model_init_kwargs = model_init_kwargs
+    
+    if eval_dataset is not None and training_args.eval_strategy == "no":
+        training_args.eval_strategy = "epoch"
+        logger.info("Evaluation dataset found, setting eval_strategy to 'epoch'")
+    
+    # Preprocess datasets to handle format conflicts
+    # Some datasets (like UltraChat) have both 'prompt' and 'messages' fields
+    # SFTTrainer prioritizes 'prompt' field and expects 'completion', but we want conversational format
+    def preprocess_dataset_format(dataset):
+        """Handle dataset format conflicts intelligently."""
+        if dataset is None:
+            return None
+        
+        # Check the first example to understand the format
+        first_example = dataset[0] if len(dataset) > 0 else {}
+        has_prompt = 'prompt' in first_example
+        has_completion = 'completion' in first_example
+        has_messages = 'messages' in first_example
+        
+        logger.info(f"Dataset format analysis: prompt={has_prompt}, completion={has_completion}, messages={has_messages}")
+        
+        # Case 1: Standard prompt+completion format - don't touch it
+        if has_prompt and has_completion and not has_messages:
+            logger.info("Detected standard prompt+completion format. No preprocessing needed.")
+            return dataset
+        
+        # Case 2: Pure conversational format - don't touch it  
+        if has_messages and not has_prompt:
+            logger.info("Detected pure conversational format. No preprocessing needed.")
+            return dataset
+        
+        # Case 3: Conflicting format (prompt + messages, but no completion)
+        # This is the UltraChat case - we prefer conversational format
+        if has_prompt and has_messages and not has_completion:
+            logger.info("Detected conflicting format (prompt+messages without completion).")
+            logger.info("Removing 'prompt' field to use conversational format.")
+            # Remove 'prompt' and other non-essential fields to force conversational processing
+            columns_to_remove = [col for col in dataset.column_names if col not in ['messages']]
+            dataset = dataset.remove_columns(columns_to_remove)
+            return dataset
+        
+        # Case 4: Other formats - let SFTTrainer handle it
+        logger.info("Unknown dataset format. Letting SFTTrainer handle it as-is.")
+        return dataset
+    
+    # Apply preprocessing
+    dataset = preprocess_dataset_format(dataset)
+    eval_dataset = preprocess_dataset_format(eval_dataset)
     
     # Initialize trainer
     logger.info("Initializing SFTTrainer...")
@@ -446,6 +626,12 @@ def main():
     tokenizer.save_pretrained(training_args.output_dir)
     
     logger.info("Training completed successfully!")
+    
+    if eval_dataset is not None:
+        logger.info("\nStarting post-training evaluation...")
+        final_eval_results = evaluate_model_on_test_set(trainer, eval_dataset, training_args)
+    else:
+        logger.info("No evaluation dataset available, skipping post-training evaluation.")
     
     # Print final metrics with MTP-specific information
     if trainer.state.log_history:
