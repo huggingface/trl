@@ -18,11 +18,12 @@ import json
 import os
 import random
 import socket
-from collections.abc import Sequence, Sized
+import warnings
+from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from itertools import accumulate
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional, TypeVar, Union
 
 import numpy as np
 import pandas as pd
@@ -219,6 +220,10 @@ class RewardDataCollatorWithPadding:
     r"""
     Reward DataCollator class that pads the inputs to the maximum length of the batch.
 
+    > [!WARNING]
+    > This class is deprecated and will be removed in version 0.27.0. Please use
+    `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
+
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
@@ -234,6 +239,14 @@ class RewardDataCollatorWithPadding:
     padding: Union[bool, str] = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
+
+    def __init__(self, *args, **kwargs) -> None:
+        warnings.warn(
+            "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
+            "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
+            DeprecationWarning,
+        )
+        super().__init__(*args, **kwargs)
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:
         features_chosen = []
@@ -696,6 +709,15 @@ SIMPLE_CHAT_TEMPLATE = "{% for message in messages %}{{message['role'].capitaliz
 
 @dataclass
 class OnlineTrainerState(TrainerState):
+    """
+    Training state for online/on-policy trainers.
+
+    Extends [`~transformers.TrainerState`] with an `episode` counter to track the current rollout/episode.
+
+    Args:
+        episode (`int`, defaults to 0): Zero-based episode index.
+    """
+
     episode: int = 0
 
 
@@ -1232,6 +1254,10 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     """
     Decodes the input tensor and strips the padding tokens.
 
+    > [!WARNING]
+    > This function is deprecated and will be removed in a version 0.25.0. If you want to keep using it, please copy
+    > the code into your codebase and use it from there.
+
     Args:
         inputs (`torch.Tensor`):
             The input tensor to be decoded.
@@ -1242,6 +1268,11 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
         `list[str]`:
             The list of decoded strings with padding tokens stripped.
     """
+    warnings.warn(
+        "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
+        "to keep using it, please copy the code into your codebase and use it from there.",
+        DeprecationWarning,
+    )
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
     return [d.replace(tokenizer.pad_token, "") for d in decoded]
 
@@ -1255,6 +1286,7 @@ def generate_model_card(
     wandb_url: Optional[str],
     trainer_name: str,
     trainer_citation: Optional[str] = None,
+    template_file: Optional[str] = None,
     paper_title: Optional[str] = None,
     paper_id: Optional[str] = None,
     comet_url: Optional[str] = None,
@@ -1281,6 +1313,8 @@ def generate_model_card(
             Trainer name.
         trainer_citation (`str` or `None`, defaults to `None`):
             Trainer citation as a BibTeX entry.
+        template_file (`str` *optional*):
+            Template file name located in the `trl/templates` directory. Defaults to `lm_model_card.md`.
         paper_title (`str` or `None`, defaults to `None`):
             Paper title.
         paper_id (`str` or `None`, defaults to `None`):
@@ -1298,9 +1332,10 @@ def generate_model_card(
         model_name=model_name,
         tags=["generated_from_trainer", *tags],
     )
+    template_file = template_file or "lm_model_card.md"
     card = ModelCard.from_template(
         card_data,
-        template_path=str(pkg_resources.files("trl").joinpath("templates/lm_model_card.md")),
+        template_path=str(pkg_resources.files("trl").joinpath(f"templates/{template_file}")),
         base_model=base_model,
         model_name=model_name,
         hub_model_id=hub_model_id,
@@ -1519,8 +1554,8 @@ def entropy_from_logits(logits: torch.Tensor, chunk_size: int = 128) -> torch.Te
 
 
 def print_prompt_completions_sample(
-    prompts: list[str],
-    completions: list[str],
+    prompts: list,
+    completions: list,
     rewards: dict[str, list[float]],
     advantages: list[float],
     step: int,
@@ -1533,10 +1568,10 @@ def print_prompt_completions_sample(
     during training. It requires the `rich` library to be installed.
 
     Args:
-        prompts (`list[str]`):
-            List of prompts.
-        completions (`list[str]`):
-            List of completions corresponding to the prompts.
+        prompts (`list`):
+            List of prompts. Can be either strings or lists of messages.
+        completions (`list`):
+            List of completions corresponding to the prompts. Can be either strings or lists of messages.
         rewards (`dict[str, list[float]]`):
             Dictionary where keys are reward names and values are lists of rewards.
         advantages (`list[float]`):
@@ -1581,6 +1616,28 @@ def print_prompt_completions_sample(
         table.add_column(reward_name, style="bold cyan", justify="right")
     table.add_column("Advantage", style="bold magenta", justify="right")
 
+    def format_entry(entry) -> Text:
+        t = Text()
+        if isinstance(entry, list) and all(isinstance(m, dict) for m in entry):
+            for j, msg in enumerate(entry):
+                role = msg.get("role", "")
+                if "content" in msg:
+                    # Chat message
+                    t.append(f"{role.upper()}\n", style="bold red")
+                    t.append(msg["content"])
+                elif "name" in msg and "args" in msg:
+                    # Tool call
+                    t.append(f"{role.upper()}\n", style="bold red")
+                    t.append(f"{msg['name']}({msg['args']})")
+                else:
+                    # Fallback
+                    t.append(str(msg))
+                if j < len(entry) - 1:
+                    t.append("\n\n")
+        else:
+            t.append(str(entry))
+        return t
+
     # Some basic input validation
     if num_samples is not None:
         if num_samples >= len(prompts):
@@ -1598,7 +1655,12 @@ def print_prompt_completions_sample(
 
     for i in range(len(prompts)):
         reward_values = [f"{rewards[key][i]:.2f}" for key in rewards.keys()]  # 2 decimals
-        table.add_row(Text(prompts[i]), Text(completions[i]), *reward_values, f"{advantages[i]:.2f}")
+        table.add_row(
+            format_entry(prompts[i]),
+            format_entry(completions[i]),
+            *reward_values,
+            f"{advantages[i]:.2f}",
+        )
         table.add_section()  # Adds a separator between rows
 
     panel = Panel(table, expand=False, title=f"Step {step}", border_style="bold white")
@@ -1861,63 +1923,80 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
     return batch
 
 
-def truncate_with_protected_tokens(
-    ids: torch.Tensor, mask: torch.Tensor, target_length: int, protected_tokens: list[int]
-) -> tuple[torch.Tensor, torch.Tensor]:
+def truncate_with_protected_tokens(ids: list[int], target_length: int, protected_tokens: list[int]) -> list[int]:
     """
-    Truncate tensors to target length while preserving protected tokens.
+    Truncate list to target length while preserving protected tokens.
 
     Args:
-        ids (`torch.Tensor`):
-            Input tensor of token IDs, shape (batch_size, sequence_length).
-        mask (`torch.Tensor`):
-            Input tensor of attention masks, shape (batch_size, sequence_length).
+        ids (`list[int]`):
+            Input sequence of token IDs.
         target_length (`int`):
-            Desired length of the output sequences.
+            Desired length of the output sequence.
         protected_tokens (`list[int]`):
             List of token IDs that should be preserved in the output.
+
+    Returns:
+        `list[int]`: Truncated sequence.
+
+    Raises:
+        `ValueError`: If `len(protected_tokens ∩ seq) > target_length`.
     """
     protected_set = set(protected_tokens)
-    # Create protected_tokens tensor once to avoid recreating it on every call
-    protected_tokens_tensor = torch.tensor(list(protected_set), device=ids.device)
 
-    def process_sequence(ids, mask):
-        # Create boolean masks
-        is_protected = torch.isin(ids, protected_tokens_tensor)
-        is_non_protected = ~is_protected
+    # Count protected tokens
+    num_protected = sum(1 for t in ids if t in protected_set)
+    if num_protected > target_length:
+        raise ValueError(
+            f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
+            f"Please increase target length to at least {num_protected} or disable truncation."
+        )
+    num_non_protected_needed = target_length - num_protected
+    result = []
 
-        # Count tokens
-        num_protected = is_protected.sum().item()
-        num_non_protected_needed = target_length - num_protected
+    # Iterate backward to select all protected tokens and rightmost non-protected tokens
+    for t in reversed(ids):
+        if t in protected_set:
+            result.append(t)
+        elif num_non_protected_needed > 0:
+            result.append(t)
+            num_non_protected_needed -= 1
+    # Reverse to restore original order
+    return result[::-1]
 
-        if num_non_protected_needed < 0:
-            raise ValueError(
-                f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-                f"Please increase target length to at least {num_protected} or disable truncation."
-            )
 
-        # Select which non-protected tokens to keep (rightmost ones)
-        non_protected_indices = torch.where(is_non_protected)[0]
-        keep_non_protected = torch.zeros_like(is_non_protected)
-        if num_non_protected_needed > 0:
-            keep_indices = non_protected_indices[-num_non_protected_needed:]
-            keep_non_protected[keep_indices] = True
+TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
-        # Final mask: protected OR selected non-protected
-        keep_mask = is_protected | keep_non_protected
 
-        return ids[keep_mask], mask[keep_mask]
+def remove_none_values(example: TListOrMapping) -> TListOrMapping:
+    """
+    Recursively removes entries with `None` values from a nested structure (list or dictionary).
 
-    # Process each sequence in the batch
-    truncated_seq = []
-    truncated_mask = []
+    Args:
+        example (`list` or `Mapping`):
+            Input nested structure (list or dictionary) from which to remove `None`.
 
-    for i in range(ids.shape[0]):
-        new_ids, new_mask = process_sequence(ids[i], mask[i])
-        truncated_seq.append(new_ids)
-        truncated_mask.append(new_mask)
-
-    return torch.stack(truncated_seq), torch.stack(truncated_mask)
+    Example:
+    ```python
+    >>> [
+    ...     {
+    ...         "a": {"aa": None, "ab": 1},
+    ...         "b": "my_string",
+    ...     }
+    ... ]
+    >>> remove_none_values(example)
+    [{'a': {'ab': 1}, 'b': 'my_string'}]
+    ```
+    """
+    if isinstance(example, list):
+        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
+    elif isinstance(example, Mapping):
+        return {
+            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
+            for key, value in example.items()
+            if value is not None
+        }
+    else:
+        raise TypeError("Input must be a list or a dictionary.")
 
 
 def create_model_from_path(model_id: str, **kwargs) -> PreTrainedModel:
