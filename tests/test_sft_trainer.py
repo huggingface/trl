@@ -1369,7 +1369,6 @@ class SFTTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
 
-
     # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
     # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
     @pytest.mark.slow
