@@ -193,7 +193,7 @@ class TestBCOTrainer(TrlTestCase):
 
         tokenized_dataset = dataset.map(
             _tokenize,
-            fn_kwargs={"tokenizer": trainer.tokenizer},
+            fn_kwargs={"tokenizer": trainer.processing_class},
             batched=True,
             batch_size=2,
         )
@@ -208,7 +208,7 @@ class TestBCOTrainer(TrlTestCase):
         fn_kwargs = {
             "prefix": "",
             "is_encoder_decoder": trainer.is_encoder_decoder,
-            "tokenizer": trainer.tokenizer,
+            "tokenizer": trainer.processing_class,
             "max_length": trainer.max_length,
             "truncation_mode": trainer.truncation_mode,
             "label_pad_token_id": trainer.label_pad_token_id,

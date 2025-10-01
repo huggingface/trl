@@ -237,8 +237,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
         # Check if training loss is available
         assert "train_loss" in trainer.state.log_history[-1]
 
-    @require_llm_blender
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @require_llm_blender
     def test_training_with_judge(self, config_name):
         training_args = OnlineDPOConfig(
             output_dir=self.tmp_dir,
@@ -418,8 +418,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == 64
         assert not trainer.generation_config.do_sample  # From generation_kwargs
 
-    @require_torch_accelerator
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @require_torch_accelerator
     def test_training_with_transformers_paged(self, config_name):
         if Version(transformers.__version__) < Version("4.57.0"):
             pytest.xfail("Upstream bug in transformers (GH#40692). Fix merged; awaiting release >= 4.57.0")

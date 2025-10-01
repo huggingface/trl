@@ -1288,7 +1288,6 @@ class TestDPOTrainer(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
-    @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
     @parameterized.expand(
         [
             (0.1, "sigmoid"),
@@ -1304,6 +1303,7 @@ class TestDPOTrainer(TrlTestCase):
         ]
     )
     @require_liger_kernel
+    @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
     def test_dpo_trainer_with_liger(self, beta, loss_type):
         """Test DPO trainer with Liger loss enabled across supported loss types.
 
