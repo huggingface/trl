@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 import sys
 import unittest
 from unittest.mock import MagicMock
@@ -955,7 +956,9 @@ class DPOTrainerTester(TrlTestCase):
 
         with pytest.raises(
             ValueError,
-            match="Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1.",
+            match=re.escape(
+                "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1."
+            ),
         ):
             _ = DPOTrainer(
                 model=self.model_id,
@@ -974,7 +977,9 @@ class DPOTrainerTester(TrlTestCase):
 
         with pytest.raises(
             ValueError,
-            match="Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1.",
+            match=re.escape(
+                "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1."
+            ),
         ):
             _ = DPOTrainer(
                 model=self.model_id,
