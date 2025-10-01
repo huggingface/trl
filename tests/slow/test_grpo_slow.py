@@ -33,7 +33,6 @@ from transformers import (
 )
 from transformers.testing_utils import (
     backend_empty_cache,
-    require_bitsandbytes,
     require_flash_attn,
     require_liger_kernel,
     require_peft,
@@ -45,7 +44,7 @@ from transformers.utils import is_peft_available
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.utils import get_kbit_device_map
 
-from ..testing_utils import TrlTestCase, require_vllm
+from ..testing_utils import TrlTestCase, require_bitsandbytes, require_vllm
 from .testing_constants import MODELS_TO_TEST
 
 
@@ -79,6 +78,7 @@ class GRPOTrainerSlowTester(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
+            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)

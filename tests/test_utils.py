@@ -743,6 +743,94 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         ]
         self.assertIn(output, possible_outputs)
 
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages(self, mock_stdout):
+        prompts = [
+            [
+                {"role": "system", "content": "You are an helpful assistant."},
+                {"role": "user", "content": "What color is the sky?"},
+            ],
+            [
+                {"role": "system", "content": "You are an helpful assistant."},
+                {"role": "user", "content": "Where is the sun?"},
+            ],
+        ]
+        completions = [
+            [{"role": "assistant", "content": "It is blue."}],
+            [{"role": "assistant", "content": "In the sky."}],
+        ]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt                  ┃ Completion  ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ SYSTEM                  │ ASSISTANT   │        0.12 │   0.79 │      0.99 │ │
+        │ │ You are an helpful      │ It is blue. │             │        │           │ │
+        │ │ assistant.              │             │             │        │           │ │
+        │ │                         │             │             │        │           │ │
+        │ │ USER                    │             │             │        │           │ │
+        │ │ What color is the sky?  │             │             │        │           │ │
+        │ ├─────────────────────────┼─────────────┼─────────────┼────────┼───────────┤ │
+        │ │ SYSTEM                  │ ASSISTANT   │        0.46 │   0.10 │      0.65 │ │
+        │ │ You are an helpful      │ In the sky. │             │        │           │ │
+        │ │ assistant.              │             │             │        │           │ │
+        │ │                         │             │             │        │           │ │
+        │ │ USER                    │             │             │        │           │ │
+        │ │ Where is the sun?       │             │             │        │           │ │
+        │ └─────────────────────────┴─────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        self.assertEqual(output, expected_output)
+
+    @patch("sys.stdout", new_callable=StringIO)
+    def test_print_messages_with_tools(self, mock_stdout):
+        prompts = [
+            [{"role": "user", "content": "What is the temperature in Paris?"}],
+            [{"role": "user", "content": "What is the weather in London?"}],
+        ]
+        completions = [
+            [{"role": "tool", "name": "get_temperature", "args": {"location": "Paris"}}],
+            [{"role": "tool", "name": "get_weather", "args": {"location": "London"}}],
+        ]
+        rewards = {"Correctness": [0.123, 0.456], "Format": [0.789, 0.101]}
+        advantages = [0.987, 0.654]
+        step = 42
+
+        print_prompt_completions_sample(prompts, completions, rewards, advantages, step)
+
+        output = mock_stdout.getvalue()
+
+        # docstyle-ignore
+        expected_output = textwrap.dedent("""\
+        ╭────────────────────────────────── Step 42 ───────────────────────────────────╮
+        │ ┏━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━┓ │
+        │ ┃ Prompt            ┃ Completion        ┃ Correctness ┃ Format ┃ Advantage ┃ │
+        │ ┡━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━┩ │
+        │ │ USER              │ TOOL              │        0.12 │   0.79 │      0.99 │ │
+        │ │ What is the       │ get_temperature(… │             │        │           │ │
+        │ │ temperature in    │ 'Paris'})         │             │        │           │ │
+        │ │ Paris?            │                   │             │        │           │ │
+        │ ├───────────────────┼───────────────────┼─────────────┼────────┼───────────┤ │
+        │ │ USER              │ TOOL              │        0.46 │   0.10 │      0.65 │ │
+        │ │ What is the       │ get_weather({'lo… │             │        │           │ │
+        │ │ weather in        │ 'London'})        │             │        │           │ │
+        │ │ London?           │                   │             │        │           │ │
+        │ └───────────────────┴───────────────────┴─────────────┴────────┴───────────┘ │
+        ╰──────────────────────────────────────────────────────────────────────────────╯
+        """)
+
+        self.assertEqual(output, expected_output)
+
 
 class TestSelectiveLogSoftmax(TrlTestCase):
     @parameterized.expand([(torch.float64,), (torch.float32,), (torch.float16,), (torch.bfloat16,)])
@@ -937,136 +1025,79 @@ class SplitPixelValuesByGridTester(TrlTestCase):
 class TruncateWithProtectedTokensTester(TrlTestCase):
     def test_basic_example(self):
         """Test the basic example from the problem description."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [2, 3, 6]
+        prompt_ids = [1, 2, 3, 4, 5]
+        protected_tokens = [2, 3]
         target_length = 3
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        expected_ids = torch.tensor([[2, 3, 5], [6, 9, 10]])
-        expected_mask = torch.ones_like(expected_ids)
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-        self.assertTrue(torch.equal(new_mask, expected_mask))
+        expected_ids = [2, 3, 5]
+        self.assertEqual(new_ids, expected_ids)
 
     def test_no_truncation_needed(self):
         """Test when target length equals current length."""
-        prompt_ids = torch.tensor([[1, 2, 3]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [1, 2, 3]
         protected_tokens = [2]
         target_length = 3
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        self.assertTrue(torch.equal(new_ids, prompt_ids))
-        self.assertTrue(torch.equal(new_mask, prompt_mask))
+        self.assertEqual(new_ids, prompt_ids)
 
     def test_no_protected_tokens(self):
         """Test truncation with no protected tokens (normal right truncation)."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [1, 2, 3, 4, 5]
         protected_tokens = []
         target_length = 3
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        expected_ids = torch.tensor([[3, 4, 5]])  # Last 3 tokens
-        self.assertTrue(torch.equal(new_ids, expected_ids))
+        expected_ids = [3, 4, 5]  # Last 3 tokens
+        self.assertEqual(new_ids, expected_ids)
 
     def test_all_tokens_protected(self):
         """Test when all remaining tokens are protected."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [1, 2, 3, 4, 5]
         protected_tokens = [3, 4, 5]
         target_length = 3
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        expected_ids = torch.tensor([[3, 4, 5]])
-        self.assertTrue(torch.equal(new_ids, expected_ids))
+        expected_ids = [3, 4, 5]
+        self.assertEqual(new_ids, expected_ids)
 
     def test_too_many_protected_tokens(self):
         """Test error when too many protected tokens for target length."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [1, 2, 3, 4, 5]
         protected_tokens = [1, 2, 3, 4]
         target_length = 3
 
         with self.assertRaises(ValueError):
-            truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+            truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
     def test_single_batch_single_token(self):
         """Test edge case with single batch and single token."""
-        prompt_ids = torch.tensor([[5]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [5]
         protected_tokens = [5]
         target_length = 1
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        self.assertTrue(torch.equal(new_ids, prompt_ids))
-
-    def test_mask_preservation(self):
-        """Test that mask values are correctly preserved."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.tensor([[1, 0, 1, 0, 1]])  # Mixed mask values
-        protected_tokens = [2, 4]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[2, 4, 5]])
-        expected_mask = torch.tensor([[0, 0, 1]])  # Corresponding mask values
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-
-    def test_multiple_batches_different_protected(self):
-        """Test multiple batches where protected tokens appear differently."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5], [2, 6, 7, 8, 9], [10, 11, 12, 2, 13]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [2]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor(
-            [
-                [2, 4, 5],  # 2 is protected, keep last 2 non-protected (4,5)
-                [2, 8, 9],  # 2 is protected, keep last 2 non-protected (8,9)
-                [12, 2, 13],  # 2 is protected, keep last 2 non-protected (12,13)
-            ]
-        )
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
+        self.assertEqual(new_ids, prompt_ids)
 
     def test_order_preservation(self):
         """Test that relative order is preserved."""
-        prompt_ids = torch.tensor([[10, 2, 20, 3, 30, 40]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [10, 2, 20, 3, 30, 40]
         protected_tokens = [2, 3]
         target_length = 4
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        # Should keep protected tokens 2,3 and last 2 non-protected tokens 30,40
+        # Should keep protected tokens 2, 3 and last 2 non-protected tokens 30, 40
         # Order should be: 2, 3, 30, 40 (maintaining original relative positions)
-        expected_ids = torch.tensor([[2, 3, 30, 40]])
+        expected_ids = [2, 3, 30, 40]
 
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-
-    def test_empty_protected_tokens_list(self):
-        """Test with empty protected tokens list."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = []
-        target_length = 2
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[4, 5]])  # Last 2 tokens
-        self.assertTrue(torch.equal(new_ids, expected_ids))
+        self.assertEqual(new_ids, expected_ids)
 
 
 class UnsplitPixelValuesByGridTester(TrlTestCase):

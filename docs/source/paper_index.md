@@ -533,3 +533,53 @@ training_args = CPOConfig(
     ...
 )
 ```
+
+## Reward Modeling
+
+Papers relating to the [`RewardTrainer`]
+
+### Helping or Herding? Reward Model Ensembles Mitigate but do not Eliminate Reward Hacking
+
+**📜 Paper**: https://huggingface.co/papers/2312.09244
+
+This paper proposed an auxiliary loss function designed to directly learn a centered reward model. This auxiliary loss minimizes the squared sum of the rewards, encouraging the model to naturally produce mean-zero outputs and thereby resolving the issue of underdetermination.
+
+$$
+\mathcal{L}(\theta) = - \mathbb{E}_{(x,y^+,y^-) \sim \mathcal{D}} \left[ \log \sigma(r_\theta(x, y^+) - r_\theta(x, y^-)) \textcolor{red}{- \eta \cdot (r_\theta(x, y^+) + r_\theta(x, y^-))^2} \right].
+$$
+
+To use this auxiliary loss with [`RewardTrainer`], you can use the `center_rewards_coefficient` argument in [`RewardConfig`] as follows:
+
+```python
+from trl import RewardConfig
+
+training_args = RewardConfig(
+    center_rewards_coefficient=0.01,  # η in the paper
+    ...
+)
+```
+
+### Llama 2: Open Foundation and Fine-Tuned Chat Models
+
+**📜 Paper**: https://huggingface.co/papers/2307.09288
+
+In this paper, the authors propose to leverage their preference ratings being decomposed as a scale of four points (e.g., _significantly better_) to provide more informative feedback to the reward model. This is done by adding a margin to the loss function, which encourages the reward model to assign larger gaps in scores for pairs with higher preference ratings.
+
+$$
+\mathcal{L}(\theta) = - \mathbb{E}_{(x,y^+,y^-,\textcolor{red}{m}) \sim \mathcal{D}} \left[ \log \sigma(r_\theta(x, y^+) - r_\theta(x, y^-) \textcolor{red}{- m}) \right].
+$$
+
+You can add a margin to the loss by adding a `margin` column to the dataset. The following example shows how to set up a the "Margin Small" setting of the paper.
+
+```python
+def add_margin(example):
+    preference_to_margin = {
+        "significantly better": 1.0,
+        "better": 2.0/3.0,
+        "slightly better": 1.0/3.0,
+        "negligibly better / unsure": 0.0,
+    }
+    return {"margin": preference_to_margin[example["preference_label"]]}
+
+dataset = dataset.map(add_margin)
+```
