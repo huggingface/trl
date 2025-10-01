@@ -478,8 +478,8 @@ class TestOnlineDPOTrainer(TrlTestCase):
         assert "train_loss" in trainer.state.log_history[-1]
         assert len(trainer.reward_funcs) == 2
         assert trainer.reward_weights is not None
-        assert round(abs(trainer.reward_weights[0].item()-0.7), 5) == 0
-        assert round(abs(trainer.reward_weights[1].item()-0.3), 5) == 0
+        assert round(abs(trainer.reward_weights[0].item() - 0.7), 5) == 0
+        assert round(abs(trainer.reward_weights[1].item() - 0.3), 5) == 0
 
 
 @require_vision

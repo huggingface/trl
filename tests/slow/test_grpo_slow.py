@@ -444,9 +444,9 @@ class GRPOTrainerSlowTester(TrlTestCase):
                     # Check if signature columns were set properly
                     if trainer._signature_columns is not None:
                         # Should include 'image' in signature columns for VLM processors
-                        assert "image" in \
-                            trainer._signature_columns, \
+                        assert "image" in trainer._signature_columns, (
                             "Should include 'image' in signature columns for VLM"
+                        )
 
                     # Should not emit any warnings about VLM incompatibility
                     incompatibility_warnings = [
@@ -455,9 +455,9 @@ class GRPOTrainerSlowTester(TrlTestCase):
                         if "does not support VLMs" in str(w_item.message)
                         or "not compatible" in str(w_item.message).lower()
                     ]
-                    assert len(incompatibility_warnings) == \
-                        0, \
+                    assert len(incompatibility_warnings) == 0, (
                         f"Should not emit VLM incompatibility warnings, but got: {incompatibility_warnings}"
+                    )
 
                     # Test passes if we get this far without exceptions
 

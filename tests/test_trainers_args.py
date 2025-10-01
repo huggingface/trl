@@ -84,8 +84,8 @@ class TrainerArgTester(TrlTestCase):
         assert trainer.args.padding_value == -99
         assert trainer.args.truncation_mode == "keep_start"
         # self.assertEqual(trainer.args.generate_during_eval, True)
-        assert trainer.args.is_encoder_decoder == True
-        assert trainer.args.precompute_ref_log_probs == True
+        assert trainer.args.is_encoder_decoder
+        assert trainer.args.precompute_ref_log_probs
         assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.dataset_num_proc == 4
@@ -123,14 +123,14 @@ class TrainerArgTester(TrlTestCase):
         assert trainer.args.beta == 0.5
         assert trainer.args.label_smoothing == 0.5
         assert trainer.args.loss_type == "hinge"
-        assert trainer.args.disable_dropout == False
+        assert not trainer.args.disable_dropout
         assert trainer.args.cpo_alpha == 0.5
         assert trainer.args.simpo_gamma == 0.2
         assert trainer.args.label_pad_token_id == -99
         assert trainer.args.padding_value == -99
         assert trainer.args.truncation_mode == "keep_start"
         # self.assertEqual(trainer.args.generate_during_eval, True)
-        assert trainer.args.is_encoder_decoder == True
+        assert trainer.args.is_encoder_decoder
         assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.dataset_num_proc == 4
 
@@ -183,16 +183,16 @@ class TrainerArgTester(TrlTestCase):
         assert trainer.args.max_length == 256
         assert trainer.args.max_prompt_length == 64
         assert trainer.args.max_completion_length == 64
-        assert trainer.args.disable_dropout == False
+        assert not trainer.args.disable_dropout
         # self.assertEqual(trainer.args.generate_during_eval, True)
-        assert trainer.args.precompute_ref_log_probs == True
+        assert trainer.args.precompute_ref_log_probs
         assert trainer.args.dataset_num_proc == 4
         assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.model_adapter_name == "dummy_adapter"
         assert trainer.args.ref_adapter_name == "dummy_adapter"
-        assert trainer.args.reference_free == True
-        assert trainer.args.force_use_ref_model == True
+        assert trainer.args.reference_free
+        assert trainer.args.force_use_ref_model
         assert trainer.args.f_divergence_type == FDivergenceType.JS_DIVERGENCE
         assert trainer.args.f_alpha_divergence_coef == 0.5
         # self.assertEqual(trainer.args.sync_ref_model, True)
@@ -240,8 +240,8 @@ class TrainerArgTester(TrlTestCase):
         assert trainer.args.padding_value == -99
         assert trainer.args.truncation_mode == "keep_start"
         # self.assertEqual(trainer.args.generate_during_eval, True)
-        assert trainer.args.is_encoder_decoder == True
-        assert trainer.args.precompute_ref_log_probs == True
+        assert trainer.args.is_encoder_decoder
+        assert trainer.args.precompute_ref_log_probs
         assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.ref_model_init_kwargs == {"trust_remote_code": True}
         assert trainer.args.dataset_num_proc == 4
@@ -323,7 +323,7 @@ class TrainerArgTester(TrlTestCase):
         assert trainer.args.max_prompt_length == 64
         assert trainer.args.max_completion_length == 64
         assert trainer.args.beta == 0.5
-        assert trainer.args.disable_dropout == False
+        assert not trainer.args.disable_dropout
         assert trainer.args.label_pad_token_id == -99
 
     def test_reward(self):
@@ -363,14 +363,14 @@ class TrainerArgTester(TrlTestCase):
         )
         trainer = SFTTrainer(model_id, args=training_args, train_dataset=dataset)
         assert trainer.args.dataset_text_field == "dummy_text_field"
-        assert trainer.args.packing == True
+        assert trainer.args.packing
         assert trainer.args.max_length == 256
         assert trainer.args.dataset_num_proc == 4
         assert trainer.args.neftune_noise_alpha == 0.1
         assert trainer.args.model_init_kwargs == {"trust_remote_code": True}
         assert "append_concat_token" in trainer.args.dataset_kwargs
-        assert trainer.args.dataset_kwargs["append_concat_token"] == True
-        assert trainer.args.eval_packing == True
+        assert trainer.args.dataset_kwargs["append_concat_token"]
+        assert trainer.args.eval_packing
 
     @parameterized.expand([(False,), (True,)])
     def test_xpo(self, alpha_list):

@@ -15,6 +15,7 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -30,7 +31,6 @@ from transformers.utils import is_peft_available
 from trl import RLOOConfig, RLOOTrainer
 
 from .testing_utils import TrlTestCase, require_vllm
-import pytest
 
 
 if is_peft_available():

@@ -85,7 +85,7 @@ class SoftOverlongPunishmentRewardTester(unittest.TestCase):
         reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
         completion_ids = [[1] * 90]  # 90 is between 80 and 100
         rewards = reward_fn(completion_ids)
-        assert round(abs(rewards[0]--0.5), 4) == 0
+        assert round(abs(rewards[0] - -0.5), 4) == 0
 
 
 if __name__ == "__main__":

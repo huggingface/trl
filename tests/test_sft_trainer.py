@@ -1504,24 +1504,26 @@ class SFTTrainerTester(TrlTestCase):
                     lora_params_after.append(name)
 
         # LoRA parameters should remain trainable
-        assert len(trainable_params_after) > 0, \
-            f"PeftModel should still have trainable parameters after SFTTrainer initialization. " \
-            f"Found {len(trainable_params_after)} trainable params. " \
+        assert len(trainable_params_after) > 0, (
+            f"PeftModel should still have trainable parameters after SFTTrainer initialization. "
+            f"Found {len(trainable_params_after)} trainable params. "
             f"This test fails without the fix for issue #3926."
+        )
 
-        assert len(lora_params_after) > 0, \
-            f"LoRA adapter parameters should remain trainable. " \
+        assert len(lora_params_after) > 0, (
+            f"LoRA adapter parameters should remain trainable. "
             f"Found {len(lora_params_after)} trainable LoRA params out of {len(lora_params_before)} original."
+        )
 
         # Ensure the parameter counts are preserved (no additional freezing occurred)
-        assert len(trainable_params_before) == \
-            len(trainable_params_after), \
+        assert len(trainable_params_before) == len(trainable_params_after), (
             "Number of trainable parameters should not change after SFTTrainer initialization"
+        )
 
         # Verify that all original LoRA parameters are still trainable
-        assert set(lora_params_before) == \
-            set(lora_params_after), \
+        assert set(lora_params_before) == set(lora_params_after), (
             "All original LoRA parameters should remain trainable after SFTTrainer initialization"
+        )
 
     @require_peft
     def test_prompt_tuning_peft_model(self):

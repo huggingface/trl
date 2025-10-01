@@ -675,46 +675,46 @@ class UnpairPreferenceDatasetTester(TrlTestCase):
     def test_unpair_preference_dataset(self):
         # Test that a paired dataset is correctly converted to unpaired
         unpaired_dataset = unpair_preference_dataset(self.paired_dataset)
-        assert unpaired_dataset.to_dict() == \
-            self.unpaired_dataset.to_dict(), \
+        assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict(), (
             "The paired dataset should be converted to unpaired."
+        )
 
     def test_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
         unpaired_dataset_dict = unpair_preference_dataset(paired_dataset_dict)
-        assert unpaired_dataset_dict["abc"].to_dict() == \
-            self.unpaired_dataset.to_dict(), \
+        assert unpaired_dataset_dict["abc"].to_dict() == self.unpaired_dataset.to_dict(), (
             "The paired dataset should be converted to unpaired."
+        )
 
     def test_maybe_unpair_preference_dataset(self):
         # Test that a paired dataset is correctly converted to unpaired with maybe_unpair_preference_dataset
         unpaired_dataset = maybe_unpair_preference_dataset(self.paired_dataset)
-        assert unpaired_dataset.to_dict() == \
-            self.unpaired_dataset.to_dict(), \
+        assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict(), (
             "The paired dataset should be converted to unpaired."
+        )
 
     def test_maybe_unpair_preference_dataset_dict(self):
         # Test that a paired dataset dict is correctly converted to unpaired with maybe_unpair_preference_dataset
         paired_dataset_dict = DatasetDict({"abc": self.paired_dataset})
         unpaired_dataset_dict = maybe_unpair_preference_dataset(paired_dataset_dict)
-        assert unpaired_dataset_dict["abc"].to_dict() == \
-            self.unpaired_dataset.to_dict(), \
+        assert unpaired_dataset_dict["abc"].to_dict() == self.unpaired_dataset.to_dict(), (
             "The paired dataset should be converted to unpaired."
+        )
 
     def test_maybe_unpair_preference_dataset_already_paired(self):
         # Test that a paired dataset remains unchanged with maybe_unpair_preference_dataset
         unpaired_dataset = maybe_unpair_preference_dataset(self.unpaired_dataset)
-        assert unpaired_dataset.to_dict() == \
-            self.unpaired_dataset.to_dict(), \
+        assert unpaired_dataset.to_dict() == self.unpaired_dataset.to_dict(), (
             "The unpaired dataset should remain unchanged."
+        )
 
     def test_maybe_unpair_preference_dataset_dict_already_paired(self):
         # Test that a paired dataset dict remains unchanged with maybe_unpair_preference_dataset
         unpaired_dataset_dict = maybe_unpair_preference_dataset(DatasetDict({"abc": self.unpaired_dataset}))
-        assert unpaired_dataset_dict["abc"].to_dict() == \
-            self.unpaired_dataset.to_dict(), \
+        assert unpaired_dataset_dict["abc"].to_dict() == self.unpaired_dataset.to_dict(), (
             "The unpaired dataset should remain unchanged."
+        )
 
 
 class ExtractPromptTester(TrlTestCase):
@@ -755,44 +755,42 @@ class ExtractPromptTester(TrlTestCase):
     def test_extract_prompt_conversational(self):
         # Test that the prompt is correctly extracted from the dataset
         example_extracted_prompt = extract_prompt(self.example_implicit_prompt_conversational)
-        assert example_extracted_prompt == \
-            self.example_explicit_prompt_conversational, \
+        assert example_extracted_prompt == self.example_explicit_prompt_conversational, (
             "The prompt is not correctly extracted from the dataset."
+        )
 
     def test_maybe_extract_prompt_conversational(self):
         # Test that the prompt is correctly extracted from the dataset with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_implicit_prompt_conversational)
-        assert example_extracted_prompt == \
-            self.example_explicit_prompt_conversational, \
+        assert example_extracted_prompt == self.example_explicit_prompt_conversational, (
             "The prompt is not correctly extracted from the dataset."
+        )
 
     def test_maybe_extract_prompt_conversational_already_explicit(self):
         # Test that the prompt remains unchanged with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_conversational)
-        assert example_extracted_prompt == \
-            self.example_explicit_prompt_conversational, \
+        assert example_extracted_prompt == self.example_explicit_prompt_conversational, (
             "The prompt should remain unchanged."
+        )
 
     def test_extract_prompt_standard(self):
         # Test that the prompt is correctly extracted from the dataset
         example_extracted_prompt = extract_prompt(self.example_implicit_prompt_standard)
-        assert example_extracted_prompt == \
-            self.example_explicit_prompt_standard, \
+        assert example_extracted_prompt == self.example_explicit_prompt_standard, (
             "The prompt is not correctly extracted from the dataset."
+        )
 
     def test_maybe_extract_prompt_standard(self):
         # Test that the prompt is correctly extracted from the dataset with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_implicit_prompt_standard)
-        assert example_extracted_prompt == \
-            self.example_explicit_prompt_standard, \
+        assert example_extracted_prompt == self.example_explicit_prompt_standard, (
             "The prompt is not correctly extracted from the dataset."
+        )
 
     def test_maybe_extract_prompt_standard_already_explicit(self):
         # Test that the prompt remains unchanged with maybe_extract_prompt
         example_extracted_prompt = maybe_extract_prompt(self.example_explicit_prompt_standard)
-        assert example_extracted_prompt == \
-            self.example_explicit_prompt_standard, \
-            "The prompt should remain unchanged."
+        assert example_extracted_prompt == self.example_explicit_prompt_standard, "The prompt should remain unchanged."
 
 
 class TestPackDatasetWrapped(TrlTestCase):

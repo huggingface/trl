@@ -45,8 +45,10 @@ class TestChunkList(TrlTestCase):
         assert chunk_list([42], 2) == [[42], []]
 
     def test_any_dtype(self):
-        assert chunk_list([1, "two", 3.0, {"four": 4}, ["f", "i", "v", "e"]], 2) == \
-            [[1, "two", 3.0], [{"four": 4}, ["f", "i", "v", "e"]]]
+        assert chunk_list([1, "two", 3.0, {"four": 4}, ["f", "i", "v", "e"]], 2) == [
+            [1, "two", 3.0],
+            [{"four": 4}, ["f", "i", "v", "e"]],
+        ]
 
 
 @pytest.mark.slow

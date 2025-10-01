@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -23,7 +24,6 @@ from trl import KTOConfig, KTOTrainer
 from trl.trainer.kto_trainer import _get_kl_dataset, _process_tokens, _tokenize
 
 from .testing_utils import TrlTestCase, require_no_wandb
-import pytest
 
 
 class KTOTrainerTester(TrlTestCase):
@@ -167,12 +167,11 @@ class KTOTrainerTester(TrlTestCase):
             # the last batch remains unaltered. This is a rare scenario that does not impact the training
             # process, so we exclude it from testing by iterating only up to len - 1.
             for i in range(len(tokenized_kl_dataset["answer_input_ids"]) - 1):
-                assert tokenized_dataset["prompt_input_ids"][i] == \
-                    tokenized_kl_dataset["prompt_input_ids"][i]
-                assert tokenized_dataset["prompt_attention_mask"][i] == \
-                    tokenized_kl_dataset["prompt_attention_mask"][i]
-                assert tokenized_dataset["answer_input_ids"][i] != \
-                    tokenized_kl_dataset["answer_input_ids"][i]
+                assert tokenized_dataset["prompt_input_ids"][i] == tokenized_kl_dataset["prompt_input_ids"][i]
+                assert (
+                    tokenized_dataset["prompt_attention_mask"][i] == tokenized_kl_dataset["prompt_attention_mask"][i]
+                )
+                assert tokenized_dataset["answer_input_ids"][i] != tokenized_kl_dataset["answer_input_ids"][i]
 
         fn_kwargs = {
             "prefix": "",
@@ -295,8 +294,11 @@ class KTOTrainerTester(TrlTestCase):
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_unpaired_preference")
 
-        with pytest.raises(ValueError, match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
-            " Please install `wandb` or `comet-ml` to resolve."):
+        with pytest.raises(
+            ValueError,
+            match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+            " Please install `wandb` or `comet-ml` to resolve.",
+        ):
             KTOTrainer(
                 model=self.model,
                 ref_model=None,

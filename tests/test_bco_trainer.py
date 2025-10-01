@@ -14,6 +14,7 @@
 
 from functools import partial
 
+import pytest
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
@@ -26,7 +27,6 @@ from trl import BCOConfig, BCOTrainer
 from trl.trainer.bco_trainer import _process_tokens, _tokenize
 
 from .testing_utils import TrlTestCase, require_no_wandb, require_sklearn
-import pytest
 
 
 if is_peft_available():
@@ -363,8 +363,11 @@ class BCOTrainerTester(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError, match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
-            " Please install `wandb` or `comet-ml` to resolve."):
+        with pytest.raises(
+            ValueError,
+            match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+            " Please install `wandb` or `comet-ml` to resolve.",
+        ):
             BCOTrainer(
                 model=model,
                 args=training_args,

@@ -152,8 +152,10 @@ class SetupChatFormatTestCase(TrlTestCase):
         ]
         prompt = modified_tokenizer.apply_chat_template(messages, tokenize=False)
 
-        assert prompt == \
-            "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
+        assert (
+            prompt
+            == "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\nHi, how can I help you?<|im_end|>\n"
+        )
 
 
 class CloneChatTemplateTestCase(TrlTestCase):
@@ -217,8 +219,10 @@ class CloneChatTemplateTestCase(TrlTestCase):
         ]
         prompt = modified_tokenizer.apply_chat_template(messages, tokenize=False)
 
-        assert prompt == \
-            "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nHi, how can I help you?<|im_end|>\n"
+        assert (
+            prompt
+            == "<|im_start|>system\nYou are helpful<|im_end|>\n<|im_start|>user\nHello<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\nHi, how can I help you?<|im_end|>\n"
+        )
 
     def test_clone_with_sequence_classification_model(self):
         # This tokenizer doesn't have a chat_template by default

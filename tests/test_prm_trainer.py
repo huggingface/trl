@@ -75,11 +75,10 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        assert result == \
-            {
-                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
-                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
-            }
+        assert result == {
+            "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
+            "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
+        }
 
     def test_tokenize_row_train_on_last_step_only(self):
         # Define the input features
@@ -100,11 +99,10 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        assert result == \
-            {
-                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
-                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
-            }
+        assert result == {
+            "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
+            "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
+        }
 
     def test_tokenize_row_prompt_truncation(self):
         # Define the input features
@@ -126,11 +124,10 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        assert result == \
-            {
-                "input_ids": [6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
-                "labels": [-100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
-            }
+        assert result == {
+            "input_ids": [6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
+            "labels": [-100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
+        }
 
     def test_tokenize_row_completion_truncation(self):
         # Define the input features
@@ -152,11 +149,10 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        assert result == \
-            {
-                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11],
-                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100],
-            }
+        assert result == {
+            "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11],
+            "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100],
+        }
 
     def test_tokenize_row_prompt_completion_truncation(self):
         # Define the input features
@@ -178,11 +174,10 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        assert result == \
-            {
-                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030],
-                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1],
-            }
+        assert result == {
+            "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030],
+            "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1],
+        }
 
     def test_tokenize_row_multi_token_separator(self):
         # Define the input features
@@ -204,11 +199,10 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        assert result == \
-            {
-                "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 1030, 4995, 11, 22, 1030, 1030],
-                "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, 0],
-            }
+        assert result == {
+            "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 1030, 4995, 11, 22, 1030, 1030],
+            "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, 0],
+        }
 
 
 class PRMTrainerTester(TrlTestCase):

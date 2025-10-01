@@ -142,8 +142,8 @@ class BaseTester:
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
                     assert torch.allclose(
-                            transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
-                        )
+                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
+                    )
 
         def test_from_save_transformers(self):
             """
@@ -163,8 +163,8 @@ class BaseTester:
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
                     assert torch.allclose(
-                            transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
-                        )
+                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
+                    )
 
                 # Check if the trl model has the same keys as the transformers model
                 # except the v_head
@@ -175,8 +175,9 @@ class BaseTester:
                         assert torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key])
 
                 # check if they have the same modules
-                assert set(transformers_model_from_save.state_dict().keys()) == \
-                    set(transformers_model.state_dict().keys())
+                assert set(transformers_model_from_save.state_dict().keys()) == set(
+                    transformers_model.state_dict().keys()
+                )
 
 
 class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
@@ -261,8 +262,9 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
 
             lm_head_namings = ["lm_head", "embed_out", "output_layer"]
 
-            assert any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings), \
+            assert any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings), (
                 "Can't test the model because it doesn't have any of the expected lm_head namings"
+            )
 
             for lm_head_naming in lm_head_namings:
                 if hasattr(trl_model.pretrained_model, lm_head_naming):
@@ -287,8 +289,9 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
             assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
 
             for name, param in model.state_dict().items():
-                assert torch.allclose(param, model_from_pretrained.state_dict()[name]), \
+                assert torch.allclose(param, model_from_pretrained.state_dict()[name]), (
                     f"Parameter {name} is not the same after push_to_hub and from_pretrained"
+                )
 
 
 class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
@@ -378,8 +381,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
             assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
 
             for name, param in model.state_dict().items():
-                assert torch.allclose(param, model_from_pretrained.state_dict()[name]), \
+                assert torch.allclose(param, model_from_pretrained.state_dict()[name]), (
                     f"Parameter {name} is not the same after push_to_hub and from_pretrained"
+                )
 
     def test_transformers_bf16_kwargs(self):
         r"""

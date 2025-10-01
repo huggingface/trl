@@ -136,17 +136,21 @@ class PeftModelTester(TrlTestCase):
         model.save_pretrained(self.tmp_dir)
 
         # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
-        assert os.path.isfile(f"{self.tmp_dir}/adapter_model.safetensors"), \
+        assert os.path.isfile(f"{self.tmp_dir}/adapter_model.safetensors"), (
             f"{self.tmp_dir}/adapter_model.safetensors does not exist"
-        assert os.path.exists(f"{self.tmp_dir}/adapter_config.json"), f"{self.tmp_dir}/adapter_config.json does not exist"
+        )
+        assert os.path.exists(f"{self.tmp_dir}/adapter_config.json"), (
+            f"{self.tmp_dir}/adapter_config.json does not exist"
+        )
 
         # check also for `pytorch_model.bin` and make sure it only contains `v_head` weights
         assert os.path.exists(f"{self.tmp_dir}/pytorch_model.bin"), f"{self.tmp_dir}/pytorch_model.bin does not exist"
 
         # check that only keys that starts with `v_head` are in the dict
         maybe_v_head = torch.load(f"{self.tmp_dir}/pytorch_model.bin", weights_only=True)
-        assert all(k.startswith("v_head") for k in maybe_v_head.keys()), \
+        assert all(k.startswith("v_head") for k in maybe_v_head.keys()), (
             f"keys in {self.tmp_dir}/pytorch_model.bin do not start with `v_head`"
+        )
 
         model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(self.tmp_dir)
 
@@ -167,9 +171,12 @@ class PeftModelTester(TrlTestCase):
         model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(self.tmp_dir)
 
         # check that the files `adapter_model.safetensors` and `adapter_config.json` are in the directory
-        assert os.path.isfile(f"{self.tmp_dir}/adapter_model.safetensors"), \
+        assert os.path.isfile(f"{self.tmp_dir}/adapter_model.safetensors"), (
             f"{self.tmp_dir}/adapter_model.safetensors does not exist"
-        assert os.path.exists(f"{self.tmp_dir}/adapter_config.json"), f"{self.tmp_dir}/adapter_config.json does not exist"
+        )
+        assert os.path.exists(f"{self.tmp_dir}/adapter_config.json"), (
+            f"{self.tmp_dir}/adapter_config.json does not exist"
+        )
 
         # check all the weights are the same
         for p1, p2 in zip(model.named_parameters(), model_from_pretrained.named_parameters()):

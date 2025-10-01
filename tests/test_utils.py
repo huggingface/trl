@@ -17,6 +17,7 @@ from io import StringIO
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -47,7 +48,6 @@ from trl.trainer.utils import (
 )
 
 from .testing_utils import TrlTestCase, require_rich
-import pytest
 
 
 if is_peft_available():
@@ -292,8 +292,9 @@ class TestDataCollatorForChatML(TrlTestCase):
 
         # Verify labels are -100 for non-assistant parts
         prompt_length = len(prompt_only)
-        assert all(label == self.ignore_index for label in labels[:prompt_length]), \
+        assert all(label == self.ignore_index for label in labels[:prompt_length]), (
             "Labels should be ignore_index for prompt tokens"
+        )
 
         # Verify labels match assistant response after prompt
         # Add a filter to remove any trailing tokens after the first <|im_end|>
@@ -309,18 +310,15 @@ class TestDataCollatorForChatML(TrlTestCase):
             response_labels.append(label)
             if label == self.tokenizer.convert_tokens_to_ids("<|im_end|>"):
                 break
-        assert response_labels == \
-            last_assistant_response_tokens, \
-            "Labels should match assistant response tokens"
+        assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
 
         # Verify there isn't a generation prompt at the end
         generation_prompt = "<|im_start|>assistant"
-        assert not decoded_input.strip().endswith(generation_prompt), \
+        assert not decoded_input.strip().endswith(generation_prompt), (
             f"Input should not end with generation prompt '{generation_prompt}'"
+        )
 
-        assert response_labels == \
-            last_assistant_response_tokens, \
-            "Labels should match assistant response tokens"
+        assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
 
 
 class TestBatchGeneration(TrlTestCase):
@@ -397,7 +395,7 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 0.5  # 2 matches, 2 mismatches
         result = compute_accuracy(eval_pred)
-        assert round(abs(result["accuracy"]-expected_accuracy), 7) == 0
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
 
     def test_token_classification_task_with_ignored_tokens_0(self):
         eval_pred = (
@@ -411,7 +409,7 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 1.0  # All non-ignored tokens match
         result = compute_accuracy(eval_pred)
-        assert round(abs(result["accuracy"]-expected_accuracy), 7) == 0
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
 
     def test_token_classification_task_with_ignored_tokens_1(self):
         eval_pred = (
@@ -425,7 +423,7 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 1 / 3  # 1 match, 2 mismatch, 1 ignored
         result = compute_accuracy(eval_pred)
-        assert round(abs(result["accuracy"]-expected_accuracy), 7) == 0
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
 
     def test_rewards_comparison_task(self):
         eval_pred = (
@@ -443,7 +441,7 @@ class TestComputeAccuracy(TrlTestCase):
         with self.assertLogs("trl.trainer.utils", level="WARNING") as cm:
             result = compute_accuracy(eval_pred)
 
-        assert round(abs(result["accuracy"]-expected_accuracy), 7) == 0
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
         expected_warning = (
             "There are 1 out of 3 instances where the predictions for both options are equal. "
             "These instances are ignored in the accuracy computation."

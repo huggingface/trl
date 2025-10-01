@@ -70,8 +70,9 @@ class TestGKDTrainer(TrlTestCase):
 
         # Check if the generated texts start with the original prompts
         for prompt, generated_text in zip(prompts, generated_texts):
-            assert generated_text.startswith(prompt), \
+            assert generated_text.startswith(prompt), (
                 f"Generated text '{generated_text}' does not start with prompt '{prompt}'"
+            )
 
         # Run the generation twice and check if the outputs are identical
         outputs2 = GKDTrainer.generate_on_policy_outputs(
@@ -82,10 +83,10 @@ class TestGKDTrainer(TrlTestCase):
 
         # Check if the two generations are identical
         assert torch.all(new_input_ids.eq(new_input_ids2)), "Deterministic generations are not identical"
-        assert torch.all(new_attention_mask.eq(new_attention_mask2)), \
+        assert torch.all(new_attention_mask.eq(new_attention_mask2)), (
             "Attention masks for deterministic generations are not identical"
-        assert torch.all(new_labels.eq(new_labels2)), \
-            "Labels for deterministic generations are not identical"
+        )
+        assert torch.all(new_labels.eq(new_labels2)), "Labels for deterministic generations are not identical"
 
     def test_generate_on_policy_outputs(self):
         prompts = ["Hello, how are you?", "What's the weather like today?"]
@@ -134,7 +135,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
     def test_uniform_distribution(self):
         logits = torch.ones(1, 1, self.vocab_size)
         loss = GKDTrainer.generalized_jsd_loss(logits, logits)
-        assert round(abs(loss.item()-0), 5) == 0
+        assert round(abs(loss.item() - 0), 5) == 0
 
     def test_generalized_jsd_loss_edge_cases(self):
         # Setup
@@ -146,14 +147,14 @@ class TestGeneralizedJSDLoss(TrlTestCase):
         expected_loss_beta_1 = F.kl_div(
             F.log_softmax(teacher_logits, dim=-1), F.softmax(student_logits, dim=-1), reduction="batchmean"
         )
-        assert round(abs(loss_beta_1.item()-expected_loss_beta_1.item()), 5) == 0
+        assert round(abs(loss_beta_1.item() - expected_loss_beta_1.item()), 5) == 0
 
         # Case 2: beta = 0 (should be equivalent to KL(teacher || student))
         loss_beta_0 = GKDTrainer.generalized_jsd_loss(student_logits, teacher_logits, beta=0)
         expected_loss_beta_0 = F.kl_div(
             F.log_softmax(student_logits, dim=-1), F.softmax(teacher_logits, dim=-1), reduction="batchmean"
         )
-        assert round(abs(loss_beta_0.item()-expected_loss_beta_0.item()), 5) == 0
+        assert round(abs(loss_beta_0.item() - expected_loss_beta_0.item()), 5) == 0
 
     def test_output_shape(self):
         loss = GKDTrainer.generalized_jsd_loss(self.student_logits, self.teacher_logits)
@@ -195,7 +196,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
     def test_zero_loss_for_identical_inputs(self):
         identical_logits = torch.randn(self.batch_size, self.seq_length, self.vocab_size)
         loss = GKDTrainer.generalized_jsd_loss(identical_logits, identical_logits)
-        assert round(abs(loss.item()-0), 6) == 0
+        assert round(abs(loss.item() - 0), 6) == 0
 
 
 class GKDTrainerTester(TrlTestCase):

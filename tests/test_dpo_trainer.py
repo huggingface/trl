@@ -17,6 +17,7 @@ import unittest
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 import torch
 from datasets import Dataset, features, load_dataset
 from parameterized import parameterized
@@ -40,7 +41,6 @@ from transformers.testing_utils import (
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
 from .testing_utils import TrlTestCase, require_bitsandbytes, require_no_wandb
-import pytest
 
 
 if is_vision_available():
@@ -85,12 +85,11 @@ class TestTokenizeRow(TrlTestCase):
         )
 
         # Assert the correct output without truncation or special tokens
-        assert result == \
-            {
-                "prompt_input_ids": [464, 6766, 318],
-                "chosen_input_ids": [4171, 2],  # eos_token added
-                "rejected_input_ids": [4077, 2],  # eos_token added
-            }
+        assert result == {
+            "prompt_input_ids": [464, 6766, 318],
+            "chosen_input_ids": [4171, 2],  # eos_token added
+            "rejected_input_ids": [4077, 2],  # eos_token added
+        }
 
     def test_tokenize_row_with_truncation(self):
         # Define the input features
@@ -106,12 +105,11 @@ class TestTokenizeRow(TrlTestCase):
         )
 
         # Assert the correct output with truncation applied
-        assert result == \
-            {
-                "prompt_input_ids": [6766, 318],  # truncated to the last 2 tokens
-                "chosen_input_ids": [4171],  # truncated to 1 token
-                "rejected_input_ids": [4077],  # truncated to 1 token
-            }
+        assert result == {
+            "prompt_input_ids": [6766, 318],  # truncated to the last 2 tokens
+            "chosen_input_ids": [4171],  # truncated to 1 token
+            "rejected_input_ids": [4077],  # truncated to 1 token
+        }
 
     def test_tokenize_row_with_special_tokens(self):
         # Define the input features
@@ -127,12 +125,11 @@ class TestTokenizeRow(TrlTestCase):
         )
 
         # Assert the correct output with special tokens added
-        assert result == \
-            {
-                "prompt_input_ids": [0, 464, 6766, 318, 2],  # bos_token and eos_token added
-                "chosen_input_ids": [4171, 2],  # eos_token added
-                "rejected_input_ids": [4077, 2],  # eos_token added
-            }
+        assert result == {
+            "prompt_input_ids": [0, 464, 6766, 318, 2],  # bos_token and eos_token added
+            "chosen_input_ids": [4171, 2],  # eos_token added
+            "rejected_input_ids": [4077, 2],  # eos_token added
+        }
 
     def test_tokenize_row_with_truncation_and_special_tokens(self):
         # Define the input features
@@ -148,12 +145,11 @@ class TestTokenizeRow(TrlTestCase):
         )
 
         # Assert the correct output with both truncation and special tokens
-        assert result == \
-            {
-                "prompt_input_ids": [464, 6766, 318, 2],  # truncated to 4 tokens with bos_token and eos_token
-                "chosen_input_ids": [4171],  # truncated to 1 token
-                "rejected_input_ids": [4077],  # truncated to 1 token
-            }
+        assert result == {
+            "prompt_input_ids": [464, 6766, 318, 2],  # truncated to 4 tokens with bos_token and eos_token
+            "chosen_input_ids": [4171],  # truncated to 1 token
+            "rejected_input_ids": [4077],  # truncated to 1 token
+        }
 
 
 class DPOTrainerTester(TrlTestCase):
@@ -573,8 +569,11 @@ class DPOTrainerTester(TrlTestCase):
 
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
-        with pytest.raises(ValueError, match="`generate_during_eval=True` requires Weights and Biases, MLFlow or Comet to be installed."
-            " Please install `wandb`, `mlflow` or `comet-ml` to resolve."):
+        with pytest.raises(
+            ValueError,
+            match="`generate_during_eval=True` requires Weights and Biases, MLFlow or Comet to be installed."
+            " Please install `wandb`, `mlflow` or `comet-ml` to resolve.",
+        ):
             DPOTrainer(
                 model=self.model,
                 ref_model=None,
@@ -963,9 +962,10 @@ class DPOTrainerTester(TrlTestCase):
                 train_dataset=dummy_dataset["train"],
             )
 
-        assert "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid " \
-            "`torch.dtype` (e.g., 'float32'), but got -1." in \
-            str(context.exception)
+        assert (
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
+            "`torch.dtype` (e.g., 'float32'), but got -1." in str(context.exception)
+        )
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -984,9 +984,10 @@ class DPOTrainerTester(TrlTestCase):
                 train_dataset=dummy_dataset["train"],
             )
 
-        assert "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid " \
-            "`torch.dtype` (e.g., 'float32'), but got -1." in \
-            str(context.exception)
+        assert (
+            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
+            "`torch.dtype` (e.g., 'float32'), but got -1." in str(context.exception)
+        )
 
     def test_dpo_loss_alpha_div_f(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
@@ -1369,7 +1370,7 @@ class DPOTrainerTester(TrlTestCase):
         with torch.no_grad():
             output = trainer.model(**model_inputs)
         assert output is not None
-        assert not ("loss" in output.keys())
+        assert "loss" not in output.keys()
 
     def test_train_with_iterable_dataset(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"

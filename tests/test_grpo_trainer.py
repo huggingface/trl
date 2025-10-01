@@ -1922,19 +1922,19 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
 
         # Check for new entry with seq len 3 in buffer
         assert [[3, 4, 5], [3, 4, 5]] in buffered_prompt_ids  # excluded no-variance group
-        assert [[1013, 1014, pad_token_id], [1015, 1016, 1017]] in buffered_completion_ids  # excluded no-variance group
+        assert [
+            [1013, 1014, pad_token_id],
+            [1015, 1016, 1017],
+        ] in buffered_completion_ids  # excluded no-variance group
 
         # Check that sampled outputs contain one group with prompt_ids starting with a pad token
         assert [
-                [pad_token_id, 101, 102],
-                [pad_token_id, 102, 103],
-            ] \
-            in output_prompt_ids \
-            or [
-                [pad_token_id, 104, 105],
-                [pad_token_id, 106, 107],
-            ] \
-            in output_prompt_ids
+            [pad_token_id, 101, 102],
+            [pad_token_id, 102, 103],
+        ] in output_prompt_ids or [
+            [pad_token_id, 104, 105],
+            [pad_token_id, 106, 107],
+        ] in output_prompt_ids
 
 
 @pytest.mark.low_priority
