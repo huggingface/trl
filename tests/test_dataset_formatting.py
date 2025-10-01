@@ -24,8 +24,7 @@ from .testing_utils import TrlTestCase
 
 
 class DatasetFormattingTestCase(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.llama_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.1")
         self.chatml_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
@@ -118,8 +117,7 @@ class DatasetFormattingTestCase(TrlTestCase):
 
 
 class SetupChatFormatTestCase(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         self.model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         # remove built-in chat_template to simulate a model having no chat_template

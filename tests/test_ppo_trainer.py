@@ -30,8 +30,7 @@ if is_peft_available():
 
 
 class TestPPOTrainer(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         # Set up the models and tokenizer using the test model
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)

@@ -55,8 +55,7 @@ class BaseTester:
         trl_model_class = None
         transformers_model_class = None
 
-        def setUp(self):
-            super().setUp()
+        def setup_method(self):
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         def test_value_head(self):
@@ -189,10 +188,9 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     trl_model_class = AutoModelForCausalLMWithValueHead
     transformers_model_class = AutoModelForCausalLM
 
-    def tearDown(self):
+    def teardown_method(self):
         # free memory
         gc.collect()
-        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -303,10 +301,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     trl_model_class = AutoModelForSeq2SeqLMWithValueHead
     transformers_model_class = AutoModelForSeq2SeqLM
 
-    def tearDown(self):
+    def teardown_method(self):
         # free memory
         gc.collect()
-        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -409,8 +406,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
 
 
 class ReferenceModelTest(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.model = AutoModelForCausalLMWithValueHead.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)

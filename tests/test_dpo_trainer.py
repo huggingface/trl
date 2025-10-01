@@ -49,8 +49,7 @@ if is_vision_available():
 
 
 class TestTokenizeRow(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         # Set up the mock tokenizer with specific behaviors
         self.tokenizer = MagicMock(spec=PreTrainedTokenizerBase)
         self.tokenizer.bos_token_id = 0
@@ -154,8 +153,7 @@ class TestTokenizeRow(TrlTestCase):
 
 
 class DPOTrainerTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)

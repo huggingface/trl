@@ -29,8 +29,7 @@ if is_peft_available():
 
 
 class TestNashMDTrainer(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)

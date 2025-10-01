@@ -45,8 +45,7 @@ if is_peft_available():
 @require_torch_accelerator
 @require_peft
 class SFTTrainerSlowTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
         self.max_length = 128
@@ -58,11 +57,10 @@ class SFTTrainerSlowTester(TrlTestCase):
             task_type="CAUSAL_LM",
         )
 
-    def tearDown(self):
+    def teardown_method(self):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
-        super().tearDown()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
     def test_sft_trainer_str(self, model_name, packing):

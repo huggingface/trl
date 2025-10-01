@@ -38,8 +38,7 @@ if is_peft_available():
 @require_torch_accelerator
 @require_peft
 class DPOTrainerSlowTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         self.peft_config = LoraConfig(
             lora_alpha=16,
@@ -50,11 +49,10 @@ class DPOTrainerSlowTester(TrlTestCase):
         )
         self.max_length = 128
 
-    def tearDown(self):
+    def teardown_method(self):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
-        super().tearDown()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS)))
     def test_dpo_bare_model(self, model_id, loss_type, pre_compute_logits):

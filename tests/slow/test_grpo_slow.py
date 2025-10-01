@@ -55,17 +55,15 @@ if is_peft_available():
 @pytest.mark.slow
 @require_torch_accelerator
 class GRPOTrainerSlowTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.train_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
         self.eval_dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="test")
         self.max_length = 128
 
-    def tearDown(self):
+    def teardown_method(self):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
-        super().tearDown()
 
     @parameterized.expand(MODELS_TO_TEST)
     @require_liger_kernel

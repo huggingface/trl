@@ -21,8 +21,7 @@ from .testing_utils import TrlTestCase
 
 
 class TestDataCollatorForPreference(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.collator = DataCollatorForPreference(pad_token_id=0)
 
     def assertTensorEqual(self, tensor1, tensor2):

@@ -57,7 +57,7 @@ class TestVLLMClientServer(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -115,9 +115,7 @@ class TestVLLMClientServer(TrlTestCase):
         self.client.reset_prefix_cache()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # Close the client
         cls.client.close_communicator()
 
@@ -133,7 +131,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -191,9 +189,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         self.client.reset_prefix_cache()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # Close the client
         cls.client.close_communicator()
 
@@ -208,7 +204,7 @@ class TestVLLMClientServerTP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1 and 2, so we set VISIBLE_DEVICES to "1,2"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -249,9 +245,7 @@ class TestVLLMClientServerTP(TrlTestCase):
         self.client.reset_prefix_cache()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # Close the client
         cls.client.close_communicator()
 
@@ -266,7 +260,7 @@ class TestVLLMClientServerDP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1 and 2, so we set VISIBLE_DEVICES to "1,2"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -307,9 +301,7 @@ class TestVLLMClientServerDP(TrlTestCase):
         self.client.reset_prefix_cache()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # Close the client
         cls.client.close_communicator()
 
@@ -326,7 +318,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -380,9 +372,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         client.close_communicator()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
         kill_process(cls.server_process)

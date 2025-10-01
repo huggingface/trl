@@ -31,8 +31,7 @@ if is_peft_available():
 
 
 class TestTokenizeRow(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         # Set up the mock tokenizer with specific behaviors
         self.tokenizer = MagicMock(spec=PreTrainedTokenizerBase)
         self.tokenizer.bos_token_id = 0
@@ -206,8 +205,7 @@ class TestTokenizeRow(TrlTestCase):
 
 
 class PRMTrainerTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForTokenClassification.from_pretrained(model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)

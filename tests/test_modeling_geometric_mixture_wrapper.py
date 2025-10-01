@@ -22,8 +22,7 @@ from .testing_utils import TrlTestCase
 
 
 class TestGeometricMixtureWrapper(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = AutoModelForCausalLM.from_pretrained(model_id).to(self.device)

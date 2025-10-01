@@ -1712,8 +1712,8 @@ class GRPOTrainerTester(TrlTestCase):
 
 
 @pytest.mark.low_priority
-class TestReplayBuffer(unittest.TestCase):
-    def setUp(self):
+class TestReplayBuffer:
+    def setup_method(self):
         self.replay_buffer = ReplayBuffer(max_size=5)
 
     def test_add(self):
@@ -1780,8 +1780,8 @@ class TestReplayBuffer(unittest.TestCase):
 
 
 @pytest.mark.low_priority
-class TestUpdateWithReplayBuffer(unittest.TestCase):
-    def setUp(self):
+class TestUpdateWithReplayBuffer:
+    def setup_method(self):
         config = GRPOWithReplayBufferConfig(
             replay_buffer_size=5,
         )

@@ -25,8 +25,7 @@ class CoreTester(TrlTestCase):
     A wrapper class for testing core utils functions
     """
 
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.test_input = torch.Tensor([1, 2, 3, 4])
         self.test_mask = torch.Tensor([0, 1, 1, 0])
         self.test_input_unmasked = self.test_input[1:3]

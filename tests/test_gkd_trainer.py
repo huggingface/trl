@@ -29,7 +29,7 @@ from .testing_utils import TrlTestCase
 
 class TestGKDTrainer(TrlTestCase):
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         cls.tokenizer = AutoTokenizer.from_pretrained(model_id)
         cls.tokenizer.pad_token = cls.tokenizer.eos_token
@@ -124,8 +124,7 @@ class TestGKDTrainer(TrlTestCase):
 
 
 class TestGeneralizedJSDLoss(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.batch_size = 2
         self.seq_length = 3
         self.vocab_size = 5
@@ -200,8 +199,7 @@ class TestGeneralizedJSDLoss(TrlTestCase):
 
 
 class GKDTrainerTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.teacher_model = AutoModelForCausalLM.from_pretrained(self.model_id)

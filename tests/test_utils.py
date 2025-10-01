@@ -173,8 +173,7 @@ class TestGetPEFTConfig(TrlTestCase):
 
 
 class TestDecodeAndStripPadding(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
     def test_example_with_padding(self):
@@ -235,8 +234,7 @@ class TestGenerateModelCard(TrlTestCase):
 
 
 class TestDataCollatorForChatML(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         # Initialize the tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         if self.tokenizer.pad_token is None:
@@ -322,8 +320,7 @@ class TestDataCollatorForChatML(TrlTestCase):
 
 
 class TestBatchGeneration(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         # Initialize the tokenizer
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
