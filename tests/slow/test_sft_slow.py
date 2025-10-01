@@ -148,7 +148,7 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
@@ -252,7 +252,7 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
@@ -332,7 +332,7 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
@@ -372,7 +372,7 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
@@ -447,11 +447,11 @@ class SFTTrainerSlowTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         release_memory(trainer.model, trainer)

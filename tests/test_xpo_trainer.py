@@ -65,7 +65,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft(self):
@@ -93,7 +93,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft_and_ref_model(self):
@@ -122,7 +122,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft_model_and_peft_config(self):
@@ -153,7 +153,7 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_pre_pefted_model_implicit_ref(self):
@@ -182,7 +182,7 @@ class TestXPOTrainer(TrlTestCase):
 
         trainer.train()
 
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_llm_blender
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
@@ -213,4 +213,4 @@ class TestXPOTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]

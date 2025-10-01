@@ -119,7 +119,7 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
         for history_row, expected_row in zip(winrate_history, self.expected_winrates):
-            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
+            assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
     def test_without_ref_model(self):
         # Same as before, but without the ref_model attribute. It should use the model attribute instead
@@ -145,7 +145,7 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
         for history_row, expected_row in zip(winrate_history, self.expected_winrates):
-            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
+            assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
     def test_soft_judge(self):
         """Test that the soft judge functionality works correctly"""
@@ -188,7 +188,7 @@ class WinRateCallbackTester(TrlTestCase):
             if "eval_avg_win_prob" in h
         ]
         for history_row, expected_row in zip(winrate_history, expected_soft_winrates):
-            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
+            assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
     @require_peft
     def test_lora(self):
@@ -222,7 +222,7 @@ class WinRateCallbackTester(TrlTestCase):
         trainer.train()
         winrate_history = [h for h in trainer.state.log_history if "eval_win_rate" in h]
         for history_row, expected_row in zip(winrate_history, self.expected_winrates):
-            self.assertTrue(all(key in history_row and history_row[key] == expected_row[key] for key in expected_row))
+            assert all(key in history_row and history_row[key] == expected_row[key] for key in expected_row)
 
 
 class LogCompletionsCallbackTester(TrlTestCase):
@@ -273,12 +273,12 @@ class LogCompletionsCallbackTester(TrlTestCase):
             completions = json.load(f)
 
         # Check that the columns are correct
-        self.assertIn("step", completions["columns"])
-        self.assertIn("prompt", completions["columns"])
-        self.assertIn("completion", completions["columns"])
+        assert "step" in completions["columns"]
+        assert "prompt" in completions["columns"]
+        assert "completion" in completions["columns"]
 
         # Check that the prompt is in the log
-        self.assertIn(self.dataset["test"][0]["prompt"], completions["data"][0])
+        assert self.dataset["test"][0]["prompt"] in completions["data"][0]
 
     @require_comet
     def test_basic_comet(self):
@@ -347,7 +347,7 @@ class MergeModelCallbackTester(TrlTestCase):
         trainer.train()
         last_checkpoint = get_last_checkpoint(self.tmp_dir)
         merged_path = os.path.join(last_checkpoint, "merged")
-        self.assertTrue(os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint.")
+        assert os.path.isdir(merged_path), "Merged folder does not exist in the last checkpoint."
 
     def test_every_checkpoint(self):
         training_args = DPOConfig(
@@ -374,7 +374,7 @@ class MergeModelCallbackTester(TrlTestCase):
 
         for checkpoint in checkpoints:
             merged_path = os.path.join(checkpoint, "merged")
-            self.assertTrue(os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}.")
+            assert os.path.isdir(merged_path), f"Merged folder does not exist in checkpoint {checkpoint}."
 
 
 class BEMACallbackTester(TrlTestCase):
@@ -409,7 +409,7 @@ class BEMACallbackTester(TrlTestCase):
 
         # Check that the BEMA model was saved and can be loaded
         bema_path = os.path.join(self.tmp_dir, "bema")
-        self.assertTrue(os.path.isdir(bema_path), "BEMA directory was not created")
+        assert os.path.isdir(bema_path), "BEMA directory was not created"
         AutoModelForCausalLM.from_pretrained(bema_path)
 
     def test_update_frequency_0(self):
@@ -430,7 +430,7 @@ class BEMACallbackTester(TrlTestCase):
 
             # Total 9 steps (17 samples, batch size 8, 3 epochs).
             # BEMA starts after step 0 and updates every 2 steps → updates at 2, 4, 5, 8
-            self.assertEqual(mock_update.call_args_list, [call(2), call(4), call(6), call(8)])
+            assert mock_update.call_args_list == [call(2), call(4), call(6), call(8)]
 
     def test_update_frequency_1(self):
         """Test that BEMA callback respects the update frequency."""
@@ -450,7 +450,7 @@ class BEMACallbackTester(TrlTestCase):
 
             # Total 9 steps (17 samples, batch size 8, 3 epochs).
             # BEMA starts after step 0 and updates every 3 steps → updates at 3, 6, 9
-            self.assertEqual(mock_update.call_args_list, [call(3), call(6), call(9)])
+            assert mock_update.call_args_list == [call(3), call(6), call(9)]
 
     def test_update_frequency_2(self):
         """Test that BEMA callback respects the update frequency."""
@@ -470,7 +470,7 @@ class BEMACallbackTester(TrlTestCase):
 
             # Total 9 steps (17 samples, batch size 8, 3 epochs).
             # BEMA starts after step 3 and updates every 2 steps → updates at 5, 7, 9
-            self.assertEqual(mock_update.call_args_list, [call(5), call(7), call(9)])
+            assert mock_update.call_args_list == [call(5), call(7), call(9)]
 
     def test_no_bema(self):
         """Test that BEMACallback works without BEMA updates."""

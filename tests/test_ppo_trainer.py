@@ -107,8 +107,8 @@ class TestPPOTrainer(TrlTestCase):
                 policy_weights_updated = True
                 break
 
-        self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
-        self.assertTrue(policy_weights_updated, "Policy weights were not updated during training")
+        assert critic_weights_updated, "Critic weights were not updated during training"
+        assert policy_weights_updated, "Policy weights were not updated during training"
 
     @require_peft
     def test_peft_training(self):
@@ -171,5 +171,5 @@ class TestPPOTrainer(TrlTestCase):
                     policy_weights_updated = True
                     break
 
-        self.assertTrue(critic_weights_updated, "Critic weights were not updated during training")
-        self.assertTrue(policy_weights_updated, "Policy LoRA weights were not updated during training")
+        assert critic_weights_updated, "Critic weights were not updated during training"
+        assert policy_weights_updated, "Policy LoRA weights were not updated during training"

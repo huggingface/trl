@@ -26,7 +26,7 @@ class TestDataCollatorForPreference(TrlTestCase):
         self.collator = DataCollatorForPreference(pad_token_id=0)
 
     def assertTensorEqual(self, tensor1, tensor2):
-        self.assertTrue(torch.equal(tensor1, tensor2), f"Tensors are not equal:\n{tensor1}\n{tensor2}")
+        assert torch.equal(tensor1, tensor2), f"Tensors are not equal:\n{tensor1}\n{tensor2}"
 
     def test_padding_behavior(self):
         examples = [

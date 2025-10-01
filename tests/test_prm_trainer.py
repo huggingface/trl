@@ -75,13 +75,11 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        self.assertEqual(
-            result,
+        assert result == \
             {
                 "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
                 "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
-            },
-        )
+            }
 
     def test_tokenize_row_train_on_last_step_only(self):
         # Define the input features
@@ -102,13 +100,11 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        self.assertEqual(
-            result,
+        assert result == \
             {
                 "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
                 "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, -100, 0],
-            },
-        )
+            }
 
     def test_tokenize_row_prompt_truncation(self):
         # Define the input features
@@ -130,13 +126,11 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        self.assertEqual(
-            result,
+        assert result == \
             {
                 "input_ids": [6766, 318, 298, 4, 322, 12, 1030, 4995, 11, 22, 1030],
                 "labels": [-100, -100, -100, -100, -100, -100, 1, -100, -100, -100, 0],
-            },
-        )
+            }
 
     def test_tokenize_row_completion_truncation(self):
         # Define the input features
@@ -158,13 +152,11 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        self.assertEqual(
-            result,
+        assert result == \
             {
                 "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 4995, 11],
                 "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100],
-            },
-        )
+            }
 
     def test_tokenize_row_prompt_completion_truncation(self):
         # Define the input features
@@ -186,13 +178,11 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        self.assertEqual(
-            result,
+        assert result == \
             {
                 "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030],
                 "labels": [-100, -100, -100, -100, -100, -100, -100, -100, 1],
-            },
-        )
+            }
 
     def test_tokenize_row_multi_token_separator(self):
         # Define the input features
@@ -214,13 +204,11 @@ class TestTokenizeRow(TrlTestCase):
             is_eval=False,
         )
 
-        self.assertEqual(
-            result,
+        assert result == \
             {
                 "input_ids": [0, 465, 6766, 318, 298, 4, 322, 12, 1030, 1030, 4995, 11, 22, 1030, 1030],
                 "labels": [-100, -100, -100, -100, -100, -100, -100, -100, -100, 1, -100, -100, -100, -100, 0],
-            },
-        )
+            }
 
 
 class PRMTrainerTester(TrlTestCase):
@@ -244,12 +232,12 @@ class PRMTrainerTester(TrlTestCase):
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
     def test_train_full_pretokenized(self):
         dummy_dataset = Dataset.from_dict(
@@ -297,12 +285,12 @@ class PRMTrainerTester(TrlTestCase):
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
+                assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12)
 
     @require_peft
     def test_train_lora(self):
@@ -337,17 +325,17 @@ class PRMTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[(-1)]["train_loss"])
+        assert trainer.state.log_history[(-1)]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
+            assert not torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
 
         # Check that the non trainable parameters have not changed
         for n, param in previous_non_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertTrue(torch.allclose(param, new_param, atol=1e-12, rtol=1e-12))
+            assert torch.allclose(param, new_param, atol=1e-12, rtol=1e-12)
 
     def test_tags(self):
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_stepwise_supervision", split="train")
@@ -355,4 +343,4 @@ class PRMTrainerTester(TrlTestCase):
         trainer = PRMTrainer(
             model=self.model, args=training_args, processing_class=self.tokenizer, train_dataset=dummy_dataset
         )
-        self.assertEqual(trainer.model.model_tags, trainer._tag_names)
+        assert trainer.model.model_tags == trainer._tag_names

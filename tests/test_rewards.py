@@ -31,7 +31,7 @@ class ThinkFormatRewardTester(TrlTestCase):
         completions = [[{"content": completion}] for completion in completions]
         expected_rewards = [1.0, 1.0, 1.0, 1.0, 1.0]  # All should be valid
         rewards = think_format_reward(completions)
-        self.assertEqual(rewards, expected_rewards)
+        assert rewards == expected_rewards
 
     def test_invalid_format(self):
         completions = [
@@ -48,7 +48,7 @@ class ThinkFormatRewardTester(TrlTestCase):
         completions = [[{"content": completion}] for completion in completions]
         expected_rewards = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]  # All should be invalid
         rewards = think_format_reward(completions)
-        self.assertEqual(rewards, expected_rewards)
+        assert rewards == expected_rewards
 
     def test_mixed_format(self):
         completions = [
@@ -60,7 +60,7 @@ class ThinkFormatRewardTester(TrlTestCase):
         completions = [[{"content": completion}] for completion in completions]
         expected_rewards = [1.0, 1.0, 0.0, 0.0]
         rewards = think_format_reward(completions)
-        self.assertEqual(rewards, expected_rewards)
+        assert rewards == expected_rewards
 
 
 class SoftOverlongPunishmentRewardTester(unittest.TestCase):
@@ -70,7 +70,7 @@ class SoftOverlongPunishmentRewardTester(unittest.TestCase):
         reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
         completion_ids = [[1] * 50]  # 50 <= 80
         rewards = reward_fn(completion_ids=completion_ids)
-        self.assertEqual(rewards, [0])
+        assert rewards == [0]
 
     def test_soft_overlong_punishment_long_completion(self):
         """Test soft overlong punishment reward function with a longer than max completion."""
@@ -78,14 +78,14 @@ class SoftOverlongPunishmentRewardTester(unittest.TestCase):
         reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
         completion_ids = [[1] * 110]
         rewards = reward_fn(completion_ids)
-        self.assertEqual(rewards, [-1])
+        assert rewards == [-1]
 
     def test_soft_overlong_punishment_intermediate_completion(self):
         """Test soft overlong punishment reward function for intermediate length completion."""
         reward_fn = get_soft_overlong_punishment(max_completion_len=100, soft_punish_cache=20)
         completion_ids = [[1] * 90]  # 90 is between 80 and 100
         rewards = reward_fn(completion_ids)
-        self.assertAlmostEqual(rewards[0], -0.5, places=4)
+        assert round(abs(rewards[0]--0.5), 4) == 0
 
 
 if __name__ == "__main__":

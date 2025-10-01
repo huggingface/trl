@@ -151,8 +151,8 @@ class DPOTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
-        self.assertIsNone(trainer.ref_model)
+        assert isinstance(trainer.model, PeftModel)
+        assert trainer.ref_model is None
 
         # train the model
         trainer.train()
@@ -215,8 +215,8 @@ class DPOTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
-        self.assertIsNone(trainer.ref_model)
+        assert isinstance(trainer.model, PeftModel)
+        assert trainer.ref_model is None
 
         # train the model
         trainer.train()
