@@ -16,13 +16,12 @@
 import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import PPOConfig, PPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():

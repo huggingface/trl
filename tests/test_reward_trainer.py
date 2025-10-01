@@ -19,13 +19,12 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import RewardConfig, RewardTrainer
 from trl.trainer.reward_trainer import DataCollatorForPreference
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():

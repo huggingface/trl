@@ -25,7 +25,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
-from transformers.testing_utils import require_liger_kernel, require_peft, require_vision
+from transformers.testing_utils import require_liger_kernel, require_vision
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -36,7 +36,7 @@ from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_trainer im
 )
 from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
 
-from .testing_utils import TrlTestCase, require_vllm
+from .testing_utils import TrlTestCase, require_peft, require_vllm
 
 
 if is_peft_available():

@@ -22,7 +22,7 @@ import pytest
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import torch_device
-from transformers.utils import is_rich_available
+from transformers.utils import is_peft_available, is_rich_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import is_joblib_available, is_llm_blender_available, is_mergekit_available, is_vllm_available
@@ -32,6 +32,7 @@ require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reaso
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_llm_blender = pytest.mark.skipif(not is_llm_blender_available(), reason="test requires llm-blender")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
+require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
 require_sklearn = pytest.mark.skipif(
     not (is_sklearn_available() and is_joblib_available()), reason="test requires sklearn"

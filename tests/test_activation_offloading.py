@@ -16,12 +16,12 @@
 import torch
 from torch import nn
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_peft, require_torch_accelerator, torch_device
+from transformers.testing_utils import require_torch_accelerator, torch_device
 from transformers.utils import is_peft_available
 
 from trl.models.activation_offloading import NoOpManager, OffloadActivations
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():

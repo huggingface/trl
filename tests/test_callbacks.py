@@ -18,11 +18,10 @@ from unittest.mock import call, patch
 
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, Trainer, TrainingArguments
-from transformers.testing_utils import require_peft, require_wandb
+from transformers.testing_utils import require_wandb
 from transformers.trainer_utils import get_last_checkpoint
 from transformers.utils import is_peft_available
 
-from tests.testing_utils import require_comet, require_mergekit
 from trl import (
     BasePairwiseJudge,
     BEMACallback,
@@ -34,7 +33,7 @@ from trl import (
 )
 from trl.mergekit_utils import MergeConfig
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_comet, require_mergekit, require_peft
 
 
 if is_peft_available():

@@ -16,12 +16,11 @@
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import NashMDConfig, NashMDTrainer
 
-from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender
+from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
 
 
 if is_peft_available():

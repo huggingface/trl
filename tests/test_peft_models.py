@@ -16,15 +16,12 @@ import os
 
 import torch
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import (
-    require_peft,
-    require_torch_gpu_if_bnb_not_multi_backend_enabled,
-)
+from transformers.testing_utils import require_torch_gpu_if_bnb_not_multi_backend_enabled
 from transformers.utils import is_peft_available
 
 from trl import AutoModelForCausalLMWithValueHead
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():

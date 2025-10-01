@@ -18,12 +18,11 @@ import torch
 from datasets import Dataset, load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForTokenClassification, AutoTokenizer, PreTrainedTokenizerBase
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import PRMConfig, PRMTrainer
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
