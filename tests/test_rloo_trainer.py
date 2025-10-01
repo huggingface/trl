@@ -1353,7 +1353,7 @@ class RLOOTrainerTester(TrlTestCase):
 
         training_args = RLOOConfig(output_dir=self.tmp_dir, report_to="none")
 
-        with pytest.raises(ValueError) as context:
+        with pytest.raises(ValueError, match="must match"):
             RLOOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs=reward_models,
@@ -1361,8 +1361,6 @@ class RLOOTrainerTester(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
-
-        assert "must match" in str(context.exception)
 
     def test_correct_reward_processing_classes_list(self):
         """Test that correct list of reward_processing_classes works properly."""

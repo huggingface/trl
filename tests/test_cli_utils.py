@@ -45,9 +45,8 @@ class TestTrlParser(TrlTestCase):
 
     def test_init_with_config_field(self):
         """Test initialization with a 'config' field in the dataclass (should raise ValueError)."""
-        with pytest.raises(ValueError) as context:
+        with pytest.raises(ValueError, match="has a field named 'config'"):
             TrlParser(dataclass_types=[InvalidDataclass])
-        assert "has a field named 'config'" in str(context.exception)
 
     @patch("builtins.open", mock_open(read_data="env:\n VAR1: value1\n VAR2: value2\narg1: 2"))
     @patch("yaml.safe_load")
@@ -105,10 +104,8 @@ class TestTrlParser(TrlTestCase):
 
         args = ["--arg1", "2", "--arg2", "value", "--config", "config.yaml"]
 
-        with pytest.raises(ValueError) as context:
+        with pytest.raises(ValueError, match="`env` field should be a dict in the YAML file."):
             parser.parse_args_and_config(args)
-
-        assert str(context.exception) == "`env` field should be a dict in the YAML file."
 
     def test_parse_args_and_config_without_config(self):
         """Test parse_args_and_config without the `--config` argument."""
@@ -352,10 +349,8 @@ class TestGetDataset(unittest.TestCase):
     def test_empty_dataset_mixture_raises_error(self):
         mixture_config = DatasetMixtureConfig(datasets=[])
 
-        with pytest.raises(ValueError) as context:
+        with pytest.raises(ValueError, match="No datasets were loaded"):
             get_dataset(mixture_config)
-
-        assert "No datasets were loaded" in str(context.exception)
 
     def test_mixture_multiple_different_configs(self):
         dataset_config1 = DatasetConfig(

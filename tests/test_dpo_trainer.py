@@ -336,13 +336,12 @@ class DPOTrainerTester(TrlTestCase):
             assert "nll_loss" in metrics  # SFT loss should be computed
 
     def test_wrong_loss_weights_length(self):
-        with pytest.raises(ValueError) as context:
+        with pytest.raises(ValueError, match="Length of loss_weights list"):
             DPOConfig(
                 output_dir=self.tmp_dir,
                 loss_type=["sigmoid", "bco_pair"],
                 loss_weights=[1.0, 0.5, 0.1],  # Wrong length
             )
-        assert "Length of loss_weights list" in str(context.exception)
 
     @parameterized.expand([(None,), (0.5,)])
     def test_dpo_trainer_without_providing_ref_model(self, rpo_alpha):
@@ -954,18 +953,16 @@ class DPOTrainerTester(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError) as context:
+        with pytest.raises(
+            ValueError,
+            match="Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1.",
+        ):
             _ = DPOTrainer(
                 model=self.model_id,
                 processing_class=self.tokenizer,
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
             )
-
-        assert (
-            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
-            "`torch.dtype` (e.g., 'float32'), but got -1." in str(context.exception)
-        )
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -975,7 +972,10 @@ class DPOTrainerTester(TrlTestCase):
             report_to="none",
         )
 
-        with pytest.raises(ValueError) as context:
+        with pytest.raises(
+            ValueError,
+            match="Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid `torch.dtype` (e.g., 'float32'), but got -1.",
+        ):
             _ = DPOTrainer(
                 model=self.model_id,
                 ref_model=self.model_id,
@@ -983,11 +983,6 @@ class DPOTrainerTester(TrlTestCase):
                 args=training_args,
                 train_dataset=dummy_dataset["train"],
             )
-
-        assert (
-            "Invalid `dtype` passed to the config. Expected either 'auto' or a string representing a valid "
-            "`torch.dtype` (e.g., 'float32'), but got -1." in str(context.exception)
-        )
 
     def test_dpo_loss_alpha_div_f(self):
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
