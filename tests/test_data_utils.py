@@ -40,7 +40,7 @@ from trl.data_utils import (
 from .testing_utils import TrlTestCase
 
 
-class PrepareMultimodalMessagesTester(unittest.TestCase):
+class TestPrepareMultimodalMessages:
     def test_basic_user_assistant_conversation(self):
         """Test basic conversation with user and assistant messages."""
         messages = [

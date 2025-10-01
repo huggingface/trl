@@ -63,7 +63,7 @@ class ThinkFormatRewardTester(TrlTestCase):
         assert rewards == expected_rewards
 
 
-class SoftOverlongPunishmentRewardTester(unittest.TestCase):
+class TestSoftOverlongPunishmentReward:
     def test_soft_overlong_punishment_short_completion(self):
         """Test soft overlong punishment reward function with a short completion."""
         # length 50, with max=100 and soft cache=20, reward should be 0.

@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import tempfile
-import unittest
 from dataclasses import dataclass
 from unittest.mock import mock_open, patch
 
@@ -268,7 +267,7 @@ class TestTrlParser(TrlTestCase):
             assert result_args[0].arg2 == "config_value"  # Default from config
 
 
-class TestGetDataset(unittest.TestCase):
+class TestGetDataset:
     def test_single_dataset_with_config(self):
         mixture_config = DatasetMixtureConfig(
             datasets=[DatasetConfig(path="trl-internal-testing/zen", name="standard_language_modeling")]
