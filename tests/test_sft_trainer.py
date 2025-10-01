@@ -1306,8 +1306,14 @@ class SFTTrainerTester(TrlTestCase):
                 torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
             )
 
+    @parameterized.expand(
+        [
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
+        ]
+    )
     @require_vision
-    def test_train_vlm_prompt_completion(self):
+    def test_train_vlm_prompt_completion(self, model_id):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
 
@@ -1318,7 +1324,7 @@ class SFTTrainerTester(TrlTestCase):
             report_to="none",
         )
         trainer = SFTTrainer(
-            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            model=model_id,
             args=training_args,
             train_dataset=dataset,
         )
