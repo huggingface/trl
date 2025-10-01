@@ -798,6 +798,7 @@ class GRPOTrainer(BaseTrainer):
         num_images=None,
         pixel_attention_mask=None,
         image_sizes=None,
+        token_type_ids=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -825,6 +826,8 @@ class GRPOTrainer(BaseTrainer):
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
                 model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
+            if token_type_ids is not None:
+                model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1145,6 +1148,9 @@ class GRPOTrainer(BaseTrainer):
                 broadcast_object_list(obj_list, from_process=0)
                 all_prompt_ids, all_completion_ids, all_logprobs = obj_list[0]
 
+                # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
+
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
@@ -1391,6 +1397,12 @@ class GRPOTrainer(BaseTrainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
@@ -1578,6 +1590,8 @@ class GRPOTrainer(BaseTrainer):
             output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
         if "image_sizes" in forward_kwargs:
             output["image_sizes"] = forward_kwargs["image_sizes"]
+        if "token_type_ids" in forward_kwargs:
+            output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
         return output
@@ -1655,6 +1669,7 @@ class GRPOTrainer(BaseTrainer):
             num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
+            token_type_ids=inputs.get("token_type_ids"),
         )
 
         if self.top_entropy_quantile < 1.0:
