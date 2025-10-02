@@ -340,6 +340,10 @@ The blog post recommends using effective batch size < 32 because the authors fou
 
 ![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/4.png)
 
+## Takeaways
+
+Using TRL, you can efficiently implement LoRA adapters to match full fine-tuning performance, applying the core insights (targeting all weight matrices, choosing the right rank, and managing batch size and learning rate) without the heavy compute cost of FullFT.
+
 ## Citation
 
 ```bibtex
