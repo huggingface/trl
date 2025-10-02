@@ -13,54 +13,6 @@ First of all, let's remind ourselves of the benefits of [LoRA over full fine-tun
 
 LoRA adds adapter layers on top of the base model, which contains significantly fewer parameters than the base model itself. This design reduces GPU memory requirements and enables more efficient training. As described in the [blog](https://thinkingmachines.ai/blog/lora/), this approach was originally thought to involve a performance trade-off, although careful configuration can overcome this trade-off and match full fine-tuning performance.  
 
-
-## Key findings in optimizing LoRA
-
-The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.
-
-### 1. *LoRA performs better when applied to all weight matrices*
-
-The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. 
-
-![all layers](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/1.png)
-
-Attention-only LoRA underperforms even when using higher rank to match parameter count. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.  In python, we can do this like so:
-
-```python
-from peft import LoraConfig  
-
-peft_config = LoraConfig(target_modules="all-linear")  
-```
-
-### 2. *We can estimate trainable parameters from dataset size to determine LoRA rank*
-
-The blog post recommends selecting the LoRA rank based on the task and dataset size. The rank determines the number of trainable parameters in the LoRA adapter. According to the post, LoRA performs effectively when the number of trainable parameters exceeds the amount of information to be learned, which can be estimated from the size of the dataset.  
-
-![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/3.png)
-
-In TRL script, we could use `--lora_r` to set the rank and adapt it based on the task and dataset we're training on. The blog post recommends the following ranks based on the task and dataset size:
-
-| Task Type | Dataset Size | Recommended Rank |
-|-----------|-------------|------------------|
-| **SFT** - Small instruction | <10K examples | 32-64 |
-| **SFT** - Medium instruction | 10K-1M examples | 64-128 |
-| **SFT** - Large reasoning | >1M examples | 256+ |
-| **RL** - All tasks | Any size | 8-32 |
-
-Reinforcement learning tasks typically require lower capacity, so smaller LoRA ranks can be used. This is because policy gradient algorithms extract roughly ~1 bit of information per episode, demanding minimal parameter capacity.  
-
-### 3. *"FullFT and high-rank LoRAs have similar learning curves"*
-
-Counter-intuitively, the blog post recommends using similar learning rates to full fine-tuning. In TRL script, we could use `--learning_rate` to set the learning rate. The 1/r scaling in LoRA makes optimal learning rate approximately rank-independent.
-
-![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/2.png)
-
-### 4. *"In some scenarios, LoRA is less tolerant of large batch sizes than full fine-tuning."*
-
-The blog post recommends using effective batch size < 32 because the authors found LoRA to be less tolerant of large batch sizes. This could not be mitigated by increasing the LoRA rank. In TRL script, we could use `--per_device_train_batch_size` and `--gradient_accumulation_steps` to set the batch size.
-
-![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/4.png)
-
 ## Examples with TRL
 
 Those are the core findings of the blog post. Let's implement them in TRL scripts to train LoRA adapters.
@@ -81,8 +33,28 @@ The blog post performs SFT on a range of models and datasets from the Hub, which
 
 ```bash
 
-# Medium dataset (Tulu3) - use rank 128
-# TODO: add hf jobs command
+hf jobs uv run \
+    --flavor a100-large \
+    --timeout 8h \
+    --secrets HF_TOKEN \
+    "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" \
+    --model_name_or_path Qwen/Qwen2.5-3B-Instruct \
+    --dataset_name open-thoughts/OpenThoughts-114k \
+    --learning_rate 2.0e-5 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 16 \
+    --gradient_checkpointing \
+    --eval_strategy no \
+    --use_peft \
+    --lora_r 256 \
+    --lora_alpha 16 \
+    --lora_target_modules all-linear \
+    --output_dir Qwen2.5-3B-OpenThoughts-LoRA \
+    --report_to trackio \
+    --push_to_hub
+
 ```
 
 To use Hugging Face Jobs, you will need to be logged in to the Hugging Face Hub (`hf auth login`) and have a [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan. Check out the [Jobs documentation](https://huggingface.co/docs/huggingface_hub/en/guides/jobs) for more details.
@@ -92,25 +64,36 @@ To use Hugging Face Jobs, you will need to be logged in to the Hugging Face Hub 
 
 ```bash
 
-# Medium dataset (Tulu3) - use rank 128
-# TODO: local command
+uv run "https://raw.githubusercontent.com/huggingface/trl/main/trl/scripts/sft.py" \
+    --model_name_or_path Qwen/Qwen2.5-3B-Instruct \
+    --dataset_name open-thoughts/OpenThoughts-114k \
+    --learning_rate 2.0e-5 \
+    --num_train_epochs 1 \
+    --packing \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 16 \
+    --gradient_checkpointing \
+    --eval_strategy no \
+    --use_peft \
+    --lora_r 256 \
+    --lora_alpha 16 \
+    --lora_target_modules all-linear \
+    --output_dir Qwen2.5-3B-OpenThoughts-LoRA \
+    --report_to trackio \
+    --push_to_hub
+
 ```
 
-To run th script locally, you will need to have `uv` installed. Check out the [uv documentation](https://docs.astral.sh/uv/) for more details.
+To run the script locally, you will need to have `uv` installed. Check out the [uv documentation](https://docs.astral.sh/uv/) for more details.
 
 </hfoption>
 </hfoptions>
 
 Once training starts, you can monitor the progress in [Trackio](https://huggingface.co/trackio) which will log the url.
 
-<!-- TODO: @burtenshaw - add trackio iframe -->
-
 ### Reinforcement Learning (GRPO)
 
-The blog post performs GRPO on a range of models and datasets from the Hub, and once again we can reproduce the results in TRL.
-
-<!-- TODO: @edbeeching - describe rl function -->
-
+The blog post performs GRPO on a range of models and datasets from the Hub, and once again we can reproduce the results in TRL. 
 
 | Model | Dataset |
 |-------|---------|
@@ -118,13 +101,128 @@ The blog post performs GRPO on a range of models and datasets from the Hub, and 
 | [Llama-3.1-8B-Base](https://huggingface.co/meta-llama/Llama-3.2-1B) | [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) |
 | [Qwen3-8b-base](https://huggingface.co/Qwen/Qwen3-8b-base) | [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) |
 
-<hfoptions id="sft">
+For reinforcement learning the blog uses a a math reasoning task which we can reproduce as a python function.
+
+<details>
+<summary>Reward function</summary>
+
+```python
+def strip_reasoning_accuracy_reward(
+    completions: list[list[dict[str, str]]], solution: list[str], **kwargs
+) -> list[Optional[float]]:
+    """Reward function that strips reasoning tags and checks mathematical accuracy.
+
+    This function:
+    1. Extracts the content from completions
+    2. Removes <think></think> tags (for reasoning that shouldn't be evaluated)
+    3. Parses both the gold solution and the predicted answer
+    4. Uses math_verify to check if they are mathematically equivalent
+
+    Args:
+        completions: List of model completions, each containing a list of messages
+        solution: List of ground truth solutions
+        **kwargs: Additional arguments (ignored but required for trainer compatibility)
+
+    Returns:
+        List of rewards where:
+        - 1.0 if the answer is correct
+        - 0.0 if the answer is incorrect
+        - None if the solution is not parseable (skips this example)
+    """
+    contents = [completion[0]["content"] for completion in completions]
+    rewards = []
+
+    for content, sol in zip(contents, solution):
+        # Strip reasoning tags from completion
+        while "<think>" in content and "</think>" in content:
+            start = content.find("<think>")
+            end = content.find("</think>", start)
+            if start != -1 and end != -1:
+                content = content[:start] + content[end + len("</think>") :]
+            else:
+                break
+
+        # Parse gold solution
+        gold_parsed = parse(
+            f"${sol}$",
+            extraction_config=[
+                LatexExtractionConfig(
+                    boxed_match_priority=0, try_extract_without_anchor=True
+                )
+            ],
+        )
+
+        if len(gold_parsed) != 0:
+            # We require the answer to be provided in correct latex (no malformed operators)
+            answer_parsed = parse(
+                content,
+                extraction_config=[
+                    LatexExtractionConfig(
+                        boxed_match_priority=0,
+                        normalization_config=NormalizationConfig(
+                            basic_latex=True,
+                            units=True,
+                            malformed_operators=False,
+                            nits=False,
+                            boxed=True,
+                        ),
+                        try_extract_without_anchor=False,
+                    )
+                ],
+                extraction_mode="first_match",
+            )
+
+            # Compute binary rewards if verifiable, `None` otherwise to skip this example
+            try:
+                reward = float(verify(gold_parsed, answer_parsed))
+            except Exception as e:
+                print(
+                    f"verify failed: {e}, answer: {answer_parsed}, gold: {gold_parsed}"
+                )
+                reward = None
+        else:
+            # If the gold solution is not parseable, we assign `None` to skip this example
+            reward = None
+
+        rewards.append(reward)
+
+    return rewards
+```
+
+</details>
+
+<hfoptions id="grpo">
 <hfoption id="jobs">
 
 ```bash
 
-# Medium dataset (Tulu3) - use rank 128
-# TODO: add hf jobs command
+hf jobs uv run \
+    --flavor a100-large \
+    --timeout 4h \
+    --secrets HF_TOKEN \
+    --env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/main/grpo_full.py" \
+    --model_name_or_path Qwen/Qwen3-0.6B \
+    --dataset_name HuggingFaceH4/OpenR1-Math-220k-default-verified \
+    --output_dir grpo-full-qwen3-0.6b \
+    --learning_rate 1.0e-5 \
+    --lr_scheduler_type cosine \
+    --warmup_ratio 0.0 \
+    --max_grad_norm 1.0 \
+    --beta 0.0 \
+    --max_prompt_length 1024 \
+    --max_completion_length 8192 \
+    --num_generations 8 \
+    --generation_batch_size 8 \
+    --gradient_accumulation_steps 16 \
+    --per_device_train_batch_size 1 \
+    --num_train_epochs 1 \
+    --vllm_mode colocate \
+    --save_strategy steps \
+    --save_steps 100 \
+    --save_total_limit 1 \
+    --logging_steps 1 \
+    --report_to trackio
 ```
 
 To use Hugging Face Jobs, you will need to be logged in to the Hugging Face Hub (`hf auth login`) and have a [Pro](https://hf.co/pro), [Team](https://hf.co/enterprise), or [Enterprise](https://hf.co/enterprise) plan. Check out the [Jobs documentation](https://huggingface.co/docs/huggingface_hub/en/guides/jobs) for more details.
@@ -134,25 +232,83 @@ To use Hugging Face Jobs, you will need to be logged in to the Hugging Face Hub 
 
 ```bash
 
-# Medium dataset (Tulu3) - use rank 128
-# TODO: local command
+uv run "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/main/grpo_full.py" \
+    --model_name_or_path Qwen/Qwen3-0.6B \
+    --dataset_name HuggingFaceH4/OpenR1-Math-220k-default-verified \
+    --output_dir grpo-full-qwen3-0.6b \
+    --learning_rate 1.0e-5 \
+    --lr_scheduler_type cosine \
+    --warmup_ratio 0.0 \
+    --max_grad_norm 1.0 \
+    --beta 0.0 \
+    --max_prompt_length 1024 \
+    --max_completion_length 8192 \
+    --num_generations 8 \
+    --generation_batch_size 8 \
+    --gradient_accumulation_steps 16 \
+    --per_device_train_batch_size 1 \
+    --num_train_epochs 1 \
+    --vllm_mode colocate \
+    --save_strategy steps \
+    --save_steps 100 \
+    --save_total_limit 1 \
+    --logging_steps 1 \
+    --report_to trackio
 ```
 
-To run th script locally, you will need to have `uv` installed. Check out the [uv documentation](https://docs.astral.sh/uv/) for more details.
+To run the script locally, you will need to have `uv` installed. Check out the [uv documentation](https://docs.astral.sh/uv/) for more details.
 
 </hfoption>
 </hfoptions>
 
-<!-- TODO: @burtenshaw - add trackio iframe -->
+The reinforcement learning script with GRPO is implemented as custom scripts in TRL which uses the reward function shown above. You can review it at [`grpo.py`](https://huggingface.co/datasets/burtenshaw/lora-without-regrets/blob/main/grpo.py) - Reinforcement learning with LoRA best practices
 
-## Scripts
+## Key findings in optimizing LoRA
 
-The above commands are both implemented as custom scripts in TRL based on the configurations recommended by the blog post.  
+The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.
 
-- [`sft_lora.py`]() - Supervised fine-tuning with LoRA best practices
-- [`grpo_lora.py`]() - Reinforcement learning with LoRA best practices
+### 1. *LoRA performs better when applied to all weight matrices*
 
-<!-- TODO: @burtenshaw - add scripts links -->
+The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. 
+
+![all layers](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/1.png)
+
+Attention-only LoRA underperforms even when using higher rank to match parameter count. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.  In python, we can do this like so:
+
+```python
+from peft import LoraConfig  
+
+peft_config = LoraConfig(target_modules="all-linear")  
+```
+
+### 2. *The adapter needs sufficient capacity to learn from the dataset*
+
+The blog post recommends use a sufficient LoRA rank to learn from the dataset. The rank determines the number of trainable parameters in the LoRA adapter. Therefore, "For datasets that exceed LoRA capacity, LoRA underperforms FullFT". 
+
+![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/3.png)
+
+In TRL script, we could use `--lora_r` to set the rank and adapt it based on the task and dataset we're training on. The blog post recommends the following ranks based on the task and dataset size:
+
+Reinforcement learning tasks typically require lower capacity, so smaller LoRA ranks can be used. This is because policy gradient algorithms extract roughly ~1 bit of information per episode, demanding minimal parameter capacity.  
+
+The blog post defines the ideal dataset size for LoRA to match full fine-tuning as "Post-training scale". Which we can use to determine the recommended rank for SFT and RL LoRA's as:
+
+| Task Type | Dataset Size | Recommended Rank |
+|-----------|-------------|------------------|
+| **SFT** | Post-training scale | 256 |
+| **RL** | Any size | 8-32 |
+
+### 3. *"FullFT and high-rank LoRAs have similar learning curves"*
+
+Counter-intuitively, the blog post recommends using similar learning rates to full fine-tuning. In TRL script, we could use `--learning_rate` to set the learning rate. The 1/r scaling in LoRA makes optimal learning rate approximately rank-independent.
+
+![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/2.png)
+
+### 4. *"In some scenarios, LoRA is less tolerant of large batch sizes than full fine-tuning."*
+
+The blog post recommends using effective batch size < 32 because the authors found LoRA to be less tolerant of large batch sizes. This could not be mitigated by increasing the LoRA rank. In TRL script, we could use `--per_device_train_batch_size` and `--gradient_accumulation_steps` to set the batch size.
+
+![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/4.png)
 
 ## Citation
 
