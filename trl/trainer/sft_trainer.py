@@ -61,7 +61,7 @@ from .utils import (
 
 
 if is_peft_available():
-    from peft import PeftConfig, PeftModel
+    from peft import PeftConfig, PeftModel, PeftType
 
 
 logger = logging.get_logger(__name__)
@@ -1116,13 +1116,15 @@ class SFTTrainer(BaseTrainer):
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 per_token_entropy = entropy_from_logits(outputs.logits)
+                # When using Prompt Tuning, skip the virtual tokens in logits before entropy computation, since they
+                # do not correspond to actual input tokens.
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    per_token_entropy = per_token_entropy[:, self.num_virtual_tokens :]
                 if "attention_mask" in inputs:
                     attention_mask = inputs["attention_mask"]
-                    # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
-                    virtual_attention_mask = torch.ones(
-                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-                    )
-                    attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
                     entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
                 elif "position_ids" in inputs:
                     entropy = torch.mean(per_token_entropy)
@@ -1157,9 +1159,12 @@ class SFTTrainer(BaseTrainer):
                     shift_logits = outputs.logits[..., :-1, :].contiguous()
                     shift_labels = labels[..., 1:].contiguous()
 
-                # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
-                # not correspond to actual input labels.
-                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
+                # Prompt Tuning and P-Tuning output logits for virtual tokens but Prefix-Tuning does not.
+                if (
+                    self.num_virtual_tokens > 0
+                    and model.peft_config[model.active_adapter].peft_type != PeftType.PREFIX_TUNING
+                ):
+                    shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
 
                 # Get predictions
                 predictions = shift_logits.argmax(dim=-1)
