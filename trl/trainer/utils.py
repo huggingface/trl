@@ -217,6 +217,7 @@ def ensure_master_addr_port(addr: Optional[str] = None, port: Optional[int] = No
 
 @dataclass
 class RewardDataCollatorWithPadding:
+    # docstyle-ignore
     r"""
     Reward DataCollator class that pads the inputs to the maximum length of the batch.
 
@@ -1251,6 +1252,7 @@ def empty_cache() -> None:
 
 
 def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenizerBase) -> list[str]:
+    # docstyle-ignore
     """
     Decodes the input tensor and strips the padding tokens.
 

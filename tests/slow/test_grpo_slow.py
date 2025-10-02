@@ -208,14 +208,14 @@ class GRPOTrainerSlowTester(TrlTestCase):
 
         release_memory(model, trainer)
 
-    @require_flash_attn
-    @require_bitsandbytes
-    @require_peft
     @parameterized.expand(
         [
             ("HuggingFaceTB/SmolVLM-Instruct",),  # Only test the smaller model to avoid OOM
         ]
     )
+    @require_flash_attn
+    @require_bitsandbytes
+    @require_peft
     def test_vlm_training(self, model_name):
         """
         Test VLM training with aggressive memory optimization.

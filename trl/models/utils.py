@@ -90,6 +90,7 @@ def setup_chat_format(
     format: Optional[Literal["chatml"]] = "chatml",
     resize_to_multiple_of: Optional[int] = None,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+    # docstyle-ignore
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
     embedding layer of the model based on the new special tokens.
