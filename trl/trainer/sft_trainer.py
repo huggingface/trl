@@ -413,7 +413,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         )
 
         to_concat_keys = {"input_ids", "attention_mask"}
-        for candidate_key in (processed_prompts.keys() & processed_completions.keys()) - to_concat_keys.copy():
+        for candidate_key in (processed_prompts.keys() & processed_completions.keys()) - to_concat_keys:
             if (
                 processed_prompts[candidate_key].shape == processed_prompts["attention_mask"].shape
                 and processed_completions[candidate_key].shape == processed_completions["attention_mask"].shape
