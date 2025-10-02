@@ -330,7 +330,7 @@ The blog post defines the ideal dataset size for LoRA to match full fine-tuning 
 | Task Type | Dataset Size | Recommended Rank |
 |-----------|-------------|------------------|
 | **SFT** | Post-training scale | 256 |
-| **RL** | Any size | 8-32 |
+| **RL** | Any size | 1-32 |
 
 ### 3. *"FullFT and high-rank LoRAs have similar learning curves"*
 
