@@ -271,6 +271,20 @@ We were able to reproduce the results of the blog post using TRL and the SmolLM3
 
 ![train reward](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/5.png)
 
+Here are the parameters we used to train the above models
+
+| Parameter                       | LoRA                                               | Full FT                        |
+|----------------------------------|----------------------------------------------------|-------------------------------|
+| `--model_name_or_path`           | HuggingFaceTB/SmolLM3-3B                           | HuggingFaceTB/SmolLM3-3B      |
+| `--dataset_name`                 | HuggingFaceH4/OpenR1-Math-220k-default-verified    | HuggingFaceH4/OpenR1-Math-220k-default-verified |
+| `--learning_rate`                | 1.0e-6                                             | 1.0e-5                        |
+| `--max_prompt_length`            | 1024                                               | 1024                          |
+| `--max_completion_length`        | 4096                                               | 4096                          |
+| `--lora_r`                       | 1                                                  | -                           |
+| `--lora_alpha`                   | 32                                                 | -                           |
+| `--lora_dropout`                 | 0.0                                                | -                           |
+| `--lora_target_modules`          | all-linear                                         | -                           |
+
 Let's break down the key findings of the blog post and how we were able to reproduce them.
 
 ### 1. *LoRA performs better when applied to all weight matrices*
