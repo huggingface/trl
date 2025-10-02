@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import pathlib
-import unittest
 
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
@@ -653,7 +653,7 @@ class TestRewardTrainer(TrlTestCase):
             original_template_content = f.read()
         assert template_content == original_template_content, "Chat template content does not match the original"
 
-    @unittest.skip("Skipping until we have a dataset with tool calls")
+    @pytest.mark.skip(reason="Skipping until we have a dataset with tool calls")
     def test_train_toolcall_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", split="train")

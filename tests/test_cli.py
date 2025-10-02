@@ -15,18 +15,18 @@
 
 import os
 import sys
-import unittest
 from io import StringIO
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from .testing_utils import TrlTestCase
 
 
-@unittest.skipIf(
+@pytest.mark.skipif(
     sys.version_info < (3, 10),
-    "Transformers' generation codebase uses a Python >3.10 syntax (`str | None`), which seems to cause the CLI tests "
+    reason="Transformers' generation codebase uses a Python >3.10 syntax (`str | None`), which seems to cause the CLI tests "
     "to fail on Python <3.10.",  # let's say it's a known issue, but not expected to be fixed, because too niche
 )
 class TestCLI(TrlTestCase):
@@ -113,7 +113,3 @@ class TestCLI(TrlTestCase):
 
         # Verify that output directory was created
         assert os.path.exists(output_dir)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 
 from trl.rewards import get_soft_overlong_punishment, think_format_reward
 
@@ -86,7 +85,3 @@ class TestSoftOverlongPunishmentReward:
         completion_ids = [[1] * 90]  # 90 is between 80 and 100
         rewards = reward_fn(completion_ids)
         assert round(abs(rewards[0] - -0.5), 4) == 0
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 from unittest.mock import patch
 
 import pytest
@@ -580,9 +579,9 @@ class TestRLOOTrainer(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
     @require_vllm
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM
@@ -627,7 +626,7 @@ class TestRLOOTrainer(TrlTestCase):
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_guided_decoding(self):
         """Test that training works with vLLM for generation with guided decoding."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -696,7 +695,7 @@ class TestRLOOTrainer(TrlTestCase):
             assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1262,7 +1261,7 @@ class TestRLOOTrainer(TrlTestCase):
     )
     @require_vision
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1416,7 +1415,3 @@ class TestRLOOTrainer(TrlTestCase):
 
         assert len(trainer.reward_processing_classes) == 1
         assert trainer.reward_processing_classes[0] == single_processing_class
-
-
-if __name__ == "__main__":
-    unittest.main()

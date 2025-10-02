@@ -15,7 +15,6 @@
 import copy
 import itertools
 import textwrap
-import unittest
 from time import strftime
 
 from datasets import Dataset, DatasetDict
@@ -977,8 +976,3 @@ class TestMaybeConvertToChatML(TrlTestCase):
             ]
         }
         assert maybe_convert_to_chatml(example) == example
-
-
-# Run the tests
-if __name__ == "__main__":
-    unittest.main()

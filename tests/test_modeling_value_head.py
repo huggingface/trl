@@ -13,8 +13,8 @@
 # limitations under the License.
 
 import gc
-import unittest
 
+import pytest
 import torch
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
@@ -273,7 +273,7 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
             # check dummy forward pass works in half precision
             _ = trl_model(dummy_input)
 
-    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    @pytest.mark.skip(reason="This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
@@ -364,7 +364,7 @@ class TestSeq2SeqValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         # Just check if the generation works
         _ = model.generate(input_ids, decoder_input_ids=decoder_input_ids, generation_config=generation_config)
 
-    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    @pytest.mark.skip(reason="This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
             model = self.trl_model_class.from_pretrained(model_name)

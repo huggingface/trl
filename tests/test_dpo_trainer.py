@@ -14,7 +14,6 @@
 
 import re
 import sys
-import unittest
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -714,9 +713,9 @@ class TestDPOTrainer(TrlTestCase):
     )
     @require_bitsandbytes
     @require_peft
-    @unittest.skipIf(
+    @pytest.mark.skipif(
         get_device_properties()[0] == "cuda" and get_device_properties()[1] < 8,
-        "Skipping because bf16 not supported on CUDA GPU with capability < 8.0",
+        reason="Skipping because bf16 not supported on CUDA GPU with capability < 8.0",
     )
     def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
         from peft import LoraConfig
@@ -1301,7 +1300,7 @@ class TestDPOTrainer(TrlTestCase):
         ]
     )
     @require_liger_kernel
-    @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
+    @pytest.mark.skipif(not (sys.version_info >= (3, 10)), reason="Liger kernel is not supported on Python 3.9")
     def test_dpo_trainer_with_liger(self, beta, loss_type):
         """Test DPO trainer with Liger loss enabled across supported loss types.
 
@@ -1512,7 +1511,3 @@ class TestDPOConfig(TrlTestCase):
         # Serialization: TrainingArguments.to_dict should yield the enum's string value
         configparser_dict = training_args.to_dict()
         assert configparser_dict["f_divergence_type"] == f_divergence_type.value
-
-
-if __name__ == "__main__":
-    unittest.main()
