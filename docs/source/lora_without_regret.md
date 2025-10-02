@@ -201,27 +201,32 @@ hf jobs uv run \
     --timeout 4h \
     --secrets HF_TOKEN \
     --env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-    "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/main/grpo_full.py" \
+    "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/main/grpo.py" \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --dataset_name HuggingFaceH4/OpenR1-Math-220k-default-verified \
     --output_dir grpo-full-qwen3-0.6b \
-    --learning_rate 1.0e-5 \
+    --learning_rate 1.0e-6 \
     --lr_scheduler_type cosine \
     --warmup_ratio 0.0 \
     --max_grad_norm 1.0 \
     --beta 0.0 \
     --max_prompt_length 1024 \
-    --max_completion_length 8192 \
-    --num_generations 8 \
-    --generation_batch_size 8 \
-    --gradient_accumulation_steps 16 \
+    --max_completion_length 4096 \
+    --num_generations 16 \
+    --generation_batch_size 16 \
+    --gradient_accumulation_steps 8 \
     --per_device_train_batch_size 1 \
     --num_train_epochs 1 \
+    --lora_r 1 \
+    --lora_alpha 32 \
+    --lora_dropout 0.0 \
+    --lora_target_modules all-linear \
     --vllm_mode colocate \
     --save_strategy steps \
-    --save_steps 100 \
+    --save_steps 50 \
     --save_total_limit 1 \
     --logging_steps 1 \
+    --max_steps 200 \
     --report_to trackio
 ```
 
@@ -232,27 +237,32 @@ To use Hugging Face Jobs, you will need to be logged in to the Hugging Face Hub 
 
 ```bash
 
-uv run "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/main/grpo_full.py" \
+uv run "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/main/grpo.py" \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --dataset_name HuggingFaceH4/OpenR1-Math-220k-default-verified \
     --output_dir grpo-full-qwen3-0.6b \
-    --learning_rate 1.0e-5 \
+    --learning_rate 1.0e-6 \
     --lr_scheduler_type cosine \
     --warmup_ratio 0.0 \
     --max_grad_norm 1.0 \
     --beta 0.0 \
     --max_prompt_length 1024 \
-    --max_completion_length 8192 \
-    --num_generations 8 \
-    --generation_batch_size 8 \
-    --gradient_accumulation_steps 16 \
+    --max_completion_length 4096 \
+    --num_generations 16 \
+    --generation_batch_size 16 \
+    --gradient_accumulation_steps 8 \
     --per_device_train_batch_size 1 \
     --num_train_epochs 1 \
+    --lora_r 1 \
+    --lora_alpha 32 \
+    --lora_dropout 0.0 \
+    --lora_target_modules all-linear \
     --vllm_mode colocate \
     --save_strategy steps \
-    --save_steps 100 \
+    --save_steps 50 \
     --save_total_limit 1 \
     --logging_steps 1 \
+    --max_steps 200 \
     --report_to trackio
 ```
 
