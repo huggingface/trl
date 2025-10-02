@@ -1025,136 +1025,79 @@ class SplitPixelValuesByGridTester(TrlTestCase):
 class TruncateWithProtectedTokensTester(TrlTestCase):
     def test_basic_example(self):
         """Test the basic example from the problem description."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5], [6, 7, 8, 9, 10]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [2, 3, 6]
+        prompt_ids = [1, 2, 3, 4, 5]
+        protected_tokens = [2, 3]
         target_length = 3
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        expected_ids = torch.tensor([[2, 3, 5], [6, 9, 10]])
-        expected_mask = torch.ones_like(expected_ids)
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-        self.assertTrue(torch.equal(new_mask, expected_mask))
+        expected_ids = [2, 3, 5]
+        self.assertEqual(new_ids, expected_ids)
 
     def test_no_truncation_needed(self):
         """Test when target length equals current length."""
-        prompt_ids = torch.tensor([[1, 2, 3]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [1, 2, 3]
         protected_tokens = [2]
         target_length = 3
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        self.assertTrue(torch.equal(new_ids, prompt_ids))
-        self.assertTrue(torch.equal(new_mask, prompt_mask))
+        self.assertEqual(new_ids, prompt_ids)
 
     def test_no_protected_tokens(self):
         """Test truncation with no protected tokens (normal right truncation)."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [1, 2, 3, 4, 5]
         protected_tokens = []
         target_length = 3
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        expected_ids = torch.tensor([[3, 4, 5]])  # Last 3 tokens
-        self.assertTrue(torch.equal(new_ids, expected_ids))
+        expected_ids = [3, 4, 5]  # Last 3 tokens
+        self.assertEqual(new_ids, expected_ids)
 
     def test_all_tokens_protected(self):
         """Test when all remaining tokens are protected."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [1, 2, 3, 4, 5]
         protected_tokens = [3, 4, 5]
         target_length = 3
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        expected_ids = torch.tensor([[3, 4, 5]])
-        self.assertTrue(torch.equal(new_ids, expected_ids))
+        expected_ids = [3, 4, 5]
+        self.assertEqual(new_ids, expected_ids)
 
     def test_too_many_protected_tokens(self):
         """Test error when too many protected tokens for target length."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [1, 2, 3, 4, 5]
         protected_tokens = [1, 2, 3, 4]
         target_length = 3
 
         with self.assertRaises(ValueError):
-            truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+            truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
     def test_single_batch_single_token(self):
         """Test edge case with single batch and single token."""
-        prompt_ids = torch.tensor([[5]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [5]
         protected_tokens = [5]
         target_length = 1
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        self.assertTrue(torch.equal(new_ids, prompt_ids))
-
-    def test_mask_preservation(self):
-        """Test that mask values are correctly preserved."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.tensor([[1, 0, 1, 0, 1]])  # Mixed mask values
-        protected_tokens = [2, 4]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[2, 4, 5]])
-        expected_mask = torch.tensor([[0, 0, 1]])  # Corresponding mask values
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-
-    def test_multiple_batches_different_protected(self):
-        """Test multiple batches where protected tokens appear differently."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5], [2, 6, 7, 8, 9], [10, 11, 12, 2, 13]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = [2]
-        target_length = 3
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor(
-            [
-                [2, 4, 5],  # 2 is protected, keep last 2 non-protected (4,5)
-                [2, 8, 9],  # 2 is protected, keep last 2 non-protected (8,9)
-                [12, 2, 13],  # 2 is protected, keep last 2 non-protected (12,13)
-            ]
-        )
-
-        self.assertTrue(torch.equal(new_ids, expected_ids))
+        self.assertEqual(new_ids, prompt_ids)
 
     def test_order_preservation(self):
         """Test that relative order is preserved."""
-        prompt_ids = torch.tensor([[10, 2, 20, 3, 30, 40]])
-        prompt_mask = torch.ones_like(prompt_ids)
+        prompt_ids = [10, 2, 20, 3, 30, 40]
         protected_tokens = [2, 3]
         target_length = 4
 
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
+        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        # Should keep protected tokens 2,3 and last 2 non-protected tokens 30,40
+        # Should keep protected tokens 2, 3 and last 2 non-protected tokens 30, 40
         # Order should be: 2, 3, 30, 40 (maintaining original relative positions)
-        expected_ids = torch.tensor([[2, 3, 30, 40]])
+        expected_ids = [2, 3, 30, 40]
 
-        self.assertTrue(torch.equal(new_ids, expected_ids))
-
-    def test_empty_protected_tokens_list(self):
-        """Test with empty protected tokens list."""
-        prompt_ids = torch.tensor([[1, 2, 3, 4, 5]])
-        prompt_mask = torch.ones_like(prompt_ids)
-        protected_tokens = []
-        target_length = 2
-
-        new_ids, new_mask = truncate_with_protected_tokens(prompt_ids, prompt_mask, target_length, protected_tokens)
-
-        expected_ids = torch.tensor([[4, 5]])  # Last 2 tokens
-        self.assertTrue(torch.equal(new_ids, expected_ids))
+        self.assertEqual(new_ids, expected_ids)
 
 
 class UnsplitPixelValuesByGridTester(TrlTestCase):

@@ -90,15 +90,13 @@ def setup_chat_format(
     format: Optional[Literal["chatml"]] = "chatml",
     resize_to_multiple_of: Optional[int] = None,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
+    # docstyle-ignore
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
     embedding layer of the model based on the new special tokens.
 
-    <Tip warning="true">
-
-    This function is deprecated and will be removed in version 0.26.0. Please use [`clone_chat_template`] instead.
-
-    </Tip>
+    > [!WARNING]
+    > This function is deprecated and will be removed in version 0.26.0. Please use [`clone_chat_template`] instead.
 
     If the model already has a chat template, this will throw an error. If you want to overwrite it, please set
     `tokenizer.chat_template` to `None`.

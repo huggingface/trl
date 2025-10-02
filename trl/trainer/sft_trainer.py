@@ -15,10 +15,9 @@
 import contextlib
 import os
 from collections import defaultdict
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -56,6 +55,7 @@ from .utils import (
     entropy_from_logits,
     flush_left,
     pad,
+    remove_none_values,
     selective_log_softmax,
 )
 
@@ -66,7 +66,6 @@ if is_peft_available():
 
 logger = logging.get_logger(__name__)
 
-TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
 FLASH_ATTENTION_VARIANTS = {
     "flash_attention_2",
@@ -75,38 +74,6 @@ FLASH_ATTENTION_VARIANTS = {
     "kernels-community/vllm-flash-attn3",
     "kernels-community/flash-attn3",
 }
-
-
-def remove_none_values(example: TListOrMapping) -> TListOrMapping:
-    """
-    Recursively removes entries with `None` values from a nested structure (list or dictionary).
-
-    Args:
-        example (`list` or `Mapping`):
-            Input nested structure (list or dictionary) from which to remove `None`.
-
-    Example:
-    ```python
-    >>> [
-    ...     {
-    ...         "a": {"aa": None, "ab": 1},
-    ...         "b": "my_string",
-    ...     }
-    ... ]
-    >>> remove_none_values(example)
-    [{'a': {'ab': 1}, 'b': 'my_string'}]
-    ```
-    """
-    if isinstance(example, list):
-        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
-    elif isinstance(example, Mapping):
-        return {
-            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
-            for key, value in example.items()
-            if value is not None
-        }
-    else:
-        raise TypeError("Input must be a list or a dictionary.")
 
 
 def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
