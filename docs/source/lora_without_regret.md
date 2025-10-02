@@ -281,6 +281,10 @@ We were able to reproduce the results of the blog post using TRL and the SmolLM3
 
 ![train reward](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/5.png)
 
+And most importantly, the LoRA model uses significantly less memory than the full fine-tuning model, as we can see in the figure below.
+
+![memory usage](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/6.png)
+
 Here are the parameters we used to train the above models
 
 | Parameter                       | LoRA                                               | Full FT                        |
