@@ -1,30 +1,40 @@
 # LoRA Without Regret
 
-Recent research from the team at [Thinking Machines Lab](https://thinkingmachines.ai/blog/lora/) (Schulman et al., 2025) shows that **LoRA can match full fine-tuning performance** when configured correctly, while using only ~67% of the compute. These findings are exciting to TRL users because they're straight forward to implement and can improve model performance on smaller budgets.
+Recent research from the team at [Thinking Machines Lab](https://thinkingmachines.ai/blog/lora/) (Schulman et al., 2025) shows that **LoRA can match full fine-tuning performance** when configured correctly, while using only ~67% of the compute. These findings are exciting to TRL users because they're straightforward to implement and can improve model performance on smaller budgets.
 
 This guide provides simple instructions to reproduce the results of the blog post in TRL.
+
+> [!TIP]
+> It is recommended to read the blog post before following this guide, or to consult both resources in parallel for best results.
 
 ## Benefits of LoRA over full fine-tuning
 
 First of all, let's remind ourselves of the benefits of [LoRA over full fine-tuning](https://huggingface.co/docs/trl/en/peft_integration).
 
-LoRA trains an adapter layer on top of the base model, which contains significantly fewer parameters than the base model itself. This allows us to train the model on less GPU memory. It has generally been accepted that this comes with a trade-off in performance. The [blog post](https://thinkingmachines.ai/blog/lora/) proposes that with the correct configuration, LoRA can overcome this tradeoff and match full fine-tuning performance.
+LoRA adds adapter layers on top of the base model, which contains significantly fewer parameters than the base model itself. This design reduces GPU memory requirements and enables more efficient training. As described in the [blog](https://thinkingmachines.ai/blog/lora/), this approach was originally thought to involve a performance trade-off, although careful configuration can overcome this trade-off and match full fine-tuning performance.  
+
 
 ## Key findings in optimizing LoRA
 
-Let's dive into the key findings of the blog post one by one and see how we can implement them in TRL scripts. Below, we will reproduce the results of the blog post using complete the TRL scripts that you can run locally or on Hugging Face Jobs.
+The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.
 
 ### 1. *LoRA performs better when applied to all weight matrices*
 
-The authors recommend applying LoRA to all weight matrices instead of attention-only LoRA targeted at attention layers, and this is not overcome by increasing the rank. In TRL script, we could use `--lora_target_modules all-linear` to apply LoRA to all weight matrices.
+The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. 
 
 ![all layers](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/1.png)
 
-Attention-only LoRA underperforms even when using higher rank to match parameter count.
+Attention-only LoRA underperforms even when using higher rank to match parameter count. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.  In python, we can do this like so:
+
+```python
+from peft import LoraConfig  
+
+peft_config = LoraConfig(target_modules="all-linear")  
+```
 
 ### 2. *We can estimate trainable parameters from dataset size to determine LoRA rank*
 
-The blog post recommends choosing LoRA rank based on task and dataset size. LoRA rank controls the number of trainable parameters in the LoRA adapter. And the post proposes that LoRA works well when the number of parameters exceeds the amount of information to be learned, which we should estimate from the dataset size.
+The blog post recommends selecting the LoRA rank based on the task and dataset size. The rank determines the number of trainable parameters in the LoRA adapter. According to the post, LoRA performs effectively when the number of trainable parameters exceeds the amount of information to be learned, which can be estimated from the size of the dataset.  
 
 ![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/3.png)
 
@@ -37,7 +47,7 @@ In TRL script, we could use `--lora_r` to set the rank and adapt it based on the
 | **SFT** - Large reasoning | >1M examples | 256+ |
 | **RL** - All tasks | Any size | 8-32 |
 
-Reinforcement learning requires minimal capacity, so we can use lower ranks. This is because policy gradient algorithms learn only ~1 bit per episode, requiring minimal capacity.
+Reinforcement learning tasks typically require lower capacity, so smaller LoRA ranks can be used. This is because policy gradient algorithms extract roughly ~1 bit of information per episode, demanding minimal parameter capacity.  
 
 ### 3. *"FullFT and high-rank LoRAs have similar learning curves"*
 
@@ -47,7 +57,7 @@ Counter-intuitively, the blog post recommends using similar learning rates to fu
 
 ### 4. *"In some scenarios, LoRA is less tolerant of large batch sizes than full fine-tuning."*
 
-The blog post recommends using effective batch size < 256 because the authors found LoRA to be less tolerant of large batch sizes. This could not be mitigated by increasing the LoRA rank. In TRL script, we could use `--per_device_train_batch_size` and `--gradient_accumulation_steps` to set the batch size.
+The blog post recommends using effective batch size < 32 because the authors found LoRA to be less tolerant of large batch sizes. This could not be mitigated by increasing the LoRA rank. In TRL script, we could use `--per_device_train_batch_size` and `--gradient_accumulation_steps` to set the batch size.
 
 ![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/4.png)
 
@@ -137,7 +147,7 @@ To run th script locally, you will need to have `uv` installed. Check out the [u
 
 ## Scripts
 
-The above commands are both implement as custom scripts in TRL based on the configurations recommended by the blog post.
+The above commands are both implemented as custom scripts in TRL based on the configurations recommended by the blog post.  
 
 - [`sft_lora.py`]() - Supervised fine-tuning with LoRA best practices
 - [`grpo_lora.py`]() - Reinforcement learning with LoRA best practices
@@ -147,12 +157,12 @@ The above commands are both implement as custom scripts in TRL based on the conf
 ## Citation
 
 ```bibtex
-@article{schulman2025lora,
-  author = {John Schulman and Thinking Machines Lab},
-  title = {LoRA Without Regret},
-  journal = {Thinking Machines Lab: Connectionism},
-  year = {2025},
-  note = {https://thinkingmachines.ai/blog/lora/},
-  doi = {10.64434/tml.20250929},
-}
+@article{schulman2025lora,  
+    title        = {{LoRA Without Regret}},  
+    author       = {John Schulman and Thinking Machines Lab},  
+    year         = 2025,  
+    journal      = {Thinking Machines Lab: Connectionism},  
+    doi          = {10.64434/tml.20250929},  
+    note         = {https://thinkingmachines.ai/blog/lora/}  
+}  
 ```
