@@ -58,7 +58,7 @@ from ..extras.profiling import profiling_context
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_peft_model
-from ..models.utils import unwrap_model_for_generation
+from ..models.utils import prepare_deepspeed, unwrap_model_for_generation
 from .base_trainer import BaseTrainer
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
@@ -591,8 +591,19 @@ class OnlineDPOTrainer(BaseTrainer):
                 for i, reward_func in enumerate(self.reward_funcs):
                     if isinstance(reward_func, PreTrainedModel):
                         self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
+        elif self.is_fsdp_enabled:
+            # Prepare ref model for FSDP training
+            if self.ref_model is not None:
+                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
+            if self.reward_funcs is not None:
+                for i, reward_func in enumerate(self.reward_funcs):
+                    if isinstance(reward_func, PreTrainedModel):
+                        # Set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
+                        self.reward_funcs[i] = self.accelerator.prepare_model(
+                            reward_func, evaluation_mode=True, device_placement=True
+                        )
         else:
-            # Prepare ref model for FSDP/regular training
+            # Prepare ref model for regular training
             if self.ref_model is not None:
                 self.ref_model = self.accelerator.prepare_model(
                     self.ref_model, evaluation_mode=True, device_placement=True
