@@ -49,8 +49,6 @@
     title: Unsloth
   - local: vllm_integration
     title: vLLM
-  - local: lora_without_regret
-    title: LoRA Without Regret
   title: Integrations
 - sections:
   - local: example_overview
@@ -65,6 +63,8 @@
     title: Detoxifying a Language Model
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
+  - local: lora_without_regret
+    title: LoRA Without Regret
   title: Examples
 - sections:
   - sections: # Sorted alphabetically

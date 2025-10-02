@@ -15,7 +15,7 @@ LoRA adds adapter layers on top of the base model, which contains significantly 
 
 ## Examples with TRL
 
-Those are the core findings of the blog post. Let's implement them in TRL scripts to train LoRA adapters.
+Let's implement and train LoRA adapters in TRL scripts based on the core findings of the blog post. Afterwards, we'll revisit each finding in light of the TRL results.
 
 ### Supervised Fine-Tuning (SFT)
 
