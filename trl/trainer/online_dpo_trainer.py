@@ -1227,10 +1227,12 @@ class OnlineDPOTrainer(BaseTrainer):
         # Get the logprobs of the completions from the model
         output = model(prompt_completion_ids, **model_kwargs)
 
-        # There is 1 offset, because the model predict the next token
+        # There is 1 offset, because the model predicts the next token
         prompt_len = prompt_ids.size(1)
         start_idx = prompt_len - 1 if prompt_len > 0 else 0
-        logits = output.logits[:, start_idx:-1]
+        # Only slice off the last logit when we have a prompt, otherwise we need all logits
+        end_idx = -1 if prompt_len > 0 else None
+        logits = output.logits[:, start_idx:end_idx]
 
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
