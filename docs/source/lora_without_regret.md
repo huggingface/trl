@@ -267,6 +267,12 @@ The reinforcement learning script with GRPO is implemented as custom scripts in 
 
 The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.
 
+We were able to reproduce the results of the blog post using TRL, the Hugging Face Jobs platform, and the SmolLM3 model. We trained the model for 200 steps on the [Math 220k dataset](https://huggingface.co/datasets/HuggingFaceH4/OpenR1-Math-220k-default-verified) with the reward function and configuration above. As you can see in the figure below, the LoRA model's average train reward curve matches the full fine-tuning curve.
+
+![train reward](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/5.png)
+
+Let's break down the key findings of the blog post and how we were able to reproduce them.
+
 ### 1. *LoRA performs better when applied to all weight matrices*
 
 The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. 
