@@ -9,9 +9,7 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 Below is the current TRL trainers taxonomy (⚡ indicates trainers with **online support**).
 
-<div style="background-color: white;">
-  <img src="./trainers_taxonomy.svg" alt="TRL Trainers Taxonomy" />
-</div>
+![Trainers taxonomy](trainers_taxonomy.png)
 
 ## 🎉 What's New
 
