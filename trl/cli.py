@@ -24,6 +24,7 @@ from .scripts.dpo import make_parser as make_dpo_parser
 from .scripts.env import print_env
 from .scripts.grpo import make_parser as make_grpo_parser
 from .scripts.kto import make_parser as make_kto_parser
+from .scripts.reward import make_parser as make_reward_parser
 from .scripts.rloo import make_parser as make_rloo_parser
 from .scripts.sft import make_parser as make_sft_parser
 from .scripts.utils import TrlParser
@@ -45,6 +46,7 @@ def main():
     subparsers.add_parser("env", help="Print the environment information")
     make_grpo_parser(subparsers)
     make_kto_parser(subparsers)
+    make_reward_parser(subparsers)
     make_rloo_parser(subparsers)
     make_sft_parser(subparsers)
     make_vllm_serve_parser(subparsers)
@@ -109,6 +111,15 @@ def main():
 
         # Feed the args to the launch command
         args.training_script_args = sys.argv[2:]  # remove "trl" and "kto"
+        launch_command(args)  # launch training
+
+    elif args.command == "reward":
+        # Get the default args for the launch command
+        reward_training_script = resources.files("trl.scripts").joinpath("reward.py")
+        args = launch_command_parser().parse_args([str(reward_training_script)])
+
+        # Feed the args to the launch command
+        args.training_script_args = sys.argv[2:]  # remove "trl" and "reward"
         launch_command(args)  # launch training
 
     elif args.command == "rloo":

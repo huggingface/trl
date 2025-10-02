@@ -2,11 +2,8 @@
 
 [![](https://img.shields.io/badge/All_models-PRM-blue)](https://huggingface.co/models?other=prm,trl)
 
-<Tip warning={true}>
-
-PRM Trainer is an experimental API which is subject to change at any time.
-
-</Tip>
+> [!WARNING]
+> PRM Trainer is an experimental API which is subject to change at any time.
 
 ## Overview
 

@@ -135,10 +135,16 @@ def main(script_args, training_args, model_args, dataset_args):
     # Train the model
     trainer.train()
 
+    # Log training complete
+    trainer.accelerator.print("✅ Training completed.")
+
     # Save and push to Hub
     trainer.save_model(training_args.output_dir)
+    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
 def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):

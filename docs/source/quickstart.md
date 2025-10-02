@@ -1,6 +1,6 @@
 # Quickstart
 
-TRL is a comprehensive library for post-training foundation models using techniques like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO),  Direct Preference Optimization (DPO).
+TRL is a comprehensive library for post-training foundation models using techniques like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO).
 
 ## Quick Examples
 
@@ -51,6 +51,21 @@ trainer = DPOTrainer(
 trainer.train()
 ```
 
+### Reward Modeling
+
+```python
+from trl import RewardTrainer
+from datasets import load_dataset
+
+dataset = load_dataset("trl-lib/ultrafeedback_binarized", split="train")
+
+trainer = RewardTrainer(
+    model="Qwen/Qwen2.5-0.5B-Instruct",
+    train_dataset=dataset,
+)
+trainer.train()
+```
+
 ## Command Line Interface
 
 Skip the code entirely - train directly from your terminal:
@@ -62,6 +77,10 @@ trl sft --model_name_or_path Qwen/Qwen2.5-0.5B \
 
 # DPO: Align with preferences  
 trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
+    --dataset_name trl-lib/ultrafeedback_binarized
+
+# Reward: Train a reward model
+trl reward --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --dataset_name trl-lib/ultrafeedback_binarized
 ```
 

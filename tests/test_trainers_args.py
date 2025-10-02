@@ -24,6 +24,7 @@ from trl import (
     CPOTrainer,
     DPOConfig,
     DPOTrainer,
+    FDivergenceType,
     KTOConfig,
     KTOTrainer,
     NashMDConfig,
@@ -192,7 +193,7 @@ class TrainerArgTester(TrlTestCase):
         self.assertEqual(trainer.args.ref_adapter_name, "dummy_adapter")
         self.assertEqual(trainer.args.reference_free, True)
         self.assertEqual(trainer.args.force_use_ref_model, True)
-        self.assertEqual(trainer.args.f_divergence_type, "js_divergence")
+        self.assertEqual(trainer.args.f_divergence_type, FDivergenceType.JS_DIVERGENCE)
         self.assertEqual(trainer.args.f_alpha_divergence_coef, 0.5)
         # self.assertEqual(trainer.args.sync_ref_model, True)
         self.assertEqual(trainer.args.ref_model_mixup_alpha, 0.5)

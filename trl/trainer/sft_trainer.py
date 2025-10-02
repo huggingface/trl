@@ -15,10 +15,9 @@
 import contextlib
 import os
 from collections import defaultdict
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
@@ -32,9 +31,7 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     TrainingArguments,
-    is_wandb_available,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
@@ -51,14 +48,14 @@ from ..data_utils import (
     truncate_dataset,
 )
 from ..models import clone_chat_template, get_act_offloading_ctx_manager, prepare_peft_model
+from .base_trainer import BaseTrainer
 from .sft_config import SFTConfig
 from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
-    generate_model_card,
-    get_comet_experiment_url,
     pad,
+    remove_none_values,
     selective_log_softmax,
 )
 
@@ -66,44 +63,17 @@ from .utils import (
 if is_peft_available():
     from peft import PeftConfig, PeftModel
 
-if is_wandb_available():
-    import wandb
 
 logger = logging.get_logger(__name__)
 
-TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
 
-
-def remove_none_values(example: TListOrMapping) -> TListOrMapping:
-    """
-    Recursively removes entries with `None` values from a nested structure (list or dictionary).
-
-    Args:
-        example (`list` or `Mapping`):
-            Input nested structure (list or dictionary) from which to remove `None`.
-
-    Example:
-    ```python
-    >>> [
-    ...     {
-    ...         "a": {"aa": None, "ab": 1},
-    ...         "b": "my_string",
-    ...     }
-    ... ]
-    >>> remove_none_values(example)
-    [{'a': {'ab': 1}, 'b': 'my_string'}]
-    ```
-    """
-    if isinstance(example, list):
-        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
-    elif isinstance(example, Mapping):
-        return {
-            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
-            for key, value in example.items()
-            if value is not None
-        }
-    else:
-        raise TypeError("Input must be a list or a dictionary.")
+FLASH_ATTENTION_VARIANTS = {
+    "flash_attention_2",
+    "flash_attention_3",
+    "kernels-community/flash-attn",
+    "kernels-community/vllm-flash-attn3",
+    "kernels-community/flash-attn3",
+}
 
 
 def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
@@ -120,11 +90,13 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     completion. If `"assistant_masks"` are present, they are used to set the labels to `-100` for tokens that are not
     in the assistant part of the sequence. The collator returns a dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
-    - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
-    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
     - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `completion_only_loss` is set to
     `True`, tokens that are not in the completion are set to -100. If `assistant_masks` are present, tokens that are
-    not in the assistant part of the sequence are set to -100.
+    not in the assistant part of the sequence are set to -100. If `padding_free` is set to `False`, the following key
+    is also returned:
+    - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
+    If `padding_free` is set to `True`, the following key is also returned:
+    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
 
     Args:
         pad_token_id (`int`):
@@ -134,7 +106,7 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             that are no in the completion.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly.
+            generated accordingly and returned instead of the attention mask.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -151,8 +123,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                           [  4,  5,  0]]),
      'attention_mask': tensor([[  1,  1,  1],
                                [  1,  1,  0]]),
-     'position_ids': tensor([[0, 1, 2],
-                             [0, 1, 0]]),
      'labels': tensor([[   1,    2,    3],
                        [   4,    5, -100]])}
 
@@ -166,8 +136,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                           [  4,  5,  0]]),
      'attention_mask': tensor([[  1,  1,  1],
                                [  1,  1,  0]]),
-     'position_ids': tensor([[0, 1, 2],
-                             [0, 1, 0]]),
      'labels': tensor([[-100,    2,    3],
                        [-100,    5, -100]])}
 
@@ -175,7 +143,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
     >>> collator(examples)
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
-     'attention_mask': tensor([[1, 1, 1, 1, 1]]),
      'position_ids': tensor([[0, 1, 2, 0, 1]]),
      'labels': tensor([[1, 2, 3, 4, 5]])}
     ```
@@ -184,33 +151,28 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     pad_token_id: int
     completion_only_loss: bool = True
     padding_free: bool = False
-    return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         # Convert to tensor
         input_ids = [torch.tensor(example["input_ids"]) for example in examples]
+        if "labels" in examples[0]:
+            labels = [torch.tensor(example["labels"]) for example in examples]
+        else:
+            labels = [torch.tensor(example["input_ids"]) for example in examples]
 
-        # Check if we have meaningful seq_lengths from packing (restarting sequences)
-        has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
-
-        # For packing with position_ids, we should NOT create attention_mask as it causes
-        # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
-        if not has_packed_position_ids:
-            attention_mask = [torch.ones_like(ids) for ids in input_ids]
-
-        if self.return_position_ids:
+        # For padding-free, we should NOT create attention_mask as it causes FlashAttention to ignore position_ids and
+        # compute wrong cu_seq_lens from the all-1s mask
+        if self.padding_free:
             if "seq_lengths" in examples[0]:
                 position_ids = self.get_position_ids_from_packed_seq_lengths(
                     [example["seq_lengths"] for example in examples]
                 )
             else:
                 position_ids = [torch.arange(len(ids)) for ids in input_ids]
-        if "labels" in examples[0]:
-            labels = [torch.tensor(example["labels"]) for example in examples]
         else:
-            labels = [torch.tensor(example["input_ids"]) for example in examples]
+            attention_mask = [torch.ones_like(ids) for ids in input_ids]
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = [torch.tensor(example["completion_mask"]) for example in examples]
         if "assistant_masks" in examples[0]:
@@ -220,11 +182,8 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output = {}
         if self.padding_free:
             input_ids = [torch.cat(input_ids, dim=0)]
-            if not has_packed_position_ids:
-                attention_mask = [torch.cat(attention_mask, dim=0)]
-            if self.return_position_ids:
-                position_ids = [torch.cat(position_ids, dim=0)]
             labels = [torch.cat(labels, dim=0)]
+            position_ids = [torch.cat(position_ids, dim=0)]
             if self.completion_only_loss and "completion_mask" in examples[0]:
                 completion_mask = [torch.cat(completion_mask, dim=0)]
             if "assistant_masks" in examples[0]:
@@ -237,17 +196,18 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
-        if not has_packed_position_ids:
-            output["attention_mask"] = pad(
-                attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-        if self.return_position_ids:
-            output["position_ids"] = pad(
-                position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
         output["labels"] = pad(
             labels, padding_value=-100, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
         )
+        if self.padding_free:
+            output["position_ids"] = pad(
+                position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
+            output["labels"][output["position_ids"] == 0] = -100
+        else:
+            output["attention_mask"] = pad(
+                attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
+            )
         if self.completion_only_loss and "completion_mask" in examples[0]:
             completion_mask = pad(
                 completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
@@ -374,7 +334,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     dataset_text_field: str = "text"
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if "messages" in examples[0] or self.dataset_text_field in examples[0]:
             if self.completion_only_loss:
                 raise ValueError(
@@ -386,7 +346,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         else:
             raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
 
-    def _collate_language_modeling(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
 
         if "messages" in examples[0]:  # conversational case
@@ -421,7 +381,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         output["labels"] = labels
         return output
 
-    def _collate_prompt_completion(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def _collate_prompt_completion(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         if self.pad_to_multiple_of is not None:
             raise NotImplementedError(
                 "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
@@ -482,7 +442,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
-def dft_loss(outputs, labels, num_items_in_batch):
+def dft_loss(outputs, labels, num_items_in_batch=None):
     """
     DFT loss function, as presented in [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward
     Rectification](https://huggingface.co/papers/2508.05629)
@@ -493,11 +453,13 @@ def dft_loss(outputs, labels, num_items_in_batch):
     shift_labels[~loss_mask] = 0
     logprobs = selective_log_softmax(outputs.logits, shift_labels)
     per_token_loss = -logprobs.exp().detach() * logprobs
+    if num_items_in_batch is None:
+        num_items_in_batch = loss_mask.sum()
     loss = (per_token_loss * loss_mask).sum() / num_items_in_batch
     return loss
 
 
-class SFTTrainer(Trainer):
+class SFTTrainer(BaseTrainer):
     """
     Trainer for Supervised Fine-Tuning (SFT) method.
 
@@ -589,12 +551,13 @@ class SFTTrainer(Trainer):
     """
 
     _tag_names = ["trl", "sft"]
+    _name = "SFT"
 
     def __init__(
         self,
-        model: Union[str, nn.Module, PreTrainedModel],
+        model: Union[str, PreTrainedModel],
         args: Optional[Union[SFTConfig, TrainingArguments]] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
+        data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
@@ -721,11 +684,7 @@ class SFTTrainer(Trainer):
         # BFD packing requires padding-free mode; otherwise, the collator outputs padded attention masks, causing
         # FlashAttention to ignore position_ids and recompute them incorrectly from the padded attention mask.
         self.padding_free = args.padding_free or (args.packing and args.packing_strategy == "bfd")
-        use_flash_attention = model.config._attn_implementation in [
-            "flash_attention_2",
-            "flash_attention_3",
-            "kernels-community/vllm-flash-attn3",
-        ]
+        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
@@ -736,13 +695,15 @@ class SFTTrainer(Trainer):
                 )
             if not use_flash_attention:
                 logger.warning(
-                    "Padding-free training is enabled, but the attention implementation is not set to "
-                    "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
-                    "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
-                    "other implementations may lead to unexpected behavior. To ensure compatibility, set "
-                    "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
-                    "attention mechanism can handle flattened sequences."
+                    "Padding-free training is enabled, but the attention implementation is not set to a supported "
+                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
+                    "the following implementations are known to reliably support this: "
+                    f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
+                    "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
+                    "configuration to one of these supported options or verify that your attention mechanism can "
+                    "handle flattened sequences."
                 )
+
             if args.per_device_train_batch_size == 1 and not args.packing:
                 logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
@@ -758,7 +719,14 @@ class SFTTrainer(Trainer):
         else:
             self.completion_only_loss = args.completion_only_loss
 
-        if data_collator is None and not self._is_vlm:
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
+
+        if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
@@ -773,11 +741,9 @@ class SFTTrainer(Trainer):
                 pad_token_id=pad_token_id,
                 completion_only_loss=self.completion_only_loss,
                 padding_free=self.padding_free,
-                # Using position_ids without flash_attn hurts the training
-                return_position_ids=use_flash_attention,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
-        elif data_collator is None and self._is_vlm:
+        elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
                 max_length=args.max_length,
@@ -788,12 +754,12 @@ class SFTTrainer(Trainer):
 
         if args.packing and args.packing_strategy == "bfd" and not use_flash_attention:
             logger.warning(
-                "You are using packing, but the attention implementation is not set to 'flash_attention_2' or "
-                "'kernels-community/vllm-flash-attn3'. Packing flattens batches into a single sequence, and Flash "
-                "Attention is the only known attention mechanisms that reliably support this. Using other "
-                "implementations may lead to cross-contamination between batches. To avoid this, either disable "
-                "packing by setting `packing=False`, or set `attn_implementation='flash_attention_2'` or "
-                "`attn_implementation='kernels-community/vllm-flash-attn3'` in the model configuration."
+                "You are using packing, but the attention implementation is not set to a supported flash attention "
+                "variant. Packing gathers multiple samples into a single sequence, and only the following "
+                f"implementations are known to reliably support this: {', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. "
+                "Using other implementations may lead to cross-contamination between samples. To avoid this, either "
+                "disable packing by setting `packing=False`, or set `attn_implementation` in the model configuration "
+                "to one of these supported options."
             )
         if args.assistant_only_loss and not is_conversational(dataset_sample):
             raise ValueError(
@@ -805,7 +771,9 @@ class SFTTrainer(Trainer):
         # Skip dataset preparation if `skip_prepare_dataset=True` in `dataset_kwargs`, or if it's a VLM, where
         # preprocessing (e.g., image-to-pixel conversion) is too costly and done on the fly instead.
         skip_prepare_dataset = (
-            args.dataset_kwargs is not None and args.dataset_kwargs.get("skip_prepare_dataset", False) or self._is_vlm
+            args.dataset_kwargs is not None
+            and args.dataset_kwargs.get("skip_prepare_dataset", False)
+            or self._is_vision_dataset
         )
         if not skip_prepare_dataset:
             if self.completion_only_loss and formatting_func:
@@ -959,22 +927,36 @@ class SFTTrainer(Trainer):
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-                def tokenize(example, processing_class, dataset_text_field, assistant_only_loss):
+                def tokenize_fn(example, processing_class, dataset_text_field, assistant_only_loss):
                     if "prompt" in example:  # prompt-completion case
                         output = {}
                         if is_conversational(example):
+                            if self._is_vlm:
+                                prepare_multimodal_messages(example["prompt"], num_images=0)
+                                prepare_multimodal_messages(example["completion"], num_images=0)
                             prompt_ids = processing_class.apply_chat_template(
                                 example["prompt"],
+                                tokenize=True,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
+                            # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                             prompt_completion_processed = processing_class.apply_chat_template(
                                 example["prompt"] + example["completion"],
                                 return_dict=True,
+                                tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
+                            # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            prompt_completion_processed = {
+                                k: v[0] if isinstance(v[0], list) else v
+                                for k, v in prompt_completion_processed.items()
+                            }
                             prompt_completion_ids = prompt_completion_processed["input_ids"]
                             if "assistant_masks" in prompt_completion_processed:
                                 output["assistant_masks"] = prompt_completion_processed["assistant_masks"]
@@ -999,13 +981,19 @@ class SFTTrainer(Trainer):
 
                     else:  # language modeling case
                         if is_conversational(example):
+                            if self._is_vlm:
+                                prepare_multimodal_messages(example["messages"], num_images=0)
                             processed = processing_class.apply_chat_template(
                                 example["messages"],
                                 return_dict=True,
+                                tokenize=True,
                                 return_assistant_tokens_mask=assistant_only_loss,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
+                            # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
+                            # even for single examples, while for LLMs it returns lists of ints.
+                            processed = {k: v[0] if isinstance(v[0], list) else v for k, v in processed.items()}
                             if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
                                 raise RuntimeError(
                                     "You're using `assistant_only_loss=True`, but at least one example has no "
@@ -1020,7 +1008,7 @@ class SFTTrainer(Trainer):
                     return output
 
                 dataset = dataset.map(
-                    tokenize,
+                    tokenize_fn,
                     fn_kwargs={
                         "processing_class": processing_class,
                         "dataset_text_field": args.dataset_text_field,
@@ -1064,12 +1052,18 @@ class SFTTrainer(Trainer):
         # and "attention_mask"). When using `train_on_completion_only` we add a "completion_mask" column to the
         # dataset. So we need to override the default signature columns to include "completion_mask" as well.
         if self._signature_columns is None:
-            if self._is_vlm:
+            if self._is_vision_dataset:
                 self._signature_columns = ["messages", "prompt", "completion", "images"]
             else:
                 self._signature_columns = ["input_ids", "labels", "seq_lengths", "completion_mask", "assistant_masks"]
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[torch.Tensor] = None,
+    ):
         """
         Compute training loss and additionally compute token accuracies
         """
@@ -1186,57 +1180,3 @@ class SFTTrainer(Trainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="SFT",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

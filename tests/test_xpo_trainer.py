@@ -184,8 +184,8 @@ class TestXPOTrainer(TrlTestCase):
 
         self.assertIn("train_loss", trainer.state.log_history[-1])
 
-    @require_llm_blender
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
+    @require_llm_blender
     def test_xpo_trainer_judge_training(self, config_name):
         training_args = XPOConfig(
             output_dir=self.tmp_dir,

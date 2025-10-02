@@ -185,6 +185,7 @@ class BaseBinaryJudge(BaseJudge):
 
 
 class PairRMJudge(BasePairwiseJudge):
+    # docstyle-ignore
     """
     LLM judge based on the PairRM model from AllenAI.
 
@@ -206,11 +207,8 @@ class PairRMJudge(BasePairwiseJudge):
     >>> print(results)  # [0, 1] (indicating the first completion is preferred for the first prompt and the second)
     ```
 
-    <Tip>
-
-    This class requires the llm-blender library to be installed. Install it with: `pip install llm-blender`.
-
-    </Tip>
+    > [!TIP]
+    > This class requires the llm-blender library to be installed. Install it with: `pip install llm-blender`.
     """
 
     def __init__(self):
