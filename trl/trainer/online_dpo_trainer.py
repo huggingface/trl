@@ -592,8 +592,11 @@ class OnlineDPOTrainer(BaseTrainer):
                     if isinstance(reward_func, PreTrainedModel):
                         self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
         else:
+            # Prepare ref model for FSDP/regular training
             if self.ref_model is not None:
-                self.ref_model = self.ref_model.to(self.accelerator.device)
+                self.ref_model = self.accelerator.prepare_model(
+                    self.ref_model, evaluation_mode=True, device_placement=True
+                )
             # Prepare reward function models for FSDP/regular training
             if self.reward_funcs is not None:
                 for i, reward_func in enumerate(self.reward_funcs):
