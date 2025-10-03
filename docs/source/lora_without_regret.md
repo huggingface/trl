@@ -89,7 +89,7 @@ To run the script locally, you will need to have `uv` installed. Check out the [
 </hfoption>
 </hfoptions>
 
-Once training starts, you can monitor the progress in [Trackio](https://huggingface.co/trackio) which will log the url.
+Once training starts, you can monitor the progress in [Trackio](https://huggingface.co/trackio), which will log the URL.
 
 ### Reinforcement Learning (GRPO)
 
