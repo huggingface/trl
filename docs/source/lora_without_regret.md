@@ -334,7 +334,7 @@ The blog post defines the ideal dataset size for LoRA to match full fine-tuning 
 
 ### 3. *"FullFT and high-rank LoRAs have similar learning curves"*
 
-Counter-intuitively, the blog post recommends using similar learning rates to full fine-tuning. In TRL script, we could use `--learning_rate` to set the learning rate. The  \\( \frac{1}{r} \\) scaling in LoRA makes optimal learning rate approximately rank-independent.
+Counter-intuitively, the blog post recommends using similar learning rates to full fine-tuning. The  \\( \frac{1}{r} \\) scaling in LoRA makes optimal learning rate approximately rank-independent. In TRL script, we could use `--learning_rate` to set the learning rate.
 
 ![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/2.png)
 
