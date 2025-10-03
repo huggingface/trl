@@ -38,20 +38,18 @@ We can integrate these findings with the TRL Python API like so:
 
 from datasets import load_dataset
 from peft import LoraConfig
-from trl import SFTTrainer, GRPOConfig
+from trl import SFTTrainer, SFTConfig
 
 dataset = load_dataset("open-thoughts/OpenThoughts-114k", split="train")
 
 peft_config = LoraConfig(lora_r=256, lora_alpha=16, lora_target_modules="all-linear")
 
 training_args = SFTConfig(
-    learning_rate=1e-6,
+    learning_rate=2e-4,
     per_device_train_batch_size=1,
     gradient_accumulation_steps=4,
     num_train_epochs=1,
-    gradient_checkpointing=True,
     report_to=["trackio"],
-    bf16=True,
 )
 
 trainer = SFTTrainer(
@@ -83,8 +81,6 @@ hf jobs uv run \
     --packing \
     --per_device_train_batch_size 2 \
     --gradient_accumulation_steps 16 \
-    --gradient_checkpointing \
-    --eval_strategy no \
     --use_peft \
     --lora_r 256 \
     --lora_alpha 16 \
@@ -248,11 +244,6 @@ def strip_reasoning_accuracy_reward(completions, **kwargs):
 
     ... 
 
-    if correct:
-        return 1.0
-    else:
-        return 0.0
-
 peft_config = LoraConfig(
     lora_r=1,
     lora_alpha=32,
@@ -260,15 +251,13 @@ peft_config = LoraConfig(
 )
 
 training_args = GRPOConfig(
-    learning_rate=1e-6,
+    learning_rate=5e-5,
     per_device_train_batch_size=1,
     gradient_accumulation_steps=4,
     num_train_epochs=1,
-    gradient_checkpointing=True,
     num_generations=8,
     generation_batch_size=8,
     report_to=["trackio"],
-    bf16=True,
 )
 
 trainer = GRPOTrainer(
