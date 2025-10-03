@@ -937,6 +937,7 @@ class SFTTrainer(BaseTrainer):
                             prompt_ids = processing_class.apply_chat_template(
                                 example["prompt"],
                                 tokenize=True,
+                                add_generation_prompt=True,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
@@ -974,10 +975,17 @@ class SFTTrainer(BaseTrainer):
                                 "token handling. Verify that the tokenizer is processing text consistently."
                             )
 
-                        # Create a completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
                         output["input_ids"] = prompt_completion_ids
-                        output["completion_mask"] = completion_mask
+
+                        # Warn if assistant_masks are all zeros (chat template doesn't support {% generation %})
+                        # This means assistant_only_loss won't work correctly with prompt-completion format
+                        if "assistant_masks" in output and 1 not in output["assistant_masks"]:
+                            logger.warning(
+                                "The chat template does not support generation tokens (missing '{% generation %}' keyword). "
+                                "When using prompt-completion format with assistant_only_loss=True, this will result in "
+                                "all tokens being masked. Consider using a chat template that supports generation tokens, "
+                                "or set assistant_only_loss=False and use completion_only_loss=True instead."
+                            )
 
                     else:  # language modeling case
                         if is_conversational(example):
