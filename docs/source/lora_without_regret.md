@@ -227,7 +227,7 @@ def strip_reasoning_accuracy_reward(
 
 <hfoptions id="grpo">
 
-<hfoption id="jobs">
+<hfoption id="python">
 
 We can implement these recommendations with the TRL Python API like so:
 
@@ -272,7 +272,7 @@ trainer.train()
 
 ```
 
-[!WARNING]
+> [!WARNING]
 > This snippet skips the reward function which is defined above to keep the example concise.
 
 </hfoption>
