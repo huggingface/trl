@@ -271,7 +271,7 @@ To run the script locally, you will need to have `uv` installed. Check out the [
 </hfoption>
 </hfoptions>
 
-The reinforcement learning script with GRPO is implemented as custom scripts in TRL which uses the reward function shown above. You can review it at [`grpo.py`](https://huggingface.co/datasets/burtenshaw/lora-without-regrets/blob/main/grpo.py) - Reinforcement learning with LoRA best practices
+The reinforcement learning script with GRPO is implemented as a custom script in TRL, which uses the reward function shown above. You can review it at [`grpo.py`](https://huggingface.co/datasets/burtenshaw/lora-without-regrets/blob/main/grpo.py) - Reinforcement learning with LoRA best practices
 
 ## Key findings in optimizing LoRA
 
@@ -307,7 +307,7 @@ The authors recommend applying LoRA to all weight matrices rather than limiting 
 
 ![all layers](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/1.png)
 
-Attention-only LoRA underperforms even when using higher rank to match parameter count. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.  In python, we can do this like so:
+Attention-only LoRA underperforms even when using a higher rank to match parameter count. In TRL, this can be configured using `--lora_target_modules all-linear` to apply LoRA to all weight matrices.  In Python, we can do this like so:
 
 ```python
 from peft import LoraConfig  
@@ -317,15 +317,15 @@ peft_config = LoraConfig(target_modules="all-linear")
 
 ### 2. *The adapter needs sufficient capacity to learn from the dataset*
 
-The blog post recommends use a sufficient LoRA rank to learn from the dataset. The rank determines the number of trainable parameters in the LoRA adapter. Therefore, "For datasets that exceed LoRA capacity, LoRA underperforms FullFT". 
+The blog post recommends using a sufficient LoRA rank to learn from the dataset. The rank determines the number of trainable parameters in the LoRA adapter. Therefore, "For datasets that exceed LoRA capacity, LoRA underperforms FullFT". 
 
 ![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/3.png)
 
-In TRL script, we could use `--lora_r` to set the rank and adapt it based on the task and dataset we're training on. The blog post recommends the following ranks based on the task and dataset size:
+In the TRL script, we could use `--lora_r` to set the rank and adapt it based on the task and dataset we're training on. The blog post recommends the following ranks based on the task and dataset size:
 
 Reinforcement learning tasks typically require lower capacity, so smaller LoRA ranks can be used. This is because policy gradient algorithms extract roughly ~1 bit of information per episode, demanding minimal parameter capacity.  
 
-The blog post defines the ideal dataset size for LoRA to match full fine-tuning as "Post-training scale". Which we can use to determine the recommended rank for SFT and RL LoRA's as:
+The blog post defines the ideal dataset size for LoRA to match full fine-tuning as "Post-training scale". Which we can use to determine the recommended rank for SFT and RL LoRAs as:
 
 | Task Type | Dataset Size | Recommended Rank |
 |-----------|-------------|------------------|
@@ -340,7 +340,7 @@ Counter-intuitively, the blog post recommends using similar learning rates to fu
 
 ### 4. *"In some scenarios, LoRA is less tolerant of large batch sizes than full fine-tuning."*
 
-The blog post recommends using effective batch size < 32 because the authors found LoRA to be less tolerant of large batch sizes. This could not be mitigated by increasing the LoRA rank. In TRL script, we could use `--per_device_train_batch_size` and `--gradient_accumulation_steps` to set the batch size.
+The blog post recommends using an effective batch size < 32 because the authors found LoRA to be less tolerant of large batch sizes. This could not be mitigated by increasing the LoRA rank. In the TRL script, we could use `--per_device_train_batch_size` and `--gradient_accumulation_steps` to set the batch size.
 
 ![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/4.png)
 
