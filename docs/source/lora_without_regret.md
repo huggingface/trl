@@ -29,6 +29,44 @@ The blog post performs SFT on a range of models and datasets from the Hub, which
 | [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B) | [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) |
 
 <hfoptions id="sft">
+
+<hfoption id="python">
+
+We can integrate these findings with the TRL Python API like so:
+
+```python
+
+from datasets import load_dataset
+from peft import LoraConfig
+from trl import SFTTrainer, GRPOConfig
+
+dataset = load_dataset("open-thoughts/OpenThoughts-114k", split="train")
+
+peft_config = LoraConfig(lora_r=256, lora_alpha=16, lora_target_modules="all-linear")
+
+training_args = SFTConfig(
+    learning_rate=1e-6,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=4,
+    num_train_epochs=1,
+    gradient_checkpointing=True,
+    report_to=["trackio"],
+    bf16=True,
+)
+
+trainer = SFTTrainer(
+    model="Qwen/Qwen2.5-3B-Instruct",
+    train_dataset=dataset,
+    peft_config=peft_config,
+    args=training_args,
+)
+
+trainer.train()
+
+```
+
+</hfoption>
+
 <hfoption id="jobs">
 
 ```bash
@@ -192,6 +230,64 @@ def strip_reasoning_accuracy_reward(
 </details>
 
 <hfoptions id="grpo">
+
+<hfoption id="jobs">
+
+We can implement these recommendations with the TRL Python API like so:
+
+```python
+
+from datasets import load_dataset
+from peft import LoraConfig
+from trl import GRPOConfig, GRPOTrainer
+
+dataset = load_dataset("HuggingFaceH4/OpenR1-Math-220k-default-verified", split="train")
+
+def strip_reasoning_accuracy_reward(completions, **kwargs):
+    """Reward function that strips reasoning and accuracy scores from the model outputs."""
+
+    ... 
+
+    if correct:
+        return 1.0
+    else:
+        return 0.0
+
+peft_config = LoraConfig(
+    lora_r=1,
+    lora_alpha=32,
+    lora_target_modules="all-linear"
+)
+
+training_args = GRPOConfig(
+    learning_rate=1e-6,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=4,
+    num_train_epochs=1,
+    gradient_checkpointing=True,
+    num_generations=8,
+    generation_batch_size=8,
+    report_to=["trackio"],
+    bf16=True,
+)
+
+trainer = GRPOTrainer(
+    model="Qwen/Qwen3-0.6B",
+    reward_funcs=strip_reasoning_accuracy_reward,
+    args=training_args,
+    train_dataset=dataset,
+    peft_config=peft_config,
+)
+
+trainer.train()
+
+```
+
+[!WARNING]
+> This snippet skips the reward function which is defined above to keep the example concise.
+
+</hfoption>
+
 <hfoption id="jobs">
 
 ```bash
