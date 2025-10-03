@@ -14,6 +14,5 @@ jobs:
       commit_sha: ${{ github.sha }}
       package: trl
       version_tag_suffix: ""
-      custom_container: huggingface/transformers-doc-builder
     secrets:
       hf_token: ${{ secrets.HF_DOC_BUILD_PUSH }}
