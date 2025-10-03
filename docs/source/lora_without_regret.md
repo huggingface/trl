@@ -101,7 +101,7 @@ The blog post performs GRPO on a range of models and datasets from the Hub, and 
 | [Llama-3.1-8B-Base](https://huggingface.co/meta-llama/Llama-3.2-1B) | [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) |
 | [Qwen3-8b-base](https://huggingface.co/Qwen/Qwen3-8b-base) | [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) |
 
-For reinforcement learning the blog uses a a math reasoning task which we can reproduce as a python function.
+For reinforcement learning, the blog uses a math reasoning task that we can reproduce as a Python function.
 
 <details>
 <summary>Reward function</summary>
