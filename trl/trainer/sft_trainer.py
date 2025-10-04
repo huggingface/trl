@@ -937,6 +937,7 @@ class SFTTrainer(BaseTrainer):
                             prompt_ids = processing_class.apply_chat_template(
                                 example["prompt"],
                                 tokenize=True,
+                                add_generation_prompt=True,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
@@ -974,10 +975,21 @@ class SFTTrainer(BaseTrainer):
                                 "token handling. Verify that the tokenizer is processing text consistently."
                             )
 
-                        # Create a completion mask
-                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
                         output["input_ids"] = prompt_completion_ids
+
+                        # Create completion_mask - more precise thanks to add_generation_prompt=True
+                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
                         output["completion_mask"] = completion_mask
+
+                        # Warn if assistant_masks are all zeros (chat template doesn't support {% generation %})
+                        # This means assistant_only_loss won't work correctly with prompt-completion format
+                        if "assistant_masks" in output and 1 not in output["assistant_masks"] and assistant_only_loss:
+                            logger.warning(
+                                "You're using `assistant_only_loss=True` with prompt-completion format, but the chat template "
+                                "doesn't generate valid assistant masks — it may be missing the `{% generation %}` keyword. "
+                                "This will cause all tokens to be masked during training. Please use `completion_only_loss=True` "
+                                "instead to train on completion tokens."
+                            )
 
                     else:  # language modeling case
                         if is_conversational(example):
