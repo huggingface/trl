@@ -388,6 +388,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "prompt-completion data yet."
             )
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
         if all(img_list == [] for img_list in images):
             images = None
         if is_conversational(examples[0]):  # conversational case
