@@ -1306,6 +1306,7 @@ class SFTTrainerTester(TrlTestCase):
                 torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
             )
 
+    @require_vision
     def test_train_vlm_multi_image(self):
         # Get the dataset
         dataset = load_dataset(
