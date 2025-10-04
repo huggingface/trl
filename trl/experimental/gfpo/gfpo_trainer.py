@@ -76,6 +76,8 @@ class GFPOTrainer(_GRPOTrainer):
             images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
         else:
             images = None
+        if images is not None and all(img_list == [] for img_list in images):
+            images = None
 
         (
             prompt_ids_list,
