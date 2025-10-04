@@ -17,11 +17,11 @@ from io import StringIO
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import ModelConfig
@@ -46,7 +46,7 @@ from trl.trainer.utils import (
     unsplit_pixel_values_by_grid,
 )
 
-from .testing_utils import TrlTestCase, require_rich
+from .testing_utils import TrlTestCase, require_peft, require_rich
 
 
 if is_peft_available():
@@ -59,14 +59,14 @@ class TestPad(TrlTestCase):
         y = torch.tensor([4, 5])
         output = pad((x, y), padding_value=0, padding_side="left")
         expected = torch.tensor([[1, 2, 3], [0, 4, 5]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_1_dim_right(self):
         x = torch.tensor([1, 2, 3])
         y = torch.tensor([4, 5])
         output = pad((x, y), padding_value=0, padding_side="right")
         expected = torch.tensor([[1, 2, 3], [4, 5, 0]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_2_dim_left(self):
         x = torch.tensor([[1, 2], [3, 4]])
@@ -78,7 +78,7 @@ class TestPad(TrlTestCase):
                 [[0, 0], [5, 6]],
             ]
         )
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_2_dim_right(self):
         x = torch.tensor([[1, 2], [3, 4]])
@@ -90,7 +90,7 @@ class TestPad(TrlTestCase):
                 [[5, 6], [0, 0]],
             ]
         )
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_2_dim_right_multidim(self):
         x = torch.tensor([[1, 2], [3, 4]])
@@ -102,7 +102,7 @@ class TestPad(TrlTestCase):
                 [[5, 0], [0, 0]],
             ]
         )
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_to_multiple_of_1(self):
         x = torch.tensor([1, 2, 3])
@@ -110,7 +110,7 @@ class TestPad(TrlTestCase):
         # Max length is 3, pad to multiple of 4
         output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
         expected = torch.tensor([[1, 2, 3, 0], [4, 5, 0, 0]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_to_multiple_of_2(self):
         x = torch.tensor([1, 2, 3, 4, 5])
@@ -118,7 +118,7 @@ class TestPad(TrlTestCase):
         # Max length is 3, pad to multiple of 4
         output = pad((x, y), padding_value=0, padding_side="right", pad_to_multiple_of=4)
         expected = torch.tensor([[1, 2, 3, 4, 5, 0, 0, 0], [6, 7, 8, 0, 0, 0, 0, 0]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_to_multiple_of_side_left(self):
         x = torch.tensor([1, 2, 3, 4, 5])
@@ -126,7 +126,7 @@ class TestPad(TrlTestCase):
         # Max length is 3, pad to multiple of 4
         output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
         expected = torch.tensor([[0, 0, 0, 1, 2, 3, 4, 5], [0, 0, 0, 0, 0, 6, 7, 8]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
     def test_pad_to_multiple_of_no_extra_padding(self):
         x = torch.tensor([1, 2, 3, 4])
@@ -134,7 +134,7 @@ class TestPad(TrlTestCase):
         # Already multiple of 4
         output = pad((x, y), padding_value=0, padding_side="left", pad_to_multiple_of=4)
         expected = torch.tensor([[1, 2, 3, 4], [5, 6, 7, 8]])
-        self.assertTrue(torch.equal(output, expected))
+        assert torch.equal(output, expected)
 
 
 @require_peft
@@ -143,7 +143,7 @@ class TestGetPEFTConfig(TrlTestCase):
         """Test that when use_peft is False, the function returns None."""
         model_args = ModelConfig(use_peft=False)
         peft_config = get_peft_config(model_args)
-        self.assertIsNone(peft_config)
+        assert peft_config is None
 
     def test_create_peft_config_use_peft_true(self):
         """Test that when use_peft is True, the function returns a LoraConfig object."""
@@ -159,7 +159,7 @@ class TestGetPEFTConfig(TrlTestCase):
         }
         model_args = ModelConfig(use_peft=True, **peft_kwargs)
         peft_config = get_peft_config(model_args)
-        self.assertTrue(isinstance(peft_config, LoraConfig))
+        assert isinstance(peft_config, LoraConfig)
         for arg, value in peft_kwargs.items():
             # Test that lists of modules are converted to sets
             if arg == "lora_target_modules":
@@ -168,23 +168,22 @@ class TestGetPEFTConfig(TrlTestCase):
             if arg in ["lora_r", "lora_task_type", "lora_target_modules", "lora_modules_to_save"]:
                 arg = arg[len("lora_") :] if arg.startswith("lora_") else arg
 
-            self.assertEqual(getattr(peft_config, arg), value)
+            assert getattr(peft_config, arg) == value
 
 
 class TestDecodeAndStripPadding(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
 
     def test_example_with_padding(self):
         inputs = self.tokenizer(["Hello world", "Hello"], padding=True, return_tensors="pt")
         decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
-        self.assertEqual(decoded, ["Hello world", "Hello"])
+        assert decoded == ["Hello world", "Hello"]
 
     def test_example_without_padding(self):
         inputs = self.tokenizer(["Hello", "Hello"], padding=False, return_tensors="pt")
         decoded = decode_and_strip_padding(inputs["input_ids"], self.tokenizer)
-        self.assertEqual(decoded, ["Hello", "Hello"])
+        assert decoded == ["Hello", "Hello"]
 
 
 class TestGenerateModelCard(TrlTestCase):
@@ -203,15 +202,15 @@ class TestGenerateModelCard(TrlTestCase):
             paper_id="1234.56789",
         )
         card_text = str(model_card)
-        self.assertIn("[username/my_base_model](https://huggingface.co/username/my_base_model)", card_text)
-        self.assertIn("my_model", card_text)
-        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
-        self.assertIn("datasets: username/my_dataset", card_text)
-        self.assertIn("](https://wandb.ai/username/project_id/runs/abcd1234)", card_text)
-        self.assertIn("](https://www.comet.com/username/project_id/experiment_id", card_text)
-        self.assertIn("My Trainer", card_text)
-        self.assertIn("```bibtex\n@article{my_trainer, ...}\n```", card_text)
-        self.assertIn("[My Paper](https://huggingface.co/papers/1234.56789)", card_text)
+        assert "[username/my_base_model](https://huggingface.co/username/my_base_model)" in card_text
+        assert "my_model" in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert "datasets: username/my_dataset" in card_text
+        assert "](https://wandb.ai/username/project_id/runs/abcd1234)" in card_text
+        assert "](https://www.comet.com/username/project_id/experiment_id" in card_text
+        assert "My Trainer" in card_text
+        assert "```bibtex\n@article{my_trainer, ...}\n```" in card_text
+        assert "[My Paper](https://huggingface.co/papers/1234.56789)" in card_text
 
     def test_val_none(self):
         model_card = generate_model_card(
@@ -228,14 +227,13 @@ class TestGenerateModelCard(TrlTestCase):
             paper_id=None,
         )
         card_text = str(model_card)
-        self.assertIn("my_model", card_text)
-        self.assertIn('pipeline("text-generation", model="username/my_hub_model", device="cuda")', card_text)
-        self.assertIn("My Trainer", card_text)
+        assert "my_model" in card_text
+        assert 'pipeline("text-generation", model="username/my_hub_model", device="cuda")' in card_text
+        assert "My Trainer" in card_text
 
 
 class TestDataCollatorForChatML(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         # Initialize the tokenizer
         self.tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
         if self.tokenizer.pad_token is None:
@@ -265,11 +263,11 @@ class TestDataCollatorForChatML(TrlTestCase):
         data = self.collator(self.examples)
 
         # Verify basic shapes and types
-        self.assertIn("input_ids", data)
-        self.assertIn("attention_mask", data)
-        self.assertIn("labels", data)
-        self.assertIn("prompts", data)
-        self.assertIn("prompt_attention_mask", data)
+        assert "input_ids" in data
+        assert "attention_mask" in data
+        assert "labels" in data
+        assert "prompts" in data
+        assert "prompt_attention_mask" in data
 
         # Decode input_ids and labels for verification
         input_ids = data["input_ids"][0].tolist()
@@ -278,22 +276,21 @@ class TestDataCollatorForChatML(TrlTestCase):
 
         # Get the last assistant's response for comparison
         last_message = self.examples[0][self.messages_key][-1]
-        self.assertEqual(last_message["role"], "assistant", "Last message should be from assistant")
+        assert last_message["role"] == "assistant", "Last message should be from assistant"
         last_assistant_response = last_message["content"]
 
         # Verify that input_ids contain both prompt and response
         decoded_input = self.tokenizer.decode(input_ids)
-        self.assertIn(last_assistant_response, decoded_input, "Input should contain assistant's response")
+        assert last_assistant_response in decoded_input, "Input should contain assistant's response"
 
         # Verify that prompts only contain the conversation up to the last response
         decoded_prompt = self.tokenizer.decode(prompt_only)
-        self.assertNotIn(last_assistant_response, decoded_prompt, "Prompt should not contain assistant's response")
+        assert last_assistant_response not in decoded_prompt, "Prompt should not contain assistant's response"
 
         # Verify labels are -100 for non-assistant parts
         prompt_length = len(prompt_only)
-        self.assertTrue(
-            all(label == self.ignore_index for label in labels[:prompt_length]),
-            "Labels should be ignore_index for prompt tokens",
+        assert all(label == self.ignore_index for label in labels[:prompt_length]), (
+            "Labels should be ignore_index for prompt tokens"
         )
 
         # Verify labels match assistant response after prompt
@@ -310,29 +307,19 @@ class TestDataCollatorForChatML(TrlTestCase):
             response_labels.append(label)
             if label == self.tokenizer.convert_tokens_to_ids("<|im_end|>"):
                 break
-        self.assertEqual(
-            response_labels,
-            last_assistant_response_tokens,
-            "Labels should match assistant response tokens",
-        )
+        assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
 
         # Verify there isn't a generation prompt at the end
         generation_prompt = "<|im_start|>assistant"
-        self.assertFalse(
-            decoded_input.strip().endswith(generation_prompt),
-            f"Input should not end with generation prompt '{generation_prompt}'",
+        assert not decoded_input.strip().endswith(generation_prompt), (
+            f"Input should not end with generation prompt '{generation_prompt}'"
         )
 
-        self.assertEqual(
-            response_labels,
-            last_assistant_response_tokens,
-            "Labels should match assistant response tokens",
-        )
+        assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
 
 
 class TestBatchGeneration(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         # Initialize the tokenizer
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -367,9 +354,9 @@ class TestBatchGeneration(TrlTestCase):
         max_length_query = query_responses.shape[1]
         max_length_logits = max_length_query - context_length
 
-        self.assertGreater(max_length_query, context_length)
-        self.assertEqual(query_responses.shape, (bs, max_length_query))
-        self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
+        assert max_length_query > context_length
+        assert query_responses.shape == (bs, max_length_query)
+        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
 
     def test_single_batch_generation(self):
         batch = [
@@ -386,9 +373,9 @@ class TestBatchGeneration(TrlTestCase):
         max_length_query = query_responses.shape[1]
         max_length_logits = max_length_query - context_length
 
-        self.assertGreater(max_length_query, context_length)
-        self.assertEqual(query_responses.shape, (bs, max_length_query))
-        self.assertEqual(logits.shape, (bs, max_length_logits, self.model.config.vocab_size))
+        assert max_length_query > context_length
+        assert query_responses.shape == (bs, max_length_query)
+        assert logits.shape == (bs, max_length_logits, self.model.config.vocab_size)
 
 
 class TestComputeAccuracy(TrlTestCase):
@@ -404,7 +391,7 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 0.5  # 2 matches, 2 mismatches
         result = compute_accuracy(eval_pred)
-        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
 
     def test_token_classification_task_with_ignored_tokens_0(self):
         eval_pred = (
@@ -418,7 +405,7 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 1.0  # All non-ignored tokens match
         result = compute_accuracy(eval_pred)
-        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
 
     def test_token_classification_task_with_ignored_tokens_1(self):
         eval_pred = (
@@ -432,9 +419,9 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 1 / 3  # 1 match, 2 mismatch, 1 ignored
         result = compute_accuracy(eval_pred)
-        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
 
-    def test_rewards_comparison_task(self):
+    def test_rewards_comparison_task(self, caplog):
         eval_pred = (
             np.array(
                 [
@@ -447,15 +434,15 @@ class TestComputeAccuracy(TrlTestCase):
         )
         expected_accuracy = 0.5  # 1 match, 1 mismatch, 1 equal (ignored)
 
-        with self.assertLogs("trl.trainer.utils", level="WARNING") as cm:
+        with caplog.at_level("WARNING", logger="trl.trainer.utils"):
             result = compute_accuracy(eval_pred)
 
-        self.assertAlmostEqual(result["accuracy"], expected_accuracy)
+        assert round(abs(result["accuracy"] - expected_accuracy), 7) == 0
         expected_warning = (
             "There are 1 out of 3 instances where the predictions for both options are equal. "
             "These instances are ignored in the accuracy computation."
         )
-        self.assertIn(expected_warning, cm.output[0])
+        assert expected_warning in caplog.text
 
 
 class TestFlushLeft(TrlTestCase):
@@ -469,9 +456,9 @@ class TestFlushLeft(TrlTestCase):
         expected_tensor1 = torch.tensor([[2, 3, 4], [5, 6, 0]])
         expected_tensor2 = torch.tensor([[7, 8, 9], [10, 11, 0]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
-        self.assertTrue(torch.equal(new_tensor2, expected_tensor2))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
+        assert torch.equal(new_tensor2, expected_tensor2)
 
     def test_single_row(self):
         mask = torch.tensor([[0, 0, 1, 1]])
@@ -481,8 +468,8 @@ class TestFlushLeft(TrlTestCase):
         expected_mask = torch.tensor([[1, 1]])
         expected_tensor1 = torch.tensor([[2, 3]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
 
     def test_no_shift_needed(self):
         mask = torch.tensor([[1, 1, 0, 0], [1, 0, 0, 0]])
@@ -492,14 +479,14 @@ class TestFlushLeft(TrlTestCase):
         expected_mask = torch.tensor([[1, 1], [1, 0]])
         expected_tensor1 = torch.tensor([[5, 6], [7, 0]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
 
     def test_no_tensors(self):
         mask = torch.tensor([[0, 0, 1, 1, 1], [0, 1, 1, 0, 0]])
         new_mask = flush_left(mask)
         expected_mask = torch.tensor([[1, 1, 1], [1, 1, 0]])
-        self.assertTrue(torch.equal(new_mask, expected_mask))
+        assert torch.equal(new_mask, expected_mask)
 
 
 class TestFlushRight(TrlTestCase):
@@ -513,9 +500,9 @@ class TestFlushRight(TrlTestCase):
         expected_tensor1 = torch.tensor([[2, 3, 4], [0, 5, 6]])
         expected_tensor2 = torch.tensor([[7, 8, 9], [0, 10, 11]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
-        self.assertTrue(torch.equal(new_tensor2, expected_tensor2))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
+        assert torch.equal(new_tensor2, expected_tensor2)
 
     def test_single_row(self):
         mask = torch.tensor([[1, 1, 0, 0]])
@@ -525,8 +512,8 @@ class TestFlushRight(TrlTestCase):
         expected_mask = torch.tensor([[1, 1]])
         expected_tensor1 = torch.tensor([[2, 3]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
 
     def test_no_shift_needed(self):
         mask = torch.tensor([[0, 0, 1, 1], [0, 0, 0, 1]])
@@ -536,17 +523,17 @@ class TestFlushRight(TrlTestCase):
         expected_mask = torch.tensor([[1, 1], [0, 1]])
         expected_tensor1 = torch.tensor([[5, 6], [0, 7]])
 
-        self.assertTrue(torch.equal(new_mask, expected_mask))
-        self.assertTrue(torch.equal(new_tensor1, expected_tensor1))
+        assert torch.equal(new_mask, expected_mask)
+        assert torch.equal(new_tensor1, expected_tensor1)
 
     def test_no_tensors(self):
         mask = torch.tensor([[1, 1, 1, 0, 0], [0, 0, 1, 1, 0]])
         new_mask = flush_right(mask)
         expected_mask = torch.tensor([[1, 1, 1], [0, 1, 1]])
-        self.assertTrue(torch.equal(new_mask, expected_mask))
+        assert torch.equal(new_mask, expected_mask)
 
 
-class RepeatRandomSamplerTester(TrlTestCase):
+class TestRepeatRandomSampler(TrlTestCase):
     def test_sampler(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
         sampler = RepeatSampler(dataset, mini_repeat_count=2)
@@ -564,7 +551,7 @@ class RepeatRandomSamplerTester(TrlTestCase):
         sampler = RepeatSampler(dataset, mini_repeat_count=2, shuffle=False)
         sampled = list(sampler)
         expected = [0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6]
-        self.assertEqual(sampled, expected)
+        assert sampled == expected
 
     def test_sampler_no_repeat(self):
         dataset = ["a", "b", "c", "d", "e", "f", "g"]
@@ -706,7 +693,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         ╰──────────────────────────────────────────────────────────────────╯
         """)
 
-        self.assertEqual(output, expected_output)
+        assert output == expected_output
 
     @patch("sys.stdout", new_callable=StringIO)
     def test_num_samples(self, mock_stdout):
@@ -741,7 +728,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
             ╰─────────────────────────────────────────────╯
                 """),
         ]
-        self.assertIn(output, possible_outputs)
+        assert output in possible_outputs
 
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_messages(self, mock_stdout):
@@ -790,7 +777,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         ╰──────────────────────────────────────────────────────────────────────────────╯
         """)
 
-        self.assertEqual(output, expected_output)
+        assert output == expected_output
 
     @patch("sys.stdout", new_callable=StringIO)
     def test_print_messages_with_tools(self, mock_stdout):
@@ -829,7 +816,7 @@ class TestPrintPromptCompletionsSample(TrlTestCase):
         ╰──────────────────────────────────────────────────────────────────────────────╯
         """)
 
-        self.assertEqual(output, expected_output)
+        assert output == expected_output
 
 
 class TestSelectiveLogSoftmax(TrlTestCase):
@@ -848,12 +835,12 @@ class TestSelectiveLogSoftmax(TrlTestCase):
 
         if dtype in [torch.float16, torch.bfloat16]:
             # half-precision dtypes fall back to an exact method
-            self.assertTrue(torch.equal(actual_output, expected_output))
+            assert torch.equal(actual_output, expected_output)
         else:
             torch.testing.assert_close(actual_output, expected_output, rtol=1e-5, atol=1e-5)
 
 
-class ShuffleSequenceDictTester(TrlTestCase):
+class TestShuffleSequenceDict(TrlTestCase):
     def test_shuffle_preserves_shape(self):
         x = torch.arange(6).reshape(3, 2)
         y = torch.arange(3).reshape(3, 1)
@@ -861,8 +848,8 @@ class ShuffleSequenceDictTester(TrlTestCase):
 
         shuffled = shuffle_sequence_dict(tensor_dict)
 
-        self.assertEqual(shuffled["x"].shape, x.shape)
-        self.assertEqual(shuffled["y"].shape, y.shape)
+        assert shuffled["x"].shape == x.shape
+        assert shuffled["y"].shape == y.shape
 
     def test_shuffle_consistent_across_tensors(self):
         # Use known patterns to check alignment
@@ -878,13 +865,13 @@ class ShuffleSequenceDictTester(TrlTestCase):
             y_val = shuffled["y"][i].item()
 
             if torch.equal(x_row, torch.tensor([10, 11])):
-                self.assertEqual(y_val, 1)
+                assert y_val == 1
             elif torch.equal(x_row, torch.tensor([20, 21])):
-                self.assertEqual(y_val, 2)
+                assert y_val == 2
             elif torch.equal(x_row, torch.tensor([30, 31])):
-                self.assertEqual(y_val, 3)
+                assert y_val == 3
             else:
-                self.fail("Unexpected x row in shuffled output.")
+                pytest.fail("Unexpected x row in shuffled output.")
 
     def test_none_tensor_remains_none(self):
         x = torch.arange(6).reshape(3, 2)
@@ -892,8 +879,8 @@ class ShuffleSequenceDictTester(TrlTestCase):
 
         shuffled = shuffle_sequence_dict(tensor_dict)
 
-        self.assertIsNone(shuffled["y"])
-        self.assertEqual(shuffled["x"].shape, x.shape)
+        assert shuffled["y"] is None
+        assert shuffled["x"].shape == x.shape
 
     def test_shuffle_with_list(self):
         x = torch.tensor([[10, 11], [20, 21], [30, 31]])
@@ -909,16 +896,16 @@ class ShuffleSequenceDictTester(TrlTestCase):
             y_val = shuffled["y"][i]
 
             if torch.equal(x_row, torch.tensor([10, 11])):
-                self.assertEqual(y_val, "a")
+                assert y_val == "a"
             elif torch.equal(x_row, torch.tensor([20, 21])):
-                self.assertEqual(y_val, "b")
+                assert y_val == "b"
             elif torch.equal(x_row, torch.tensor([30, 31])):
-                self.assertEqual(y_val, "c")
+                assert y_val == "c"
             else:
-                self.fail("Unexpected x row in shuffled output.")
+                pytest.fail("Unexpected x row in shuffled output.")
 
 
-class SplitTensorDictTester(TrlTestCase):
+class TestSplitTensorDict(TrlTestCase):
     def test_split_equal_chunks(self):
         x = torch.arange(12).reshape(6, 2)
         y = torch.arange(6).reshape(6, 1)
@@ -928,10 +915,10 @@ class SplitTensorDictTester(TrlTestCase):
 
         expected_x_chunks = torch.chunk(x, 3, dim=0)
         expected_y_chunks = torch.chunk(y, 3, dim=0)
-        self.assertEqual(len(result), 3)
+        assert len(result) == 3
         for i in range(3):
-            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
-            self.assertTrue(torch.equal(result[i]["y"], expected_y_chunks[i]))
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert torch.equal(result[i]["y"], expected_y_chunks[i])
 
     def test_with_none_tensor(self):
         x = torch.arange(12).reshape(6, 2)
@@ -940,10 +927,10 @@ class SplitTensorDictTester(TrlTestCase):
         result = split_tensor_dict(tensor_dict, 2)
 
         expected_x_chunks = torch.chunk(x, 2, dim=0)
-        self.assertEqual(len(result), 2)
+        assert len(result) == 2
         for i in range(2):
-            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
-            self.assertIsNone(result[i]["y"])
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert result[i]["y"] is None
 
     def test_with_scalar(self):
         x = torch.arange(12).reshape(6, 2)
@@ -952,13 +939,13 @@ class SplitTensorDictTester(TrlTestCase):
         result = split_tensor_dict(tensor_dict, 2)
 
         expected_x_chunks = torch.chunk(x, 2, dim=0)
-        self.assertEqual(len(result), 2)
+        assert len(result) == 2
         for i in range(2):
-            self.assertTrue(torch.equal(result[i]["x"], expected_x_chunks[i]))
-            self.assertTrue(torch.equal(result[i]["y"], torch.tensor(1)))
+            assert torch.equal(result[i]["x"], expected_x_chunks[i])
+            assert torch.equal(result[i]["y"], torch.tensor(1))
 
 
-class SplitPixelValuesByGridTester(TrlTestCase):
+class TestSplitPixelValuesByGrid(TrlTestCase):
     def test_split_correctly_0(self):
         batch = {
             "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 2]]),
@@ -966,14 +953,14 @@ class SplitPixelValuesByGridTester(TrlTestCase):
             "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
         }
         result = split_pixel_values_by_grid(batch)
-        self.assertIsInstance(result["pixel_values"], list)
-        self.assertEqual(len(result["pixel_values"]), 2)
-        self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:4]))
-        self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][4:]))
-        self.assertIsInstance(result["image_grid_thw"], list)
-        self.assertEqual(len(result["image_grid_thw"]), 2)
-        self.assertTrue(torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]])))
-        self.assertTrue(torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2]])))
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:4])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][4:])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2]]))
 
     def test_split_correctly_1(self):
         batch = {
@@ -982,19 +969,19 @@ class SplitPixelValuesByGridTester(TrlTestCase):
             "pixel_values": torch.arange(12 * 3).reshape(12, 3),  # Shape: [12, 3]
         }
         result = split_pixel_values_by_grid(batch)
-        self.assertIsInstance(result["pixel_values"], list)
-        self.assertEqual(len(result["pixel_values"]), 2)
-        self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:4]))
-        self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][4:12]))
-        self.assertIsInstance(result["image_grid_thw"], list)
-        self.assertEqual(len(result["image_grid_thw"]), 2)
-        self.assertTrue(torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]])))
-        self.assertTrue(torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 4]])))
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:4])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][4:12])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 2, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 4]]))
 
     def test_missing_keys(self):
         batch = {"pixel_values": torch.tensor([1.0])}
         result = split_pixel_values_by_grid(batch)
-        self.assertEqual(result, batch)
+        assert result == batch
 
     def test_mismatched_length(self):
         batch = {
@@ -1002,7 +989,7 @@ class SplitPixelValuesByGridTester(TrlTestCase):
             "num_images": [1, 1],
             "pixel_values": torch.randn(3, 5),  # Only 3 rows
         }
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             split_pixel_values_by_grid(batch)
 
     def test_multi_images(self):
@@ -1012,17 +999,17 @@ class SplitPixelValuesByGridTester(TrlTestCase):
             "pixel_values": torch.arange(8 * 3).reshape(8, 3),  # Shape: [8, 3]
         }
         result = split_pixel_values_by_grid(batch)
-        self.assertIsInstance(result["pixel_values"], list)
-        self.assertEqual(len(result["pixel_values"]), 2)
-        self.assertTrue(torch.equal(result["pixel_values"][0], batch["pixel_values"][:2]))
-        self.assertTrue(torch.equal(result["pixel_values"][1], batch["pixel_values"][2:]))
-        self.assertIsInstance(result["image_grid_thw"], list)
-        self.assertEqual(len(result["image_grid_thw"]), 2)
-        self.assertTrue(torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]])))
-        self.assertTrue(torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]])))
+        assert isinstance(result["pixel_values"], list)
+        assert len(result["pixel_values"]) == 2
+        assert torch.equal(result["pixel_values"][0], batch["pixel_values"][:2])
+        assert torch.equal(result["pixel_values"][1], batch["pixel_values"][2:])
+        assert isinstance(result["image_grid_thw"], list)
+        assert len(result["image_grid_thw"]) == 2
+        assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
+        assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
 
 
-class TruncateWithProtectedTokensTester(TrlTestCase):
+class TestTruncateWithProtectedTokens(TrlTestCase):
     def test_basic_example(self):
         """Test the basic example from the problem description."""
         prompt_ids = [1, 2, 3, 4, 5]
@@ -1032,7 +1019,7 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
         expected_ids = [2, 3, 5]
-        self.assertEqual(new_ids, expected_ids)
+        assert new_ids == expected_ids
 
     def test_no_truncation_needed(self):
         """Test when target length equals current length."""
@@ -1042,7 +1029,7 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
 
         new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        self.assertEqual(new_ids, prompt_ids)
+        assert new_ids == prompt_ids
 
     def test_no_protected_tokens(self):
         """Test truncation with no protected tokens (normal right truncation)."""
@@ -1053,7 +1040,7 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
         expected_ids = [3, 4, 5]  # Last 3 tokens
-        self.assertEqual(new_ids, expected_ids)
+        assert new_ids == expected_ids
 
     def test_all_tokens_protected(self):
         """Test when all remaining tokens are protected."""
@@ -1064,7 +1051,7 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
         expected_ids = [3, 4, 5]
-        self.assertEqual(new_ids, expected_ids)
+        assert new_ids == expected_ids
 
     def test_too_many_protected_tokens(self):
         """Test error when too many protected tokens for target length."""
@@ -1072,7 +1059,7 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         protected_tokens = [1, 2, 3, 4]
         target_length = 3
 
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
     def test_single_batch_single_token(self):
@@ -1083,7 +1070,7 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
 
         new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
 
-        self.assertEqual(new_ids, prompt_ids)
+        assert new_ids == prompt_ids
 
     def test_order_preservation(self):
         """Test that relative order is preserved."""
@@ -1097,10 +1084,10 @@ class TruncateWithProtectedTokensTester(TrlTestCase):
         # Order should be: 2, 3, 30, 40 (maintaining original relative positions)
         expected_ids = [2, 3, 30, 40]
 
-        self.assertEqual(new_ids, expected_ids)
+        assert new_ids == expected_ids
 
 
-class UnsplitPixelValuesByGridTester(TrlTestCase):
+class TestUnsplitPixelValuesByGrid(TrlTestCase):
     def test_unsplit_correctly(self):
         pixel_values = [torch.randn(4, 5), torch.randn(2, 5)]
         pixel_values_merged = torch.cat(pixel_values, dim=0)
@@ -1108,14 +1095,14 @@ class UnsplitPixelValuesByGridTester(TrlTestCase):
         image_grid_thw_merged = torch.cat(image_grid_thw, dim=0)
         batch = {"pixel_values": pixel_values, "image_grid_thw": image_grid_thw, "other_key": torch.tensor([1])}
         result = unsplit_pixel_values_by_grid(batch)
-        self.assertIsInstance(result["pixel_values"], torch.Tensor)
-        self.assertTrue(torch.allclose(result["pixel_values"], pixel_values_merged))
-        self.assertIsInstance(result["image_grid_thw"], torch.Tensor)
-        self.assertTrue(torch.equal(result["image_grid_thw"], image_grid_thw_merged))
-        self.assertIn("other_key", result)
+        assert isinstance(result["pixel_values"], torch.Tensor)
+        assert torch.allclose(result["pixel_values"], pixel_values_merged)
+        assert isinstance(result["image_grid_thw"], torch.Tensor)
+        assert torch.equal(result["image_grid_thw"], image_grid_thw_merged)
+        assert "other_key" in result
 
     def test_no_op_if_not_list(self):
         original = torch.randn(5, 3)
         batch = {"pixel_values": original}
         result = unsplit_pixel_values_by_grid(batch)
-        self.assertTrue(torch.equal(result["pixel_values"], original))
+        assert torch.equal(result["pixel_values"], original)

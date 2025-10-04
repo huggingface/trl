@@ -13,19 +13,18 @@
 # limitations under the License.
 
 import pathlib
-import unittest
 
+import pytest
 import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import RewardConfig, RewardTrainer
 from trl.trainer.reward_trainer import DataCollatorForPreference
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
 if is_peft_available():
@@ -108,7 +107,7 @@ class TestDataCollatorForPreference(TrlTestCase):
         torch.testing.assert_close(result["margin"], torch.tensor([0.1, 0.2]))
 
 
-class RewardTrainerTester(TrlTestCase):
+class TestRewardTrainer(TrlTestCase):
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5",),
@@ -131,12 +130,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @parameterized.expand(
         [
@@ -165,12 +164,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_model(self):
         # Instantiate the model
@@ -192,12 +191,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_from_causal_lm(self):
         # Get the dataset
@@ -216,12 +215,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_model_dtype(self):
         # Get the dataset
@@ -247,7 +246,7 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
@@ -257,8 +256,8 @@ class RewardTrainerTester(TrlTestCase):
                 continue
             new_param = trainer.model.get_parameter(n)
             # Check the torch dtype
-            self.assertEqual(new_param.dtype, torch.float16)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert new_param.dtype == torch.float16
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
     def test_train_dense_with_peft_config(self):
@@ -287,15 +286,15 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
     def test_train_moe_with_peft_config(self):
@@ -324,15 +323,15 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
     def test_train_peft_model(self):
@@ -361,15 +360,15 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
     def test_train_dense_with_peft_config_and_gradient_checkpointing(self):
@@ -398,15 +397,15 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
     def test_train_moe_with_peft_config_and_gradient_checkpointing(self):
@@ -435,15 +434,15 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
     def test_train_with_peft_model_and_gradient_checkpointing(self):
@@ -462,7 +461,7 @@ class RewardTrainerTester(TrlTestCase):
         trainer = RewardTrainer(model=model, args=training_args, train_dataset=dataset)
 
         # Verify model is a PeftModel
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         # Save the initial parameters to compare them later
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
@@ -471,15 +470,15 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_with_pretokenized_data(self):
         # Get the dataset
@@ -507,12 +506,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_with_iterable_dataset(self):
         # Get the dataset
@@ -535,12 +534,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_with_chat_template_kwargs(self):
         # Get the dataset
@@ -569,12 +568,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_with_set_chat_template_from_model(self):
         # Get the dataset
@@ -596,7 +595,7 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
@@ -606,7 +605,7 @@ class RewardTrainerTester(TrlTestCase):
             # this parameter.
             if n == "gpt_neox.final_layer_norm.bias":
                 continue
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_with_set_chat_template_from_path(self):
         # Get the dataset
@@ -632,7 +631,7 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
@@ -642,21 +641,19 @@ class RewardTrainerTester(TrlTestCase):
             # this parameter.
             if n == "gpt_neox.final_layer_norm.bias":
                 continue
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         # Check that the template saved in the output directory is the same as the one used for training
         template_path = pathlib.Path(self.tmp_dir) / "checkpoint-9" / "chat_template.jinja"
-        self.assertTrue(template_path.exists(), f"Chat template not found at {template_path}")
+        assert template_path.exists(), f"Chat template not found at {template_path}"
 
         with open(template_path) as f:
             template_content = f.read()
         with open(training_args.chat_template_path) as f:
             original_template_content = f.read()
-        self.assertEqual(
-            template_content, original_template_content, "Chat template content does not match the original"
-        )
+        assert template_content == original_template_content, "Chat template content does not match the original"
 
-    @unittest.skip("Skipping until we have a dataset with tool calls")
+    @pytest.mark.skip(reason="Skipping until we have a dataset with tool calls")
     def test_train_toolcall_data(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/toolcall", split="train")
@@ -676,12 +673,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_with_eval(self):
         # Get the dataset
@@ -700,7 +697,7 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the eval loss is not None
-        self.assertIsNotNone(trainer.state.log_history[0]["eval_loss"])
+        assert trainer.state.log_history[0]["eval_loss"] is not None
 
     def test_train_with_multiple_eval_dataset(self):
         # Get the dataset
@@ -718,8 +715,8 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the eval losses are not None
-        self.assertIsNotNone(trainer.state.log_history[-3]["eval_data1_loss"])
-        self.assertIsNotNone(trainer.state.log_history[-2]["eval_data2_loss"])
+        assert trainer.state.log_history[-3]["eval_data1_loss"] is not None
+        assert trainer.state.log_history[-2]["eval_data2_loss"] is not None
 
     def test_train_with_gradient_checkpointing(self):
         # Get the dataset
@@ -740,12 +737,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_tag_added(self):
         # Get the dataset
@@ -758,7 +755,7 @@ class RewardTrainerTester(TrlTestCase):
         )
 
         for tag in ["reward-trainer", "trl"]:
-            self.assertIn(tag, trainer.model.model_tags)
+            assert tag in trainer.model.model_tags
 
     @require_peft
     def test_tag_added_peft(self):
@@ -773,7 +770,7 @@ class RewardTrainerTester(TrlTestCase):
         )
 
         for tag in ["reward-trainer", "trl"]:
-            self.assertIn(tag, trainer.model.model_tags)
+            assert tag in trainer.model.model_tags
 
     def test_train_with_margin(self):
         # Get the dataset
@@ -800,12 +797,12 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     def test_train_with_center_rewards_coefficient(self):
         # Get the dataset
@@ -826,9 +823,9 @@ class RewardTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"

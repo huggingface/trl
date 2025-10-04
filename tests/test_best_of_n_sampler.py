@@ -27,7 +27,7 @@ def queries_to_scores(list_of_strings):
     return [torch.rand(1).item() for _ in list_of_strings]
 
 
-class BestOfNSamplerTester(TrlTestCase):
+class TestBestOfNSampler(TrlTestCase):
     """
     Tests the BestOfNSampler class
     """
@@ -74,8 +74,8 @@ class BestOfNSamplerTester(TrlTestCase):
 
         for q, expected_length in various_queries_formats:
             results = best_of_n.generate(q)
-            self.assertIsInstance(results, list)
-            self.assertEqual(len(results), expected_length)
+            assert isinstance(results, list)
+            assert len(results) == expected_length
 
     def test_different_sample_sizes_and_n_candidates_values(self):
         r"""
@@ -110,4 +110,4 @@ class BestOfNSamplerTester(TrlTestCase):
             tokenized_queries = [self.tokenizer.encode(query) for query in queries]
             results = best_of_n.generate(tokenized_queries)
             for result in results:
-                self.assertEqual(len(result), expected)
+                assert len(result) == expected

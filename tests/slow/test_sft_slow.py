@@ -24,7 +24,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from transformers.testing_utils import (
     backend_empty_cache,
     require_liger_kernel,
-    require_peft,
     require_torch_accelerator,
     require_torch_multi_accelerator,
     torch_device,
@@ -33,7 +32,7 @@ from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
 
-from ..testing_utils import TrlTestCase, require_bitsandbytes
+from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft
 from .testing_constants import DEVICE_MAP_OPTIONS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST, PACKING_OPTIONS
 
 
@@ -44,9 +43,8 @@ if is_peft_available():
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
-class SFTTrainerSlowTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+class TestSFTTrainerSlow(TrlTestCase):
+    def setup_method(self):
         self.train_dataset = load_dataset("stanfordnlp/imdb", split="train[:10%]")
         self.eval_dataset = load_dataset("stanfordnlp/imdb", split="test[:10%]")
         self.max_length = 128
@@ -58,11 +56,10 @@ class SFTTrainerSlowTester(TrlTestCase):
             task_type="CAUSAL_LM",
         )
 
-    def tearDown(self):
+    def teardown_method(self):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
-        super().tearDown()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
     def test_sft_trainer_str(self, model_name, packing):
@@ -148,7 +145,7 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
@@ -252,7 +249,7 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
@@ -332,7 +329,7 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
@@ -372,7 +369,7 @@ class SFTTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         trainer.train()
 
@@ -447,11 +444,11 @@ class SFTTrainerSlowTester(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+            assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
         release_memory(trainer.model, trainer)
