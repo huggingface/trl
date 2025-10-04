@@ -977,14 +977,18 @@ class SFTTrainer(BaseTrainer):
 
                         output["input_ids"] = prompt_completion_ids
 
+                        # Create completion_mask - more precise thanks to add_generation_prompt=True
+                        completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
+                        output["completion_mask"] = completion_mask
+
                         # Warn if assistant_masks are all zeros (chat template doesn't support {% generation %})
                         # This means assistant_only_loss won't work correctly with prompt-completion format
-                        if "assistant_masks" in output and 1 not in output["assistant_masks"]:
+                        if "assistant_masks" in output and 1 not in output["assistant_masks"] and assistant_only_loss:
                             logger.warning(
-                                "The chat template does not support generation tokens (missing '{% generation %}' keyword). "
-                                "When using prompt-completion format with assistant_only_loss=True, this will result in "
-                                "all tokens being masked. Consider using a chat template that supports generation tokens, "
-                                "or set assistant_only_loss=False and use completion_only_loss=True instead."
+                                "You're using `assistant_only_loss=True` with prompt-completion format, but the chat template "
+                                "doesn't generate valid assistant masks — it may be missing the `{% generation %}` keyword. "
+                                "This will cause all tokens to be masked during training. Please use `completion_only_loss=True` "
+                                "instead to train on completion tokens."
                             )
 
                     else:  # language modeling case
