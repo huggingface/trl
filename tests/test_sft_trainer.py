@@ -30,7 +30,16 @@ from .testing_utils import TrlTestCase, ignore_warnings, require_bitsandbytes
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
+    from peft import (
+        LoraConfig,
+        PeftModel,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        PromptTuningInit,
+        TaskType,
+        get_peft_model,
+    )
 
 
 class DFTLossTester(TrlTestCase):
@@ -451,7 +460,7 @@ class SFTTrainerTester(TrlTestCase):
             self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
-    def test_train_dense_with_peft_config(self):
+    def test_train_dense_with_peft_config_lora(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -485,6 +494,58 @@ class SFTTrainerTester(TrlTestCase):
             if n in base_param_names:  # We expect the base model parameters to be the same
                 self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+
+    @parameterized.expand(
+        [
+            (PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),),
+            (PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),),
+            (
+                PromptTuningConfig(
+                    task_type=TaskType.CAUSAL_LM,
+                    prompt_tuning_init=PromptTuningInit.RANDOM,
+                    num_virtual_tokens=4,
+                    tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+                ),
+            ),
+        ]
+    )
+    @require_peft
+    def test_train_with_peft_config_prompt_tuning(self, peft_config):
+        # Get the base model parameter names
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        base_param_names = [f"base_model.{n}" for n, _ in model.named_parameters()]
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Initialize the trainer, p-tuning doesn't support gradient checkpointing
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        peft_config.encoder_hidden_size = model.config.hidden_size
+
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+            else:  # We expect the peft parameters to be different
                 self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
 
     @require_peft
