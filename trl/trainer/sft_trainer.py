@@ -348,6 +348,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
