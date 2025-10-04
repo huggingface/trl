@@ -58,7 +58,7 @@ from ..extras.profiling import profiling_context
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_peft_model
-from ..models.utils import unwrap_model_for_generation
+from ..models.utils import prepare_deepspeed, unwrap_model_for_generation
 from .base_trainer import BaseTrainer
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
@@ -591,9 +591,23 @@ class OnlineDPOTrainer(BaseTrainer):
                 for i, reward_func in enumerate(self.reward_funcs):
                     if isinstance(reward_func, PreTrainedModel):
                         self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
-        else:
+        elif self.is_fsdp_enabled:
+            # Prepare ref model for FSDP training
             if self.ref_model is not None:
-                self.ref_model = self.ref_model.to(self.accelerator.device)
+                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
+            if self.reward_funcs is not None:
+                for i, reward_func in enumerate(self.reward_funcs):
+                    if isinstance(reward_func, PreTrainedModel):
+                        # Set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
+                        self.reward_funcs[i] = self.accelerator.prepare_model(
+                            reward_func, evaluation_mode=True, device_placement=True
+                        )
+        else:
+            # Prepare ref model for regular training
+            if self.ref_model is not None:
+                self.ref_model = self.accelerator.prepare_model(
+                    self.ref_model, evaluation_mode=True, device_placement=True
+                )
             # Prepare reward function models for FSDP/regular training
             if self.reward_funcs is not None:
                 for i, reward_func in enumerate(self.reward_funcs):
@@ -1227,10 +1241,12 @@ class OnlineDPOTrainer(BaseTrainer):
         # Get the logprobs of the completions from the model
         output = model(prompt_completion_ids, **model_kwargs)
 
-        # There is 1 offset, because the model predict the next token
+        # There is 1 offset, because the model predicts the next token
         prompt_len = prompt_ids.size(1)
         start_idx = prompt_len - 1 if prompt_len > 0 else 0
-        logits = output.logits[:, start_idx:-1]
+        # Only slice off the last logit when we have a prompt, otherwise we need all logits
+        end_idx = -1 if prompt_len > 0 else None
+        logits = output.logits[:, start_idx:end_idx]
 
         # Take the completion tokens logprob
         logprobs = torch.take_along_dim(logits.log_softmax(dim=-1), completion_ids.unsqueeze(-1), dim=2).squeeze(-1)
