@@ -17,7 +17,9 @@ from unittest.mock import MagicMock
 
 import pytest
 import torch
+import transformers
 from datasets import load_dataset
+from packaging.version import parse as parse_version
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import require_flash_attn, require_liger_kernel, require_peft, require_vision
@@ -1306,6 +1308,11 @@ class SFTTrainerTester(TrlTestCase):
                 torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
             )
 
+    @pytest.mark.xfail(
+        parse_version(transformers.__version__) < parse_version("4.57.0"),
+        reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
+        strict=False,
+    )
     @require_vision
     def test_train_vlm_multi_image(self):
         # Get the dataset
