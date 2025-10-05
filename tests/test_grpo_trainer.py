@@ -604,8 +604,7 @@ class GRPOTrainerTester(TrlTestCase):
         def reward_func(completions, some_values, **kwargs):
             """Reward function that rewards completions with lengths closer to the values in some_values."""
             return [
-                float(abs(len(completion) - value))
-                for completion, value in zip(completions, some_values, strict=True)
+                float(abs(len(completion) - value)) for completion, value in zip(completions, some_values, strict=True)
             ]
 
         training_args = GRPOConfig(

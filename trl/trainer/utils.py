@@ -23,7 +23,7 @@ from collections.abc import Mapping, Sequence, Sized
 from dataclasses import dataclass, field
 from importlib.metadata import version
 from itertools import accumulate
-from typing import Any, Literal, Optional, TypeVar, Union
+from typing import Any, Literal, TypeVar
 
 import numpy as np
 import pandas as pd
@@ -1292,11 +1292,11 @@ def generate_model_card(
     tags: list[str],
     wandb_url: str | None,
     trainer_name: str,
-    trainer_citation: Optional[str] = None,
-    template_file: Optional[str] = None,
-    paper_title: Optional[str] = None,
-    paper_id: Optional[str] = None,
-    comet_url: Optional[str] = None,
+    trainer_citation: str | None = None,
+    template_file: str | None = None,
+    paper_title: str | None = None,
+    paper_id: str | None = None,
+    comet_url: str | None = None,
 ) -> ModelCard:
     """
     Generate a `ModelCard` from a template.

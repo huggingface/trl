@@ -266,8 +266,7 @@ class PRMTrainer(BaseTrainer):
 
         # Create the label
         labels = [
-            [-100] * (len(completion) - 1) + [label]
-            for completion, label in zip(completions_ids, labels, strict=True)
+            [-100] * (len(completion) - 1) + [label] for completion, label in zip(completions_ids, labels, strict=True)
         ]
 
         # Join the completions and labels steps

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -102,14 +102,14 @@ class RewardConfig(TrainingArguments):
     )
 
     # Parameters that control the model
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `RewardTrainer` is provided as a string."
         },
     )
-    chat_template_path: Optional[str] = field(
+    chat_template_path: str | None = field(
         default=None,
         metadata={
             "help": "If specified, sets the model's chat template. This can either be the path to a tokenizer (local "
@@ -124,37 +124,37 @@ class RewardConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    eos_token: Optional[str] = field(
+    eos_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used to indicate the end of a turn or sequence. If `None`, it defaults to `processing_class.eos_token`."
         },
     )
-    pad_token: Optional[str] = field(
+    pad_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
             "is also `None`, it falls back to `processing_class.eos_token`."
         },
     )
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={
             "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
             "the right. If `None`, no truncation is applied."
         },
     )
-    pad_to_multiple_of: Optional[int] = field(
+    pad_to_multiple_of: int | None = field(
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
 
     # Parameters that control the training
-    center_rewards_coefficient: Optional[float] = field(
+    center_rewards_coefficient: float | None = field(
         default=None,
         metadata={
             "help": "Coefficient to incentivize the reward model to output mean-zero rewards (proposed by "

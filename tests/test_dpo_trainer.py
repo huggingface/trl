@@ -1317,7 +1317,6 @@ class DPOTrainerTester(TrlTestCase):
         ]
     )
     @require_liger_kernel
-    @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
     def test_dpo_trainer_with_liger(self, beta, loss_type):
         """Test DPO trainer with Liger loss enabled across supported loss types.
 
