@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -359,7 +358,7 @@ class DPOConfig(TrainingArguments):
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
-    tools: list[dict | Callable] | None = field(
+    tools: list[dict] | None = field(
         default=None,
         metadata={
             "help": "List of tools (callable functions) that will be accessible to the model. If the template does "
