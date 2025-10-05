@@ -13,7 +13,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any
 
 import evaluate
 import numpy as np
@@ -41,70 +41,70 @@ class ScriptArguments:
     These arguments vary depending on how many GPUs you have, what their capacity and features are, and what size model you want to train.
     """
 
-    local_rank: Optional[int] = field(default=-1, metadata={"help": "Used for multi-gpu"})
-    resume_from_checkpoint: Optional[bool] = field(
+    local_rank: int | None = field(default=-1, metadata={"help": "Used for multi-gpu"})
+    resume_from_checkpoint: bool | None = field(
         default=False,
         metadata={"help": "If you want to resume training where it left off."},
     )
-    deepspeed: Optional[str] = field(
+    deepspeed: str | None = field(
         default=None,
         metadata={
             "help": "Path to deepspeed config if using deepspeed. You may need this if the model that you want to train doesn't fit on a single GPU."
         },
     )
-    per_device_train_batch_size: Optional[int] = field(default=4)
-    per_device_eval_batch_size: Optional[int] = field(default=1)
-    gradient_accumulation_steps: Optional[int] = field(default=1)
-    learning_rate: Optional[float] = field(default=2e-5)
-    weight_decay: Optional[float] = field(default=0.001)
-    model_name: Optional[str] = field(
+    per_device_train_batch_size: int | None = field(default=4)
+    per_device_eval_batch_size: int | None = field(default=1)
+    gradient_accumulation_steps: int | None = field(default=1)
+    learning_rate: float | None = field(default=2e-5)
+    weight_decay: float | None = field(default=0.001)
+    model_name: str | None = field(
         default="gpt2",
         metadata={
             "help": "The model that you want to train from the Hugging Face hub. E.g. gpt2, gpt2-xl, bert, etc."
         },
     )
-    tokenizer_name: Optional[str] = field(
+    tokenizer_name: str | None = field(
         default=None,
         metadata={
             "help": "The tokenizer for your model, if left empty will use the default for your model",
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=True,
         metadata={
             "help": "This essentially cuts the training time in half if you want to sacrifice a little precision and have a supported GPU."
         },
     )
-    num_train_epochs: Optional[int] = field(
+    num_train_epochs: int | None = field(
         default=1,
         metadata={"help": "The number of training epochs for the reward model."},
     )
-    train_subset: Optional[int] = field(
+    train_subset: int | None = field(
         default=100000,
         metadata={"help": "The size of the subset of the training data to use"},
     )
-    eval_subset: Optional[int] = field(
+    eval_subset: int | None = field(
         default=50000,
         metadata={"help": "The size of the subset of the eval data to use"},
     )
-    gradient_checkpointing: Optional[bool] = field(
+    gradient_checkpointing: bool | None = field(
         default=False,
         metadata={"help": "Enables gradient checkpointing."},
     )
-    optim: Optional[str] = field(
+    optim: str | None = field(
         default="adamw_hf",
         metadata={"help": "The optimizer to use."},
     )
-    lr_scheduler_type: Optional[str] = field(
+    lr_scheduler_type: str | None = field(
         default="linear",
         metadata={"help": "The lr scheduler"},
     )
-    max_length: Optional[int] = field(default=512)
-    eval_first_step: Optional[bool] = field(
+    max_length: int | None = field(default=512)
+    eval_first_step: bool | None = field(
         default=False,
         metadata={"help": "Whether to run eval after the first step"},
     )
-    seed: Optional[int] = field(
+    seed: int | None = field(
         default=0, metadata={"help": "Random seed that will be set at the beginning of training."}
     )
 
@@ -189,7 +189,9 @@ def preprocess_function(examples):
         "input_ids_k": [],
         "attention_mask_k": [],
     }
-    for question, response_j, response_k in zip(examples["question"], examples["response_j"], examples["response_k"]):
+    for question, response_j, response_k in zip(
+        examples["question"], examples["response_j"], examples["response_k"], strict=False
+    ):
         tokenized_j = tokenizer("Question: " + question + "\n\nAnswer: " + response_j, truncation=True)
         tokenized_k = tokenizer("Question: " + question + "\n\nAnswer: " + response_k, truncation=True)
 
@@ -229,8 +231,8 @@ eval_dataset = eval_dataset.filter(
 @dataclass
 class RewardDataCollatorWithPadding:
     tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str, PaddingStrategy] = True
-    pad_to_multiple_of: Optional[int] = None
+    padding: bool | str | PaddingStrategy = True
+    pad_to_multiple_of: int | None = None
     return_tensors: str = "pt"
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, Any]:

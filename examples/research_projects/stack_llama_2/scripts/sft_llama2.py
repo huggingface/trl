@@ -15,7 +15,6 @@
 # Fine-Tune Llama2-7b on SE paired dataset
 import os
 from dataclasses import dataclass, field
-from typing import Optional
 
 import torch
 from accelerate import Accelerator
@@ -38,21 +37,21 @@ from trl.trainer import ConstantLengthDataset
 
 @dataclass
 class ScriptArguments:
-    model_name: Optional[str] = field(default="meta-llama/Llama-2-7b-hf", metadata={"help": "the model name"})
-    dataset_name: Optional[str] = field(default="lvwerra/stack-exchange-paired", metadata={"help": "the dataset name"})
-    subset: Optional[str] = field(default="data/finetune", metadata={"help": "the subset to use"})
-    split: Optional[str] = field(default="train", metadata={"help": "the split to use"})
-    size_valid_set: Optional[int] = field(default=4000, metadata={"help": "the size of the validation set"})
-    streaming: Optional[bool] = field(default=True, metadata={"help": "whether to stream the dataset"})
-    shuffle_buffer: Optional[int] = field(default=5000, metadata={"help": "the shuffle buffer size"})
-    seq_length: Optional[int] = field(default=1024, metadata={"help": "the sequence length"})
-    num_workers: Optional[int] = field(default=4, metadata={"help": "the number of workers"})
-    use_bnb: Optional[bool] = field(default=True, metadata={"help": "whether to use BitsAndBytes"})
+    model_name: str | None = field(default="meta-llama/Llama-2-7b-hf", metadata={"help": "the model name"})
+    dataset_name: str | None = field(default="lvwerra/stack-exchange-paired", metadata={"help": "the dataset name"})
+    subset: str | None = field(default="data/finetune", metadata={"help": "the subset to use"})
+    split: str | None = field(default="train", metadata={"help": "the split to use"})
+    size_valid_set: int | None = field(default=4000, metadata={"help": "the size of the validation set"})
+    streaming: bool | None = field(default=True, metadata={"help": "whether to stream the dataset"})
+    shuffle_buffer: int | None = field(default=5000, metadata={"help": "the shuffle buffer size"})
+    seq_length: int | None = field(default=1024, metadata={"help": "the sequence length"})
+    num_workers: int | None = field(default=4, metadata={"help": "the number of workers"})
+    use_bnb: bool | None = field(default=True, metadata={"help": "whether to use BitsAndBytes"})
 
     # LoraConfig
-    lora_alpha: Optional[float] = field(default=16, metadata={"help": "the lora alpha parameter"})
-    lora_dropout: Optional[float] = field(default=0.05, metadata={"help": "the lora dropout parameter"})
-    lora_r: Optional[int] = field(default=8, metadata={"help": "the lora r parameter"})
+    lora_alpha: float | None = field(default=16, metadata={"help": "the lora alpha parameter"})
+    lora_dropout: float | None = field(default=0.05, metadata={"help": "the lora dropout parameter"})
+    lora_r: int | None = field(default=8, metadata={"help": "the lora r parameter"})
 
 
 parser = HfArgumentParser((ScriptArguments, SFTConfig))
@@ -82,7 +81,7 @@ def chars_token_ratio(dataset, tokenizer, nb_examples=400):
     Estimate the average number of characters per token in the dataset.
     """
     total_characters, total_tokens = 0, 0
-    for _, example in tqdm(zip(range(nb_examples), iter(dataset)), total=nb_examples):
+    for _, example in tqdm(zip(range(nb_examples), iter(dataset), strict=True), total=nb_examples):
         text = prepare_sample_text(example)
         total_characters += len(text)
         if tokenizer.is_fast:

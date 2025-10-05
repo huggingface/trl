@@ -226,7 +226,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
         for k in list(state_dict.keys()):
             if "v_head." in k:
                 state_dict[k.replace("v_head.", "")] = state_dict.pop(k)
-        self.v_head.load_state_dict(state_dict, strict=False)
+        self.v_head.load_state_dict(state_dict, strict=True)
         del state_dict
 
         if hasattr(self.pretrained_model, "hf_device_map"):
@@ -313,7 +313,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
         for k in list(state_dict.keys()):
             if "v_head." in k:
                 state_dict[k.replace("v_head.", "")] = state_dict.pop(k)
-        self.v_head.load_state_dict(state_dict, strict=False)
+        self.v_head.load_state_dict(state_dict, strict=True)
         del state_dict
 
         if hasattr(self.pretrained_model, "hf_device_map"):

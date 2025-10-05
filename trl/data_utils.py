@@ -13,9 +13,9 @@
 # limitations under the License.
 
 from collections import defaultdict, deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from itertools import takewhile
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, TypeVar
 
 import numpy as np
 import pyarrow as pa
@@ -119,8 +119,8 @@ def is_conversational(example: dict[str, Any]) -> bool:
 
 def apply_chat_template(
     example: dict[str, list[dict[str, str]]],
-    tokenizer: Union[PreTrainedTokenizerBase, ProcessorMixin],
-    tools: Optional[list[Union[dict, Callable]]] = None,
+    tokenizer: PreTrainedTokenizerBase | ProcessorMixin,
+    tools: list[dict | Callable] | None = None,
     **template_kwargs,
 ) -> dict[str, str]:
     r"""
@@ -174,7 +174,7 @@ def apply_chat_template(
             # DeepSeek-R1 inserts a <tool_call> token when using `add_generation_prompt`, which can cause discrepancies
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
             # common prefix between the two. In most cases, this is a no-op.
-            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen)))
+            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_chosen, strict=False)))
 
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
@@ -182,14 +182,18 @@ def apply_chat_template(
                 example["prompt"] + example["rejected"], tools=tools, tokenize=False, **template_kwargs
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
-            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
+            prompt = "".join(
+                x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected, strict=False))
+            )
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
                 example["prompt"] + example["completion"], tools=tools, tokenize=False, **template_kwargs
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
-            prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
+            prompt = "".join(
+                x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion, strict=False))
+            )
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
@@ -220,7 +224,7 @@ def apply_chat_template(
 def maybe_apply_chat_template(
     example: dict[str, list[dict[str, str]]],
     tokenizer: PreTrainedTokenizerBase,
-    tools: Optional[list[Union[dict, Callable]]] = None,
+    tools: list[dict | Callable] | None = None,
     **template_kwargs: Any,
 ) -> dict[str, str]:
     r"""
@@ -291,7 +295,7 @@ def _unpair_row(examples: list[dict[str, list[dict[str, str]]]]) -> list[dict[st
 
 
 def unpair_preference_dataset(
-    dataset: DatasetType, num_proc: Optional[int] = None, desc: Optional[str] = None
+    dataset: DatasetType, num_proc: int | None = None, desc: str | None = None
 ) -> DatasetType:
     r"""
     Unpair a preference dataset.
@@ -334,7 +338,7 @@ def unpair_preference_dataset(
 
 
 def maybe_unpair_preference_dataset(
-    dataset: DatasetType, num_proc: Optional[int] = None, desc: Optional[str] = None
+    dataset: DatasetType, num_proc: int | None = None, desc: str | None = None
 ) -> DatasetType:
     r"""
     Unpair a preference dataset if it is paired.
@@ -565,7 +569,7 @@ def _pack_bfd(examples: pa.Table, seq_length: int) -> pa.Table:
 
     # Bin is represented as a dict (of example ids and sum of their lengths) to allow in-place updates
     bins: list[dict] = []
-    for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy()):
+    for length, idx in zip(lengths.field(0).to_numpy(), lengths.field(1).to_numpy(), strict=True):
         space = segment_tree.search(length)
 
         if space < seq_length:
@@ -627,7 +631,7 @@ def _pack_wrapped(examples: pa.Table, seq_length: int) -> pa.Table:
 
 
 def pack_dataset(
-    dataset: DatasetType, seq_length: int, strategy: str = "bfd", map_kwargs: Optional[dict[str, Any]] = None
+    dataset: DatasetType, seq_length: int, strategy: str = "bfd", map_kwargs: dict[str, Any] | None = None
 ) -> DatasetType:
     r"""
     Pack sequences in a dataset into chunks of size `seq_length`.
@@ -682,9 +686,7 @@ def pack_dataset(
     return dataset
 
 
-def truncate_dataset(
-    dataset: DatasetType, max_length: int, map_kwargs: Optional[dict[str, Any]] = None
-) -> DatasetType:
+def truncate_dataset(dataset: DatasetType, max_length: int, map_kwargs: dict[str, Any] | None = None) -> DatasetType:
     r"""
     Truncate sequences in a dataset to a specified `max_length`.
 

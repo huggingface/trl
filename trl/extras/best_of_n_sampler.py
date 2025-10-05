@@ -12,7 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from transformers import GenerationConfig, PreTrainedTokenizer, PreTrainedTokenizerFast, set_seed
@@ -47,13 +48,13 @@ class BestOfNSampler:
     def __init__(
         self,
         model: PreTrainedModelWrapper,
-        tokenizer: Union[PreTrainedTokenizer, PreTrainedTokenizerFast],
+        tokenizer: PreTrainedTokenizer | PreTrainedTokenizerFast,
         queries_to_scores: Callable[[list[str]], list[float]],
         length_sampler: Any,
         sample_size: int = 4,
-        seed: Optional[int] = None,
+        seed: int | None = None,
         n_candidates: int = 1,
-        generation_config: Optional[GenerationConfig] = None,
+        generation_config: GenerationConfig | None = None,
     ) -> None:
         if seed is not None:
             set_seed(seed)
@@ -78,9 +79,9 @@ class BestOfNSampler:
 
     def generate(
         self,
-        tokenized_query: Union[list[int], torch.Tensor, list[torch.Tensor], list[list[int]]],
+        tokenized_query: list[int] | torch.Tensor | list[torch.Tensor] | list[list[int]],
         skip_special_tokens: bool = True,
-        device: Optional[Union[str, torch.device]] = None,
+        device: str | torch.device | None = None,
         **generation_kwargs,
     ) -> list[list[str]]:
         """

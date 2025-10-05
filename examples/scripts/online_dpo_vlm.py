@@ -202,7 +202,7 @@ if __name__ == "__main__":
         """
         rewards = []
         contents = [completion[0]["content"] for completion in completions]
-        for content, sol in zip(contents, solution):
+        for content, sol in zip(contents, solution, strict=True):
             try:
                 gold_parsed = parse(sol, extraction_mode="first_match")
             except Exception:

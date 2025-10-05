@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import logging
-from typing import Callable, Literal, Optional
+from collections.abc import Callable
+from typing import Literal
 
 import datasets
 from datasets import Dataset, Value
@@ -36,7 +37,7 @@ else:
 
 
 def conversations_formatting_function(
-    tokenizer: AutoTokenizer, messages_field: Literal["messages", "conversations"], tools: Optional[list] = None
+    tokenizer: AutoTokenizer, messages_field: Literal["messages", "conversations"], tools: list | None = None
 ):
     r"""
     return a callable function that takes in a "messages" dataset and returns a formatted dataset, based on the
@@ -84,8 +85,8 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
 
 
 def get_formatting_func_from_dataset(
-    dataset: Dataset, tokenizer: AutoTokenizer, tools: Optional[list] = None
-) -> Optional[Callable]:
+    dataset: Dataset, tokenizer: AutoTokenizer, tools: list | None = None
+) -> Callable | None:
     r"""
     Finds the correct formatting function based on the dataset structure. Currently supported datasets are:
     - `ChatML` with [{"role": str, "content": str}]

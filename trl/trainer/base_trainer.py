@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import os
-from typing import Optional, Union
 
 from transformers import Trainer, is_wandb_available
 
@@ -31,9 +30,9 @@ class BaseTrainer(Trainer):
 
     def create_model_card(
         self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Optional[Union[str, list[str]]] = None,
+        model_name: str | None = None,
+        dataset_name: str | None = None,
+        tags: str | list[str] | None = None,
     ):
         """
         Creates a draft of a model card using the information available to the `Trainer`.

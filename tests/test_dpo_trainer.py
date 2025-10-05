@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import sys
 import unittest
 from unittest.mock import MagicMock
 
@@ -1303,7 +1302,6 @@ class DPOTrainerTester(TrlTestCase):
             if param.sum() != 0:  # ignore 0 biases
                 self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12))
 
-    @unittest.skipUnless(sys.version_info >= (3, 10), "Liger kernel is not supported on Python 3.9")
     @parameterized.expand(
         [
             (0.1, "sigmoid"),

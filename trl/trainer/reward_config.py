@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from transformers import TrainingArguments
 
@@ -61,7 +60,7 @@ class RewardConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -70,7 +69,7 @@ class RewardConfig(TrainingArguments):
         },
     )
 
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={
             "help": "Maximum length of the sequences (prompt + completion) in the batch, filters out entries that "
@@ -81,11 +80,11 @@ class RewardConfig(TrainingArguments):
         default=True,
         metadata={"help": "Whether to disable dropout in the model and reference model."},
     )
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    center_rewards_coefficient: Optional[float] = field(
+    center_rewards_coefficient: float | None = field(
         default=None,
         metadata={
             "help": "Coefficient to incentivize the reward model to output mean-zero rewards (proposed by "

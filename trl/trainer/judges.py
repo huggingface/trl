@@ -15,7 +15,6 @@
 import concurrent.futures
 import logging
 from abc import ABC, abstractmethod
-from typing import Optional, Union
 
 import numpy as np
 from accelerate import Accelerator
@@ -154,7 +153,7 @@ class BaseBinaryJudge(BaseJudge):
         self,
         prompts: list[str],
         completions: list[str],
-        gold_completions: Optional[list[str]] = None,
+        gold_completions: list[str] | None = None,
         shuffle_order: bool = True,
     ) -> list[int]:
         """
@@ -206,8 +205,7 @@ class PairRMJudge(BasePairwiseJudge):
     >>> print(results)  # [0, 1] (indicating the first completion is preferred for the first prompt and the second)
     ```
 
-    > [!TIP]
-    > This class requires the llm-blender library to be installed. Install it with: `pip install llm-blender`.
+    > [!TIP] > This class requires the llm-blender library to be installed. Install it with: `pip install llm-blender`.
     """
 
     def __init__(self):
@@ -223,7 +221,7 @@ class PairRMJudge(BasePairwiseJudge):
         shuffle_order: bool = True,
         return_scores: bool = False,
         temperature: float = 1.0,
-    ) -> list[Union[int, float]]:
+    ) -> list[int | float]:
         """
         Judge the completion pairs for the given prompts using the PairRM model.
 
@@ -259,7 +257,7 @@ class PairRMJudge(BasePairwiseJudge):
         # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
             flip_mask = np.random.choice([True, False], size=len(prompts))
-            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
+            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions, strict=True)]
 
         # Rank the completions
         ranks = self.blender.rank(prompts, completions, return_scores=return_scores, disable_tqdm=True)
@@ -304,8 +302,8 @@ class HfPairwiseJudge(BasePairwiseJudge):
     def __init__(
         self,
         model="meta-llama/Meta-Llama-3-70B-Instruct",
-        token: Optional[str] = None,
-        system_prompt: Optional[str] = None,
+        token: str | None = None,
+        system_prompt: str | None = None,
     ):
         self.client = InferenceClient(model=model, token=token)
         self.system_prompt = system_prompt or DEFAULT_PAIRWISE_SYSTEM_PROMPT
@@ -314,7 +312,7 @@ class HfPairwiseJudge(BasePairwiseJudge):
         # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
             flip_mask = np.random.choice([True, False], size=len(prompts))
-            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
+            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions, strict=True)]
 
         # Define a function to get the rank for a single prompt, will be called concurrently
         def get_rank(prompt, candidates):
@@ -358,7 +356,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
     """
 
     def __init__(
-        self, model="gpt-4-turbo-preview", system_prompt: Optional[str] = None, max_requests: Union[int, None] = 1_000
+        self, model="gpt-4-turbo-preview", system_prompt: str | None = None, max_requests: int | None = 1_000
     ):
         if not is_openai_available():
             raise ValueError("OpenAI client is not installed. Please install it with 'pip install openai'.")
@@ -383,7 +381,7 @@ class OpenAIPairwiseJudge(BasePairwiseJudge):
         # Shuffle the order of the completions to avoid positional bias
         if shuffle_order:
             flip_mask = np.random.choice([True, False], size=len(prompts))
-            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions)]
+            completions = [pair[::-1] if flip else pair for flip, pair in zip(flip_mask, completions, strict=True)]
 
         # Define a function to get the rank for a single prompt, will be called concurrently
         def get_rank(prompt, candidates):
@@ -432,14 +430,14 @@ class AllTrueJudge(BaseBinaryJudge):
         self,
         prompts: list[str],
         completions: list[str],
-        gold_completions: Optional[list[str]] = None,
+        gold_completions: list[str] | None = None,
         shuffle_order: bool = True,
     ) -> list[int]:
         all_binary_judgments = [
             judge.judge(prompts, completions, gold_completions, shuffle_order) for judge in self.judges
         ]
         output = []
-        for binary_judgments in zip(*all_binary_judgments):
+        for binary_judgments in zip(*all_binary_judgments, strict=True):
             # Check that all values are in {0, 1, -1}
             if any(binary_judgment not in {0, 1, -1} for binary_judgment in binary_judgments):
                 raise ValueError(

@@ -87,8 +87,8 @@ FORMAT_MAPPING = {"chatml": ChatMlSpecialTokens}
 def setup_chat_format(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
-    format: Optional[Literal["chatml"]] = "chatml",
-    resize_to_multiple_of: Optional[int] = None,
+    format: Literal["chatml"] | None = "chatml",
+    resize_to_multiple_of: int | None = None,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer]:
     """
     Setup chat format by adding special tokens to the tokenizer, setting the correct format, and extending the
@@ -166,7 +166,7 @@ def clone_chat_template(
     model: PreTrainedModel,
     tokenizer: PreTrainedTokenizer,
     source_tokenizer_path: str,
-    resize_to_multiple_of: Optional[int] = 64,
+    resize_to_multiple_of: int | None = 64,
 ) -> tuple[PreTrainedModel, PreTrainedTokenizer, list[int]]:
     """
     Clones a chat template from a source tokenizer to the target tokenizer and updates the model accordingly.
@@ -473,7 +473,7 @@ class _ForwardRedirection:
 
 
 def enable_gradient_checkpointing(
-    model: PreTrainedModel, gradient_checkpointing_kwargs: Optional[dict]
+    model: PreTrainedModel, gradient_checkpointing_kwargs: dict | None
 ) -> PreTrainedModel:
     """Enables gradient checkpointing for the model."""
     # Enable gradient checkpointing on the base model for PEFT

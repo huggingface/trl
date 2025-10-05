@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import torch
 from accelerate.utils import gather_object
@@ -89,7 +90,9 @@ class GFPOTrainer(_GRPOTrainer):
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
+        completion_ids_list = [
+            row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool(), strict=True)
+        ]
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -168,7 +171,7 @@ class GFPOTrainer(_GRPOTrainer):
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
-            for prompt, completion in zip(prompts, completions_text):
+            for prompt, completion in zip(prompts, completions_text, strict=True):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:

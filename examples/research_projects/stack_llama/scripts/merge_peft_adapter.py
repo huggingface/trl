@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import torch
 from peft import PeftConfig, PeftModel
@@ -27,9 +26,9 @@ class ScriptArguments:
     merged model.
     """
 
-    adapter_model_name: Optional[str] = field(default=None, metadata={"help": "the adapter name"})
-    base_model_name: Optional[str] = field(default=None, metadata={"help": "the base model name"})
-    output_name: Optional[str] = field(default=None, metadata={"help": "the merged model name"})
+    adapter_model_name: str | None = field(default=None, metadata={"help": "the adapter name"})
+    base_model_name: str | None = field(default=None, metadata={"help": "the base model name"})
+    output_name: str | None = field(default=None, metadata={"help": "the merged model name"})
 
 
 parser = HfArgumentParser(ScriptArguments)

@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import heapq
-from typing import Any, Optional, Union
+from typing import Any
 
 import torch
 from accelerate.utils import gather_object
@@ -35,7 +35,7 @@ class ReplayBuffer:
         self.heap = []  # Min-heap of (score, data) tuples
 
     def add(self, scores: list[float], data: list[dict]):
-        for score, datum in zip(scores, data):
+        for score, datum in zip(scores, data, strict=True):
             if len(self.heap) < self.max_size:
                 heapq.heappush(self.heap, (score, datum))
             else:
@@ -58,13 +58,13 @@ class ReplayBuffer:
 
 
 class GRPOWithReplayBufferTrainer(GRPOTrainer):
-    def __init__(self, args: Optional[GRPOWithReplayBufferConfig] = None, **kwargs):
+    def __init__(self, args: GRPOWithReplayBufferConfig | None = None, **kwargs):
         super().__init__(args=args, **kwargs)
         self.replay_buffer = ReplayBuffer(args.replay_buffer_size) if args.replay_buffer_size > 0 else None
 
     def _generate_and_score_completions(
-        self, inputs: list[dict[str, Union[torch.Tensor, Any]]]
-    ) -> dict[str, Union[torch.Tensor, Any]]:
+        self, inputs: list[dict[str, torch.Tensor | Any]]
+    ) -> dict[str, torch.Tensor | Any]:
         device = self.accelerator.device
         mode = "train" if self.model.training else "eval"
 
@@ -89,7 +89,9 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
 
         # Convert tensor to a list of lists of token IDs. This will be passed to the reward function, avoiding the need
         # to re-tokenize completions if the reward is computed from tokens.
-        completion_ids_list = [row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool())]
+        completion_ids_list = [
+            row[mask_row].tolist() for row, mask_row in zip(completion_ids, completion_mask.bool(), strict=True)
+        ]
 
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
@@ -162,7 +164,7 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         completions_text = self.processing_class.batch_decode(completion_ids, skip_special_tokens=True)
         if is_conversational(inputs[0]):
             completions = []
-            for prompt, completion in zip(prompts, completions_text):
+            for prompt, completion in zip(prompts, completions_text, strict=True):
                 bootstrap = prompt.pop()["content"] if prompt[-1]["role"] == "assistant" else ""
                 completions.append([{"role": "assistant", "content": bootstrap + completion}])
         else:
@@ -339,9 +341,9 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         completion_mask: torch.Tensor,
         forward_kwargs: dict,
         optional_vision_fields: list[str] = None,
-        old_per_token_logps: Optional[torch.Tensor] = None,
-        ref_per_token_logps: Optional[torch.Tensor] = None,
-        importance_sampling_ratio: Optional[float] = None,
+        old_per_token_logps: torch.Tensor | None = None,
+        ref_per_token_logps: torch.Tensor | None = None,
+        importance_sampling_ratio: float | None = None,
     ) -> None:
         """
         Update the replay buffer with groups that have reward variance (std > 0).
@@ -463,9 +465,9 @@ class GRPOWithReplayBufferTrainer(GRPOTrainer):
         completion_mask: torch.Tensor,
         forward_kwargs: dict,
         num_items_in_batch: int,
-        old_per_token_logps: Optional[torch.Tensor] = None,
-        ref_per_token_logps: Optional[torch.Tensor] = None,
-        importance_sampling_ratio: Optional[float] = None,
+        old_per_token_logps: torch.Tensor | None = None,
+        ref_per_token_logps: torch.Tensor | None = None,
+        importance_sampling_ratio: float | None = None,
     ) -> None:
         """
         Update current batch data with samples from replay buffer.

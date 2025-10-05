@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import torch
 from datasets import load_dataset
@@ -65,15 +64,15 @@ class ScriptArguments:
 
     # NOTE: gpt2 models use Conv1D instead of Linear layers which are not yet supported in 8 bit mode
     # models like gpt-neo* models are more suitable.
-    model_name: Optional[str] = field(default="ybelkada/gpt-j-6b-sharded-bf16", metadata={"help": "the model name"})
-    log_with: Optional[str] = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
-    learning_rate: Optional[float] = field(default=(1.47e-5) * 2, metadata={"help": "the learning rate"})
-    mini_batch_size: Optional[int] = field(default=4, metadata={"help": "the PPO minibatch size"})
-    batch_size: Optional[int] = field(default=16, metadata={"help": "the batch size"})
-    gradient_accumulation_steps: Optional[int] = field(
+    model_name: str | None = field(default="ybelkada/gpt-j-6b-sharded-bf16", metadata={"help": "the model name"})
+    log_with: str | None = field(default=None, metadata={"help": "use 'wandb' to log with wandb"})
+    learning_rate: float | None = field(default=(1.47e-5) * 2, metadata={"help": "the learning rate"})
+    mini_batch_size: int | None = field(default=4, metadata={"help": "the PPO minibatch size"})
+    batch_size: int | None = field(default=16, metadata={"help": "the batch size"})
+    gradient_accumulation_steps: int | None = field(
         default=1, metadata={"help": "the number of gradient accumulation steps"}
     )
-    model_save_path: Optional[str] = field(
+    model_save_path: str | None = field(
         default="./gpt-j-6B-detoxified-long-context-26-shl-1e4-final",
         metadata={"help": "the path to save the model"},
     )

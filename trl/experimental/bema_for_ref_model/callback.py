@@ -216,7 +216,7 @@ class BEMACallback(_BEMACallback):
                     filtered_state_dict[base_key] = value
 
             # Update the base model
-            model.load_state_dict(filtered_state_dict, strict=False)
+            model.load_state_dict(filtered_state_dict, strict=True)
         else:
             # Regular model, update directly
-            model.load_state_dict(bema_state_dict, strict=False)
+            model.load_state_dict(bema_state_dict, strict=True)

@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 from transformers import TrainingArguments
 
@@ -244,7 +245,7 @@ class DPOConfig(TrainingArguments):
             "help": "If True, use gradient checkpointing to save memory at the expense of slower backward pass."
         },
     )
-    bf16: Optional[bool] = field(
+    bf16: bool | None = field(
         default=None,
         metadata={
             "help": "Whether to use bf16 (mixed) precision instead of 32-bit. Requires Ampere or higher NVIDIA "
@@ -254,25 +255,25 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the model and reference model
-    model_init_kwargs: Optional[dict[str, Any]] = field(
+    model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `model` argument of "
             "the `DPOTrainer` is provided as a string."
         },
     )
-    ref_model_init_kwargs: Optional[dict[str, Any]] = field(
+    ref_model_init_kwargs: dict[str, Any] | None = field(
         default=None,
         metadata={
             "help": "Keyword arguments for `AutoModelForCausalLM.from_pretrained`, used when the `ref_model` argument "
             "of the `DPOTrainer` is provided as a string."
         },
     )
-    model_adapter_name: Optional[str] = field(
+    model_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the train target PEFT adapter, when using LoRA with multiple adapters."},
     )
-    ref_adapter_name: Optional[str] = field(
+    ref_adapter_name: str | None = field(
         default=None,
         metadata={"help": "Name of the reference PEFT adapter, when using LoRA with multiple adapters."},
     )
@@ -297,11 +298,11 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the data preprocessing
-    dataset_num_proc: Optional[int] = field(
+    dataset_num_proc: int | None = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
     )
-    pad_token: Optional[str] = field(
+    pad_token: str | None = field(
         default=None,
         metadata={
             "help": "Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that "
@@ -312,15 +313,15 @@ class DPOConfig(TrainingArguments):
         default=-100,
         metadata={"help": "Padding value to use for labels."},
     )
-    max_prompt_length: Optional[int] = field(
+    max_prompt_length: int | None = field(
         default=512,
         metadata={"help": "Maximum length of the prompt."},
     )
-    max_completion_length: Optional[int] = field(
+    max_completion_length: int | None = field(
         default=None,
         metadata={"help": "Maximum length of the completion."},
     )
-    max_length: Optional[int] = field(
+    max_length: int | None = field(
         default=1024,
         metadata={"help": "Maximum length of the full sequence (prompt + completion)."},
     )
@@ -350,7 +351,7 @@ class DPOConfig(TrainingArguments):
             "probabilities on-the-fly."
         },
     )
-    precompute_ref_batch_size: Optional[int] = field(
+    precompute_ref_batch_size: int | None = field(
         default=None,
         metadata={
             "help": "Batch size to use when precomputing reference model log probabilities. This can be set higher "
@@ -358,7 +359,7 @@ class DPOConfig(TrainingArguments):
             "`per_device_train_batch_size` for training and `per_device_eval_batch_size` for evaluation."
         },
     )
-    tools: Optional[list[Union[dict, Callable]]] = field(
+    tools: list[dict | Callable] | None = field(
         default=None,
         metadata={
             "help": "List of tools (callable functions) that will be accessible to the model. If the template does "
@@ -425,7 +426,7 @@ class DPOConfig(TrainingArguments):
         default=False,
         metadata={"help": "Whether to weight the loss as done in the WPO paper."},
     )
-    rpo_alpha: Optional[float] = field(
+    rpo_alpha: float | None = field(
         default=None,
         metadata={
             "help": "α parameter from the RPO paper (v3), which controls the weighting of the NLL term in the loss. "
@@ -433,7 +434,7 @@ class DPOConfig(TrainingArguments):
             "`rpo_alpha=1.0`."
         },
     )
-    ld_alpha: Optional[float] = field(
+    ld_alpha: float | None = field(
         default=None,
         metadata={
             "help": "α parameter from the LD-DPO paper, which controls the weighting of the verbose token "
@@ -448,7 +449,7 @@ class DPOConfig(TrainingArguments):
             "loss. The paper recommends the default value `discopop_tau=0.05`."
         },
     )
-    loss_weights: Optional[list[float]] = field(
+    loss_weights: list[float] | None = field(
         default=None,
         metadata={
             "help": "List of loss weights for multi-loss combinations. Used when combining multiple loss types. "
@@ -489,7 +490,7 @@ class DPOConfig(TrainingArguments):
     )
 
     # Deprecated arguments
-    padding_value: Optional[int] = field(
+    padding_value: int | None = field(
         default=None,
         metadata={"help": "Deprecated, use `pad_token` (str) instead."},
     )

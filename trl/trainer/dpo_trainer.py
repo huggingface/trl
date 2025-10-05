@@ -17,10 +17,11 @@ import random
 import textwrap
 import warnings
 from collections import defaultdict
+from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Optional, Union
+from typing import Any, Literal, Optional
 
 import pandas as pd
 import torch
@@ -144,7 +145,7 @@ class DataCollatorForPreference(DataCollatorMixin):
     pad_token_id: int
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[list[int] | Any | dict[str, Any]]) -> dict[str, Any]:
         # Convert to tensor
         prompt_input_ids = [torch.tensor(example["prompt_input_ids"]) for example in examples]
         prompt_attention_mask = [torch.ones_like(input_ids) for input_ids in prompt_input_ids]
@@ -265,20 +266,22 @@ class DPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, nn.Module, PreTrainedModel],
-        ref_model: Optional[Union[PreTrainedModel, nn.Module, str]] = None,
-        args: Optional[DPOConfig] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
-        train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
-        eval_dataset: Optional[Union[Dataset, IterableDataset, dict[str, Union[Dataset, IterableDataset]]]] = None,
-        processing_class: Optional[
-            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
-        ] = None,
-        compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
-        callbacks: Optional[list[TrainerCallback]] = None,
-        optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
-        optimizer_cls_and_kwargs: Optional[tuple[type[torch.optim.Optimizer], dict[str, Any]]] = None,
-        preprocess_logits_for_metrics: Optional[Callable[[torch.Tensor, torch.Tensor], torch.Tensor]] = None,
+        model: str | nn.Module | PreTrainedModel,
+        ref_model: PreTrainedModel | nn.Module | str | None = None,
+        args: DPOConfig | None = None,
+        data_collator: DataCollator | None = None,  # type: ignore
+        train_dataset: Dataset | IterableDataset | None = None,
+        eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
+        processing_class: PreTrainedTokenizerBase
+        | BaseImageProcessor
+        | FeatureExtractionMixin
+        | ProcessorMixin
+        | None = None,
+        compute_metrics: Callable[[EvalLoopOutput], dict] | None = None,
+        callbacks: list[TrainerCallback] | None = None,
+        optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
+        optimizer_cls_and_kwargs: tuple[type[torch.optim.Optimizer], dict[str, Any]] | None = None,
+        preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
         peft_config: Optional["PeftConfig"] = None,
     ):
         # Args
@@ -632,11 +635,11 @@ class DPOTrainer(BaseTrainer):
 
     def _prepare_dataset(
         self,
-        dataset: Union[Dataset, IterableDataset],
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        dataset: Dataset | IterableDataset,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         args: DPOConfig,
         dataset_name: str,
-    ) -> Union[Dataset, IterableDataset]:
+    ) -> Dataset | IterableDataset:
         # Build the kwargs for the `map` function
         map_kwargs = {}
         if isinstance(dataset, Dataset):  # IterableDataset does not support num_proc nor writer_batch_size
@@ -679,8 +682,8 @@ class DPOTrainer(BaseTrainer):
     def tokenize_row(
         features: dict[str, str],
         processing_class: PreTrainedTokenizerBase,
-        max_prompt_length: Optional[int] = None,
-        max_completion_length: Optional[int] = None,
+        max_prompt_length: int | None = None,
+        max_completion_length: int | None = None,
         add_special_tokens: bool = True,
     ) -> dict[str, list[int]]:
         """
@@ -748,8 +751,8 @@ class DPOTrainer(BaseTrainer):
     def process_row(
         features: dict[str, str],
         processing_class: PreTrainedTokenizerBase,
-        max_prompt_length: Optional[int] = None,
-        max_completion_length: Optional[int] = None,
+        max_prompt_length: int | None = None,
+        max_completion_length: int | None = None,
         add_special_tokens: bool = True,
     ) -> dict[str, list[int]]:
         """
@@ -854,7 +857,7 @@ class DPOTrainer(BaseTrainer):
 
         return super().get_train_dataloader()
 
-    def get_eval_dataloader(self, eval_dataset: Optional[Dataset] = None) -> DataLoader:
+    def get_eval_dataloader(self, eval_dataset: Dataset | None = None) -> DataLoader:
         """
         Returns the evaluation [`~torch.utils.data.DataLoader`].
 
@@ -934,7 +937,7 @@ class DPOTrainer(BaseTrainer):
 
     @staticmethod
     def concatenated_inputs(
-        batch: dict[str, Union[list, torch.LongTensor]], padding_value: int
+        batch: dict[str, list | torch.LongTensor], padding_value: int
     ) -> dict[str, torch.LongTensor]:
         """
         Concatenate the `chosen` and `rejected` inputs from the batch into a single tensor for both the prompt and
@@ -1233,7 +1236,7 @@ class DPOTrainer(BaseTrainer):
         return losses, chosen_rewards, rejected_rewards
 
     def _compute_loss_liger(
-        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]]
+        self, model: nn.Module, batch: dict[str, list | torch.LongTensor]
     ) -> dict[str, torch.Tensor]:
         unwrapped_model = self.accelerator.unwrap_model(model)
         concatenated_batch = self.concatenated_inputs(batch, padding_value=self.pad_token_id)
@@ -1465,7 +1468,7 @@ class DPOTrainer(BaseTrainer):
         return output
 
     def concatenated_forward(
-        self, model: nn.Module, batch: dict[str, Union[list, torch.LongTensor]], is_ref_model: bool = False
+        self, model: nn.Module, batch: dict[str, list | torch.LongTensor], is_ref_model: bool = False
     ) -> dict[str, torch.Tensor]:
         """
         Runs the given model on the given batch of inputs, concatenating the chosen and rejected inputs together.
@@ -1687,8 +1690,8 @@ class DPOTrainer(BaseTrainer):
 
     def get_batch_loss_metrics(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        batch: dict[str, Union[list, torch.LongTensor]],
+        model: PreTrainedModel | nn.Module,
+        batch: dict[str, list | torch.LongTensor],
         train_eval: Literal["train", "eval"] = "train",
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute the DPO loss and other metrics for the given batch of inputs for train or test."""
@@ -1775,11 +1778,11 @@ class DPOTrainer(BaseTrainer):
 
     def compute_loss(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
         return_outputs=False,
         num_items_in_batch=None,
-    ) -> Union[torch.Tensor, tuple[torch.Tensor, dict[str, float]]]:
+    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, float]]:
         compute_loss_context_manager = (
             autocast(self.accelerator.device.type) if self._peft_has_been_casted_to_bf16 else nullcontext()
         )
@@ -1846,11 +1849,11 @@ class DPOTrainer(BaseTrainer):
 
     def prediction_step(
         self,
-        model: Union[PreTrainedModel, nn.Module],
-        inputs: dict[str, Union[torch.Tensor, Any]],
+        model: PreTrainedModel | nn.Module,
+        inputs: dict[str, torch.Tensor | Any],
         prediction_loss_only: bool,
-        ignore_keys: Optional[list[str]] = None,
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        ignore_keys: list[str] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         if ignore_keys is None:
             if hasattr(model, "config"):
                 ignore_keys = getattr(model.config, "keys_to_ignore_at_inference", [])
@@ -1889,8 +1892,8 @@ class DPOTrainer(BaseTrainer):
         self,
         dataloader: DataLoader,
         description: str,
-        prediction_loss_only: Optional[bool] = None,
-        ignore_keys: Optional[list[str]] = None,
+        prediction_loss_only: bool | None = None,
+        ignore_keys: list[str] | None = None,
         metric_key_prefix: str = "eval",
     ) -> EvalLoopOutput:
         """
@@ -1918,7 +1921,7 @@ class DPOTrainer(BaseTrainer):
                 data=[
                     [prompt, pol[len(prompt) :], ref[len(prompt) :]]
                     for prompt, pol, ref in zip(
-                        random_batch_dataset["prompt"], policy_output_decoded, ref_output_decoded
+                        random_batch_dataset["prompt"], policy_output_decoded, ref_output_decoded, strict=False
                     )
                 ],
             )
@@ -1941,7 +1944,7 @@ class DPOTrainer(BaseTrainer):
 
         return initial_output
 
-    def log(self, logs: dict[str, float], start_time: Optional[float] = None) -> None:
+    def log(self, logs: dict[str, float], start_time: float | None = None) -> None:
         """
         Log `logs` on the various objects watching training, including stored metrics.
 
