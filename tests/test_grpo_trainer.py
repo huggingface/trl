@@ -1516,14 +1516,14 @@ class GRPOTrainerTester(TrlTestCase):
             new_param = trainer.model.get_parameter(n)
             self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
 
-    @require_vision
-    @require_vllm
     @parameterized.expand(
         [
             ("trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",),
             ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
         ]
     )
+    @require_vision
+    @require_vllm
     @unittest.skip("We should add a mock for the vLLM server.")
     def test_training_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
@@ -1885,7 +1885,7 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         Test with inputs where the sequence lengths are different from the prepopulated buffer.
         """
         self._prepopulate_buffer()
-        pad_token_id = self.trainer.tokenizer.pad_token_id
+        pad_token_id = self.trainer.processing_class.pad_token_id
         group_advantages = torch.tensor([[0.6, 0.6], [0.3, 0.45]])  # one no-variance, one variance
         inputs = {
             "group_advantages": group_advantages,

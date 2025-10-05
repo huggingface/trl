@@ -44,7 +44,6 @@ from transformers import (
     ProcessorMixin,
     Trainer,
     TrainerCallback,
-    is_apex_available,
 )
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 from transformers.trainer_utils import EvalPrediction, seed_worker
@@ -78,9 +77,6 @@ from .utils import (
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
-
-if is_apex_available():
-    from apex import amp
 
 
 if is_sagemaker_mp_enabled():
@@ -1458,11 +1454,7 @@ class OnlineDPOTrainer(BaseTrainer):
         if self.args.n_gpu > 1:
             loss = loss.mean()  # mean() to average on multi-gpu parallel training
 
-        if self.use_apex:
-            with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            self.accelerator.backward(loss, **kwargs)
+        self.accelerator.backward(loss, **kwargs)
 
         return loss.detach() / self.args.gradient_accumulation_steps
 

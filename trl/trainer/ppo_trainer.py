@@ -123,7 +123,7 @@ class PPOTrainer(BaseTrainer):
             [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
         callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
             Callbacks to use during training.
-        peft_config ([`~peft.config.PeftConfig`], *optional*):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
             will be wrapped with the specified PEFT adapter.
     """

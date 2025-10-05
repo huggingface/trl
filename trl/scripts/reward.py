@@ -21,61 +21,18 @@
 # ]
 # ///
 
-"""
-Run the KTO training script with the commands below. In general, the optimal configuration for KTO will be similar to
-that of DPO.
-
-# Full training:
-```bash
-python trl/scripts/kto.py \
-    --dataset_name trl-lib/kto-mix-14k \
-    --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
-    --per_device_train_batch_size 16 \
-    --num_train_epochs 1 \
-    --learning_rate 5e-7 \
-    --lr_scheduler_type=cosine \
-    --gradient_accumulation_steps 1 \
-    --eval_steps 500 \
-    --output_dir=kto-aligned-model \
-    --warmup_ratio 0.1 \
-    --logging_first_step
-```
-
-# QLoRA:
-```bash
-# QLoRA:
-python trl/scripts/kto.py \
-    --dataset_name trl-lib/kto-mix-14k \
-    --model_name_or_path=trl-lib/qwen1.5-1.8b-sft \
-    --per_device_train_batch_size 8 \
-    --num_train_epochs 1 \
-    --learning_rate 5e-7 \
-    --lr_scheduler_type=cosine \
-    --gradient_accumulation_steps 1 \
-    --eval_steps 500 \
-    --output_dir=kto-aligned-model-lora \
-    --warmup_ratio 0.1 \
-    --logging_first_step \
-    --use_peft \
-    --load_in_4bit \
-    --lora_target_modules=all-linear \
-    --lora_r=16 \
-    --lora_alpha=16
-```
-"""
-
 import argparse
 import os
+from typing import Optional
 
 from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from trl import (
     DatasetMixtureConfig,
-    KTOConfig,
-    KTOTrainer,
     ModelConfig,
+    RewardConfig,
+    RewardTrainer,
     ScriptArguments,
     TrlParser,
     get_dataset,
@@ -90,20 +47,6 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args, dataset_args):
-    # Load a pretrained model
-    model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-    ref_model = AutoModelForCausalLM.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         logger.warning(
@@ -120,14 +63,12 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         raise ValueError("Either `datasets` or `dataset_name` must be provided.")
 
-    # Initialize the KTO trainer
-    trainer = KTOTrainer(
-        model,
-        ref_model,
+    # Initialize the RewardTrainer
+    trainer = RewardTrainer(
+        model=model_args.model_name_or_path,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
@@ -146,10 +87,12 @@ def main(script_args, training_args, model_args, dataset_args):
         trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
-def make_parser(subparsers: argparse._SubParsersAction | None = None):
-    dataclass_types = (ScriptArguments, KTOConfig, ModelConfig, DatasetMixtureConfig)
+def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):
+    dataclass_types = (ScriptArguments, RewardConfig, ModelConfig, DatasetMixtureConfig)
     if subparsers is not None:
-        parser = subparsers.add_parser("kto", help="Run the KTO training script", dataclass_types=dataclass_types)
+        parser = subparsers.add_parser(
+            "reward", help="Run the reward training script", dataclass_types=dataclass_types
+        )
     else:
         parser = TrlParser(dataclass_types)
     return parser

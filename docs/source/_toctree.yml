@@ -55,6 +55,8 @@
     title: Example Overview
   - local: community_tutorials
     title: Community Tutorials
+  - local: lora_without_regret
+    title: LoRA Without Regret
   - local: sentiment_tuning
     title: Sentiment Tuning
   - local: using_llama_models
