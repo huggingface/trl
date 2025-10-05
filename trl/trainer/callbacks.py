@@ -954,7 +954,7 @@ class BEMACallback(TrainerCallback):
 
         # Compute EMA + BEMA in-place and write directly to running_model
         for thetat, theta0, ema, run_param in zip(
-            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters(), strict=False
+            self.thetat_params, self.theta0_params, self.ema_params, self.running_model.parameters(), strict=True
         ):
             thetat = thetat.detach().to(self.device)
             ema.mul_(1 - beta).add_(thetat, alpha=beta)  # EMA update: ema = (1 - beta) * ema + beta * θₜ
@@ -973,7 +973,7 @@ class BEMACallback(TrainerCallback):
         # Snapshot θ₀ and EMA at first update
         if step == self.update_after:
             for thetat_param, theta0_param, ema_param in zip(
-                self.thetat_params, self.theta0_params, self.ema_params, strict=False
+                self.thetat_params, self.theta0_params, self.ema_params, strict=True
             ):
                 theta0_param.copy_(thetat_param)
                 ema_param.copy_(thetat_param)

@@ -1921,7 +1921,7 @@ class DPOTrainer(BaseTrainer):
                 data=[
                     [prompt, pol[len(prompt) :], ref[len(prompt) :]]
                     for prompt, pol, ref in zip(
-                        random_batch_dataset["prompt"], policy_output_decoded, ref_output_decoded, strict=False
+                        random_batch_dataset["prompt"], policy_output_decoded, ref_output_decoded, strict=True
                     )
                 ],
             )

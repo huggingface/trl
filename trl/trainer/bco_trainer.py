@@ -1452,7 +1452,7 @@ class BCOTrainer(BaseTrainer):
                 data=[
                     [prompt, pol[len(prompt) :], ref[len(prompt) :]]
                     for prompt, pol, ref in zip(
-                        target_batch["prompt"], policy_output_decoded, ref_output_decoded, strict=False
+                        target_batch["prompt"], policy_output_decoded, ref_output_decoded, strict=True
                     )
                 ],
             )
