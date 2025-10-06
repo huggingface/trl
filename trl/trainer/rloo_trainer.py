@@ -385,7 +385,7 @@ class RLOOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side = "left")
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side="left")
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
