@@ -146,11 +146,7 @@ class PPOTrainer(BaseTrainer):
     def __init__(
         self,
         args: PPOConfig,
-        processing_class: PreTrainedTokenizerBase
-        | BaseImageProcessor
-        | FeatureExtractionMixin
-        | ProcessorMixin
-        | None,
+        processing_class: PreTrainedTokenizerBase | BaseImageProcessor | FeatureExtractionMixin | ProcessorMixin,
         model: nn.Module,
         ref_model: nn.Module | None,
         reward_model: nn.Module,

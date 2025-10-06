@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import unittest
 from unittest.mock import patch
 
 import pytest
@@ -25,7 +24,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
 )
-from transformers.testing_utils import require_liger_kernel, require_peft, require_vision
+from transformers.testing_utils import require_liger_kernel
 from transformers.utils import is_peft_available
 
 from trl import GRPOConfig, GRPOTrainer
@@ -36,14 +35,14 @@ from trl.experimental.grpo_with_replay_buffer.grpo_with_replay_buffer_trainer im
 )
 from trl.experimental.gspo_token import GRPOTrainer as GSPOTokenTrainer
 
-from .testing_utils import TrlTestCase, require_vllm
+from .testing_utils import TrlTestCase, require_peft, require_vision, require_vllm
 
 
 if is_peft_available():
     from peft import LoraConfig, PeftModel
 
 
-class GetHighEntropyMaskTester(TrlTestCase):
+class TestGetHighEntropyMask(TrlTestCase):
     def get_high_entropy_mask(self, entropies, mask, threshold):
         """Helper method to test the get_high_entropy_mask functionality."""
         # Create a mock trainer with minimal setup
@@ -115,7 +114,7 @@ class GetHighEntropyMaskTester(TrlTestCase):
         torch.testing.assert_close(entropy_mask, expected_mask)
 
 
-class GRPOTrainerTester(TrlTestCase):
+class TestGRPOTrainer(TrlTestCase):
     def test_init_minimal(self):
         # Test that GRPOTrainer can be instantiated with only model, reward_model and train_dataset
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -148,12 +147,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @parameterized.expand([("bnpo",), ("dr_grpo",), ("dapo",)])
     def test_training_loss_types(self, loss_type):
@@ -180,12 +179,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_eval(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only")
@@ -233,12 +232,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_training_peft(self):
@@ -266,15 +265,15 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_peft
     def test_training_peft_with_gradient_checkpointing(self):
@@ -308,22 +307,22 @@ class GRPOTrainerTester(TrlTestCase):
         )
 
         # Verify gradient checkpointing is enabled
-        self.assertIsInstance(trainer.model, PeftModel)
+        assert isinstance(trainer.model, PeftModel)
 
         # Store initial parameters to check which ones change
         previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that only LoRA parameters have changed, base model parameters remain unchanged
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if "lora" in n.lower():  # LoRA parameters should change
-                self.assertFalse(torch.equal(param, new_param), f"LoRA parameter {n} has not changed.")
+                assert not torch.equal(param, new_param), f"LoRA parameter {n} has not changed."
             else:  # Base model parameters should not change
-                self.assertTrue(torch.equal(param, new_param), f"Base parameter {n} has changed.")
+                assert torch.equal(param, new_param), f"Base parameter {n} has changed."
 
     def test_training_different_reward_model(self):
         # Use a reward model different from the model: different chat template, tokenization, etc.
@@ -357,12 +356,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_reward_func_standard(self):
         # Test if trainer can handle reward function with standard format
@@ -391,12 +390,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_reward_func_conversational(self):
         # Test if trainer can handle reward function with conversational format
@@ -426,12 +425,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_reward_funcs(self):
         # Test that GRPOTrainer can be instantiated with multiple reward functions
@@ -464,12 +463,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_reward_funcs_with_None_output(self):
         """Test that a valid math reward function is processed correctly while the code reward function returns None."""
@@ -508,12 +507,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_reward_funcs_with_weights(self):
         """Test that GRPOTrainer can handle multiple reward functions with weights."""
@@ -548,16 +547,16 @@ class GRPOTrainerTester(TrlTestCase):
         trainer.train()
 
         # Check that training logs contain both reward metrics
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
-        self.assertIn("rewards/reward_func1/mean", trainer.state.log_history[-1])
-        self.assertIn("rewards/reward_func1/std", trainer.state.log_history[-1])
-        self.assertIn("rewards/reward_func2/mean", trainer.state.log_history[-1])
-        self.assertIn("rewards/reward_func2/std", trainer.state.log_history[-1])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+        assert "rewards/reward_func1/mean" in trainer.state.log_history[-1]
+        assert "rewards/reward_func1/std" in trainer.state.log_history[-1]
+        assert "rewards/reward_func2/mean" in trainer.state.log_history[-1]
+        assert "rewards/reward_func2/std" in trainer.state.log_history[-1]
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_mixed_reward_funcs(self):
         # Test if the trainer can handle a mix of reward functions and reward models
@@ -586,12 +585,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_reward_func_additional_column(self):
         # Test if trainer can handle reward function that rely on additional columns in the dataset
@@ -626,12 +625,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_sync_ref_model(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -657,12 +656,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_beta_non_zero(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -686,12 +685,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_entropy_filter(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -715,16 +714,16 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
-    @unittest.skip("We should add a mock for the vLLM server.")
     @require_peft
     @require_vllm
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_and_peft(self):
         """Test that training works with vLLM for generation."""
         model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-0.5B-Instruct")  # tiny model is too small for vLLM
@@ -757,19 +756,19 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n and "original_module" not in n:
                 # We expect the peft params to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_guided_decoding(self):
         """Test that training works with vLLM for generation with guided decoding."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -795,15 +794,15 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_importance_sampling_correction(self):
         """Test that training works with vLLM for generation with guided decoding."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -830,12 +829,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_additional_generation_kwargs(self):
         """Test that training works with additional generation kwargs."""
@@ -865,15 +864,15 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vllm_with_additional_generation_kwargs(self):
         """Test that training works with vLLM and additional generation kwargs."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -903,12 +902,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @parameterized.expand([(False,), ("group",), ("batch",), (True,), ("none",)])
     def test_training_scale_rewards(self, scale_rewards):
@@ -934,12 +933,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @patch("transformers.generation.utils.GenerationMixin.generate")
     def test_training_with_mask_truncated_completions(self, mock_generate):
@@ -984,12 +983,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_mask_truncated_completions_all_masked(self):
         """
@@ -1022,14 +1021,14 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertTrue(torch.equal(param, new_param), f"Parameter {n} has changed.")
+            assert torch.equal(param, new_param), f"Parameter {n} has changed."
 
-    def test_warning_raised_all_rewards_none(self):
+    def test_warning_raised_all_rewards_none(self, caplog):
         """Test that a proper warning is raised when all rewards are None."""
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -1052,11 +1051,11 @@ class GRPOTrainerTester(TrlTestCase):
             train_dataset=dataset,
         )
 
-        with self.assertLogs("trl.trainer.grpo_trainer", level="WARNING") as cm:
+        with caplog.at_level("WARNING", logger="trl.trainer.grpo_trainer"):
             trainer.train()
 
         expected_warning = "All reward functions returned None for the following kwargs:"
-        self.assertIn(expected_warning, cm.output[0])
+        assert expected_warning in caplog.text
 
     def test_training_num_generations_larger_than_batch_size(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1081,12 +1080,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_delta_clipping(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1111,12 +1110,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_multiple_dataloader_workers(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1141,12 +1140,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_generation_kwargs(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1171,12 +1170,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_with_reward_func_accessing_trainer_state(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1248,7 +1247,7 @@ class GRPOTrainerTester(TrlTestCase):
         with patch.object(GRPOTrainer, "training_step", wraps=trainer.training_step) as mock_prepare:
             trainer.train()
             # 3 epochs * 2 iterations * 2 generation batches to cover the dataset * 4 steps_per_generation
-            self.assertEqual(mock_prepare.call_count, 48)
+            assert mock_prepare.call_count == 48
             for i in range(0, 8):  # Generation batch repeated 8 times (steps_per_generation*num_iterations)
                 assert mock_prepare.call_args_list[i].args[1] == expected_first_generation_batch
             for i in range(8, 16):
@@ -1291,7 +1290,7 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
@@ -1307,7 +1306,7 @@ class GRPOTrainerTester(TrlTestCase):
             if n.startswith(params_to_skip):
                 continue
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vision
     def test_training_vlm_beta_non_zero(self):
@@ -1337,7 +1336,7 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
@@ -1347,7 +1346,7 @@ class GRPOTrainerTester(TrlTestCase):
             if n.startswith(params_to_skip):
                 continue
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vision
     @require_peft
@@ -1382,15 +1381,15 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model params to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed.")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed."
             elif "base_layer" not in n:  # We expect the peft params to be different (except for the base layer)
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed.")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed."
 
     @require_vision
     def test_training_vlm_and_importance_sampling(self):
@@ -1420,7 +1419,7 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
@@ -1430,7 +1429,7 @@ class GRPOTrainerTester(TrlTestCase):
             if n.startswith(params_to_skip):
                 continue
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vision
     @require_liger_kernel
@@ -1462,7 +1461,7 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
@@ -1472,7 +1471,7 @@ class GRPOTrainerTester(TrlTestCase):
             if n.startswith(params_to_skip):
                 continue
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vision
     def test_training_vlm_and_prompt_truncation(self):
@@ -1503,7 +1502,7 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
@@ -1513,7 +1512,7 @@ class GRPOTrainerTester(TrlTestCase):
             if n.startswith(params_to_skip):
                 continue
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @parameterized.expand(
         [
@@ -1523,7 +1522,7 @@ class GRPOTrainerTester(TrlTestCase):
     )
     @require_vision
     @require_vllm
-    @unittest.skip("We should add a mock for the vLLM server.")
+    @pytest.mark.skip(reason="We should add a mock for the vLLM server.")
     def test_training_vlm_and_vllm(self, model_id) -> None:
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_only", split="train")
 
@@ -1553,11 +1552,11 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     @require_vision
     def test_training_vlm_multi_image(self):
@@ -1590,14 +1589,14 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         # Because of the way the tiny models are initialized, the gradient does not flow properly through the
         # vision parts of the model, so we skip them. Ideally, we should fix the init of these models.
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_training_sequence_importance_sampling(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
@@ -1623,12 +1622,12 @@ class GRPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
     def test_mismatched_reward_processing_classes_length(self):
         """Test that mismatched length between reward_funcs and reward_processing_classes raises error."""
@@ -1647,7 +1646,7 @@ class GRPOTrainerTester(TrlTestCase):
 
         training_args = GRPOConfig(output_dir=self.tmp_dir, report_to="none")
 
-        with self.assertRaises(ValueError) as context:
+        with pytest.raises(ValueError, match="must match"):
             GRPOTrainer(
                 model="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
                 reward_funcs=reward_models,
@@ -1655,8 +1654,6 @@ class GRPOTrainerTester(TrlTestCase):
                 args=training_args,
                 train_dataset=dataset,
             )
-
-        self.assertIn("must match", str(context.exception))
 
     def test_correct_reward_processing_classes_list(self):
         """Test that correct list of reward_processing_classes works properly."""
@@ -1687,7 +1684,7 @@ class GRPOTrainerTester(TrlTestCase):
             train_dataset=dataset,
         )
 
-        self.assertEqual(len(trainer.reward_processing_classes), len(reward_models))
+        assert len(trainer.reward_processing_classes) == len(reward_models)
 
     def test_single_reward_model_with_single_processing_class(self):
         """Test that single reward model with single processing class works."""
@@ -1711,13 +1708,13 @@ class GRPOTrainerTester(TrlTestCase):
             train_dataset=dataset,
         )
 
-        self.assertEqual(len(trainer.reward_processing_classes), 1)
-        self.assertEqual(trainer.reward_processing_classes[0], single_processing_class)
+        assert len(trainer.reward_processing_classes) == 1
+        assert trainer.reward_processing_classes[0] == single_processing_class
 
 
 @pytest.mark.low_priority
-class TestReplayBuffer(unittest.TestCase):
-    def setUp(self):
+class TestReplayBuffer:
+    def setup_method(self):
         self.replay_buffer = ReplayBuffer(max_size=5)
 
     def test_add(self):
@@ -1733,12 +1730,12 @@ class TestReplayBuffer(unittest.TestCase):
         self.replay_buffer.add(scores, data)
 
         # Check if the buffer contains the correct number of elements
-        self.assertEqual(len(self.replay_buffer.heap), 5)
+        assert len(self.replay_buffer.heap) == 5
 
         # Check if the buffer maintains the min-heap property
         heap_scores = [item[0] for item in self.replay_buffer.heap]
-        self.assertEqual(heap_scores[0], min(heap_scores))
-        self.assertEqual(heap_scores[0], 0.3)
+        assert heap_scores[0] == min(heap_scores)
+        assert heap_scores[0] == 0.3
 
     def test_add_more_than_maxlen(self):
         # Add elements to the replay buffer
@@ -1755,12 +1752,12 @@ class TestReplayBuffer(unittest.TestCase):
         self.replay_buffer.add(scores, data)
 
         # Check if the buffer contains the correct number of elements
-        self.assertEqual(len(self.replay_buffer.heap), 5)
+        assert len(self.replay_buffer.heap) == 5
 
         # Check if the buffer maintains the min-heap property
         heap_scores = [item[0] for item in self.replay_buffer.heap]
-        self.assertEqual(heap_scores[0], min(heap_scores))
-        self.assertEqual(heap_scores[0], 0.5)  # 0.3 and 0.4 should be removed
+        assert heap_scores[0] == min(heap_scores)
+        assert heap_scores[0] == 0.5  # 0.3 and 0.4 should be removed
 
     def test_sample(self):
         # Add elements to the replay buffer
@@ -1778,14 +1775,14 @@ class TestReplayBuffer(unittest.TestCase):
         sampled = self.replay_buffer.sample(num_samples=3)
 
         # Check if the sampled elements are from the buffer
-        self.assertEqual(len(sampled), 3)
+        assert len(sampled) == 3
         for item in sampled:
-            self.assertIn(item, [entry[1] for entry in self.replay_buffer.heap])
+            assert item in [entry[1] for entry in self.replay_buffer.heap]
 
 
 @pytest.mark.low_priority
-class TestUpdateWithReplayBuffer(unittest.TestCase):
-    def setUp(self):
+class TestUpdateWithReplayBuffer:
+    def setup_method(self):
         config = GRPOWithReplayBufferConfig(
             replay_buffer_size=5,
         )
@@ -1843,12 +1840,12 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
 
         outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
 
-        self.assertIsNotNone(outputs)
-        self.assertIn("pixel_values", outputs)
-        self.assertIn("old_per_token_logps", outputs)
-        self.assertEqual(len(self.trainer.replay_buffer.heap), 2)
+        assert outputs is not None
+        assert "pixel_values" in outputs
+        assert "old_per_token_logps" in outputs
+        assert len(self.trainer.replay_buffer.heap) == 2
         for pid in outputs["prompt_ids"]:
-            self.assertNotIn(pid.tolist(), original_prompt_ids.tolist())
+            assert pid.tolist() not in original_prompt_ids.tolist()
 
     def test_update_with_replay_buffer_with_variance(self):
         self._prepopulate_buffer()
@@ -1857,8 +1854,8 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
 
         sampled = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
 
-        self.assertEqual(len(self.trainer.replay_buffer.heap), 4)  # grew
-        self.assertIsNone(sampled)
+        assert len(self.trainer.replay_buffer.heap) == 4  # grew
+        assert sampled is None
 
     def test_update_with_mixed_variance(self):
         self._prepopulate_buffer()
@@ -1868,16 +1865,16 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
 
         outputs = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
 
-        self.assertEqual(len(self.trainer.replay_buffer.heap), 3)  # grew by 1
+        assert len(self.trainer.replay_buffer.heap) == 3  # grew by 1
         output_prompt_ids = outputs["prompt_ids"].view(-1, self.trainer.num_generations, 2).tolist()
 
         buffer_ids = [item[1]["prompt_ids"].tolist() for item in self.trainer.replay_buffer.heap]
         found_from_buffer = any(pid in buffer_ids for pid in output_prompt_ids)
         found_from_original = any(pid in original_prompt_ids for pid in output_prompt_ids)
 
-        self.assertTrue(found_from_buffer)
-        self.assertTrue(found_from_original)
-        self.assertNotIn([[1, 2], [3, 4]], output_prompt_ids)  # excluded no-variance group
+        assert found_from_buffer
+        assert found_from_original
+        assert [[1, 2], [3, 4]] not in output_prompt_ids  # excluded no-variance group
 
     def test_update_with_inputs_different_seq_len(self):
         """
@@ -1912,8 +1909,8 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
 
         outputs_after_sampling = self.trainer.update_with_replay_buffer(**inputs, num_items_in_batch=4)
         # Seq length of current batch should be preserved
-        self.assertEqual(outputs_after_sampling["prompt_ids"].shape[-1], 3)
-        self.assertEqual(len(self.trainer.replay_buffer.heap), 3)
+        assert outputs_after_sampling["prompt_ids"].shape[-1] == 3
+        assert len(self.trainer.replay_buffer.heap) == 3
         output_prompt_ids = outputs_after_sampling["prompt_ids"].view(-1, self.trainer.num_generations, 3).tolist()
 
         buffered_prompt_completion_ids = [
@@ -1923,24 +1920,20 @@ class TestUpdateWithReplayBuffer(unittest.TestCase):
         buffered_prompt_ids, buffered_completion_ids = zip(*buffered_prompt_completion_ids, strict=True)
 
         # Check for new entry with seq len 3 in buffer
-        self.assertIn([[3, 4, 5], [3, 4, 5]], buffered_prompt_ids)  # excluded no-variance group
-        self.assertIn(
-            [[1013, 1014, pad_token_id], [1015, 1016, 1017]], buffered_completion_ids
-        )  # excluded no-variance group
+        assert [[3, 4, 5], [3, 4, 5]] in buffered_prompt_ids  # excluded no-variance group
+        assert [
+            [1013, 1014, pad_token_id],
+            [1015, 1016, 1017],
+        ] in buffered_completion_ids  # excluded no-variance group
 
         # Check that sampled outputs contain one group with prompt_ids starting with a pad token
-        self.assertTrue(
-            [
-                [pad_token_id, 101, 102],
-                [pad_token_id, 102, 103],
-            ]
-            in output_prompt_ids
-            or [
-                [pad_token_id, 104, 105],
-                [pad_token_id, 106, 107],
-            ]
-            in output_prompt_ids
-        )
+        assert [
+            [pad_token_id, 101, 102],
+            [pad_token_id, 102, 103],
+        ] in output_prompt_ids or [
+            [pad_token_id, 104, 105],
+            [pad_token_id, 106, 107],
+        ] in output_prompt_ids
 
 
 @pytest.mark.low_priority
@@ -1975,15 +1968,15 @@ class TestGRPOWithReplayBufferTrainer(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."
 
 
-class GSPOTokenTrainerTester(TrlTestCase):
+class TestGSPOTokenTrainer(TrlTestCase):
     def test_training(self):
         dataset = load_dataset("trl-internal-testing/zen", "standard_prompt_only", split="train")
 
@@ -2008,13 +2001,9 @@ class GSPOTokenTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.equal(param, new_param), f"Parameter {n} has not changed.")
-
-
-if __name__ == "__main__":
-    unittest.main()
+            assert not torch.equal(param, new_param), f"Parameter {n} has not changed."

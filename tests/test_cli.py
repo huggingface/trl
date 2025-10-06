@@ -14,7 +14,6 @@
 
 
 import os
-import unittest
 from io import StringIO
 from unittest.mock import patch
 
@@ -45,7 +44,7 @@ class TestCLI(TrlTestCase):
         command = "trl env"
         with patch("sys.argv", command.split(" ")):
             main()
-        self.assertIn("TRL version: ", mock_stdout.getvalue().strip())
+        assert "TRL version: " in mock_stdout.getvalue().strip()
 
     def test_grpo(self):
         from trl.cli import main
@@ -106,8 +105,4 @@ class TestCLI(TrlTestCase):
             main()
 
         # Verify that output directory was created
-        self.assertTrue(os.path.exists(output_dir))
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert os.path.exists(output_dir)
