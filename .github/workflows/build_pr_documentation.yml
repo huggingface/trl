@@ -16,4 +16,3 @@ jobs:
       pr_number: ${{ github.event.number }}
       package: trl
       version_tag_suffix: ""
-      custom_container: huggingface/transformers-doc-builder
