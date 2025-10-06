@@ -67,7 +67,6 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    setup_chat_format,
 )
 
 

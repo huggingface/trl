@@ -62,7 +62,7 @@ import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from qwen_vl_utils import process_vision_info
-from transformers import AutoModelForImageTextToText, BitsAndBytesConfig, Qwen2VLProcessor
+from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig, Qwen2VLProcessor
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_kbit_device_map
 
@@ -224,6 +224,10 @@ if __name__ == "__main__":
         model.config.use_reentrant = False
         model.enable_input_require_grads()
 
+    processor = AutoProcessor.from_pretrained(
+        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
+    )
+
     # Prepare dataset
     prepared_dataset = [prepare_dataset(example, script_args.video_cache_dir) for example in dataset]
 
@@ -234,6 +238,7 @@ if __name__ == "__main__":
         train_dataset=prepared_dataset,
         data_collator=collate_fn,
         peft_config=peft_config,
+        processing_class=processor,
     )
 
     # Train model
