@@ -16,6 +16,8 @@ import gc
 
 import pytest
 import torch
+import transformers
+from packaging.version import Version
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
 
@@ -63,6 +65,12 @@ class BaseTester:
             Test if the v-head is added to the model successfully
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                    transformers.__version__
+                ) < Version("4.57.0"):
+                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
                 assert hasattr(model, "v_head")
 
@@ -71,6 +79,12 @@ class BaseTester:
             Test if the v-head has the correct shape
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                    transformers.__version__
+                ) < Version("4.57.0"):
+                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
                 assert model.v_head.summary.weight.shape[0] == 1
 
@@ -80,6 +94,12 @@ class BaseTester:
             than zeros by default.
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                    transformers.__version__
+                ) < Version("4.57.0"):
+                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
                 assert not torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias))
 
@@ -89,6 +109,12 @@ class BaseTester:
             `from_pretrained`.
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                    transformers.__version__
+                ) < Version("4.57.0"):
+                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                    continue
+
                 pretrained_model = self.transformers_model_class.from_pretrained(model_name)
                 model = self.trl_model_class.from_pretrained(pretrained_model)
                 assert hasattr(model, "v_head")
@@ -99,6 +125,12 @@ class BaseTester:
             additional modules (e.g. v_head)
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                    transformers.__version__
+                ) < Version("4.57.0"):
+                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
 
                 model.save_pretrained(self.tmp_dir)
@@ -114,6 +146,12 @@ class BaseTester:
             Test if the model can be saved and loaded from a directory and get the same weights - sharded case
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                    transformers.__version__
+                ) < Version("4.57.0"):
+                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
 
                 model.save_pretrained(self.tmp_dir)
@@ -129,6 +167,12 @@ class BaseTester:
             Test if the model can be saved and loaded using transformers and get the same weights - sharded case
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                    transformers.__version__
+                ) < Version("4.57.0"):
+                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                    continue
+
                 transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
@@ -150,6 +194,12 @@ class BaseTester:
             of the super class to check if the weights are the same.
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                    transformers.__version__
+                ) < Version("4.57.0"):
+                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                    continue
+
                 transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
@@ -200,6 +250,12 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         EXPECTED_OUTPUT_SIZE = 3
 
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                transformers.__version__
+            ) < Version("4.57.0"):
+                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                continue
+
             model = self.trl_model_class.from_pretrained(model_name).to(self.device)
             input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
             outputs = model(input_ids)
@@ -213,6 +269,12 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                transformers.__version__
+            ) < Version("4.57.0"):
+                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                continue
+
             pretrained_model = self.transformers_model_class.from_pretrained(model_name)
             pretrained_model.config.summary_dropout_prob = 0.5
             model = self.trl_model_class.from_pretrained(pretrained_model)
@@ -225,6 +287,11 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                transformers.__version__
+            ) < Version("4.57.0"):
+                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                continue
             v_head_kwargs = {"summary_dropout_prob": 0.5}
 
             model = self.trl_model_class.from_pretrained(model_name, **v_head_kwargs)
@@ -242,6 +309,12 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         r"""
         Test if `generate` works for every model
         """
+        if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(transformers.__version__) < Version(
+            "4.57.0"
+        ):
+            # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+            pytest.xfail("DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version")
+
         generation_config = GenerationConfig(max_new_tokens=9)
         model = self.trl_model_class.from_pretrained(model_name).to(self.device)
         input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
@@ -256,6 +329,12 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                transformers.__version__
+            ) < Version("4.57.0"):
+                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                continue
+
             trl_model = self.trl_model_class.from_pretrained(model_name, dtype=torch.bfloat16).to(self.device)
 
             lm_head_namings = ["lm_head", "embed_out", "output_layer"]
@@ -276,6 +355,12 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
     @pytest.mark.skip(reason="This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                transformers.__version__
+            ) < Version("4.57.0"):
+                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                continue
+
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
             if "sharded" in model_name:
                 model.push_to_hub(model_name + "-ppo", use_auth_token=True, max_shard_size="1MB")
