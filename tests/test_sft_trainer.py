@@ -36,7 +36,6 @@ if is_peft_available():
         PrefixTuningConfig,
         PromptEncoderConfig,
         PromptTuningConfig,
-        PromptTuningInit,
         TaskType,
         get_peft_model,
     )
@@ -498,20 +497,13 @@ class TestSFTTrainer(TrlTestCase):
 
     @parameterized.expand(
         [
-            (PromptEncoderConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),),
-            (PrefixTuningConfig(task_type=TaskType.CAUSAL_LM, num_virtual_tokens=4),),
-            (
-                PromptTuningConfig(
-                    task_type=TaskType.CAUSAL_LM,
-                    prompt_tuning_init=PromptTuningInit.RANDOM,
-                    num_virtual_tokens=4,
-                    tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
-                ),
-            ),
+            ("prompt_tuning",),
+            ("prefix_tuning",),
+            ("prompt_encoder",),
         ]
     )
     @require_peft
-    def test_train_with_peft_config_prompt_tuning(self, peft_config):
+    def test_train_with_peft_config_prompt_tuning(self, peft_type):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -521,7 +513,29 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer, p-tuning doesn't support gradient checkpointing
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        if peft_type == "prompt_tuning":
+            peft_config = PromptTuningConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+                tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            )
+        elif peft_type == "prefix_tuning":
+            peft_config = PrefixTuningConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+            )
+        elif peft_type == "prompt_encoder":
+            peft_config = PromptEncoderConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+            )
+        # For prompt encoder we need to set the encoder_hidden_size
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        if tokenizer.pad_token is None:
+            tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+        model.resize_token_embeddings(len(tokenizer))
+
         peft_config.encoder_hidden_size = model.config.hidden_size
 
         trainer = SFTTrainer(
@@ -538,15 +552,15 @@ class TestSFTTrainer(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the peft params have changed and the base model params have not changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if n in base_param_names:  # We expect the base model parameters to be the same
-                self.assertTrue(torch.allclose(param, new_param), f"Parameter {n} has changed")
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             else:  # We expect the peft parameters to be different
-                self.assertFalse(torch.allclose(param, new_param), f"Parameter {n} has not changed")
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
     def test_train_moe_with_peft_config(self):
