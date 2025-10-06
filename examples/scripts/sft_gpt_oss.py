@@ -75,7 +75,6 @@ def main(script_args, training_args, model_args):
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
-
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
