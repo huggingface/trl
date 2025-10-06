@@ -1879,7 +1879,7 @@ class TestUpdateWithReplayBuffer:
         Test with inputs where the sequence lengths are different from the prepopulated buffer.
         """
         self._prepopulate_buffer()
-        pad_token_id = self.trainer.tokenizer.pad_token_id
+        pad_token_id = self.trainer.processing_class.pad_token_id
         group_advantages = torch.tensor([[0.6, 0.6], [0.3, 0.45]])  # one no-variance, one variance
         inputs = {
             "group_advantages": group_advantages,
