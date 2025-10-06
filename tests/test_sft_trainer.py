@@ -513,7 +513,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer, p-tuning doesn't support gradient checkpointing
-        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
         if peft_type == "prompt_tuning":
             peft_config = PromptTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
