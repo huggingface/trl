@@ -41,6 +41,7 @@ class GRPOTrainer(_GRPOTrainer):
             num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
+            token_type_ids=inputs.get("token_type_ids"),
         )
 
         if self.top_entropy_quantile < 1.0:

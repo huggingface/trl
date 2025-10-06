@@ -68,7 +68,7 @@ from typing import Optional
 
 from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM
 from transformers.models.auto.modeling_auto import MODEL_FOR_IMAGE_TEXT_TO_TEXT_MAPPING_NAMES
 
 from trl import (
@@ -93,7 +93,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 def main(script_args, training_args, model_args, dataset_args):
     ################
-    # Model init kwargs & Tokenizer
+    # Model init kwargs
     ################
     model_kwargs = dict(
         revision=model_args.model_revision,
@@ -118,11 +118,6 @@ def main(script_args, training_args, model_args, dataset_args):
     else:
         model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
-    # Create tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
-    )
-
     # Load the dataset
     if dataset_args.datasets and script_args.dataset_name:
         logger.warning(
@@ -145,17 +140,22 @@ def main(script_args, training_args, model_args, dataset_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 
     # Train the model
     trainer.train()
 
+    # Log training complete
+    trainer.accelerator.print("✅ Training completed.")
+
     # Save and push to Hub
     trainer.save_model(training_args.output_dir)
+    trainer.accelerator.print(f"💾 Model saved to {training_args.output_dir}.")
+
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
+        trainer.accelerator.print(f"🤗 Model pushed to the Hub in https://huggingface.co/{trainer.hub_model_id}.")
 
 
 def make_parser(subparsers: Optional[argparse._SubParsersAction] = None):

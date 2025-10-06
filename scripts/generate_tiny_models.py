@@ -43,6 +43,7 @@ from transformers import (
     GPT2LMHeadModel,
     GPTNeoXConfig,
     GPTNeoXForCausalLM,
+    GPTNeoXForSequenceClassification,
     GptOssConfig,
     GptOssForCausalLM,
     Idefics2Config,
@@ -73,6 +74,7 @@ from transformers import (
     Qwen3ForSequenceClassification,
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
+    Qwen3MoeForSequenceClassification,
     SmolVLMForConditionalGeneration,
     T5ForConditionalGeneration,
 )
@@ -234,22 +236,46 @@ model = Qwen3ForCausalLM(config)
 push_to_hub(model, tokenizer, "small")
 
 # Reward models
-for model_id, config_class, model_class, suffix in [
-    ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForSequenceClassification, "3.2"),
-    ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForSequenceClassification, "2.5"),
-    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForSequenceClassification, None),
+for model_id, model_class, suffix in [
+    ("EleutherAI/pythia-14m", GPTNeoXForSequenceClassification, None),
+    ("meta-llama/Llama-3.2-1B-Instruct", LlamaForSequenceClassification, "3.2"),
+    ("Qwen/Qwen2.5-32B-Instruct", Qwen2ForSequenceClassification, "2.5"),
+    ("Qwen/Qwen3-4B", Qwen3ForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    config = config_class(
-        vocab_size=len(tokenizer.vocab),
-        hidden_size=8,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        num_hidden_layers=2,
-        intermediate_size=32,
-        num_labels=1,
-    )
-    model = model_class(config)
+    kwargs = {
+        "num_labels": 1,
+        "hidden_size": 16,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "num_hidden_layers": 2,
+        "intermediate_size": 32,
+    }
+    config = AutoConfig.from_pretrained(model_id, **kwargs)
+    # Bug in transformers: it ignores num_hidden_layers to build layer_types
+    if model_id in ("Qwen/Qwen2.5-32B-Instruct", "Qwen/Qwen3-4B"):
+        config.layer_types = config.layer_types[:2]
+    model = model_class(config).to(dtype=torch.bfloat16)
+    init_weights_tiny_model(model)
+    push_to_hub(model, tokenizer, "tiny", suffix)
+
+# MoE Reward models
+for model_id, model_class, suffix in [
+    ("Qwen/Qwen3-30B-A3B", Qwen3MoeForSequenceClassification, None),
+]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    kwargs = {
+        "num_labels": 1,
+        "hidden_size": 16,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "num_hidden_layers": 2,
+        "intermediate_size": 32,
+        "num_experts": 4,
+        "num_experts_per_tok": 2,
+    }
+    config = AutoConfig.from_pretrained(model_id, **kwargs)
+    model = model_class(config).to(dtype=torch.bfloat16)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
 
@@ -315,7 +341,5 @@ for model_id, model_class in [
         kwargs["perceiver_config"] = {"hidden_size": 16}
 
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
-
     model = model_class(config).to(dtype=torch.bfloat16)
-
     push_to_hub(model, processor, "tiny")

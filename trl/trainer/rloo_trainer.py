@@ -14,7 +14,6 @@
 
 import inspect
 import os
-import re
 import textwrap
 import warnings
 from collections import defaultdict, deque
@@ -96,8 +95,8 @@ RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 class RLOOTrainer(BaseTrainer):
     """
     Trainer for the Reinforce Leave One Out (RLOO) method. This algorithm was initially proposed in the paper [Back to
-    Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in LLMs]
-    (https://huggingface.co/papers/2402.14740).
+    Basics: Revisiting REINFORCE Style Optimization for Learning from Human Feedback in
+    LLMs](https://huggingface.co/papers/2402.14740).
 
     Example:
 
@@ -386,7 +385,7 @@ class RLOOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side = "left")
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -402,10 +401,6 @@ class RLOOTrainer(BaseTrainer):
         self.pad_token = tokenizer.pad_token
         self.pad_token_id = tokenizer.pad_token_id
         self.eos_token_id = tokenizer.eos_token_id
-        self.image_token = getattr(processing_class, "image_token", None)
-        self.image_token_id = getattr(processing_class, "image_token_id", None)
-        self.vision_start_token_id = getattr(model.config, "vision_start_token_id", None)
-        self.vision_end_token_id = getattr(model.config, "vision_end_token_id", None)
 
         # Reward functions
         if not isinstance(reward_funcs, list):
@@ -789,6 +784,7 @@ class RLOOTrainer(BaseTrainer):
         num_images=None,
         pixel_attention_mask=None,
         image_sizes=None,
+        token_type_ids=None,
     ) -> dict[str, Optional[torch.Tensor]]:
         """Compute log-probs and (optionally) entropies for each token."""
         batch_size = batch_size or input_ids.size(0)  # Chunk inputs into smaller batches to reduce memory peak
@@ -817,6 +813,8 @@ class RLOOTrainer(BaseTrainer):
                 model_inputs["pixel_attention_mask"] = pixel_attention_mask[start : start + batch_size]
             if image_sizes is not None:
                 model_inputs["image_sizes"] = image_sizes[start : start + batch_size]
+            if token_type_ids is not None:
+                model_inputs["token_type_ids"] = token_type_ids[start : start + batch_size]
 
             # Only add logits_to_keep if the model supports it
             if "logits_to_keep" in self.model_kwarg_keys:
@@ -1077,57 +1075,12 @@ class RLOOTrainer(BaseTrainer):
             maybe_apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
         ]
 
-        prompt_inputs = self.processing_class(
-            text=prompts_text,
-            return_tensors="pt",
-            padding=True,
-            padding_side="left",
-            add_special_tokens=False,
-            **kwargs,
-        )
-        prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-        forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
-        prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
-
-        if self.max_prompt_length is not None:
-            # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
-            # Then we decode those tokens back into text. We set `skip_special_tokens=False` because some special
-            # tokens are needed for generation.
-            protected = [self.image_token_id, self.vision_start_token_id, self.vision_end_token_id]
-            protected = [token for token in protected if token is not None]
-            prompt_ids = [truncate_with_protected_tokens(ids, self.max_prompt_length, protected) for ids in prompt_ids]
-
-            prompts_text = self.processing_class.batch_decode(
-                prompt_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-            )
-
-            # The chat template sometimes inserts a single image token into the prompt text. However, when this text is
-            # later tokenized, the single image token string is expanded into multiple image token IDs, depending on the
-            # image size. Since we're detokenizing here, we may see repeated image tokens in the decoded text. We
-            # collapse them back into a single token string to match the original chat template in case it originally
-            # applies it. Otherwise, it assumes that the chat template uses only vision_start_token_id to indicate images
-            # (e.g. Gemma 3) and removes all image_token instances and vision_end_token_id as well, leaving only
-            # the vision_start_token_id (e.g. <start_of_image>).
-            if self.image_token is not None:
-                escaped_img_token = re.escape(self.image_token)
-                # Search for the image token in the chat template
-                if re.search(escaped_img_token, self.processing_class.chat_template):
-                    prompts_text = [
-                        re.sub(rf"({escaped_img_token})+", self.image_token, text) for text in prompts_text
-                    ]
-                else:
-                    # If the chat template doesn't use the image token, we remove all instances of it + vision_end_token_id
-                    if self.vision_end_token_id is not None:
-                        escaped_eoi_token = re.escape(
-                            self.processing_class.tokenizer.decode([self.vision_end_token_id])
-                        )
-                        prompts_text = [
-                            re.sub(rf"({escaped_img_token})+{escaped_eoi_token}", "", text) for text in prompts_text
-                        ]
-                    else:
-                        # If vision_end_token_id is None, just remove the image tokens
-                        prompts_text = [re.sub(rf"({escaped_img_token})+", "", text) for text in prompts_text]
+        if images is not None:
+            prompt_inputs = self.processing_class(text=prompts_text, padding=True, return_tensors="pt", **kwargs)
+            prompt_inputs = super()._prepare_inputs(prompt_inputs)
+            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
+        else:
+            forward_kwargs = {}
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
@@ -1169,22 +1122,27 @@ class RLOOTrainer(BaseTrainer):
                             top_k=-1 if self.top_k is None else self.top_k,
                             min_p=0.0 if self.min_p is None else self.min_p,
                             max_tokens=self.max_completion_length,
+                            truncate_prompt_tokens=self.max_prompt_length,
                             guided_decoding_regex=self.guided_decoding_regex,
                             generation_kwargs=self.args.generation_kwargs,
                         )
-                        payload = (output["completion_ids"], output["logprobs"])
+                        payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
                 else:
                     payload = None
 
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
                 obj_list = [payload]
                 broadcast_object_list(obj_list, from_process=0)
-                all_completion_ids, _ = obj_list[0]
+                all_prompt_ids, all_completion_ids, _ = obj_list[0]
+
+                # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
+                prompt_ids = all_prompt_ids[process_slice]
                 completion_ids = all_completion_ids[process_slice]
 
             # Generate completions using colocated vLLM instances: each device holds vLLM copy and work on their own batch of prompts
@@ -1202,6 +1160,7 @@ class RLOOTrainer(BaseTrainer):
                     "top_k": -1 if self.top_k is None else self.top_k,
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
+                    "truncate_prompt_tokens": self.max_prompt_length,
                     "guided_decoding": guided_decoding,
                 }
                 if self.args.generation_kwargs is not None:
@@ -1237,6 +1196,7 @@ class RLOOTrainer(BaseTrainer):
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
+                all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
                 all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
 
                 if self.vllm_tensor_parallel_size > 1:
@@ -1244,8 +1204,10 @@ class RLOOTrainer(BaseTrainer):
                     # Each rank generates all outputs — we keep only our share.
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    prompt_ids = all_prompt_ids[tp_slice]
                     completion_ids = all_completion_ids[tp_slice]
                 else:
+                    prompt_ids = all_prompt_ids
                     completion_ids = all_completion_ids
 
                 if self.args.vllm_enable_sleep_mode:
@@ -1286,10 +1248,17 @@ class RLOOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids]
-            prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-            prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
-            prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
+            generate_inputs = self.processing_class(
+                text=prompts_text,
+                return_tensors="pt",
+                padding=True,
+                padding_side="left",
+                max_length=self.max_prompt_length,
+                truncation=True,
+                add_special_tokens=False,
+                **kwargs,
+            )
+            generate_inputs = super()._prepare_inputs(generate_inputs)
 
             with (
                 profiling_context(self, "transformers.generate"),
@@ -1300,15 +1269,11 @@ class RLOOTrainer(BaseTrainer):
                 FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
-                    input_ids=prompt_ids,
-                    attention_mask=prompt_mask,
-                    **forward_kwargs,
-                    generation_config=self.generation_config,
-                    disable_compile=True,
+                    **generate_inputs, generation_config=self.generation_config, disable_compile=True
                 )
             # Compute prompt length and extract completion ids
+            prompt_ids, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
             prompt_length = prompt_ids.size(1)
-            prompt_ids = prompt_completion_ids[:, :prompt_length]
             completion_ids = prompt_completion_ids[:, prompt_length:]
 
             # Mask everything after the first EOS token
@@ -1397,6 +1362,12 @@ class RLOOTrainer(BaseTrainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
@@ -1537,6 +1508,8 @@ class RLOOTrainer(BaseTrainer):
             output["pixel_attention_mask"] = forward_kwargs["pixel_attention_mask"]
         if "image_sizes" in forward_kwargs:
             output["image_sizes"] = forward_kwargs["image_sizes"]
+        if "token_type_ids" in forward_kwargs:
+            output["token_type_ids"] = forward_kwargs["token_type_ids"]
         if images is not None:
             output["num_images"] = num_images
         return output
@@ -1567,6 +1540,7 @@ class RLOOTrainer(BaseTrainer):
             num_images=inputs.get("num_images"),
             pixel_attention_mask=inputs.get("pixel_attention_mask"),
             image_sizes=inputs.get("image_sizes"),
+            token_type_ids=inputs.get("token_type_ids"),
         )
 
         logps = (per_token_logps * completion_mask).sum(1)  # mask out padding and tokens after EOS

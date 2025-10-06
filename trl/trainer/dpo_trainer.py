@@ -1065,7 +1065,7 @@ class DPOTrainer(BaseTrainer):
         chosen_logratios = chosen_logps.to(device) - (not self.reference_free) * ref_chosen_logps.to(device)
         rejected_logratios = rejected_logps.to(device) - (not self.reference_free) * ref_rejected_logps.to(device)
 
-        if self.f_divergence_type == FDivergenceType.ALPHA_DIVERGENCE.value:
+        if self.f_divergence_type == FDivergenceType.ALPHA_DIVERGENCE:
             # The alpha-divergence formula: (1 - u^-alpha) / alpha
             # The divergence difference between the chosen and rejected sample is:
             #     (1 - u[w]^-alpha) / alpha - (1 - u[l]^-alpha) / alpha
@@ -1087,7 +1087,7 @@ class DPOTrainer(BaseTrainer):
             ref_logratios = ref_logratios.to(self.accelerator.device)
             logits = logratios - ref_logratios
 
-            if self.f_divergence_type == FDivergenceType.JS_DIVERGENCE.value:
+            if self.f_divergence_type == FDivergenceType.JS_DIVERGENCE:
                 # The js-divergence formula: log(2 * u / (1 + u))
                 # The divergence difference between the chosen and rejected sample is:
                 #     log(2 * u[w] / (1 + u[w])) - log(2 * u[l] / (1 + u[l]))
