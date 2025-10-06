@@ -22,7 +22,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from functools import partial
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import datasets
 import torch
@@ -125,7 +125,7 @@ class RLOOTrainer(BaseTrainer):
     ```
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -134,7 +134,7 @@ class RLOOTrainer(BaseTrainer):
               using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        reward_funcs (`Union[RewardFunc, list[RewardFunc]]`):
+        reward_funcs (`RewardFunc | list[RewardFunc]`):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
 
@@ -167,14 +167,14 @@ class RLOOTrainer(BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. The padding side must be set to "left". If `None`, the
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
-        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*):
+        reward_processing_classes (`PreTrainedTokenizerBase | list[PreTrainedTokenizerBase]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
             - A single processing class: Used when `reward_funcs` contains only one reward function.
@@ -268,7 +268,7 @@ class RLOOTrainer(BaseTrainer):
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
         # Deprecated parameters
         config=None,
         reward_model=None,

@@ -53,9 +53,9 @@ class ModelConfig:
             LoRA alpha.
         lora_dropout (`float`, *optional*, defaults to `0.05`):
             LoRA dropout.
-        lora_target_modules (`Union[str, list[str]]`, *optional*):
+        lora_target_modules (`str | list[str]`, *optional*):
             LoRA target modules.
-        lora_target_parameters (`Union[str, list[str]]`, *optional*):
+        lora_target_parameters (`str | list[str]`, *optional*):
             List of target parameters for LoRA.
         lora_modules_to_save (`list[str]`, *optional*):
             Model layers to unfreeze & train.

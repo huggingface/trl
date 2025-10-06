@@ -391,7 +391,7 @@ class PreTrainedModelWrapper(nn.Module):
         object to handle corner cases when running scripts in distributed environments.
 
         Returns:
-            current_device (`Union[int, str]`):
+            current_device (`int | str`):
                 The current device.
         """
         state = PartialState()

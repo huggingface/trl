@@ -21,7 +21,7 @@ from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import pandas as pd
 import torch
@@ -189,7 +189,7 @@ class DPOTrainer(BaseTrainer):
     This class is a wrapper around the [`transformers.Trainer`] class and inherits all of its attributes and methods.
 
     Args:
-        model (`Union[str, PreTrainedModel]`):
+        model (`str | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -214,7 +214,7 @@ class DPOTrainer(BaseTrainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -282,7 +282,7 @@ class DPOTrainer(BaseTrainer):
         optimizers: tuple[torch.optim.Optimizer | None, torch.optim.lr_scheduler.LambdaLR | None] = (None, None),
         optimizer_cls_and_kwargs: tuple[type[torch.optim.Optimizer], dict[str, Any]] | None = None,
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
     ):
         # Args
         if args is None:
@@ -944,7 +944,7 @@ class DPOTrainer(BaseTrainer):
         completion sequences.
 
         Args:
-            batch (`dict[str, Union[list, torch.LongTensor]]`):
+            batch (`dict[str, list | torch.LongTensor]`):
                 A batch of input data. The batch must contain the following keys:
 
                 - `"prompt_input_ids"`: Tensor of shape `(batch_size, prompt_length)` representing the prompt input

@@ -246,7 +246,7 @@ def maybe_apply_chat_template(
             messages, where each message is a dictionary with keys `"role"` and `"content"`.
         tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer to apply the chat template with.
-        tools (`list[Union[dict, Callable]]`, *optional*):
+        tools (`list[dict | Callable]`, *optional*):
             A list of tools (callable functions) that will be accessible to the model. If the template does not support
             function calling, this argument will have no effect.
         **template_kwargs (`Any`, *optional*):

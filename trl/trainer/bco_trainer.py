@@ -21,7 +21,7 @@ from collections.abc import Callable
 from contextlib import contextmanager, nullcontext
 from operator import itemgetter
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -90,7 +90,7 @@ CLF_NAME = "clf.pkl"
 def _tokenize(
     batch: dict[str, list[Any]],
     tokenizer: "PreTrainedTokenizer",
-    embedding_tokenizer: Optional["PreTrainedTokenizer"] = None,
+    embedding_tokenizer: "PreTrainedTokenizer | None" = None,
 ) -> dict[str, list[Any]]:
     """Tokenize a batch from a BCO specific dataset."""
     prompt_tokenized = tokenizer(batch["prompt"], add_special_tokens=False)

@@ -15,7 +15,7 @@
 import random
 import textwrap
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -127,7 +127,7 @@ class GKDTrainer(SFTTrainer):
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         preprocess_logits_for_metrics: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None,
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
         formatting_func: Callable | None = None,
     ):
         # Ensure Trainer does not drop non-signature columns used by the collator (e.g., "prompts")

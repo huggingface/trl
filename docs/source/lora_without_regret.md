@@ -143,7 +143,7 @@ For reinforcement learning, the blog uses a math reasoning task that we can repr
 ```python
 def strip_reasoning_accuracy_reward(
     completions: list[list[dict[str, str]]], solution: list[str], **kwargs
-) -> list[Optional[float]]:
+) -> list[float | None]:
     """Reward function that strips reasoning tags and checks mathematical accuracy.
 
     This function:

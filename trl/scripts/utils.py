@@ -249,7 +249,7 @@ class TrlParser(HfArgumentParser):
     configurations, while also supporting configuration file loading and environment variable management.
 
     Args:
-        dataclass_types (`Union[DataClassType, Iterable[DataClassType]]`, *optional*):
+        dataclass_types (`DataClassType | Iterable[DataClassType]`, *optional*):
             Dataclass types to use for argument parsing.
         **kwargs:
             Additional keyword arguments passed to the [`transformers.HfArgumentParser`] constructor.

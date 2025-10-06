@@ -14,7 +14,6 @@
 
 import logging
 import os
-from typing import Optional
 
 import pandas as pd
 import torch
@@ -567,7 +566,7 @@ class WeaveCallback(TrainerCallback):
         scorers (`dict[str, Callable]`, *optional*):
             Dictionary mapping scorer names to scorer functions. If `None`, operates in tracing mode (predictions
             only). If provided, operates in evaluation mode (predictions + scores + summary). Scorer functions should
-            have signature: `scorer(prompt: str, completion: str) -> Union[float, int]`
+            have signature: `scorer(prompt: str, completion: str) -> float | int`
         generation_config (`GenerationConfig`, *optional*):
             Generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*):
@@ -771,7 +770,7 @@ class MergeModelCallback(TrainerCallback):
 
     def __init__(
         self,
-        merge_config: Optional["MergeConfig"] = None,
+        merge_config: "MergeConfig | None" = None,
         merge_at_every_checkpoint: bool = False,
         push_to_hub: bool = False,
     ):

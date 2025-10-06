@@ -20,7 +20,7 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from functools import wraps
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import jinja2
 import torch
@@ -105,7 +105,7 @@ class OnlineDPOTrainer(BaseTrainer):
     Initialize OnlineDPOTrainer.
 
     Args:
-        model (`Union[str, nn.Module, PreTrainedModel]`):
+        model (`str | nn.Module | PreTrainedModel`):
             Model to be trained. Can be either:
 
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
@@ -119,7 +119,7 @@ class OnlineDPOTrainer(BaseTrainer):
             model.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
-        reward_funcs (`Union[RewardFunc, list[RewardFunc]]`, *optional*):
+        reward_funcs (`RewardFunc | list[RewardFunc]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
             functions with the prompts and completions and sum the rewards. Can be either:
 
@@ -136,13 +136,13 @@ class OnlineDPOTrainer(BaseTrainer):
             sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for training.
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Dataset | IterableDataset]`):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*):
+        reward_processing_classes (`PreTrainedTokenizerBase | list[PreTrainedTokenizerBase]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
             - A single processing class: Used when `reward_funcs` contains only one reward function.
@@ -198,7 +198,7 @@ class OnlineDPOTrainer(BaseTrainer):
         eval_dataset: Dataset | IterableDataset | dict[str, Dataset | IterableDataset] | None = None,
         processing_class: PreTrainedTokenizerBase | ProcessorMixin | None = None,
         reward_processing_classes: PreTrainedTokenizerBase | list[PreTrainedTokenizerBase] | None = None,
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
         compute_metrics: Callable[[EvalPrediction], dict] | None = None,
         callbacks: list[TrainerCallback] | None = None,
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),

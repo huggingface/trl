@@ -228,7 +228,7 @@ class RewardDataCollatorWithPadding:
     Args:
         tokenizer (`PreTrainedTokenizerBase`):
             The tokenizer used for encoding the data.
-        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
+        padding (`bool | str | PaddingStrategy`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
         pad_to_multiple_of (`int` or `None`, `optional`, defaults to `None`):
             If set will pad the sequence to a multiple of the provided value.

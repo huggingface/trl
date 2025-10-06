@@ -20,7 +20,6 @@ import time
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -157,7 +156,7 @@ class PPOTrainer(BaseTrainer):
         # less commonly used
         optimizers: tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (None, None),
         callbacks: list[TrainerCallback] | None = None,
-        peft_config: Optional["PeftConfig"] = None,
+        peft_config: "PeftConfig | None" = None,
     ) -> None:
         if ref_model is model:
             raise ValueError(

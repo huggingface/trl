@@ -18,7 +18,7 @@ from collections.abc import Callable
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Literal
 
 import torch
 import torch.nn as nn
@@ -104,7 +104,7 @@ def setup_chat_format(
     Args:
         model (`~transformers.PreTrainedModel`): The model to be modified.
         tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
-        format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
+        format (`Literal["chatml"] | None`): The format to be set. Defaults to "chatml".
         resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
@@ -306,7 +306,7 @@ def add_hooks(model: "DeepSpeedEngine") -> None:
 
 @contextmanager
 def unwrap_model_for_generation(
-    model: Union["DistributedDataParallel", "DeepSpeedEngine"],
+    model: "DistributedDataParallel | DeepSpeedEngine",
     accelerator: "Accelerator",
     gather_deepspeed3_params: bool = True,
 ):
@@ -314,7 +314,7 @@ def unwrap_model_for_generation(
     Context manager to unwrap distributed or accelerated models for generation tasks.
 
     Args:
-        model (`Union[DistributedDataParallel, DeepSpeedEngine]`):
+        model (`DistributedDataParallel | DeepSpeedEngine`):
             Model to be unwrapped.
         accelerator (`~accelerate.Accelerator`):
             Accelerator instance managing the model.
@@ -511,7 +511,7 @@ def peft_module_casting_to_bf16(model):
 
 
 def prepare_peft_model(
-    model: PreTrainedModel, peft_config: Optional["PeftConfig"], args: TrainingArguments
+    model: PreTrainedModel, peft_config: "PeftConfig | None", args: TrainingArguments
 ) -> PreTrainedModel:
     """Prepares a model for PEFT training."""
     if not is_peft_available():
