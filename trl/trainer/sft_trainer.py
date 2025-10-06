@@ -984,7 +984,7 @@ class SFTTrainer(BaseTrainer):
                         # Warn if assistant_masks are all zeros (usually means that chat template doesn't support {% generation %})
                         if "assistant_masks" in output and 1 not in output["assistant_masks"] and assistant_only_loss:
                             logger.warning(
-                                "You're using `assistant_only_loss=True` with prompt-completion format, but the chat template "
+                                "You're using `assistant_only_loss=True` but the chat template "
                                 "doesn't generate valid assistant masks — it may be missing the `{% generation %}` keyword. "
                                 "This will cause all tokens to be masked during training. Please use `completion_only_loss=True` "
                                 "instead to train on completion tokens."
