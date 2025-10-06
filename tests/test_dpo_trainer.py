@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import re
-import sys
 from unittest.mock import MagicMock
 
 import numpy as np

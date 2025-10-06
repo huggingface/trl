@@ -14,11 +14,9 @@
 
 
 import os
-import sys
 from io import StringIO
 from unittest.mock import patch
 
-import pytest
 import yaml
 
 from .testing_utils import TrlTestCase
