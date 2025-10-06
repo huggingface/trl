@@ -9,26 +9,38 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 Below is the current TRL trainers taxonomy.
 
-**Online methods**
-* [`GRPOTrainer`]
-* [`RLOOTrainer`]
-* [`OnlineDPO`]
-* [`NashMD`]
-* [`XPOTrainer`]
 
-**Offline methods**
-* [`SFTTrainer`]
-* [`DPOTrainer`]
-* [`PPOTrainer`]
-* [`ORPOTrainer`]
-* [`BCOTrainer`]
-* [`CPOTrainer`]
-* [`KTOTrainer`]
-* [`GKDTrainer`]
+<table>
+<tr>
+<td valign="top" width="50%">
+
+**Online methods**
+- [`GRPOTrainer`]
+- [`RLOOTrainer`]
+- [`OnlineDPOTrainer`]
+- [`NashMDTrainer`]
+- [`XPOTrainer`]
 
 **Reward modeling**
-* [`PRMTrainer`]
-* [`RewardTrainer`]
+- [`PRMTrainer`]
+- [`RewardTrainer`]
+
+</td>
+<td valign="top" width="50%">
+
+**Offline methods**
+- [`SFTTrainer`]
+- [`DPOTrainer`]
+- [`PPOTrainer`]
+- [`ORPOTrainer`]
+- [`BCOTrainer`]
+- [`CPOTrainer`]
+- [`KTOTrainer`]
+- [`GKDTrainer`]
+
+</td>
+</tr>
+</table>g
 
 
 ## 🎉 What's New
