@@ -115,14 +115,10 @@ dev = [
 ]
 
 [tool.setuptools]
-include-package-data = true
+package-dir = {"trl" = "trl"}
 
 [tool.setuptools.dynamic]
 version = { file = "VERSION" }
-
-[tool.setuptools.packages.find]
-where = ["."]
-exclude = ["tests*"]
 
 [tool.coverage.run]
 branch = true
