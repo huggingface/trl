@@ -14,88 +14,36 @@
 
 import functools
 import random
-import shutil
 import signal
-import tempfile
-import unittest
 import warnings
 
 import psutil
+import pytest
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import torch_device
-from transformers.utils import is_rich_available
+from transformers.utils import is_peft_available, is_rich_available, is_vision_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import is_joblib_available, is_llm_blender_available, is_mergekit_available, is_vllm_available
 
 
-# transformers.testing_utils contains a require_bitsandbytes function, but relies on pytest markers which we don't use
-# in our test suite. We therefore need to implement our own version of this function.
-def require_bitsandbytes(test_case):
-    """
-    Decorator marking a test that requires bitsandbytes. Skips the test if bitsandbytes is not available.
-    """
-    return unittest.skipUnless(is_bitsandbytes_available(), "test requires bitsandbytes")(test_case)
-
-
-def require_comet(test_case):
-    """
-    Decorator marking a test that requires Comet. Skips the test if Comet is not available.
-    """
-    return unittest.skipUnless(is_comet_available(), "test requires comet_ml")(test_case)
-
-
-def require_llm_blender(test_case):
-    """
-    Decorator marking a test that requires llm-blender. Skips the test if llm-blender is not available.
-    """
-    return unittest.skipUnless(is_llm_blender_available(), "test requires llm-blender")(test_case)
-
-
-def require_mergekit(test_case):
-    """
-    Decorator marking a test that requires mergekit. Skips the test if mergekit is not available.
-    """
-    return unittest.skipUnless(is_mergekit_available(), "test requires mergekit")(test_case)
-
-
-def require_rich(test_case):
-    """
-    Decorator marking a test that requires rich. Skips the test if rich is not available.
-    """
-    return unittest.skipUnless(is_rich_available(), "test requires rich")(test_case)
-
-
-def require_sklearn(test_case):
-    """
-    Decorator marking a test that requires sklearn. Skips the test if sklearn is not available.
-    """
-    return unittest.skipUnless(is_sklearn_available() and is_joblib_available(), "test requires sklearn")(test_case)
-
-
-def require_vllm(test_case):
-    """
-    Decorator marking a test that requires vllm. Skips the test if vllm is not available.
-    """
-    return unittest.skipUnless(is_vllm_available(), "test requires vllm")(test_case)
-
-
-def require_no_wandb(test_case):
-    """
-    Decorator marking a test that requires no wandb. Skips the test if wandb is available.
-    """
-    return unittest.skipUnless(not is_wandb_available(), "test requires no wandb")(test_case)
-
-
-def require_3_accelerators(test_case):
-    """
-    Decorator marking a test that requires at least 3 accelerators. Skips the test if 3 accelerators are not available.
-    """
-    torch_accelerator_module = getattr(torch, torch_device, torch.cuda)
-    return unittest.skipUnless(
-        torch_accelerator_module.device_count() >= 3, f"test requires at least 3 {torch_device}s"
-    )(test_case)
+require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
+require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
+require_llm_blender = pytest.mark.skipif(not is_llm_blender_available(), reason="test requires llm-blender")
+require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
+require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
+require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
+require_sklearn = pytest.mark.skipif(
+    not (is_sklearn_available() and is_joblib_available()), reason="test requires sklearn"
+)
+require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requires vision")
+require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
+require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test requires no wandb")
+require_3_accelerators = pytest.mark.skipif(
+    not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
+    reason=f"test requires at least 3 {torch_device}s",
+)
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
@@ -119,18 +67,10 @@ class RandomPairwiseJudge(BasePairwiseJudge):
             return [random.random() for _ in range(len(prompts))]
 
 
-class TrlTestCase(unittest.TestCase):
-    """
-    Base test case for TRL tests. Sets up a temporary directory for testing.
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.tmp_dir = tempfile.mkdtemp()
-
-    def tearDown(self):
-        shutil.rmtree(self.tmp_dir)
-        super().tearDown()
+class TrlTestCase:
+    @pytest.fixture(autouse=True)
+    def set_tmp_dir(self, tmp_path):
+        self.tmp_dir = str(tmp_path)
 
 
 def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> callable:
