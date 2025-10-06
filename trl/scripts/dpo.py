@@ -81,7 +81,6 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 logger = logging.get_logger(__name__)
