@@ -376,7 +376,7 @@ Here are the parameters we used to train the above models
 |----------------------------------|----------------------------------------------------|-------------------------------|
 | `--model_name_or_path`           | HuggingFaceTB/SmolLM3-3B                           | HuggingFaceTB/SmolLM3-3B      |
 | `--dataset_name`                 | HuggingFaceH4/OpenR1-Math-220k-default-verified    | HuggingFaceH4/OpenR1-Math-220k-default-verified |
-| `--learning_rate`                | 1.0e-6                                             | 1.0e-5                        |
+| `--learning_rate`                | 1.0e-5                                             | 1.0e-6                        |
 | `--max_prompt_length`            | 1024                                               | 1024                          |
 | `--max_completion_length`        | 4096                                               | 4096                          |
 | `--lora_r`                       | 1                                                  | -                           |

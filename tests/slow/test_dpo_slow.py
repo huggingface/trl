@@ -21,12 +21,12 @@ from accelerate.utils.memory import release_memory
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from transformers.testing_utils import backend_empty_cache, require_peft, require_torch_accelerator, torch_device
+from transformers.testing_utils import backend_empty_cache, require_torch_accelerator, torch_device
 from transformers.utils import is_peft_available
 
 from trl import DPOConfig, DPOTrainer
 
-from ..testing_utils import TrlTestCase, require_bitsandbytes
+from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft
 from .testing_constants import DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS, GRADIENT_CHECKPOINTING_KWARGS, MODELS_TO_TEST
 
 
@@ -37,9 +37,8 @@ if is_peft_available():
 @pytest.mark.slow
 @require_torch_accelerator
 @require_peft
-class DPOTrainerSlowTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+class TestDPOTrainerSlow(TrlTestCase):
+    def setup_method(self):
         self.dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
         self.peft_config = LoraConfig(
             lora_alpha=16,
@@ -50,11 +49,10 @@ class DPOTrainerSlowTester(TrlTestCase):
         )
         self.max_length = 128
 
-    def tearDown(self):
+    def teardown_method(self):
         gc.collect()
         backend_empty_cache(torch_device)
         gc.collect()
-        super().tearDown()
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, DPO_LOSS_TYPES, DPO_PRECOMPUTE_LOGITS)))
     def test_dpo_bare_model(self, model_id, loss_type, pre_compute_logits):
@@ -151,8 +149,8 @@ class DPOTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
-        self.assertIsNone(trainer.ref_model)
+        assert isinstance(trainer.model, PeftModel)
+        assert trainer.ref_model is None
 
         # train the model
         trainer.train()
@@ -215,8 +213,8 @@ class DPOTrainerSlowTester(TrlTestCase):
             peft_config=self.peft_config,
         )
 
-        self.assertIsInstance(trainer.model, PeftModel)
-        self.assertIsNone(trainer.ref_model)
+        assert isinstance(trainer.model, PeftModel)
+        assert trainer.ref_model is None
 
         # train the model
         trainer.train()
