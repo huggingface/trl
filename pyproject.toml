@@ -31,7 +31,8 @@ requires-python = ">=3.9"
 dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
-    "transformers>=4.56.1"
+    "transformers>=4.56.1",
+    "transformers!=4.57.0; python_version == '3.9'"
 ]
 dynamic = ["version"]
 

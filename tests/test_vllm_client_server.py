@@ -27,28 +27,28 @@ from .testing_utils import TrlTestCase, kill_process, require_3_accelerators
 
 class TestChunkList(TrlTestCase):
     def test_even_split(self):
-        self.assertEqual(chunk_list([1, 2, 3, 4, 5, 6], 2), [[1, 2, 3], [4, 5, 6]])
+        assert chunk_list([1, 2, 3, 4, 5, 6], 2) == [[1, 2, 3], [4, 5, 6]]
 
     def test_uneven_split(self):
-        self.assertEqual(chunk_list([1, 2, 3, 4, 5, 6], 4), [[1, 2], [3, 4], [5], [6]])
+        assert chunk_list([1, 2, 3, 4, 5, 6], 4) == [[1, 2], [3, 4], [5], [6]]
 
     def test_more_chunks_than_elements(self):
-        self.assertEqual(chunk_list([1, 2, 3, 4, 5, 6], 8), [[1], [2], [3], [4], [5], [6], [], []])
+        assert chunk_list([1, 2, 3, 4, 5, 6], 8) == [[1], [2], [3], [4], [5], [6], [], []]
 
     def test_n_equals_len(self):
-        self.assertEqual(chunk_list([1, 2, 3], 3), [[1], [2], [3]])
+        assert chunk_list([1, 2, 3], 3) == [[1], [2], [3]]
 
     def test_n_is_1(self):
-        self.assertEqual(chunk_list([1, 2, 3], 1), [[1, 2, 3]])
+        assert chunk_list([1, 2, 3], 1) == [[1, 2, 3]]
 
     def test_single_element_list(self):
-        self.assertEqual(chunk_list([42], 2), [[42], []])
+        assert chunk_list([42], 2) == [[42], []]
 
     def test_any_dtype(self):
-        self.assertEqual(
-            chunk_list([1, "two", 3.0, {"four": 4}, ["f", "i", "v", "e"]], 2),
-            [[1, "two", 3.0], [{"four": 4}, ["f", "i", "v", "e"]]],
-        )
+        assert chunk_list([1, "two", 3.0, {"four": 4}, ["f", "i", "v", "e"]], 2) == [
+            [1, "two", 3.0],
+            [{"four": 4}, ["f", "i", "v", "e"]],
+        ]
 
 
 @pytest.mark.slow
@@ -57,7 +57,7 @@ class TestVLLMClientServer(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -77,14 +77,14 @@ class TestVLLMClientServer(TrlTestCase):
         outputs = self.client.generate(prompts)["completion_ids"]
 
         # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        assert isinstance(outputs, list)
 
         # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
+        assert len(outputs) == len(prompts)
 
         # Check that the generated sequences are lists of integers
         for seq in outputs:
-            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+            assert all(isinstance(tok, int) for tok in seq)
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -93,18 +93,18 @@ class TestVLLMClientServer(TrlTestCase):
         ]
 
         # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        assert isinstance(outputs, list)
 
         # Check that the number of generated sequences is 2 times the number of prompts
-        self.assertEqual(len(outputs), 2 * len(prompts))
+        assert len(outputs) == 2 * len(prompts)
 
         # Check that the generated sequences are lists of integers
         for seq in outputs:
-            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+            assert all(isinstance(tok, int) for tok in seq)
 
         # Check that the length of the generated sequences is less than or equal to 32
         for seq in outputs:
-            self.assertLessEqual(len(seq), 32)
+            assert len(seq) <= 32
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
@@ -115,9 +115,7 @@ class TestVLLMClientServer(TrlTestCase):
         self.client.reset_prefix_cache()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # Close the client
         cls.client.close_communicator()
 
@@ -133,7 +131,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -153,14 +151,14 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         outputs = self.client.generate(prompts)["completion_ids"]
 
         # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        assert isinstance(outputs, list)
 
         # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
+        assert len(outputs) == len(prompts)
 
         # Check that the generated sequences are lists of integers
         for seq in outputs:
-            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+            assert all(isinstance(tok, int) for tok in seq)
 
     def test_generate_with_params(self):
         prompts = ["Hello, AI!", "Tell me a joke"]
@@ -169,18 +167,18 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         ]
 
         # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        assert isinstance(outputs, list)
 
         # Check that the number of generated sequences is 2 times the number of prompts
-        self.assertEqual(len(outputs), 2 * len(prompts))
+        assert len(outputs) == 2 * len(prompts)
 
         # Check that the generated sequences are lists of integers
         for seq in outputs:
-            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+            assert all(isinstance(tok, int) for tok in seq)
 
         # Check that the length of the generated sequences is less than or equal to 32
         for seq in outputs:
-            self.assertLessEqual(len(seq), 32)
+            assert len(seq) <= 32
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
@@ -191,9 +189,7 @@ class TestVLLMClientServerBaseURL(TrlTestCase):
         self.client.reset_prefix_cache()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # Close the client
         cls.client.close_communicator()
 
@@ -208,7 +204,7 @@ class TestVLLMClientServerTP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1 and 2, so we set VISIBLE_DEVICES to "1,2"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -231,14 +227,14 @@ class TestVLLMClientServerTP(TrlTestCase):
         outputs = self.client.generate(prompts)["completion_ids"]
 
         # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        assert isinstance(outputs, list)
 
         # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
+        assert len(outputs) == len(prompts)
 
         # Check that the generated sequences are lists of integers
         for seq in outputs:
-            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+            assert all(isinstance(tok, int) for tok in seq)
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
@@ -249,9 +245,7 @@ class TestVLLMClientServerTP(TrlTestCase):
         self.client.reset_prefix_cache()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # Close the client
         cls.client.close_communicator()
 
@@ -266,7 +260,7 @@ class TestVLLMClientServerDP(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1 and 2, so we set VISIBLE_DEVICES to "1,2"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -289,14 +283,14 @@ class TestVLLMClientServerDP(TrlTestCase):
         outputs = self.client.generate(prompts)["completion_ids"]
 
         # Check that the output is a list
-        self.assertIsInstance(outputs, list)
+        assert isinstance(outputs, list)
 
         # Check that the number of generated sequences is equal to the number of prompts
-        self.assertEqual(len(outputs), len(prompts))
+        assert len(outputs) == len(prompts)
 
         # Check that the generated sequences are lists of integers
         for seq in outputs:
-            self.assertTrue(all(isinstance(tok, int) for tok in seq))
+            assert all(isinstance(tok, int) for tok in seq)
 
     def test_update_model_params(self):
         model = AutoModelForCausalLM.from_pretrained(self.model_id, device_map=torch_device)
@@ -307,9 +301,7 @@ class TestVLLMClientServerDP(TrlTestCase):
         self.client.reset_prefix_cache()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # Close the client
         cls.client.close_communicator()
 
@@ -326,7 +318,7 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
     model_id = "Qwen/Qwen2.5-1.5B"
 
     @classmethod
-    def setUpClass(cls):
+    def setup_class(cls):
         # We want the server to run on accelerator 1, so we set VISIBLE_DEVICES to "1"
         env = os.environ.copy()
         VISIBLE_DEVICES = "ZE_AFFINITY_MASK" if torch_device == "xpu" else "CUDA_VISIBLE_DEVICES"
@@ -345,8 +337,8 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         # Test basic functionality
         prompts = ["Hello, AI!"]
         outputs = client.generate(prompts)["completion_ids"]
-        self.assertIsInstance(outputs, list)
-        self.assertEqual(len(outputs), len(prompts))
+        assert isinstance(outputs, list)
+        assert len(outputs) == len(prompts)
 
         client.close_communicator()
 
@@ -358,8 +350,8 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         # Test basic functionality
         prompts = ["Hello, AI!"]
         outputs = client.generate(prompts)["completion_ids"]
-        self.assertIsInstance(outputs, list)
-        self.assertEqual(len(outputs), len(prompts))
+        assert isinstance(outputs, list)
+        assert len(outputs) == len(prompts)
 
         client.close_communicator()
 
@@ -374,15 +366,13 @@ class TestVLLMClientServerDeviceParameter(TrlTestCase):
         # Test basic functionality
         prompts = ["Hello, AI!"]
         outputs = client.generate(prompts)["completion_ids"]
-        self.assertIsInstance(outputs, list)
-        self.assertEqual(len(outputs), len(prompts))
+        assert isinstance(outputs, list)
+        assert len(outputs) == len(prompts)
 
         client.close_communicator()
 
     @classmethod
-    def tearDownClass(cls):
-        super().tearDownClass()
-
+    def teardown_class(cls):
         # vLLM x pytest (or Popen) seems not to handle process termination well. To avoid zombie processes, we need to
         # kill the server process and its children explicitly.
         kill_process(cls.server_process)
