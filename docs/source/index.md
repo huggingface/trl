@@ -9,10 +9,9 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 Below is the current TRL trainers taxonomy.
 
+<div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
 
-<table>
-<tr>
-<td valign="top" width="50%">
+<div style="flex: 1; min-width: 0;">
 
 **Online methods**
 - [`GRPOTrainer`]
@@ -25,8 +24,9 @@ Below is the current TRL trainers taxonomy.
 - [`PRMTrainer`]
 - [`RewardTrainer`]
 
-</td>
-<td valign="top" width="50%">
+</div>
+
+<div style="flex: 1; min-width: 0;">
 
 **Offline methods**
 - [`SFTTrainer`]
@@ -38,9 +38,9 @@ Below is the current TRL trainers taxonomy.
 - [`KTOTrainer`]
 - [`GKDTrainer`]
 
-</td>
-</tr>
-</table>g
+</div>
+
+</div>
 
 
 ## 🎉 What's New
