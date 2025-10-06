@@ -250,9 +250,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         EXPECTED_OUTPUT_SIZE = 3
 
         for model_name in self.all_model_names:
-            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < Version("4.57.0"):
+            ) < version.parse("4.57.0.dev0"):
                 # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                 continue
 
@@ -269,9 +269,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
-            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < Version("4.57.0"):
+            ) < version.parse("4.57.0.dev0"):
                 # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                 continue
 
@@ -287,9 +287,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
-            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < Version("4.57.0"):
+            ) < version.parse("4.57.0.dev0"):
                 # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                 continue
             v_head_kwargs = {"summary_dropout_prob": 0.5}
@@ -309,9 +309,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         r"""
         Test if `generate` works for every model
         """
-        if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(transformers.__version__) < Version(
-            "4.57.0"
-        ):
+        if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+            transformers.__version__
+        ) < version.parse("4.57.0.dev0"):
             # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
             pytest.xfail("DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version")
 
@@ -329,9 +329,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
-            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < Version("4.57.0"):
+            ) < version.parse("4.57.0.dev0"):
                 # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                 continue
 
@@ -355,9 +355,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
     @pytest.mark.skip(reason="This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
-            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < Version("4.57.0"):
+            ) < version.parse("4.57.0.dev0"):
                 # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                 continue
 
