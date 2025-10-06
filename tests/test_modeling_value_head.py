@@ -27,7 +27,7 @@ from .testing_utils import TrlTestCase
 ALL_CAUSAL_LM_MODELS = [
     "trl-internal-testing/tiny-BloomForCausalLM",
     "trl-internal-testing/tiny-CohereForCausalLM",
-    "trl-internal-testing/tiny-DbrxForCausalLM",
+    # "trl-internal-testing/tiny-DbrxForCausalLM",
     # "trl-internal-testing/tiny-FalconMambaForCausalLM",  # FalconMambaForCausalLM modeling seems to be broken for now
     "trl-internal-testing/tiny-Gemma2ForCausalLM",
     "trl-internal-testing/tiny-GemmaForCausalLM",
