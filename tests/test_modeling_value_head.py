@@ -17,7 +17,7 @@ import gc
 import pytest
 import torch
 import transformers
-from packaging.version import Version
+from packaging import version
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
 
@@ -65,9 +65,9 @@ class BaseTester:
             Test if the v-head is added to the model successfully
             """
             for model_name in self.all_model_names:
-                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < Version("4.57.0"):
+                ) < version.parse("4.57.0.dev0"):
                     # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                     continue
 
@@ -79,9 +79,9 @@ class BaseTester:
             Test if the v-head has the correct shape
             """
             for model_name in self.all_model_names:
-                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < Version("4.57.0"):
+                ) < version.parse("4.57.0.dev0"):
                     # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                     continue
 
@@ -94,9 +94,9 @@ class BaseTester:
             than zeros by default.
             """
             for model_name in self.all_model_names:
-                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < Version("4.57.0"):
+                ) < version.parse("4.57.0.dev0"):
                     # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                     continue
 
@@ -109,9 +109,9 @@ class BaseTester:
             `from_pretrained`.
             """
             for model_name in self.all_model_names:
-                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < Version("4.57.0"):
+                ) < version.parse("4.57.0.dev0"):
                     # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                     continue
 
@@ -125,9 +125,9 @@ class BaseTester:
             additional modules (e.g. v_head)
             """
             for model_name in self.all_model_names:
-                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < Version("4.57.0"):
+                ) < version.parse("4.57.0.dev0"):
                     # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                     continue
 
@@ -146,9 +146,9 @@ class BaseTester:
             Test if the model can be saved and loaded from a directory and get the same weights - sharded case
             """
             for model_name in self.all_model_names:
-                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < Version("4.57.0"):
+                ) < version.parse("4.57.0.dev0"):
                     # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                     continue
 
@@ -167,9 +167,9 @@ class BaseTester:
             Test if the model can be saved and loaded using transformers and get the same weights - sharded case
             """
             for model_name in self.all_model_names:
-                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < Version("4.57.0"):
+                ) < version.parse("4.57.0.dev0"):
                     # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                     continue
 
@@ -194,9 +194,9 @@ class BaseTester:
             of the super class to check if the weights are the same.
             """
             for model_name in self.all_model_names:
-                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and Version(
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < Version("4.57.0"):
+                ) < version.parse("4.57.0.dev0"):
                     # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
                     continue
 
