@@ -67,8 +67,8 @@ class BaseTester:
             for model_name in self.all_model_names:
                 if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < version.parse("4.57.0.dev0"):
-                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                     continue
 
                 model = self.trl_model_class.from_pretrained(model_name)
@@ -81,8 +81,8 @@ class BaseTester:
             for model_name in self.all_model_names:
                 if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < version.parse("4.57.0.dev0"):
-                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                     continue
 
                 model = self.trl_model_class.from_pretrained(model_name)
@@ -96,8 +96,8 @@ class BaseTester:
             for model_name in self.all_model_names:
                 if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < version.parse("4.57.0.dev0"):
-                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                     continue
 
                 model = self.trl_model_class.from_pretrained(model_name)
@@ -111,8 +111,8 @@ class BaseTester:
             for model_name in self.all_model_names:
                 if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < version.parse("4.57.0.dev0"):
-                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                     continue
 
                 pretrained_model = self.transformers_model_class.from_pretrained(model_name)
@@ -127,8 +127,8 @@ class BaseTester:
             for model_name in self.all_model_names:
                 if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < version.parse("4.57.0.dev0"):
-                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                     continue
 
                 model = self.trl_model_class.from_pretrained(model_name)
@@ -148,8 +148,8 @@ class BaseTester:
             for model_name in self.all_model_names:
                 if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < version.parse("4.57.0.dev0"):
-                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                     continue
 
                 model = self.trl_model_class.from_pretrained(model_name)
@@ -169,8 +169,8 @@ class BaseTester:
             for model_name in self.all_model_names:
                 if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < version.parse("4.57.0.dev0"):
-                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                     continue
 
                 transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
@@ -196,8 +196,8 @@ class BaseTester:
             for model_name in self.all_model_names:
                 if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                     transformers.__version__
-                ) < version.parse("4.57.0.dev0"):
-                    # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                     continue
 
                 transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
@@ -252,8 +252,8 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         for model_name in self.all_model_names:
             if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < version.parse("4.57.0.dev0"):
-                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                 continue
 
             model = self.trl_model_class.from_pretrained(model_name).to(self.device)
@@ -271,8 +271,8 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         for model_name in self.all_model_names:
             if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < version.parse("4.57.0.dev0"):
-                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                 continue
 
             pretrained_model = self.transformers_model_class.from_pretrained(model_name)
@@ -289,8 +289,8 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         for model_name in self.all_model_names:
             if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < version.parse("4.57.0.dev0"):
-                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                 continue
             v_head_kwargs = {"summary_dropout_prob": 0.5}
 
@@ -311,9 +311,9 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         """
         if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
             transformers.__version__
-        ) < version.parse("4.57.0.dev0"):
-            # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
-            pytest.xfail("DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version")
+        ) < version.parse("4.58.0.dev0"):
+            # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+            pytest.xfail("DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version")
 
         generation_config = GenerationConfig(max_new_tokens=9)
         model = self.trl_model_class.from_pretrained(model_name).to(self.device)
@@ -331,8 +331,8 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         for model_name in self.all_model_names:
             if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < version.parse("4.57.0.dev0"):
-                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                 continue
 
             trl_model = self.trl_model_class.from_pretrained(model_name, dtype=torch.bfloat16).to(self.device)
@@ -357,8 +357,8 @@ class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
         for model_name in self.all_model_names:
             if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
                 transformers.__version__
-            ) < version.parse("4.57.0.dev0"):
-                # DbrxConfig generated after 4.57.0 isn't compatible with modeling code before this version
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
                 continue
 
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
