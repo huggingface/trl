@@ -986,8 +986,7 @@ class SFTTrainer(BaseTrainer):
                             logger.warning(
                                 "You're using `assistant_only_loss=True` but the chat template "
                                 "doesn't generate valid assistant masks — it may be missing the `{% generation %}` keyword. "
-                                "This will cause all tokens to be masked during training. Please use `completion_only_loss=True` "
-                                "instead to train on completion tokens."
+                                "This will cause all tokens to be masked during training."
                             )
 
                     else:  # language modeling case
