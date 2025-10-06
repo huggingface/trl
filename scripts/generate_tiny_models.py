@@ -211,7 +211,7 @@ for model_id, config_class, model_class, suffix in [
 # Special case for databricks/dbrx-instruct as it requires specific changes in the config
 model_id = "databricks/dbrx-instruct"
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-config = DbrxConfig.from_pretrained(model_id, n_layers=2, n_heads=4, d_model=24)
+config = DbrxConfig.from_pretrained(model_id, n_layers=2, n_heads=16, d_model=24)
 # transformers mistakenly ignores ffn_config keys when loading from pretrained. We need to set them manually after
 # loading the config
 config.ffn_config.ffn_hidden_size = 24
