@@ -248,8 +248,6 @@ if __name__ == "__main__":
     trainer.save_model(training_args.output_dir)
     if training_args.push_to_hub:
         trainer.push_to_hub(dataset_name=script_args.dataset_name)
-        if trainer.accelerator.is_main_process:
-            processor.push_to_hub(training_args.hub_model_id)
 
     # Cleanup
     del model

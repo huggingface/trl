@@ -64,4 +64,4 @@ trainer.train()
 
 will give you a hosted dashboard at https://huggingface.co/spaces/trl-lib/trackio.
 
-<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&sidebar=hidden" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&sidebar=hidden&runs=sft_qwen3-0.6B_capybara" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
