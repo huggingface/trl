@@ -7,9 +7,29 @@
 TRL is a full stack library where we provide a set of tools to train transformer language models with methods like Supervised Fine-Tuning (SFT), Group Relative Policy Optimization (GRPO), Direct Preference Optimization (DPO), Reward Modeling, and more.
 The library is integrated with 🤗 [transformers](https://github.com/huggingface/transformers).
 
-Below is the current TRL trainers taxonomy (⚡ indicates trainers with **online support**).
+Below is the current TRL trainers taxonomy.
 
-![Trainers taxonomy](trainers_taxonomy.png)
+**Online methods**
+* GRPOTrainer
+* RLOOTrainer
+* OnlineDPO
+* NashMD
+* XPOTrainer
+
+**Offline methods**
+* SFTTrainer
+* DPOTrainer
+* PPOTrainer
+* ORPOTrainer
+* BCOTrainer
+* CPOTrainer
+* KTOTrainer
+* GKDTrainer
+
+**Reward modeling**
+* PRMTrainer
+* RewardTrainer
+
 
 ## 🎉 What's New
 
