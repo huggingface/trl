@@ -508,8 +508,8 @@ class PreTrainedModelWrapper(nn.Module):
     def push_to_hub(self, *args, **kwargs):
         r"""
         Push the pretrained model to the hub. This method is a wrapper around
-        `transformers.PreTrainedModel.push_to_hub`. Please refer to the documentation of
-        `transformers.PreTrainedModel.push_to_hub` for more information.
+        [`~transformers.PreTrainedModel.push_to_hub`]. Please refer to the documentation of
+        [`~transformers.PreTrainedModel.push_to_hub`] for more information.
 
         Args:
             *args (`list`, *optional*):
@@ -522,8 +522,8 @@ class PreTrainedModelWrapper(nn.Module):
     def save_pretrained(self, *args, **kwargs):
         r"""
         Save the pretrained model to a directory. This method is a wrapper around
-        `transformers.PreTrainedModel.save_pretrained`. Please refer to the documentation of
-        `transformers.PreTrainedModel.save_pretrained` for more information.
+        [`~transformers.PreTrainedModel.save_pretrained`]. Please refer to the documentation of
+        [`~transformers.PreTrainedModel.save_pretrained`] for more information.
 
         Args:
             *args (`list`, *optional*):

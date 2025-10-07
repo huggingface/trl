@@ -1294,7 +1294,7 @@ def generate_model_card(
     comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
-    Generate a `ModelCard` from a template.
+    Generate a [`~huggingface_hub.ModelCard`] from a template.
 
     Args:
         base_model (`str` or `None`):
@@ -1323,7 +1323,7 @@ def generate_model_card(
             ArXiv paper ID as `YYMM.NNNNN`.
 
     Returns:
-        `ModelCard`:
+        [`~huggingface_hub.ModelCard`]:
             A ModelCard object.
     """
     card_data = ModelCardData(
@@ -1377,7 +1377,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     Args:
         name (`str`):
             Table name.
-        table (`pd.DataFrame`):
+        table (`pandas.DataFrame`):
             The Pandas DataFrame containing the table to log.
     """
     if not is_comet_available():

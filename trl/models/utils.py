@@ -316,7 +316,7 @@ def unwrap_model_for_generation(
     Args:
         model (`Union[DistributedDataParallel, DeepSpeedEngine]`):
             Model to be unwrapped.
-        accelerator (`~accelerate.Accelerator`):
+        accelerator ([`~accelerate.Accelerator`]):
             Accelerator instance managing the model.
         gather_deepspeed3_params (`bool`, *optional*, defaults to `True`):
             Whether to gather weights for DeepSpeed ZeRO Stage 3 models. If `False`, skips parameter gathering, which

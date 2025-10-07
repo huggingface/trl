@@ -60,7 +60,8 @@ class DatasetConfig:
     Configuration for a dataset.
 
     This class matches the signature of [`~datasets.load_dataset`] and the arguments are used directly in the
-    `datasets.load_dataset` function. You can refer to the `datasets.load_dataset` documentation for more details.
+    [`~datasets.load_dataset`] function. You can refer to the [`~datasets.load_dataset`] documentation for more
+    details.
 
     Parameters:
         path (`str`):
