@@ -1084,12 +1084,12 @@ class SFTTrainer(BaseTrainer):
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
                 per_token_entropy = entropy_from_logits(outputs.logits)
-                  if "attention_mask" in inputs:
+                if "attention_mask" in inputs:
                      attention_mask = inputs["attention_mask"]
                    # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
                     virtual_attention_mask = torch.ones(
-                         attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-                     )
+                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
+                    )
                     attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
                     # Ensure that per_token_entropy and attention_mask have compatible dimensions
                     if per_token_entropy.shape != attention_mask.shape:
@@ -1097,13 +1097,13 @@ class SFTTrainer(BaseTrainer):
                     # For example, by padding per_token_entropy with zeros or truncating attention_mask
                     # Here, we truncate attention_mask to match the sequence length of per_token_entropy
                         attention_mask = attention_mask[:, :per_token_entropy.size(1)]
-                     entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
+                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
                 elif "position_ids" in inputs:
                     entropy = torch.mean(per_token_entropy)
                 else:
                     raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
-                 entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
-             self._metrics[mode]["entropy"].append(entropy)
+                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+            self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
