@@ -273,7 +273,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
     Args:
         pretrained_model ([`~transformers.PreTrainedModel`]):
             The model to wrap. It should be a causal language model such as GPT2. or any model mapped inside the
-            `AutoModelForSeq2SeqLM` class.
+            [`~transformers.AutoModelForSeq2SeqLM`] class.
         kwargs:
             Additional keyword arguments passed along to the [`ValueHead`] class.
     """

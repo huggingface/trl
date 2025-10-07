@@ -283,7 +283,7 @@ class BCOTrainer(BaseTrainer):
 
     Args:
         model ([`~transformers.PreTrainedModel`]):
-            The model to train, preferably an `AutoModelForSequenceClassification`.
+            The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
         ref_model ([`PreTrainedModelWrapper`]):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same

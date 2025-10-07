@@ -76,7 +76,7 @@ class CPOTrainer(BaseTrainer):
 
     Args:
         model ([`~transformers.PreTrainedModel`]):
-            The model to train, preferably an `AutoModelForSequenceClassification`.
+            The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
         args ([`CPOConfig`]):
             The CPO config arguments to use for training.
         data_collator ([`~transformers.DataCollator`]):
