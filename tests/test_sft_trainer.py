@@ -17,7 +17,9 @@ from unittest.mock import MagicMock
 
 import pytest
 import torch
+import transformers
 from datasets import load_dataset
+from packaging.version import parse as parse_version
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers.testing_utils import require_flash_attn, require_liger_kernel
@@ -1368,6 +1370,44 @@ class TestSFTTrainer(TrlTestCase):
             ):
             # fmt: on
                 continue
+            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+
+    @pytest.mark.xfail(
+        parse_version(transformers.__version__) < parse_version("4.57.0"),
+        reason="Mixing text-only and image+text examples is only supported in transformers >= 4.57.0",
+        strict=False,
+    )
+    @require_vision
+    def test_train_vlm_multi_image(self):
+        # Get the dataset
+        dataset = load_dataset(
+            "trl-internal-testing/zen-multi-image", "conversational_prompt_completion", split="train"
+        )
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
     @require_vision

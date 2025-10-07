@@ -1043,3 +1043,23 @@ An example of a conversational vision dataset is the [openbmb/RLAIF-V-Dataset](h
   width="100%"
   height="560px"
 ></iframe>
+
+> [!NOTE]
+> Mixing text-only and vision-language data in the dataset is possible, but it requires `transformers` version 4.57.0 or later. Example:
+>
+> ```python
+> dataset = Dataset.from_dict({
+>     "prompt": [
+>         [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What color is the sky in the image?"}]}],
+>         [{"role": "user", "content": [{"type": "text", "text": "What is the capital of France?"}]}],
+>     ],
+>     "completion": [
+>         [{"role": "assistant", "content": [{"type": "text", "text": "It is blue."}]}],
+>         [{"role": "assistant", "content": [{"type": "text", "text": "Paris."}]}],
+>     ],
+>     "images": [
+>         [PIL.Image.open("path/to/sky_image1.png")],
+>         [],
+>     ],
+> })
+> ```
