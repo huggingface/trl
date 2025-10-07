@@ -118,7 +118,7 @@ class PreTrainedModelWrapper(nn.Module):
         Args:
             pretrained_model_name_or_path (`str` or [`~transformers.PreTrainedModel`]):
                 The path to the pretrained model or its name.
-            *model_args (`list`, *optional*)):
+            *model_args (`list`, *optional*):
                 Additional positional arguments passed along to the underlying model's `from_pretrained` method.
             **kwargs (`dict`, *optional*):
                 Additional keyword arguments passed along to the underlying model's `from_pretrained` method. We also
