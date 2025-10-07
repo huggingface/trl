@@ -1379,6 +1379,9 @@ class RLOOTrainer(BaseTrainer):
             images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
         else:
             images = None
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if images is not None and all(img_list == [] for img_list in images):
+            images = None
 
         prompt_ids_list, completion_ids_list, forward_kwargs = self._generate(prompts, images)
 
