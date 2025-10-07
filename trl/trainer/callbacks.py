@@ -250,7 +250,7 @@ class WinRateCallback(TrainerCallback):
     ```
 
     Args:
-        judge (`BasePairwiseJudge`):
+        judge ([`BasePairwiseJudge`]):
             The judge to use for comparing completions.
         trainer (`Trainer`):
             Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`

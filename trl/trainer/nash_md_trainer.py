@@ -66,7 +66,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             architecture as the model to be optimized.
         reward_funcs ([`~transformers.PreTrainedModel`]):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
-        judge (`BasePairwiseJudge`):
+        judge ([`BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
         args ([`NashMDConfig`]):
             The NashMD config arguments to use for training.
