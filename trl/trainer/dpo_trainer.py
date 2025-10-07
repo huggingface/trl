@@ -203,7 +203,7 @@ class DPOTrainer(BaseTrainer):
             architecture as the model to be optimized.
         args ([`DPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        data_collator (`DataCollator`, *optional*):
+        data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
             Will default to [`DataCollatorForPreference`].
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):

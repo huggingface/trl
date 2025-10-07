@@ -129,7 +129,7 @@ class OnlineDPOTrainer(BaseTrainer):
             Note: Only one of `judge`, or `reward_funcs` should be provided.
         args ([`OnlineDPOConfig`]):
             The online DPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
             (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.

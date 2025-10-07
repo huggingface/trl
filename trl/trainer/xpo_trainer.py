@@ -69,7 +69,7 @@ class XPOTrainer(OnlineDPOTrainer):
             The judge to use for pairwise comparison of model completions.
         args ([`XPOConfig`]):
             The XPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
             (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.
