@@ -513,7 +513,7 @@ class TestSFTTrainer(TrlTestCase):
         dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
 
         # Initialize the trainer, p-tuning doesn't support gradient checkpointing
-        training_args = SFTConfig(output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
         if peft_type == "prompt_tuning":
             peft_config = PromptTuningConfig(
                 task_type=TaskType.CAUSAL_LM,
@@ -529,15 +529,8 @@ class TestSFTTrainer(TrlTestCase):
             peft_config = PromptEncoderConfig(
                 task_type=TaskType.CAUSAL_LM,
                 num_virtual_tokens=4,
+                encoder_hidden_size=model.config.hidden_size,  # This will be overwritten below
             )
-        # For prompt encoder we need to set the encoder_hidden_size
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        if tokenizer.pad_token is None:
-            tokenizer.add_special_tokens({"pad_token": "[PAD]"})
-        model.resize_token_embeddings(len(tokenizer))
-
-        peft_config.encoder_hidden_size = model.config.hidden_size
-
         trainer = SFTTrainer(
             model=model_id,
             args=training_args,
