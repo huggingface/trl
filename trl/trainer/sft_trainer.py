@@ -348,6 +348,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
 
         if "messages" in examples[0]:  # conversational case
             messages = [prepare_multimodal_messages(example["messages"], example["images"]) for example in examples]
@@ -386,6 +389,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "prompt-completion data yet."
             )
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
         if is_conversational(examples[0]):  # conversational case
             for example in examples:
                 example["prompt"] = prepare_multimodal_messages(example["prompt"], images=example["images"])
@@ -939,6 +945,7 @@ class SFTTrainer(BaseTrainer):
                             prompt_ids = processing_class.apply_chat_template(
                                 prompt,
                                 tokenize=True,
+                                add_generation_prompt=True,
                                 tools=example.get("tools"),
                                 **example.get("chat_template_kwargs", {}),
                             )
@@ -976,7 +983,7 @@ class SFTTrainer(BaseTrainer):
                                 "token handling. Verify that the tokenizer is processing text consistently."
                             )
 
-                        # Create a completion mask
+                        # Create completion mask
                         completion_mask = [0] * len(prompt_ids) + [1] * (len(prompt_completion_ids) - len(prompt_ids))
                         output["input_ids"] = prompt_completion_ids
                         output["completion_mask"] = completion_mask
@@ -998,17 +1005,17 @@ class SFTTrainer(BaseTrainer):
                             # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
                             # even for single examples, while for LLMs it returns lists of ints.
                             processed = {k: v[0] if isinstance(v[0], list) else v for k, v in processed.items()}
-                            if "assistant_masks" in processed and 1 not in processed["assistant_masks"]:
-                                raise RuntimeError(
-                                    "You're using `assistant_only_loss=True`, but at least one example has no "
-                                    "assistant tokens. This usually means the tokenizer's chat template doesn't "
-                                    "generate assistant masks — it may be missing the `{% generation %}` keyword. Please "
-                                    "check the template and ensure it's correctly configured to support assistant "
-                                    "masking."
-                                )
                             output = {k: processed[k] for k in ("input_ids", "assistant_masks") if k in processed}
                         else:
                             output = {"input_ids": processing_class(text=example[dataset_text_field])["input_ids"]}
+
+                    if "assistant_masks" in output and 1 not in output["assistant_masks"]:
+                        raise RuntimeError(
+                            "You're using `assistant_only_loss=True`, but at least one example has no assistant "
+                            "tokens. This usually means the tokenizer's chat template doesn't generate assistant "
+                            "masks — it may be missing the `{% generation %}` keyword. Please check the template and "
+                            "ensure it's correctly configured to support assistant masking."
+                        )
                     return output
 
                 dataset = dataset.map(
