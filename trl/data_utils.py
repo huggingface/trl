@@ -297,7 +297,7 @@ def unpair_preference_dataset(
     Unpair a preference dataset.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
         num_proc (`int`, *optional*):
@@ -306,7 +306,7 @@ def unpair_preference_dataset(
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
-        `Dataset`: The unpaired preference dataset.
+        [`~datasets.Dataset`]: The unpaired preference dataset.
 
     Example:
 
@@ -340,7 +340,7 @@ def maybe_unpair_preference_dataset(
     Unpair a preference dataset if it is paired.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
         num_proc (`int`, *optional*):
@@ -349,7 +349,8 @@ def maybe_unpair_preference_dataset(
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The unpaired preference dataset if it was paired, otherwise the original dataset.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The unpaired preference dataset if it was paired, otherwise
+        the original dataset.
 
     Example:
 
@@ -442,7 +443,7 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
 
-    Or, with the `map` method of `datasets.Dataset`:
+    Or, with the `map` method of [`~datasets.Dataset`]:
 
     ```python
     >>> from trl import extract_prompt
@@ -633,7 +634,7 @@ def pack_dataset(
     Pack sequences in a dataset into chunks of size `seq_length`.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
@@ -648,8 +649,8 @@ def pack_dataset(
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The dataset with packed sequences. The number of examples may decrease as sequences
-        are combined.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with packed sequences. The number of examples
+        may decrease as sequences are combined.
 
     Example:
     ```python
@@ -689,7 +690,7 @@ def truncate_dataset(
     Truncate sequences in a dataset to a specified `max_length`.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Dataset to truncate.
         max_length (`int`):
             Maximum sequence length to truncate to.
@@ -697,7 +698,7 @@ def truncate_dataset(
             Additional keyword arguments to pass to the dataset's map method when truncating examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The dataset with truncated sequences.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with truncated sequences.
 
     Example:
     ```python

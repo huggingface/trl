@@ -290,9 +290,9 @@ class BCOTrainer(BaseTrainer):
             architecture as the model to be optimized.
         args ([`BCOConfig`]):
             The arguments to use for training.
-        train_dataset (`datasets.Dataset`):
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs

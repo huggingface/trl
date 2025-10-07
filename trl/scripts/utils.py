@@ -426,7 +426,7 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
             Script arguments containing dataset configuration.
 
     Returns:
-        `DatasetDict`:
+        [`~datasets.DatasetDict`]:
             Combined dataset(s) from the mixture configuration, with optional train/test split if `test_split_size` is
             set.
 
