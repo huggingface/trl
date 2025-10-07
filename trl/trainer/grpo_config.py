@@ -721,3 +721,7 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
+
+        if self.sync_ref_model and self.humanline:
+            raise ValueError("Cannot activate both sync_ref_model & humanline")
+        
