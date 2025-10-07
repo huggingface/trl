@@ -62,9 +62,9 @@ class ValueHead(nn.Module):
 class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     """
     An autoregressive model with a value head in addition to the language model head. This class inherits from
-    `~trl.PreTrainedModelWrapper` and wraps a [`~transformers.PreTrainedModel`] class. The wrapper class supports
-    classic functions such as `from_pretrained`, `push_to_hub` and `generate`. To call a method of the wrapped model,
-    simply manipulate the `pretrained_model` attribute of this class.
+    [`PreTrainedModelWrapper`] and wraps a [`~transformers.PreTrainedModel`] class. The wrapper class supports classic
+    functions such as `from_pretrained`, `push_to_hub` and `generate`. To call a method of the wrapped model, simply
+    manipulate the `pretrained_model` attribute of this class.
 
     Class attributes:
         - **transformers_parent_class** ([`~transformers.PreTrainedModel`]) -- The parent class of the wrapped model.
@@ -266,9 +266,9 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
 class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
     """
     A seq2seq model with a value head in addition to the language model head. This class inherits from
-    `~trl.PreTrainedModelWrapper` and wraps a [`~transformers.PreTrainedModel`] class. The wrapper class supports
-    classic functions such as `from_pretrained` and `push_to_hub` and also provides some additional functionalities
-    such as `generate`.
+    [`PreTrainedModelWrapper`] and wraps a [`~transformers.PreTrainedModel`] class. The wrapper class supports classic
+    functions such as `from_pretrained` and `push_to_hub` and also provides some additional functionalities such as
+    `generate`.
 
     Args:
         pretrained_model ([`~transformers.PreTrainedModel`]):
