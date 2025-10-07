@@ -127,7 +127,7 @@ class OnlineDPOTrainer(BaseTrainer):
             - A list of reward functions: Must all be of compatible types.
 
             Note: Only one of `judge`, or `reward_funcs` should be provided.
-        args (`OnlineDPOConfig`):
+        args ([`OnlineDPOConfig`]):
             The online DPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
             The data collator to use for training. If None is specified, the default data collator

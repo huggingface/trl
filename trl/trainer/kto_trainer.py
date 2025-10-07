@@ -283,7 +283,7 @@ class KTOTrainer(BaseTrainer):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        args (`KTOConfig`):
+        args ([`KTOConfig`]):
             The arguments to use for training.
         train_dataset (`datasets.Dataset`):
             The dataset to use for training.

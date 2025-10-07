@@ -1111,7 +1111,7 @@ def generate(
             The tensor containing the input queries.
         pad_token_id (`int`):
             The token ID representing the pad token.
-        generation_config (`GenerationConfig`):
+        generation_config ([`~transformers.GenerationConfig`]):
             The configuration for the generation process.
 
     Returns:

@@ -672,7 +672,7 @@ class GeometricMixtureWrapper(GenerationMixin):
     Args:
         model ([`~transformers.PreTrainedModel`]): The model to be wrapped.
         ref_model ([`~transformers.PreTrainedModel`]): The reference model.
-        generation_config (`GenerationConfig`): The generation config.
+        generation_config ([`~transformers.GenerationConfig`]): The generation config.
         mixture_coef (`float`, *optional* - default: 0.5): The mixture coefficient.
     """
 

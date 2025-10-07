@@ -422,7 +422,7 @@ def get_dataset(mixture_config: DatasetMixtureConfig) -> DatasetDict:
     Load a mixture of datasets based on the configuration.
 
     Args:
-        mixture_config (`DatasetMixtureConfig`):
+        mixture_config ([`DatasetMixtureConfig`]):
             Script arguments containing dataset configuration.
 
     Returns:

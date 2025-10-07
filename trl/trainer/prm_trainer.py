@@ -51,7 +51,7 @@ class PRMTrainer(BaseTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForTokenClassification`.
-        args (`PRMConfig`):
+        args ([`PRMConfig`]):
             The arguments to use for training.
         data_collator (`transformers.DataCollator`):
             The data collator to use for training. If None is specified, the default data collator

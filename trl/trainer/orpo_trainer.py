@@ -81,7 +81,7 @@ class ORPOTrainer(BaseTrainer):
     Args:
         model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForSequenceClassification`.
-        args (`ORPOConfig`):
+        args ([`ORPOConfig`]):
             The ORPO config arguments to use for training.
         data_collator (`transformers.DataCollator`):
             The data collator to use for training. If None is specified, the default data collator

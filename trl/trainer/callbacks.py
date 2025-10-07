@@ -257,7 +257,7 @@ class WinRateCallback(TrainerCallback):
             column containing the prompts for generating completions. If the `Trainer` has a reference model (via the
             `ref_model` attribute), it will use this reference model for generating the reference completions;
             otherwise, it defaults to using the initial model.
-        generation_config (`GenerationConfig`, *optional*):
+        generation_config ([`~transformers.GenerationConfig`], *optional*):
             The generation config to use for generating completions.
         num_prompts (`int`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in
@@ -438,7 +438,7 @@ class LogCompletionsCallback(TrainerCallback):
         trainer (`Trainer`):
             Trainer to which the callback will be attached. The trainer's evaluation dataset must include a `"prompt"`
             column containing the prompts for generating completions.
-        generation_config (`GenerationConfig`, *optional*):
+        generation_config ([`~transformers.GenerationConfig`], *optional*):
             The generation config to use for generating completions.
         num_prompts (`int`, *optional*):
             The number of prompts to generate completions for. If not provided, defaults to the number of examples in
@@ -568,7 +568,7 @@ class WeaveCallback(TrainerCallback):
             Dictionary mapping scorer names to scorer functions. If `None`, operates in tracing mode (predictions
             only). If provided, operates in evaluation mode (predictions + scores + summary). Scorer functions should
             have signature: `scorer(prompt: str, completion: str) -> Union[float, int]`
-        generation_config (`GenerationConfig`, *optional*):
+        generation_config ([`~transformers.GenerationConfig`], *optional*):
             Generation config to use for generating completions.
         num_prompts (`int` or `None`, *optional*):
             Number of prompts to generate completions for. If not provided, defaults to the number of examples in the

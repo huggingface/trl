@@ -68,7 +68,7 @@ class NashMDTrainer(OnlineDPOTrainer):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.
-        args (`NashMDConfig`):
+        args ([`NashMDConfig`]):
             The NashMD config arguments to use for training.
         data_collator (`transformers.DataCollator`):
             The data collator to use for training. If None is specified, the default data collator
