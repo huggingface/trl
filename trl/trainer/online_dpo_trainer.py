@@ -58,7 +58,7 @@ from ..extras.profiling import profiling_context
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
 from ..models import create_reference_model, prepare_peft_model
-from ..models.utils import prepare_deepspeed, unwrap_model_for_generation
+from ..models.utils import prepare_fsdp, unwrap_model_for_generation
 from .base_trainer import BaseTrainer
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
