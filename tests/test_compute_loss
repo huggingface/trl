@@ -1,0 +1,145 @@
+import unittest
+import torch
+from unittest.mock import MagicMock, patch
+from transformers import Trainer
+from trl.trainer.sft_trainer import SFTTrainer
+
+class TestComputeLoss(unittest.TestCase):
+    def setUp(self):
+        # Set up common test data
+        self.batch_size = 4
+        self.seq_length = 4
+        self.num_virtual_tokens = 4
+        self.logits = torch.randn(self.batch_size, self.seq_length, 10)  # Assuming a vocabulary size of 10
+        self.attention_mask = torch.ones(self.batch_size, self.seq_length)
+        self.position_ids = torch.arange(self.seq_length).unsqueeze(0).repeat(self.batch_size, 1)
+        self.accelerator = MagicMock()
+        self.accelerator.gather_for_metrics = MagicMock(return_value=torch.tensor([1.0]))
+        self.metrics = {"train": {"entropy": [], "num_tokens": []}}
+        self.total_train_tokens = 0
+
+    @patch('trl.trainer.sft_trainer.entropy_from_logits')
+    def test_compute_loss_with_matching_dimensions(self, mock_entropy_from_logits):
+        # Set up mock entropy_from_logits
+        mock_entropy_from_logits.return_value = torch.ones(self.batch_size, self.seq_length)
+
+        # Set up inputs with matching dimensions
+        inputs = {
+            "labels": torch.ones(self.batch_size, self.seq_length),
+            "attention_mask": self.attention_mask
+        }
+        outputs = MagicMock()
+        outputs.logits = self.logits
+
+        # Create an instance of the mock SFTTrainer class
+        sft_trainer = MagicMock(spec=SFTTrainer)
+        sft_trainer.args.use_liger_kernel = False
+        sft_trainer.num_virtual_tokens = self.num_virtual_tokens
+        sft_trainer.accelerator = self.accelerator
+        sft_trainer._metrics = self.metrics
+        sft_trainer._total_train_tokens = self.total_train_tokens
+        sft_trainer.model = MagicMock()
+        sft_trainer.model.training = True
+
+        # Mock the super().compute_loss method
+        with patch.object(Trainer, 'compute_loss', return_value=(torch.tensor(0.0), outputs)):
+            # Call the actual compute_loss method
+            loss, outputs = sft_trainer.compute_loss(MagicMock(), inputs)
+
+            # Assert that the entropy was computed correctly
+            self.assertEqual(len(self.metrics["train"]["entropy"]), 1)
+            self.assertEqual(len(self.metrics["train"]["num_tokens"]), 1)
+
+    @patch('trl.trainer.sft_trainer.entropy_from_logits')
+    def test_compute_loss_with_mismatched_dimensions(self, mock_entropy_from_logits):
+        # Set up mock entropy_from_logits
+        mock_entropy_from_logits.return_value = torch.ones(self.batch_size, self.seq_length)
+
+        # Set up inputs with mismatched dimensions
+        mismatched_attention_mask = torch.ones(self.batch_size, self.seq_length + 2)  # Mismatched sequence length
+        inputs = {
+            "labels": torch.ones(self.batch_size, self.seq_length + 2),
+            "attention_mask": mismatched_attention_mask
+        }
+        outputs = MagicMock()
+        outputs.logits = self.logits
+
+        # Create an instance of the mock SFTTrainer class
+        sft_trainer = MagicMock(spec=SFTTrainer)
+        sft_trainer.args.use_liger_kernel = False
+        sft_trainer.num_virtual_tokens = self.num_virtual_tokens
+        sft_trainer.accelerator = self.accelerator
+        sft_trainer._metrics = self.metrics
+        sft_trainer._total_train_tokens = self.total_train_tokens
+        sft_trainer.model = MagicMock()
+        sft_trainer.model.training = True
+
+        # Mock the super().compute_loss method
+        with patch.object(Trainer, 'compute_loss', return_value=(torch.tensor(0.0), outputs)):
+            # Call the actual compute_loss method
+            loss, outputs = sft_trainer.compute_loss(MagicMock(), inputs)
+
+            # Assert that the entropy was computed correctly despite the mismatch
+            self.assertEqual(len(self.metrics["train"]["entropy"]), 1)
+            self.assertEqual(len(self.metrics["train"]["num_tokens"]), 1)
+
+    @patch('trl.trainer.sft_trainer.entropy_from_logits')
+    def test_compute_loss_with_position_ids(self, mock_entropy_from_logits):
+        # Set up mock entropy_from_logits
+        mock_entropy_from_logits.return_value = torch.ones(self.batch_size, self.seq_length)
+
+        # Set up inputs with position_ids instead of attention_mask
+        inputs = {
+            "labels": torch.ones(self.batch_size, self.seq_length),
+            "position_ids": self.position_ids
+        }
+        outputs = MagicMock()
+        outputs.logits = self.logits
+
+        # Create an instance of the mock SFTTrainer class
+        sft_trainer = MagicMock(spec=SFTTrainer)
+        sft_trainer.args.use_liger_kernel = False
+        sft_trainer.accelerator = self.accelerator
+        sft_trainer._metrics = self.metrics
+        sft_trainer._total_train_tokens = self.total_train_tokens
+        sft_trainer.model = MagicMock()
+        sft_trainer.model.training = True
+
+        # Mock the super().compute_loss method
+        with patch.object(Trainer, 'compute_loss', return_value=(torch.tensor(0.0), outputs)):
+            # Call the actual compute_loss method
+            loss, outputs = sft_trainer.compute_loss(MagicMock(), inputs)
+
+            # Assert that the entropy was computed correctly
+            self.assertEqual(len(self.metrics["train"]["entropy"]), 1)
+            self.assertEqual(len(self.metrics["train"]["num_tokens"]), 1)
+
+    @patch('trl.trainer.sft_trainer.entropy_from_logits')
+    def test_compute_loss_without_attention_mask_or_position_ids(self, mock_entropy_from_logits):
+        # Set up mock entropy_from_logits
+        mock_entropy_from_logits.return_value = torch.ones(self.batch_size, self.seq_length)
+
+        # Set up inputs without attention_mask or position_ids
+        inputs = {
+            "labels": torch.ones(self.batch_size, self.seq_length),
+        }
+        outputs = MagicMock()
+        outputs.logits = self.logits
+
+        # Create an instance of the mock SFTTrainer class
+        sft_trainer = MagicMock(spec=SFTTrainer)
+        sft_trainer.args.use_liger_kernel = False
+        sft_trainer.accelerator = self.accelerator
+        sft_trainer._metrics = self.metrics
+        sft_trainer._total_train_tokens = self.total_train_tokens
+        sft_trainer.model = MagicMock()
+        sft_trainer.model.training = True
+
+        # Mock the super().compute_loss method
+        with patch.object(Trainer, 'compute_loss', return_value=(torch.tensor(0.0), outputs)):
+            # Call the function and expect a ValueError
+            with self.assertRaises(ValueError):
+                sft_trainer.compute_loss(MagicMock(), inputs)
+
+if __name__ == "__main__":
+    unittest.main()
