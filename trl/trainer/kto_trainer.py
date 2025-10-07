@@ -277,7 +277,7 @@ class KTOTrainer(BaseTrainer):
     Initialize KTOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForSequenceClassification`.
         ref_model (`PreTrainedModelWrapper`):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation

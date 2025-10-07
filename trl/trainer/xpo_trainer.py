@@ -57,13 +57,13 @@ class XPOTrainer(OnlineDPOTrainer):
     It is implemented as a subclass of [`OnlineDPOTrainer`].
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForCausalLM`.
         ref_model (`PreTrainedModelWrapper`):
             Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
             and loss. If no reference model is provided, the trainer will create a reference model with the same
             architecture as the model to be optimized.
-        reward_funcs (`transformers.PreTrainedModel`):
+        reward_funcs ([`~transformers.PreTrainedModel`]):
             The reward model to score completions with, preferably an `AutoModelForSequenceClassification`.
         judge (`BasePairwiseJudge`):
             The judge to use for pairwise comparison of model completions.

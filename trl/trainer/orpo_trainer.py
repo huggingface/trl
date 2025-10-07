@@ -79,7 +79,7 @@ class ORPOTrainer(BaseTrainer):
     Initialize ORPOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForSequenceClassification`.
         args (`ORPOConfig`):
             The ORPO config arguments to use for training.

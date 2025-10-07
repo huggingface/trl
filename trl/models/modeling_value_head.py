@@ -60,14 +60,15 @@ class ValueHead(nn.Module):
 
 
 class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
-    r"""
+    """
     An autoregressive model with a value head in addition to the language model head. This class inherits from
-    `~trl.PreTrainedModelWrapper` and wraps a `transformers.PreTrainedModel` class. The wrapper class supports classic
-    functions such as `from_pretrained`, `push_to_hub` and `generate`. To call a method of the wrapped model, simply
-    manipulate the `pretrained_model` attribute of this class.
+    `~trl.PreTrainedModelWrapper` and wraps a [`~transformers.PreTrainedModel`] class. The wrapper class supports
+    classic functions such as `from_pretrained`, `push_to_hub` and `generate`. To call a method of the wrapped model,
+    simply manipulate the `pretrained_model` attribute of this class.
 
     Class attributes:
-        - **transformers_parent_class** (`transformers.PreTrainedModel`) -- The parent class of the wrapped model. This
+        - **transformers_parent_class** ([`~transformers.PreTrainedModel`]) -- The parent class of the wrapped model.
+          This
             should be set to `transformers.AutoModelForCausalLM` for this class.
         - **supported_args** (`tuple`) -- A tuple of strings that are used to identify the arguments that are supported
             by the `ValueHead` class. Currently, the supported args are:
@@ -90,11 +91,11 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
     )
 
     def __init__(self, pretrained_model, **kwargs):
-        r"""
+        """
         Initializes the model.
 
         Args:
-            pretrained_model (`transformers.PreTrainedModel`):
+            pretrained_model ([`~transformers.PreTrainedModel`]):
                 The model to wrap. It should be a causal language model such as GPT2. or any model mapped inside the
                 `AutoModelForCausalLM` class.
             kwargs (`dict`, `optional`):
@@ -263,14 +264,14 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
 
 
 class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
-    r"""
+    """
     A seq2seq model with a value head in addition to the language model head. This class inherits from
-    `~trl.PreTrainedModelWrapper` and wraps a `transformers.PreTrainedModel` class. The wrapper class supports classic
-    functions such as `from_pretrained` and `push_to_hub` and also provides some additional functionalities such as
-    `generate`.
+    `~trl.PreTrainedModelWrapper` and wraps a [`~transformers.PreTrainedModel`] class. The wrapper class supports
+    classic functions such as `from_pretrained` and `push_to_hub` and also provides some additional functionalities
+    such as `generate`.
 
     Args:
-        pretrained_model (`transformers.PreTrainedModel`):
+        pretrained_model ([`~transformers.PreTrainedModel`]):
             The model to wrap. It should be a causal language model such as GPT2. or any model mapped inside the
             `AutoModelForSeq2SeqLM` class.
         kwargs:

@@ -75,7 +75,7 @@ class CPOTrainer(BaseTrainer):
     Initialize CPOTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForSequenceClassification`.
         args (`CPOConfig`):
             The CPO config arguments to use for training.

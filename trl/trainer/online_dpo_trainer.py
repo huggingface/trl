@@ -113,7 +113,7 @@ class OnlineDPOTrainer(BaseTrainer):
               using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        ref_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
+        ref_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `None`):
             The reference model to use for training. If None is specified, the reference model will be created from the
             model.
         judge (`BasePairwiseJudge`):

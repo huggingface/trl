@@ -102,13 +102,13 @@ def setup_chat_format(
     `tokenizer.chat_template` to `None`.
 
     Args:
-        model (`~transformers.PreTrainedModel`): The model to be modified.
+        model ([`~transformers.PreTrainedModel`]): The model to be modified.
         tokenizer (`~transformers.PreTrainedTokenizer`): The tokenizer to be modified.
         format (`Optional[Literal["chatml"]]`): The format to be set. Defaults to "chatml".
         resize_to_multiple_of (`int` or `None`): Number to resize the embedding layer to. Defaults to None.
 
     Returns:
-        model (`~transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The modified model.
         tokenizer (`~transformers.PreTrainedTokenizer`):
             The modified tokenizer.
@@ -178,7 +178,7 @@ def clone_chat_template(
       the embedding dimensions.
 
     Args:
-        model (`PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             Model to update.
         tokenizer (`PreTrainedTokenizer`):
             Tokenizer to update.
@@ -189,7 +189,7 @@ def clone_chat_template(
             new vocabulary size to the nearest multiple of this value.
 
     Returns:
-        model (`PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             Updated model with resized token embeddings and EOS token configured.
         tokenizer (`~transformers.PreTrainedTokenizer`):
             Updated tokenizer with the chat template and special tokens applied.

@@ -49,7 +49,7 @@ class PRMTrainer(BaseTrainer):
     Initialize PRMTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForTokenClassification`.
         args (`PRMConfig`):
             The arguments to use for training.
