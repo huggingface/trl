@@ -13,7 +13,7 @@ This post-training method was contributed by [Younes Belkada](https://huggingfac
 This example demonstrates how to train a language model using the [`SFTTrainer`] from TRL. We train a [Qwen 3 0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) model on the [Capybara dataset](https://huggingface.co/datasets/trl-lib/Capybara), a compact, diverse multi-turn dataset to benchmark reasoning and generalization.
 
 ```python
-from trl import SFTConfig, SFTTrainer
+from trl import SFTTrainer
 from datasets import load_dataset
 
 trainer = SFTTrainer(
@@ -23,7 +23,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train/loss,train/mean_token_accuracy,train/num_tokens&sidebar=hidden" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
+<iframe src="https://trl-lib-trackio.hf.space/?project=trl-documentation&metrics=train*&runs=sft_qwen3-0.6B_capybara" style="width: 100%; min-width: 300px; max-width: 800px;" height="830" frameBorder="0"></iframe>
 
 ## Expected dataset type and format
 
@@ -105,6 +105,10 @@ $$
   
 where  \\( y_t \\) is the target token at timestep  \\( t \\), and the model is trained to predict the next token given the previous ones. In practice, padding tokens are masked out during loss computation.
 
+> [!TIP]
+> 
+> [On the Generalization of SFT: A Reinforcement Learning Perspective with Reward Rectification](https://huggingface.co/papers/2508.05629) proposes an alternative loss function, called **Dynamic Fine-Tuning (DFT)**, which aims to improve generalization by rectifying the reward signal. This method can be enabled by setting `loss_type="dft"` in the [`SFTConfig`]. For more details, see [Paper Index - Dynamic Fine-Tuning](paper_index#on-the-generalization-of-sft-a-reinforcement-learning-perspective-with-reward-rectification).
+
 ### Label shifting and masking
 
 During training, the loss is computed using a **one-token shift**: the model is trained to predict each token in the sequence based on all previous tokens. Specifically, the input sequence is shifted right by one position to form the target labels.
@@ -112,10 +116,13 @@ Padding tokens (if present) are ignored in the loss computation by applying an i
 
 ## Logged metrics
 
+While training and evaluating we record the following reward metrics:
+
 * `global_step`: The total number of optimizer steps taken so far.
 * `epoch`: The current epoch number, based on dataset iteration.
 * `num_tokens`: The total number of tokens processed so far.
 * `loss`: The average cross-entropy loss computed over non-masked tokens in the current logging interval.
+* `entropy`: The average entropy of the model's predicted token distribution over non-masked tokens.
 * `mean_token_accuracy`: The proportion of non-masked tokens for which the model’s top-1 prediction matches the ground truth token.
 * `learning_rate`: The current learning rate, which may change dynamically if a scheduler is used.
 * `grad_norm`: The L2 norm of the gradients, computed before gradient clipping.
@@ -127,16 +134,16 @@ Padding tokens (if present) are ignored in the loss computation by applying an i
 You can directly pass the kwargs of the [`~transformers.AutoModelForCausalLM.from_pretrained()`] method to the [`SFTConfig`]. For example, if you want to load a model in a different precision, analogous to
 
 ```python
-model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", torch_dtype=torch.bfloat16)
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", dtype=torch.bfloat16)
 ```
 
-you can do so by passing the `model_init_kwargs={"torch_dtype": torch.bfloat16}` argument to the [`SFTConfig`].
+you can do so by passing the `model_init_kwargs={"dtype": torch.bfloat16}` argument to the [`SFTConfig`].
 
 ```python
 from trl import SFTConfig
 
 training_args = SFTConfig(
-    model_init_kwargs={"torch_dtype": torch.bfloat16},
+    model_init_kwargs={"dtype": torch.bfloat16},
 )
 ```
 
@@ -171,9 +178,8 @@ To train on completion only, use a [prompt-completion](dataset_formats#prompt-co
 
 ![train_on_completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/train_on_completion.png)
 
-<Tip>
-Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
-</Tip>
+> [!TIP]
+> Training on completion only is compatible with training on assistant messages only. In this case, use a [conversational](dataset_formats#conversational) [prompt-completion](dataset_formats#prompt-completion) dataset and set `assistant_only_loss=True` in the [`SFTConfig`].
 
 ### Train adapters with PEFT
 
@@ -195,7 +201,7 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-You can also continue training your [`peft.PeftModel`]. For that, first load a `PeftModel` outside [`SFTTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
+You can also continue training your [`~peft.PeftModel`]. For that, first load a `PeftModel` outside [`SFTTrainer`] and pass it directly to the trainer without the `peft_config` argument being passed.
 
 ```python
 from datasets import load_dataset
@@ -213,15 +219,12 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<Tip>
-
-When training adapters, you typically use a higher learning rate (≈1e‑4) since only new parameters are being learned.
-
-```python
-SFTConfig(learning_rate=1e-4, ...)
-```
-
-</Tip>
+> [!TIP]
+> When training adapters, you typically use a higher learning rate (≈1e‑4) since only new parameters are being learned.
+>
+> ```python
+> SFTConfig(learning_rate=1e-4, ...)
+> ```
 
 ### Train with Liger Kernel
 
@@ -304,17 +307,14 @@ trainer = SFTTrainer(
 trainer.train()
 ```
 
-<Tip>
-
-For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`SFTConfig`]. This allows the model to process the full sequence length without truncating image tokens.
-
-```python
-SFTConfig(max_length=None, ...)
-```
-
-Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
-
-</Tip>
+> [!TIP]
+> For VLMs, truncating may remove image tokens, leading to errors during training. To avoid this, set `max_length=None` in the [`SFTConfig`]. This allows the model to process the full sequence length without truncating image tokens.
+>
+> ```python
+> SFTConfig(max_length=None, ...)
+> ```
+>
+> Only use `max_length` when you've verified that truncation won't remove image tokens for the entire dataset.
 
 ## SFTTrainer
 

@@ -23,3 +23,7 @@
 ## BEMACallback
 
 [[autodoc]] BEMACallback
+
+## WeaveCallback
+
+[[autodoc]] WeaveCallback

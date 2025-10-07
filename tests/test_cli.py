@@ -15,18 +15,18 @@
 
 import os
 import sys
-import unittest
 from io import StringIO
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from .testing_utils import TrlTestCase
 
 
-@unittest.skipIf(
+@pytest.mark.skipif(
     sys.version_info < (3, 10),
-    "Transformers' generation codebase uses a Python >3.10 syntax (`str | None`), which seems to cause the CLI tests "
+    reason="Transformers' generation codebase uses a Python >3.10 syntax (`str | None`), which seems to cause the CLI tests "
     "to fail on Python <3.10.",  # let's say it's a known issue, but not expected to be fixed, because too niche
 )
 class TestCLI(TrlTestCase):
@@ -51,7 +51,7 @@ class TestCLI(TrlTestCase):
         command = "trl env"
         with patch("sys.argv", command.split(" ")):
             main()
-        self.assertIn("TRL version: ", mock_stdout.getvalue().strip())
+        assert "TRL version: " in mock_stdout.getvalue().strip()
 
     def test_grpo(self):
         from trl.cli import main
@@ -64,6 +64,20 @@ class TestCLI(TrlTestCase):
         from trl.cli import main
 
         command = f"trl kto --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_unpaired_preference --report_to none"
+        with patch("sys.argv", command.split(" ")):
+            main()
+
+    def test_reward(self):
+        from trl.cli import main
+
+        command = f"trl reward --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_implicit_prompt_preference --report_to none"
+        with patch("sys.argv", command.split(" ")):
+            main()
+
+    def test_rloo(self):
+        from trl.cli import main
+
+        command = f"trl rloo --output_dir {self.tmp_dir} --model_name_or_path trl-internal-testing/tiny-Qwen2ForCausalLM-2.5 --reward_model_name_or_path trl-internal-testing/tiny-Qwen2ForSequenceClassification-2.5 --dataset_name trl-internal-testing/zen --dataset_config standard_prompt_only --num_generations 2 --max_completion_length 32 --report_to none"
         with patch("sys.argv", command.split(" ")):
             main()
 
@@ -98,8 +112,4 @@ class TestCLI(TrlTestCase):
             main()
 
         # Verify that output directory was created
-        self.assertTrue(os.path.exists(output_dir))
-
-
-if __name__ == "__main__":
-    unittest.main()
+        assert os.path.exists(output_dir)

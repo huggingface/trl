@@ -13,10 +13,8 @@
 # limitations under the License.
 
 import inspect
-import os
 import random
 import textwrap
-import warnings
 from collections import defaultdict
 from contextlib import nullcontext
 from pathlib import Path
@@ -27,7 +25,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from datasets import Dataset
 from torch import autocast
 from torch.utils.data import DataLoader
@@ -39,7 +37,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
     is_comet_available,
     is_wandb_available,
 )
@@ -48,14 +45,13 @@ from transformers.trainer_utils import EvalLoopOutput
 from transformers.utils import is_peft_available, is_torch_fx_proxy
 
 from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
+from .base_trainer import BaseTrainer
 from .cpo_config import CPOConfig
 from .utils import (
     DPODataCollatorWithPadding,
     add_bos_token_if_needed,
     add_eos_token_if_needed,
     disable_dropout_in_model,
-    generate_model_card,
-    get_comet_experiment_url,
     log_table_to_comet_experiment,
     pad_to_length,
     peft_module_casting_to_bf16,
@@ -71,7 +67,10 @@ if is_wandb_available():
     import wandb
 
 
-class CPOTrainer(Trainer):
+logger = logging.get_logger(__name__)
+
+
+class CPOTrainer(BaseTrainer):
     r"""
     Initialize CPOTrainer.
 
@@ -88,7 +87,7 @@ class CPOTrainer(Trainer):
             The dataset to use for training.
         eval_dataset (`datasets.Dataset`):
             The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
@@ -110,6 +109,21 @@ class CPOTrainer(Trainer):
     """
 
     _tag_names = ["trl", "cpo"]
+    _name = "CPO"
+    _paper = {
+        "title": "Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",
+        "id": "2401.08417",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{xu2024contrastive,
+                title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
+                author       = {Haoran Xu and Amr Sharaf and Yunmo Chen and Weiting Tan and Lingfeng Shen and Benjamin Van Durme and Kenton Murray and Young Jin Kim},
+                year         = 2024,
+                booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
+                publisher    = {OpenReview.net},
+                url          = {https://openreview.net/forum?id=51iwkioZpn}
+            }"""),
+    }
 
     def __init__(
         self,
@@ -134,16 +148,16 @@ class CPOTrainer(Trainer):
             raise ValueError("You passed model_kwargs to the CPOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if torch_dtype is not None:
+            dtype = model_init_kwargs.get("dtype")
+            if dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(torch_dtype, str) and torch_dtype != "auto":
-                    torch_dtype = getattr(torch, torch_dtype)
-                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
+                if isinstance(dtype, str) and dtype != "auto":
+                    dtype = getattr(torch, dtype)
+                if dtype != "auto" and not isinstance(dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `torch_dtype` passed to the CPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
+                        f"Invalid `dtype` passed to the CPOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
                     )
-                model_init_kwargs["torch_dtype"] = torch_dtype
+                model_init_kwargs["dtype"] = dtype
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -226,19 +240,17 @@ class CPOTrainer(Trainer):
         if processing_class is None:
             raise ValueError("processing_class must be specified to tokenize a CPO dataset.")
         if args.max_length is None:
-            warnings.warn(
+            logger.warning(
                 "`max_length` is not set in the CPOConfig's init"
                 " it will default to `512` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_length = 512
         else:
             max_length = args.max_length
         if args.max_prompt_length is None:
-            warnings.warn(
+            logger.warning(
                 "`max_prompt_length` is not set in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_prompt_length = 128
         else:
@@ -250,10 +262,9 @@ class CPOTrainer(Trainer):
             )
 
         if args.max_completion_length is None and self.is_encoder_decoder:
-            warnings.warn(
+            logger.warning(
                 "When using an encoder decoder architecture, you should set `max_completion_length` in the CPOConfig's init"
                 " it will default to `128` by default, but you should do it yourself in the future.",
-                UserWarning,
             )
             max_completion_length = 128
         else:
@@ -269,10 +280,9 @@ class CPOTrainer(Trainer):
             if args.remove_unused_columns:
                 args.remove_unused_columns = False
                 # warn users
-                warnings.warn(
+                logger.warning(
                     "When using DPODataCollatorWithPadding, you should set `remove_unused_columns=False` in your TrainingArguments"
                     " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
                 )
 
             self.use_dpo_data_collator = True
@@ -293,10 +303,9 @@ class CPOTrainer(Trainer):
         self.processing_class = processing_class
 
         if args.loss_type in ["hinge", "ipo"] and args.label_smoothing > 0:
-            warnings.warn(
+            logger.warning(
                 f"You are using the {args.loss_type} loss type that does not support label smoothing. The "
                 "`label_smoothing` parameter will be ignored. Set `label_smoothing` to `0.0` to remove this warning.",
-                UserWarning,
             )
         if args.loss_type == "kto_pair":
             raise ValueError("Support for kto_pair has been removed in CPOTrainer. Please use KTOTrainer.")
@@ -308,16 +317,18 @@ class CPOTrainer(Trainer):
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
-            warnings.warn(
+            logger.warning(
                 "You set `output_router_logits` to `True` in the model config, but `router_aux_loss_coef` is set to "
                 "`0.0`, meaning the auxiliary loss will not be used. Either set `router_aux_loss_coef` to a value "
                 "greater than `0.0`, or set `output_router_logits` to `False` if you don't want to use the auxiliary "
                 "loss.",
-                UserWarning,
             )
 
         if args.loss_type == "simpo":
             self.simpo_gamma = args.simpo_gamma
+
+        # AlphaPO parameter for reward shaping
+        self.alpha = args.alpha
 
         self._stored_metrics = defaultdict(lambda: defaultdict(list))
 
@@ -476,7 +487,7 @@ class CPOTrainer(Trainer):
             # Make sure prompts only have one different token at most an
             # and length only differs by 1 at most
             num_diff_tokens = sum(
-                [a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])]
+                a != b for a, b in zip(chosen_tokens["prompt_input_ids"], rejected_tokens["prompt_input_ids"])
             )
             num_diff_len = abs(chosen_prompt_len_input_ids - rejected_prompt_len_input_ids)
             if num_diff_tokens > 1 or num_diff_len > 1:
@@ -659,7 +670,20 @@ class CPOTrainer(Trainer):
             loss for each example in the batch. The chosen_rewards and rejected_rewards tensors contain the rewards for
             the chosen and rejected responses, respectively.
         """
-        logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
+        # Apply AlphaPO reward transformation if alpha != 0
+        if self.alpha != 0.0:
+            # Compute probabilities
+            chosen_probs = torch.exp(policy_chosen_logps)
+            rejected_probs = torch.exp(policy_rejected_logps)
+
+            # Apply AlphaPO transformation: r = (1 - p^(-alpha)) / alpha
+            policy_chosen_rewards = (1 - chosen_probs.pow(-self.alpha)) / self.alpha
+            policy_rejected_rewards = (1 - rejected_probs.pow(-self.alpha)) / self.alpha
+
+            logits = (policy_chosen_rewards - policy_rejected_rewards).to(self.accelerator.device)
+        else:
+            # Standard log probability rewards when alpha = 0
+            logits = (policy_chosen_logps - policy_rejected_logps).to(self.accelerator.device)
 
         # The beta is a temperature parameter for the CPO loss, typically something in the range of 0.1 to 0.5.
         # We ignore the reference model as beta -> 0. The label_smoothing parameter encodes our uncertainty about the labels and
@@ -689,8 +713,15 @@ class CPOTrainer(Trainer):
                 f"Unknown loss type: {self.loss_type}. Should be one of ['sigmoid', 'hinge', 'ipo', 'simpo']"
             )
 
-        chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
-        rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
+        # Calculate rewards for logging
+        if self.alpha != 0.0:
+            # When using AlphaPO transformation, use the transformed rewards
+            chosen_rewards = self.beta * policy_chosen_rewards.to(self.accelerator.device).detach()
+            rejected_rewards = self.beta * policy_rejected_rewards.to(self.accelerator.device).detach()
+        else:
+            # Standard log probability rewards
+            chosen_rewards = self.beta * (policy_chosen_logps.to(self.accelerator.device)).detach()
+            rejected_rewards = self.beta * (policy_rejected_logps.to(self.accelerator.device)).detach()
 
         return losses, chosen_rewards, rejected_rewards
 
@@ -1008,7 +1039,7 @@ class CPOTrainer(Trainer):
         Args:
             logs (`dict[str, float]`):
                 The values to log.
-            start_time (`float` or `None`, *optional*, defaults to `None`):
+            start_time (`float`, *optional*):
                 Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
@@ -1050,67 +1081,3 @@ class CPOTrainer(Trainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @inproceedings{xu2024contrastive,
-            title        = {{Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation}},
-            author       = {Haoran Xu and Amr Sharaf and Yunmo Chen and Weiting Tan and Lingfeng Shen and Benjamin Van Durme and Kenton Murray and Young Jin Kim},
-            year         = 2024,
-            booktitle    = {Forty-first International Conference on Machine Learning, {ICML} 2024, Vienna, Austria, July 21-27, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=51iwkioZpn}
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="CPO",
-            trainer_citation=citation,
-            paper_title="Contrastive Preference Optimization: Pushing the Boundaries of LLM Performance in Machine Translation",
-            paper_id="2401.08417",
-        )
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

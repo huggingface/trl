@@ -14,8 +14,7 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
-#     "vllm",
+#     "trl[vllm]",
 # ]
 # ///
 
@@ -63,7 +62,7 @@ class ScriptArguments:
         judge_model (`str`, *optional*, defaults to `"meta-llama/Meta-Llama-3-70B-Instruct"`):
             Model name or path to the model to use as a judge. E.g., 'gpt-3.5-turbo-0125' or
             'meta-llama/Meta-Llama-3-70B-Instruct'.
-        num_examples (`int` or `None`, *optional*, defaults to `None`):
+        num_examples (`int`, *optional*):
             Number of examples to evaluate.
     """
 
@@ -78,32 +77,33 @@ class ScriptArguments:
     num_examples: Optional[int] = field(default=None, metadata={"help": "Number of examples to evaluate."})
 
 
-# Parse the arguments
-parser = HfArgumentParser(ScriptArguments)
-script_args = parser.parse_args_into_dataclasses()[0]
+if __name__ == "__main__":
+    # Parse the arguments
+    parser = HfArgumentParser(ScriptArguments)
+    script_args = parser.parse_args_into_dataclasses()[0]
 
-# Load the dataset
-dataset = load_dataset("trl-lib/tldr", split="validation")
-if script_args.num_examples is not None:
-    dataset = dataset.select(range(script_args.num_examples))
+    # Load the dataset
+    dataset = load_dataset("trl-lib/tldr", split="validation")
+    if script_args.num_examples is not None:
+        dataset = dataset.select(range(script_args.num_examples))
 
-# Extract the prompts and reference completions
-prompts = dataset["prompt"]
-reference_completions = dataset["completion"]
+    # Extract the prompts and reference completions
+    prompts = dataset["prompt"]
+    reference_completions = dataset["completion"]
 
-# Generate the model completions
-sampling_params = SamplingParams(temperature=0.0, top_p=0.95, max_tokens=200)  # very generous max token length
-llm = LLM(model=script_args.model_name_or_path, tensor_parallel_size=1)
-outputs = llm.generate(prompts, sampling_params)
-model_completions = [output.outputs[0].text.strip() for output in outputs]
+    # Generate the model completions
+    sampling_params = SamplingParams(temperature=0.0, top_p=0.95, max_tokens=200)  # very generous max token length
+    llm = LLM(model=script_args.model_name_or_path, tensor_parallel_size=1)
+    outputs = llm.generate(prompts, sampling_params)
+    model_completions = [output.outputs[0].text.strip() for output in outputs]
 
-# Judge the outputs
-if "gpt" in script_args.judge_model:
-    judge = OpenAIPairwiseJudge(script_args.judge_model)
-else:
-    judge = HfPairwiseJudge(script_args.judge_model)
+    # Judge the outputs
+    if "gpt" in script_args.judge_model:
+        judge = OpenAIPairwiseJudge(script_args.judge_model)
+    else:
+        judge = HfPairwiseJudge(script_args.judge_model)
 
-completions = [[c0, c1] for c0, c1 in zip(reference_completions, model_completions)]
-best_idxs = judge.judge(prompts, completions)
-model_win_rate = best_idxs.count(1) / len(best_idxs)
-print(f"Model win rate: {model_win_rate * 100:.2f}%")
+    completions = [[c0, c1] for c0, c1 in zip(reference_completions, model_completions)]
+    best_idxs = judge.judge(prompts, completions)
+    model_win_rate = best_idxs.count(1) / len(best_idxs)
+    print(f"Model win rate: {model_win_rate * 100:.2f}%")

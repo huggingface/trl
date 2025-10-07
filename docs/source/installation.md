@@ -7,7 +7,7 @@ Install the library with pip or [uv](https://docs.astral.sh/uv/):
 <hfoptions id="install">
 <hfoption id="uv">
 
-uv is a fast Rust-based Python package and project manager. Refer to [Installation](https://docs.astral.sh/uv/getting-started/installation/) for installation instructions), .
+uv is a fast Rust-based Python package and project manager. Refer to [Installation](https://docs.astral.sh/uv/getting-started/installation/) for installation instructions).
 
 ```bash
 uv pip install trl

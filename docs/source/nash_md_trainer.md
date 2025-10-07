@@ -63,7 +63,7 @@ The best programming language depends on personal preference, the complexity of 
 
 ## Expected dataset type
 
-Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset format. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
+Nash-MD requires a [prompt-only dataset](dataset_formats#prompt-only). The [`NashMDTrainer`] supports both [conversational](dataset_formats#conversational) and [standard](dataset_formats#standard) dataset formats. When provided with a conversational dataset, the trainer will automatically apply the chat template to the dataset.
 
 ## Usage tips
 
@@ -81,15 +81,12 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
   trainer = NashMDTrainer(
       ...
 -     judge=judge,
-+     reward_model=reward_model,
++     reward_funcs=reward_model,
   )
 ```
 
-<Tip warning={true}>
-
-Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
-
-</Tip>
+> [!WARNING]
+> Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
 
 ### Encourage EOS token generation
 
@@ -132,7 +129,7 @@ python examples/scripts/nash_md.py \
 
 ## Logged metrics
 
-The logged metrics are as follows:
+While training and evaluating, we record the following reward metrics:
 
 * `loss/kl`: The mean KL divergence between the model and reference data.
 * `objective/entropy`: The mean entropy of the model and reference data.

@@ -40,7 +40,7 @@ class DPOConfig(TrainingArguments):
 
         > Parameters that control the data preprocessing
 
-        dataset_num_proc (`int` or `None`, *optional*, defaults to `None`):
+        dataset_num_proc (`int`, *optional*):
             Number of processes to use for processing the dataset.
         pad_token (`int` or `None`, *optional*, defaults to `None`):
             Token used for padding. If `None`, it defaults to `processing_class.pad_token`, or if that is also `None`,
@@ -162,6 +162,12 @@ class DPOConfig(TrainingArguments):
     activation_offloading: bool = field(
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
+    )
+
+    # Deprecated arguments
+    padding_value: Optional[int] = field(
+        default=None,
+        metadata={"help": "Deprecated, use `pad_token` (str) instead."},
     )
 
     def __post_init__(self):

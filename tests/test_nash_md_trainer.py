@@ -16,12 +16,11 @@
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import NashMDConfig, NashMDTrainer
 
-from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender
+from .testing_utils import RandomPairwiseJudge, TrlTestCase, require_llm_blender, require_peft
 
 
 if is_peft_available():
@@ -29,8 +28,7 @@ if is_peft_available():
 
 
 class TestNashMDTrainer(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.ref_model = AutoModelForCausalLM.from_pretrained(self.model_id)
@@ -55,7 +53,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer = NashMDTrainer(
             model=self.model,
             ref_model=self.ref_model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -65,7 +63,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft(self):
@@ -82,7 +80,7 @@ class TestNashMDTrainer(TrlTestCase):
 
         trainer = NashMDTrainer(
             model=self.model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -93,7 +91,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft_and_ref_model(self):
@@ -111,7 +109,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer = NashMDTrainer(
             model=self.model,
             ref_model=self.ref_model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -122,7 +120,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_with_peft_model_and_peft_config(self):
@@ -142,7 +140,7 @@ class TestNashMDTrainer(TrlTestCase):
 
         trainer = NashMDTrainer(
             model=model,
-            reward_model=self.reward_model,
+            reward_funcs=self.reward_model,
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
@@ -153,7 +151,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @require_peft
     def test_training_pre_pefted_model_implicit_ref_with_reward_model(self):
@@ -175,7 +173,7 @@ class TestNashMDTrainer(TrlTestCase):
         trainer = NashMDTrainer(
             model=peft_model_instance,  # Pass the already PEFT model
             ref_model=None,  # Implicit reference from peft_model_instance's base
-            reward_model=self.reward_model,  # To trigger GeometricMixtureWrapper path
+            reward_funcs=self.reward_model,  # To trigger GeometricMixtureWrapper path
             args=training_args,
             processing_class=self.tokenizer,
             train_dataset=dummy_dataset,
@@ -184,7 +182,7 @@ class TestNashMDTrainer(TrlTestCase):
 
         trainer.train()
 
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]
 
     @parameterized.expand([("standard_prompt_only",), ("conversational_prompt_only",)])
     @require_llm_blender
@@ -215,4 +213,4 @@ class TestNashMDTrainer(TrlTestCase):
         trainer.train()
 
         # Check if training loss is available
-        self.assertIn("train_loss", trainer.state.log_history[-1])
+        assert "train_loss" in trainer.state.log_history[-1]

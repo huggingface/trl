@@ -17,17 +17,15 @@ import torch
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
-from transformers.testing_utils import require_peft
 
 from trl import CPOConfig, CPOTrainer
 from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_peft
 
 
-class CPOTrainerTester(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+class TestCPOTrainer(TrlTestCase):
+    def setup_method(self):
         self.model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         self.model = AutoModelForCausalLM.from_pretrained(self.model_id)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -87,13 +85,13 @@ class CPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.equal(param, new_param))
+                assert not torch.equal(param, new_param)
 
     @parameterized.expand(
         [
@@ -143,20 +141,16 @@ class CPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.equal(param, new_param))
+                    assert not torch.equal(param, new_param)
 
     def test_compute_metrics(self):
-        model = AutoModelForCausalLM.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen2ForCausalLM-2.5")
-        tokenizer.pad_token = tokenizer.eos_token
-
         dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
 
         def dummy_compute_metrics(*args, **kwargs):
@@ -174,9 +168,9 @@ class CPOTrainerTester(TrlTestCase):
         )
 
         trainer = CPOTrainer(
-            model=model,
+            model=self.model,
             args=training_args,
-            processing_class=tokenizer,
+            processing_class=self.tokenizer,
             train_dataset=dummy_dataset["train"],
             eval_dataset=dummy_dataset["test"],
             compute_metrics=dummy_compute_metrics,
@@ -184,4 +178,41 @@ class CPOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
+        assert trainer.state.log_history[-2]["eval_test"] == 0.0
+
+    def test_alphapo_trainer(self):
+        training_args = CPOConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            max_steps=3,
+            remove_unused_columns=False,
+            gradient_accumulation_steps=1,
+            learning_rate=9e-1,
+            eval_strategy="steps",
+            beta=0.1,
+            loss_type="alphapo",
+            alpha=0.5,
+            simpo_gamma=0.5,
+            report_to="none",
+        )
+
+        dummy_dataset = load_dataset("trl-internal-testing/zen", "standard_preference")
+
+        trainer = CPOTrainer(
+            model=self.model,
+            args=training_args,
+            processing_class=self.tokenizer,
+            train_dataset=dummy_dataset["train"],
+            eval_dataset=dummy_dataset["test"],
+        )
+
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        trainer.train()
+
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if param.sum() != 0:
+                assert not torch.equal(param, new_param)

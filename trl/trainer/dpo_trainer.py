@@ -353,7 +353,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         return output
 
 
-class DPOTrainer(Trainer):
+class DPOTrainer(BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method.
 
@@ -393,8 +393,7 @@ class DPOTrainer(Trainer):
             - [Standard](dataset_formats#standard): Each sample contains plain text.
             - [Conversational](dataset_formats#conversational): Each sample contains structured messages (e.g., role
               and content).
-        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset,
-        IterableDataset]]`):
+        eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
@@ -406,12 +405,10 @@ class DPOTrainer(Trainer):
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None,
-        None)`):
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
             A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
             model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*, defaults to
-        `None`):
+        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
 
@@ -424,11 +421,26 @@ class DPOTrainer(Trainer):
             by this function will be reflected in the predictions received by `compute_metrics`.
 
             Note that the labels (second parameter) will be `None` if the dataset does not have them.
-        peft_config ([`~peft.PeftConfig`], *optional*, defaults to `None`):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration used to wrap the model. If `None`, the model is not wrapped.
     """
 
     _tag_names = ["trl", "dpo"]
+    _name = "DPO"
+    _paper = {
+        "title": "Direct Preference Optimization: Your Language Model is Secretly a Reward Model",
+        "id": "2305.18290",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{rafailov2023direct,
+                title        = {{Direct Preference Optimization: Your Language Model is Secretly a Reward Model}},
+                author       = {Rafael Rafailov and Archit Sharma and Eric Mitchell and Christopher D. Manning and Stefano Ermon and Chelsea Finn},
+                year         = 2023,
+                booktitle    = {Advances in Neural Information Processing Systems 36: Annual Conference on Neural Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 - 16, 2023},
+                url          = {http://papers.nips.cc/paper_files/paper/2023/hash/a85b405ed65c6477a4fe8302b5e06ce7-Abstract-Conference.html},
+                editor       = {Alice Oh and Tristan Naumann and Amir Globerson and Kate Saenko and Moritz Hardt and Sergey Levine},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -534,7 +546,7 @@ class DPOTrainer(Trainer):
                     "attention mechanism can handle flattened sequences."
                 )
             if args.per_device_train_batch_size == 1:
-                warnings.warn(
+                logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
                     "of 1 anihilate the benefits of padding-free training. Please consider increasing the batch size "
                     "to at least 2."

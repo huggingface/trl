@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import random
 import textwrap
 from typing import Any, Callable, Optional, Union
@@ -30,11 +29,10 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
-from transformers.utils import is_peft_available
+from transformers.utils import is_liger_kernel_available, is_peft_available
 
 from ..models import prepare_deepspeed
 from ..models.utils import unwrap_model_for_generation
@@ -44,20 +42,72 @@ from .utils import (
     DataCollatorForChatML,
     disable_dropout_in_model,
     empty_cache,
-    generate_model_card,
-    get_comet_experiment_url,
 )
 
 
 if is_peft_available():
     from peft import PeftConfig
 
-if is_wandb_available():
-    import wandb
+if is_liger_kernel_available():
+    from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
 
 
 class GKDTrainer(SFTTrainer):
+    """Trainer for Generalized Knowledge Distillation (GKD) of language models.
+
+    For details on GKD, see the paper: [On-Policy Distillation of Language Models: Learning from Self-Generated
+    Mistakes](https://huggingface.co/papers/2306.13649).
+
+    Args:
+        model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
+            Model to be trained, or the string identifier of the model to be instantiated from a pretrained model.
+        teacher_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
+            Teacher model for knowledge distillation, or the string identifier of the model to be instantiated from a
+            pretrained model.
+        args ([`GKDConfig`], *optional*):
+            Training arguments.
+        data_collator ([`~transformers.DataCollator`], *optional*):
+            Data collator to batch samples from the dataset. It defaults to a [`DataCollatorForChatML`] using the
+            `processing_class`.
+        train_dataset ([`~datasets.Dataset`], *optional*):
+            Dataset for training.
+        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
+            Dataset for evaluation.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
+           Class to process the data.
+        compute_metrics (`Callable`, *optional*):
+            Function to compute metrics at evaluation. Must take in an [`~transformers.EvalPrediction`] and return a
+            dictionary string to float.
+        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
+            Callbacks to use during training.
+        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
+            Tuple containing the optimizer and the learning rate scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable`, *optional*):
+            Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
+            return the logits to be used for metrics computation.
+        peft_config ([`~peft.PeftConfig`], *optional*):
+            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
+            wrapped with the specified PEFT adapter.
+        formatting_func (`Callable`, *optional*):
+            Function to format the dataset. Must take in an example and return an example.
+    """
+
     _tag_names = ["trl", "gkd"]
+    _name = "GKD"
+    _paper = {
+        "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
+        "id": "2306.13649",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{agarwal2024on-policy,
+                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
+                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
+                year         = 2024,
+                booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+                publisher    = {OpenReview.net},
+                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -77,9 +127,29 @@ class GKDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
     ):
-        # add remove_unused_columns=False to the dataclass args
+        # Ensure Trainer does not drop non-signature columns used by the collator (e.g., "prompts")
         args.remove_unused_columns = False
-        data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
+        # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
+        if data_collator is None:
+            data_collator = DataCollatorForChatML(tokenizer=processing_class, max_length=args.max_length)
+
+        # Ensure SFTTrainer does not pre-process the dataset when using a ChatML collator,
+        # so that raw conversational fields (e.g., "messages") remain available to the collator.
+        if args.dataset_kwargs is None:
+            args.dataset_kwargs = {"skip_prepare_dataset": True}
+        else:
+            args.dataset_kwargs["skip_prepare_dataset"] = True
+
+        # Liger fused GKD loss (JSD)
+        self.use_liger_gkd_loss = False
+        if args.use_liger_kernel:
+            self.liger_jsd_loss = LigerFusedLinearJSDLoss(
+                beta=args.beta,
+                ignore_index=-100,
+                temperature=args.temperature,
+                compiled=False,
+            )
+            self.use_liger_gkd_loss = True
 
         super().__init__(
             model,
@@ -104,10 +174,10 @@ class GKDTrainer(SFTTrainer):
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["torch_dtype"] = (
-                teacher_model_init_kwargs["torch_dtype"]
-                if teacher_model_init_kwargs["torch_dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["torch_dtype"])
+            teacher_model_init_kwargs["dtype"] = (
+                teacher_model_init_kwargs["dtype"]
+                if teacher_model_init_kwargs["dtype"] in ["auto", None]
+                else getattr(torch, teacher_model_init_kwargs["dtype"])
             )
 
         if isinstance(teacher_model, str):
@@ -208,7 +278,7 @@ class GKDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / (jsd.size(0) * jsd.size(1))
+            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
@@ -217,39 +287,98 @@ class GKDTrainer(SFTTrainer):
             return jsd
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        # compute student output
-        outputs_student = model(
-            input_ids=inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-        )
+        if self.use_liger_gkd_loss:
+            # Forward only through the base models (avoid lm_head to save memory)
+            unwrapped_student = self.accelerator.unwrap_model(model)
+            if hasattr(unwrapped_student, "get_decoder") and unwrapped_student.get_decoder() is not None:
+                base_student = unwrapped_student.get_decoder()
+            else:
+                base_student = getattr(
+                    unwrapped_student, getattr(unwrapped_student, "base_model_prefix", "model"), unwrapped_student
+                )
 
-        # compute teacher output in eval mode
-        self.teacher_model.eval()
-        with torch.no_grad():
-            outputs_teacher = self.teacher_model(
+            student_outputs = base_student(
+                input_ids=inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                output_hidden_states=True,
+                use_cache=False,
+            )
+
+            self.teacher_model.eval()
+            unwrapped_teacher = self.accelerator.unwrap_model(self.teacher_model)
+            if hasattr(unwrapped_teacher, "get_decoder") and unwrapped_teacher.get_decoder() is not None:
+                base_teacher = unwrapped_teacher.get_decoder()
+            else:
+                base_teacher = getattr(
+                    unwrapped_teacher, getattr(unwrapped_teacher, "base_model_prefix", "model"), unwrapped_teacher
+                )
+            with torch.no_grad():
+                teacher_outputs = base_teacher(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    output_hidden_states=True,
+                    use_cache=False,
+                )
+
+            # hidden states (shifted)
+            student_hidden = student_outputs.last_hidden_state[:, :-1].contiguous()
+            teacher_hidden = teacher_outputs.last_hidden_state[:, :-1].contiguous()
+
+            # labels mask and labels (shifted)
+            labels_mask = inputs["labels"] != -100
+            masked_input_ids = torch.where(
+                labels_mask, inputs["input_ids"], torch.full_like(inputs["input_ids"], -100)
+            )
+            true_labels = masked_input_ids[:, 1:].contiguous()
+
+            # heads
+            student_head = unwrapped_student.get_output_embeddings()
+            teacher_head = unwrapped_teacher.get_output_embeddings()
+
+            # liger fused jsd loss
+            loss = self.liger_jsd_loss(
+                student_input=student_hidden,
+                student_weight=student_head.weight,
+                teacher_input=teacher_hidden,
+                teacher_weight=teacher_head.weight,
+                true_labels=true_labels,
+                student_bias=getattr(student_head, "bias", None),
+                teacher_bias=getattr(teacher_head, "bias", None),
+            )
+        else:
+            # compute student output
+            student_outputs = model(
                 input_ids=inputs["input_ids"],
                 attention_mask=inputs["attention_mask"],
             )
 
-        # slice the logits for the generated tokens using the inputs["prompts"] lengths
-        prompt_lengths = inputs["prompts"].shape[1]
-        shifted_student_logits = outputs_student.logits[:, prompt_lengths - 1 : -1, :]
-        shifted_teacher_logits = outputs_teacher.logits[:, prompt_lengths - 1 : -1, :]
-        shifted_labels = inputs["labels"][:, prompt_lengths:]
+            # compute teacher output in eval mode
+            self.teacher_model.eval()
+            with torch.no_grad():
+                teacher_outputs = self.teacher_model(
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                )
 
-        # compute loss
-        loss = self.generalized_jsd_loss(
-            student_logits=shifted_student_logits,
-            teacher_logits=shifted_teacher_logits,
-            labels=shifted_labels,
-            beta=self.beta,
-        )
+            # slice the logits for the generated tokens using the inputs["prompts"] lengths
+            prompt_lengths = inputs["prompts"].shape[1]
+            shifted_student_logits = student_outputs.logits[:, prompt_lengths - 1 : -1, :]
+            shifted_teacher_logits = teacher_outputs.logits[:, prompt_lengths - 1 : -1, :]
+            shifted_labels = inputs["labels"][:, prompt_lengths:]
+
+            # compute loss
+            loss = self.generalized_jsd_loss(
+                student_logits=shifted_student_logits,
+                teacher_logits=shifted_teacher_logits,
+                labels=shifted_labels,
+                beta=self.beta,
+            )
 
         # empty cache
         empty_cache()
 
         # Return loss
-        return (loss, outputs_student) if return_outputs else loss
+        return (loss, student_outputs) if return_outputs else loss
 
     @staticmethod
     def generate_on_policy_outputs(model, inputs, generation_config, pad_token_id=None):
@@ -303,68 +432,3 @@ class GKDTrainer(SFTTrainer):
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @inproceedings{agarwal2024on-policy,
-            title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-            author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-            year         = 2024,
-            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=3zKtaqxLhW},
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=tags,
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="GKD",
-            trainer_citation=citation,
-            paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
-            paper_id="2306.13649",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

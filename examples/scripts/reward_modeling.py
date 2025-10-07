@@ -14,7 +14,9 @@
 
 # /// script
 # dependencies = [
-#     "trl @ git+https://github.com/huggingface/trl.git",
+#     "trl",
+#     "trackio",
+#     "kernels",
 # ]
 # ///
 
@@ -45,15 +47,17 @@ python examples/scripts/reward_modeling.py \
     --eval_steps 50 \
     --max_length 2048 \
     --use_peft \
+    --lora_task_type SEQ_CLS \
     --lora_r 32 \
     --lora_alpha 16
 """
 
-import warnings
+import os
 
 import torch
+from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
+from transformers import AutoModelForSequenceClassification, HfArgumentParser
 
 from trl import (
     ModelConfig,
@@ -63,8 +67,13 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    setup_chat_format,
 )
+
+
+logger = logging.get_logger(__name__)
+
+# Enable logging in a Hugging Face Space
+os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 if __name__ == "__main__":
@@ -75,35 +84,26 @@ if __name__ == "__main__":
     ################
     # Model & Tokenizer
     ################
-    torch_dtype = (
-        model_args.torch_dtype if model_args.torch_dtype in ["auto", None] else getattr(torch, model_args.torch_dtype)
-    )
-    quantization_config = get_quantization_config(model_args)
+    dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
         revision=model_args.model_revision,
-        device_map=get_kbit_device_map() if quantization_config is not None else None,
-        quantization_config=quantization_config,
         use_cache=False if training_args.gradient_checkpointing else True,
-        torch_dtype=torch_dtype,
+        dtype=dtype,
     )
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
-    )
+    quantization_config = get_quantization_config(model_args)
+    if quantization_config is not None:
+        # Passing None would not be treated the same as omitting the argument, so we include it only when valid.
+        model_kwargs["device_map"] = get_kbit_device_map()
+        model_kwargs["quantization_config"] = quantization_config
+
     model = AutoModelForSequenceClassification.from_pretrained(
         model_args.model_name_or_path, num_labels=1, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-    # Align padding tokens between tokenizer and model
-    model.config.pad_token_id = tokenizer.pad_token_id
-
-    # If post-training a base model, use ChatML as the default template
-    if tokenizer.chat_template is None:
-        model, tokenizer = setup_chat_format(model, tokenizer)
 
     if model_args.use_peft and model_args.lora_task_type != "SEQ_CLS":
-        warnings.warn(
+        logger.warning(
             "You are using a `task_type` that is different than `SEQ_CLS` for PEFT. This will lead to silent bugs"
             " Make sure to pass --lora_task_type SEQ_CLS when using this script with PEFT.",
-            UserWarning,
         )
 
     ##############
@@ -116,7 +116,6 @@ if __name__ == "__main__":
     ##########
     trainer = RewardTrainer(
         model=model,
-        processing_class=tokenizer,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
