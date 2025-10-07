@@ -1733,7 +1733,15 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
-        log_ratio = per_token_logps - old_per_token_logps
+        if self.args.humanline:
+            log_ratio = per_token_logps - ref_per_token_logps
+        else:
+            log_ratio = per_token_logps - old_per_token_logps
+
+        # humanline clipping
+        if self.args.humanline:
+            log_ratio = log_ratio.clamp(self.args.humanline_log_eps_P, self.args.humanline_log_eps_R)
+
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
         elif self.importance_sampling_level == "sequence":
