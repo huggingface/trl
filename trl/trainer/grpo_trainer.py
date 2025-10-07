@@ -54,7 +54,7 @@ from ..import_utils import is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .base_trainer import BaseTrainer
-from .callbacks import SyncRefModelCallback
+from .callbacks import HumanlineSyncRefModelCallback, SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
@@ -603,6 +603,9 @@ class GRPOTrainer(BaseTrainer):
         if args.sync_ref_model:
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
+        if self.args.humanline:
+            self.add_callback(HumanlineSyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+        
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 if self.is_deepspeed_enabled:
