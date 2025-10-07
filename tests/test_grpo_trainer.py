@@ -1519,9 +1519,6 @@ class TestGRPOTrainer(TrlTestCase):
     def test_training_vlm_multi_image(self):
         dataset = load_dataset("trl-internal-testing/zen-multi-image", "conversational_prompt_only", split="train")
 
-        # For now, mixing image+text and text-only examples is not supported, so we filter out text-only examples
-        dataset = dataset.filter(lambda x: len(x["images"]) > 0)
-
         def reward_func(completions, **kwargs):
             """Reward function that rewards longer completions."""
             return [float(len(completion[0]["content"])) for completion in completions]
