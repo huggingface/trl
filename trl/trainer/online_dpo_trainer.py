@@ -596,12 +596,13 @@ class OnlineDPOTrainer(BaseTrainer):
             if self.ref_model is not None:
                 self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             if self.reward_funcs is not None:
-                for i, reward_func in enumerate(self.reward_funcs):
-                    if isinstance(reward_func, PreTrainedModel):
-                        # Set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
-                        self.reward_funcs[i] = self.accelerator.prepare_model(
-                            reward_func, evaluation_mode=True, device_placement=True
-                        )
+                # Set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
+                self.reward_funcs = [
+                    self.accelerator.prepare_model(reward_func, evaluation_mode=True, device_placement=True)
+                    if isinstance(reward_func, PreTrainedModel)
+                    else reward_func
+                    for reward_func in self.reward_funcs
+                ]
         else:
             # Prepare ref model for regular training
             if self.ref_model is not None:
