@@ -1298,9 +1298,9 @@ class RLOOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            prompt_ids = prompt_inputs["input_ids"]
+            prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
             prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids]
-            prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
+            prompt_mask = [torch.tensor(m, device=device) for m in prompt_mask]
             prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
             prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
 
