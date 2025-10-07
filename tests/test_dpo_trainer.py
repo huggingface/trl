@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import re
-import sys
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -1300,7 +1299,6 @@ class TestDPOTrainer(TrlTestCase):
         ]
     )
     @require_liger_kernel
-    @pytest.mark.skipif(not (sys.version_info >= (3, 10)), reason="Liger kernel is not supported on Python 3.9")
     def test_dpo_trainer_with_liger(self, beta, loss_type):
         """Test DPO trainer with Liger loss enabled across supported loss types.
 
