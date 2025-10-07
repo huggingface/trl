@@ -71,16 +71,16 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
           This
             should be set to `transformers.AutoModelForCausalLM` for this class.
         - **supported_args** (`tuple`) -- A tuple of strings that are used to identify the arguments that are supported
-            by the `ValueHead` class. Currently, the supported args are:
+            by the [`ValueHead`] class. Currently, the supported args are:
             - **summary_dropout_prob** (`float`, `optional`, defaults to `None`) -- The dropout probability for the
-                `ValueHead` class.
+                [`ValueHead`] class.
             - **v_head_initializer_range** (`float`, `optional`, defaults to `0.2`) -- The initializer range for the
-                `ValueHead` if a specific initialization strategy is selected.
+                [`ValueHead`] if a specific initialization strategy is selected.
             - **v_head_init_strategy** (`str`, `optional`, defaults to `None`) -- The initialization strategy for the
-                `ValueHead`. Currently, the supported strategies are:
-                - **`None`** -- Initializes the weights of the `ValueHead` with a random distribution. This is the
+                [`ValueHead`]. Currently, the supported strategies are:
+                - **`None`** -- Initializes the weights of the [`ValueHead`] with a random distribution. This is the
                   default strategy.
-                - **"normal"** -- Initializes the weights of the `ValueHead` with a normal distribution.
+                - **"normal"** -- Initializes the weights of the [`ValueHead`] with a normal distribution.
     """
 
     transformers_parent_class = AutoModelForCausalLM
@@ -99,7 +99,7 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
                 The model to wrap. It should be a causal language model such as GPT2. or any model mapped inside the
                 `AutoModelForCausalLM` class.
             kwargs (`dict`, `optional`):
-                Additional keyword arguments, that are passed to the `ValueHead` class.
+                Additional keyword arguments, that are passed to the [`ValueHead`] class.
         """
         super().__init__(pretrained_model, **kwargs)
         v_head_kwargs, _, _ = self._split_kwargs(kwargs)
@@ -115,8 +115,8 @@ class AutoModelForCausalLMWithValueHead(PreTrainedModelWrapper):
 
         Args:
             **kwargs (`dict`, `optional`):
-                Additional keyword arguments, that are passed to the `ValueHead` class. These arguments can contain the
-                `v_head_init_strategy` argument as well as the `v_head_initializer_range` argument.
+                Additional keyword arguments, that are passed to the [`ValueHead`] class. These arguments can contain
+                the `v_head_init_strategy` argument as well as the `v_head_initializer_range` argument.
         """
         initializer_range = kwargs.pop("v_head_initializer_range", 0.2)
         # random init by default
@@ -275,7 +275,7 @@ class AutoModelForSeq2SeqLMWithValueHead(PreTrainedModelWrapper):
             The model to wrap. It should be a causal language model such as GPT2. or any model mapped inside the
             `AutoModelForSeq2SeqLM` class.
         kwargs:
-            Additional keyword arguments passed along to the `ValueHead` class.
+            Additional keyword arguments passed along to the [`ValueHead`] class.
     """
 
     transformers_parent_class = AutoModelForSeq2SeqLM
