@@ -278,7 +278,7 @@ class GRPOTrainer(BaseTrainer):
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side = "left")
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path, truncation_side="left")
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -1369,12 +1369,6 @@ class GRPOTrainer(BaseTrainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
-        # If token_type_ids are used, extend them with zeros for the completion part
-        if "token_type_ids" in forward_kwargs:
-            token_type_ids = forward_kwargs["token_type_ids"]
-            forward_kwargs["token_type_ids"] = torch.cat(
-                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
-            )
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
@@ -1391,6 +1385,13 @@ class GRPOTrainer(BaseTrainer):
             forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
         else:
             forward_kwargs = {}
+
+        # If token_type_ids are used, extend them with zeros for the completion part
+        if "token_type_ids" in forward_kwargs:
+            token_type_ids = forward_kwargs["token_type_ids"]
+            forward_kwargs["token_type_ids"] = torch.cat(
+                [token_type_ids, token_type_ids.new_zeros(completion_ids.shape)], dim=1
+            )
 
         with torch.no_grad():
             # If the generation and optimization steps are misaligned—i.e., if generation does not occur at the end of
