@@ -226,7 +226,7 @@ class RewardDataCollatorWithPadding:
     `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
 
     Args:
-        tokenizer (`PreTrainedTokenizerBase`):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             The tokenizer used for encoding the data.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
@@ -1263,7 +1263,7 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     Args:
         inputs (`torch.Tensor`):
             The input tensor to be decoded.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             The tokenizer used to decode the input tensor.
 
     Returns:

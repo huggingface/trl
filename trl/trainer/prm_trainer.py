@@ -210,7 +210,7 @@ class PRMTrainer(BaseTrainer):
         Args:
             features (`dict[str, str]`):
                 Row of the dataset, should contain the keys `"prompt"`, `"completions"`, and `"labels"`.
-            tokenizer (`PreTrainedTokenizerBase`):
+            tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
                 Tokenizer used to process the data.
             step_separator (`str`):
                 Separator between steps in the completion.

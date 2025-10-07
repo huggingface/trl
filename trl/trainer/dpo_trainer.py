@@ -689,7 +689,7 @@ class DPOTrainer(BaseTrainer):
         Args:
             features (`dict[str, str]`):
                 Row of the dataset, should contain the keys `"prompt"`, `"chosen"`, and `"rejected"`.
-            processing_class (`PreTrainedTokenizerBase`):
+            processing_class ([`~transformers.PreTrainedTokenizerBase`]):
                 Processing class used to process the data.
             max_prompt_length (`int` or `None`):
                 Maximum length of the prompt sequence. If `None`, the prompt sequence is not truncated.

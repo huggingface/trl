@@ -176,7 +176,7 @@ class GRPOTrainer(BaseTrainer):
             processing class is loaded from the model's name with [`~transformers.AutoProcessor.from_pretrained`]. A
             padding token, `tokenizer.pad_token`, must be set. If the processing class has not set a padding token,
             `tokenizer.eos_token` will be used as the default.
-        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*):
+        reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
             - A single processing class: Used when `reward_funcs` contains only one reward function.
