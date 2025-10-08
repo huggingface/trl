@@ -220,7 +220,6 @@ class TestGKDTrainer(TrlTestCase):
             save_steps=2,
             per_device_train_batch_size=2,
             per_device_eval_batch_size=2,
-            bf16=False,
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
@@ -246,7 +245,6 @@ class TestGKDTrainer(TrlTestCase):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
             report_to="none",
-            bf16=False,
             use_liger_kernel=True,
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
@@ -269,7 +267,7 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_generation_config_init(self):
-        training_args = GKDConfig(output_dir=self.tmp_dir, bf16=False)
+        training_args = GKDConfig(output_dir=self.tmp_dir)
         dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         trainer = GKDTrainer(
@@ -289,16 +287,7 @@ class TestGKDTrainer(TrlTestCase):
 
     def test_gkd_trainer_smollm3_thinking_modes(self):
         smoll_tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM3-3B")
-        training_args = GKDConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            per_device_eval_batch_size=2,
-            max_steps=1,
-            eval_strategy="no",
-            bf16=False,
-            save_steps=10,
-            report_to="none",
-        )
+        training_args = GKDConfig(output_dir=self.tmp_dir)
 
         raw_examples = [
             (
