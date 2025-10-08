@@ -387,7 +387,7 @@ For examples of stepwise supervision datasets, refer to the [Stepwise supervisio
 
 Choosing the right dataset type depends on the task you are working on and the specific requirements of the TRL trainer you are using. Below is a brief overview of the dataset types supported by each TRL trainer.
 
-| Trainer | Expected dataset type    |
+| Trainer | Expected dataset type |
 | --- | --- |
 | [`BCOTrainer`] | [Unpaired preference](#unpaired-preference) or [Preference (explicit prompt recommended)](#preference) |
 | [`CPOTrainer`] | [Preference (explicit prompt recommended)](#preference) |

@@ -206,15 +206,15 @@ The `--accelerate_config` flag lets you easily configure distributed training wi
 
 TRL provides several ready-to-use Accelerate configs to simplify common training setups:
 
-| Name         | Description                         |
+| Name | Description |
 | --- | --- |
-| `fsdp1`      | Fully Sharded Data Parallel Stage 1 |
-| `fsdp2`      | Fully Sharded Data Parallel Stage 2 |
-| `zero1`      | DeepSpeed ZeRO Stage 1              |
-| `zero2`      | DeepSpeed ZeRO Stage 2              |
-| `zero3`      | DeepSpeed ZeRO Stage 3              |
-| `multi_gpu`  | Multi-GPU training                  |
-| `single_gpu` | Single-GPU training                 |
+| `fsdp1` | Fully Sharded Data Parallel Stage 1 |
+| `fsdp2` | Fully Sharded Data Parallel Stage 2 |
+| `zero1` | DeepSpeed ZeRO Stage 1 |
+| `zero2` | DeepSpeed ZeRO Stage 2 |
+| `zero3` | DeepSpeed ZeRO Stage 3 |
+| `multi_gpu` | Multi-GPU training |
+| `single_gpu` | Single-GPU training |
 
 To use one of these, just pass the name to `--accelerate_config`. TRL will automatically load the corresponding config file from `trl/accelerate_config/`.
 
