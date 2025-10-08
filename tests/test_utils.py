@@ -352,12 +352,12 @@ class TestDataCollatorForChatML(TrlTestCase):
         labels = batch["labels"][0].tolist()
         effective_labels = [token for token in labels if token != collator.ignore_index]
         assert effective_labels, "Assistant completion should remain supervised when /no_think is active."
-        expected_completion = tokenizer.encode(
-            messages[-1]["content"] + tokenizer.eos_token, add_special_tokens=False
-        )
+        expected_completion = tokenizer.encode(messages[-1]["content"] + tokenizer.eos_token, add_special_tokens=False)
         assert effective_labels[: len(expected_completion)] == expected_completion
         decoded_completion = tokenizer.decode(effective_labels)
-        assert placeholder.strip() not in decoded_completion, "Think placeholder should be masked from completion labels."
+        assert placeholder.strip() not in decoded_completion, (
+            "Think placeholder should be masked from completion labels."
+        )
 
 
 class TestBatchGeneration(TrlTestCase):

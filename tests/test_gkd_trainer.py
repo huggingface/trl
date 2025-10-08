@@ -340,9 +340,9 @@ class TestGKDTrainer(TrlTestCase):
         for idx in range(len(raw_examples)):
             prompt_tokens = batch["prompts"][idx][batch["prompts"][idx] != pad_id]
             input_without_padding = batch["input_ids"][idx][batch["input_ids"][idx] != pad_id]
-            assert torch.equal(
-                prompt_tokens, input_without_padding[: prompt_tokens.size(0)]
-            ), "Prompt tokens should align with the prefix of input_ids after collation."
+            assert torch.equal(prompt_tokens, input_without_padding[: prompt_tokens.size(0)]), (
+                "Prompt tokens should align with the prefix of input_ids after collation."
+            )
 
         decoded_prompts = [
             smoll_tokenizer.decode(example.tolist(), skip_special_tokens=False) for example in batch["prompts"]
