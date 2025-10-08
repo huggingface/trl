@@ -13,21 +13,18 @@
 # limitations under the License.
 
 import contextlib
-import os
-import warnings
+import textwrap
 from collections import defaultdict
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, TypeVar, Union
-import torch.nn.functional as F
+from typing import Any, Callable, Optional, Union
+
 import torch
 import torch.nn as nn
-import transformers
-from accelerate import PartialState
+from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
+from torch.utils.data import DataLoader
 from transformers import (
-    AutoConfig,
     AutoProcessor,
     BaseImageProcessor,
     DataCollator,
@@ -35,61 +32,50 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    Trainer,
-    TrainingArguments,
-    is_wandb_available,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import extract_prompt, is_conversational, truncate_dataset
+from ..data_utils import (
+    apply_chat_template,
+    extract_prompt,
+    is_conversational,
+    prepare_multimodal_messages,
+    truncate_dataset,
+)
 from ..models import get_act_offloading_ctx_manager, prepare_peft_model
+from .base_trainer import BaseTrainer
 from .dpo_config import DPOConfig
-from .utils import generate_model_card, get_comet_experiment_url, pad
+from .utils import (
+    create_model_from_path,
+    entropy_from_logits,
+    flush_left,
+    pad,
+    remove_none_values,
+    selective_log_softmax,
+)
 
 
 if is_peft_available():
     from peft import PeftConfig, PeftModel
 
-if is_wandb_available():
-    import wandb
+
+logger = logging.get_logger(__name__)
 
 
-TListOrMapping = TypeVar("TListOrMapping", list, Mapping)
+FLASH_ATTENTION_VARIANTS = {
+    "flash_attention_2",
+    "flash_attention_3",
+    "kernels-community/flash-attn",
+    "kernels-community/vllm-flash-attn3",
+    "kernels-community/flash-attn3",
+}
 
 
-def remove_none_values(example: TListOrMapping) -> TListOrMapping:
-    """
-    Recursively removes entries with `None` values from a nested structure (list or dictionary).
-
-    Args:
-        example (`list` or `Mapping`):
-            Input nested structure (list or dictionary) from which to remove `None`.
-
-    Example:
-    ```python
-    >>> [
-    ...     {
-    ...         "a": {"aa": None, "ab": 1},
-    ...         "b": "my_string",
-    ...     }
-    ... ]
-    >>> remove_none_values(example)
-    [{'a': {'ab': 1}, 'b': 'my_string'}]
-    ```
-    """
-    if isinstance(example, list):
-        return [remove_none_values(value) if isinstance(value, (dict, list)) else value for value in example]
-    elif isinstance(example, Mapping):
-        return {
-            key: remove_none_values(value) if isinstance(value, (dict, list)) else value
-            for key, value in example.items()
-            if value is not None
-        }
-    else:
-        raise TypeError("Input must be a list or a dictionary.")
+def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[str]:
+    return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
 @dataclass
@@ -99,29 +85,28 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
     If the input contains a `"completion_mask"`, it is used to set the labels to `-100` for tokens that are not in the
-    completion. If `"assistant_masks"` are present, they are used to set the labels to `-100` for tokens that are not
-    in the assistant part of the sequence. The collator returns a dictionary containing the following keys:
+    completion. The collator returns a dictionary containing the following keys:
     - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
-    - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
+    - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `padding_free` is set to `False`, the following key
+    is also returned:
+    - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
+    If `padding_free` is set to `True`, the following key is also returned:
     - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
-    - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `completion_only_loss` is set to
-    `True`, tokens that are not in the completion are set to -100. If `assistant_masks` are present, tokens that are
-    not in the assistant part of the sequence are set to -100.
 
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
         padding_free (`bool`, *optional*, defaults to `False`):
             If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly. The attention mask will be set to 1 for all tokens.
-        pad_to_multiple_of (`int` or `None`, *optional*, defaults to `None`):
+            generated accordingly and returned instead of the attention mask.
+        pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
             Type of Tensor to return. Only `"pt"` is currently supported.
 
     Examples:
     ```python
-    >>> from trl import DataCollatorForLanguageModeling
+    >>> from trl.trainer.dpo_trainer import DataCollatorForLanguageModeling
 
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
     >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
@@ -130,8 +115,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                           [  4,  5,  0]]),
      'attention_mask': tensor([[  1,  1,  1],
                                [  1,  1,  0]]),
-     'position_ids': tensor([[0, 1, 2],
-                             [0, 1, 0]]),
      'labels': tensor([[   1,    2,    3],
                        [   4,    5, -100]])}
 
@@ -145,8 +128,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
                           [  4,  5,  0]]),
      'attention_mask': tensor([[  1,  1,  1],
                                [  1,  1,  0]]),
-     'position_ids': tensor([[0, 1, 2],
-                             [0, 1, 0]]),
      'labels': tensor([[-100,    2,    3],
                        [-100,    5, -100]])}
 
@@ -154,7 +135,6 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
     >>> collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
     >>> collator(examples)
     {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
-     'attention_mask': tensor([[1, 1, 1, 1, 1]]),
      'position_ids': tensor([[0, 1, 2, 0, 1]]),
      'labels': tensor([[1, 2, 3, 4, 5]])}
     ```
@@ -162,74 +142,38 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     pad_token_id: int
     padding_free: bool = False
-    return_position_ids: bool = True
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        prompt_chosen_ids = [example["prompt_ids"] + example["chosen_ids"] for example in examples]
+        prompt_rejected_ids = [example["prompt_ids"] + example["rejected_ids"] for example in examples]
+        chosen_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["chosen_ids"]) for example in examples]
+        rejected_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples]
+
         # Convert to tensor
-        chosen_ids = [torch.tensor(example["chosen_ids"]) for example in examples]
-        rejected_ids = [torch.tensor(example["rejected_ids"]) for example in examples]
-        input_ids = chosen_ids + rejected_ids
-
-        # Check if we have meaningful seq_lengths from packing (restarting sequences)
-        has_packed_position_ids = self.return_position_ids and "seq_lengths" in examples[0] and self.padding_free
-
-        # For packing with position_ids, we should NOT create attention_mask as it causes
-        # FlashAttention to ignore position_ids and compute wrong cu_seq_lens from the all-1s mask
-        if not has_packed_position_ids:
-            attention_mask = [torch.ones_like(input_ids) for input_ids in input_ids]
-
-        if self.return_position_ids:
-            if "seq_lengths" in examples[0]:
-                position_ids = self._convert_seq_lengths_to_position_ids(
-                    [example["seq_lengths"] for example in examples]
-                )
-            else:
-                position_ids = [torch.arange(len(ids)) for ids in input_ids]
-        chosen_mask = [torch.tensor(example["chosen_mask"]) for example in examples]
-        rejected_mask = [torch.tensor(example["rejected_mask"]) for example in examples]
+        prompt_chosen_ids = [torch.tensor(ids) for ids in prompt_chosen_ids]
+        prompt_rejected_ids = [torch.tensor(ids) for ids in prompt_rejected_ids]
+        chosen_mask = [torch.tensor(mask, dtype=torch.long) for mask in chosen_mask]
+        rejected_mask = [torch.tensor(mask, dtype=torch.long) for mask in rejected_mask]
+        input_ids = prompt_chosen_ids + prompt_rejected_ids
         completion_mask = chosen_mask + rejected_mask
 
         # Pad
         output = {}
-        if self.padding_free:
-            output["input_ids"] = torch.cat(input_ids, dim=0).unsqueeze(0)
-            if not has_packed_position_ids:
-                output["attention_mask"] = torch.cat(attention_mask, dim=0).unsqueeze(0)
-            if self.return_position_ids:
-                output["position_ids"] = torch.cat(position_ids, dim=0).unsqueeze(0)
-        else:
-            output["input_ids"] = pad(
-                input_ids,
-                padding_value=self.pad_token_id,
-                padding_side="right",
-                pad_to_multiple_of=self.pad_to_multiple_of,
-            )
-            output["attention_mask"] = pad(
-                attention_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-            if self.return_position_ids:
-                output["position_ids"] = pad(
-                    position_ids, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-                )
-            output["completion_mask"] = pad(
-                completion_mask, padding_value=0, padding_side="right", pad_to_multiple_of=self.pad_to_multiple_of
-            )
-
-        return output
-
-    @staticmethod
-    def _convert_seq_lengths_to_position_ids(batch_seq_lengths: list[list[int]]) -> list[torch.Tensor]:
-        example_lengths = [sum(seq_lengths) for seq_lengths in batch_seq_lengths]
-        batch_seq_lengths = torch.tensor(
-            [seq_length for seq_lengths in batch_seq_lengths for seq_length in seq_lengths]
+        output["input_ids"] = pad(
+            input_ids,
+            padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
         )
-        position_ids = torch.ones(sum(example_lengths), dtype=batch_seq_lengths.dtype)
-        position_ids[0] = 0
-        position_ids[batch_seq_lengths[:-1].cumsum(0)] = -(batch_seq_lengths[:-1] - 1)
-        position_ids = position_ids.cumsum(0)
-        return list(position_ids.split(example_lengths))
+        output["completion_mask"] = pad(
+            completion_mask,
+            padding_value=0,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        return output
 
 
 @dataclass
@@ -244,7 +188,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Each input example should be a dictionary containing at least:
     - An `"images"` key holding the image data.
-    - Either a `"messages"` key for conversational inputs or a `"text"` key for standard text inputs.
+    - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
+      key for standard text inputs.
+    - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
 
     The collator outputs a dictionary including:
     - `"input_ids"`: Tensor of token IDs.
@@ -267,7 +213,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
 
     Example:
     ```python
-    >>> from trl import DataCollatorForVisionLanguageModeling
+    >>> from trl.trainer.dpo_trainer import DataCollatorForVisionLanguageModeling
     >>> from transformers import AutoProcessor
 
     >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
@@ -308,26 +254,27 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
-    def torch_call(self, examples: list[Union[list[int], Any, dict[str, Any]]]) -> dict[str, Any]:
+    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        if "messages" in examples[0] or self.dataset_text_field in examples[0]:
+            return self._collate_language_modeling(examples)
+        elif "prompt" in examples[0] and "completion" in examples[0]:
+            return self._collate_prompt_completion(examples)
+        else:
+            raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
+
+    def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
 
         if "messages" in examples[0]:  # conversational case
             for example in examples:
-                image_included = False
-                for message in example["messages"]:
-                    if message["role"] == "user":
-                        if isinstance(message["content"], str) and not image_included:
-                            message["content"] = [{"type": "image"}, {"type": "text", "text": message["content"]}]
-                            image_included = True
-                        elif isinstance(message["content"], str) and image_included:
-                            message["content"] = [{"type": "text", "text": message["content"]}]
-                    if message["role"] == "assistant":
-                        if isinstance(message["content"], str):
-                            message["content"] = [{"type": "text", "text": message["content"]}]
+                prepare_multimodal_messages(example["messages"], len(example["images"]))
             messages = [example["messages"] for example in examples]
-            texts = self.processor.apply_chat_template(messages, images=images)
-        elif "text" in examples[0]:  # standard case
-            texts = [example["text"] for example in examples]
+            texts = self.processor.apply_chat_template(messages)
+        elif self.dataset_text_field in examples[0]:  # standard case
+            texts = [example[self.dataset_text_field] for example in examples]
         else:
             raise KeyError(
                 "The input examples must contain either 'messages' for conversational data or 'text' for standard "
@@ -338,6 +285,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             images=images,
             text=texts,
             padding=True,
+            padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
             truncation=self.max_length is not None,
             max_length=self.max_length,
@@ -345,10 +293,71 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         )
         labels = output["input_ids"].clone()
-        labels[labels == self.processor.tokenizer.pad_token_id] = -100
+        labels[output["attention_mask"] == 0] = -100
         # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
         # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
         # token definitions vary across architectures.
+        output["labels"] = labels
+        return output
+
+    def _collate_prompt_completion(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
+        if self.pad_to_multiple_of is not None:
+            raise NotImplementedError(
+                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
+                "prompt-completion data yet."
+            )
+        images = [example["images"] for example in examples]
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if all(img_list == [] for img_list in images):
+            images = None
+        if is_conversational(examples[0]):  # conversational case
+            for example in examples:
+                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
+            examples = [apply_chat_template(example, self.processor) for example in examples]
+
+        prompts = [example["prompt"] for example in examples]
+        completions = [example["completion"] for example in examples]
+
+        processed_prompts = self.processor(
+            images=images,
+            text=prompts,
+            padding=True,
+            padding_side="left",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+        processed_completions = self.processor(
+            text=completions,
+            padding=True,
+            padding_side="right",
+            return_tensors=self.return_tensors,
+            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
+        )
+
+        # Concatenate prompts and completions
+        prompt_ids, completion_ids = processed_prompts["input_ids"], processed_completions["input_ids"]
+        prompt_mask, completion_mask = processed_prompts["attention_mask"], processed_completions["attention_mask"]
+        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
+        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
+        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
+
+        # Flush left to reduce padding
+        attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+
+        # Truncate if necessary
+        if self.max_length is not None:
+            input_ids = input_ids[:, : self.max_length]
+            attention_mask = attention_mask[:, : self.max_length]
+            completion_mask = completion_mask[:, : self.max_length]
+
+        # Create labels and mask padding tokens
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+
+        # Build the output dictionary
+        output = processed_prompts  # we take processed_prompts because it contains the images
+        output["input_ids"] = input_ids
+        output["attention_mask"] = attention_mask
         output["labels"] = labels
         return output
 
@@ -357,7 +366,7 @@ class DPOTrainer(BaseTrainer):
     """
     Trainer for Direct Preference Optimization (DPO) method.
 
-    This class is a wrapper around the [`transformers.Trainer`] class and inherits all of its attributes and methods.
+    This class is a wrapper around the [`~transformers.Trainer`] class and inherits all of its attributes and methods.
 
     Example:
 
@@ -378,14 +387,17 @@ class DPOTrainer(BaseTrainer):
             - A string, being the *model id* of a pretrained model hosted inside a model repo on huggingface.co, or a
               path to a *directory* containing model weights saved using
               [`~transformers.PreTrainedModel.save_pretrained`], e.g., `'./my_model_directory/'`. The model is loaded
-              using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
-              `args.model_init_kwargs`.
-            - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        args ([`DPOConfig`], *optional*, defaults to `None`):
+              using `<ModelArchitecture>.from_pretrained` (where `<ModelArchitecture>` is derived from the model
+              config) with the keyword arguments in `args.model_init_kwargs`.
+            - A [`~transformers.PreTrainedModel`] object.
+            If you're training a model with an MoE architecture and want to include the load balancing/auxilliary loss
+            as a part of the final loss, remember to set the `output_router_logits` config of the model to `True`.
+        args ([`DPOConfig`], *optional*):
             Configuration for this trainer. If `None`, a default configuration is used.
-        data_collator (`DataCollator`, *optional*):
+        data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to a custom [`DataCollatorForLanguageModeling`].
+            Will default to [`~trainer.dpo_trainer.DataCollatorForLanguageModeling`] if the model is a language model
+            and [`~trainer.dpo_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. DPO supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -395,27 +407,38 @@ class DPOTrainer(BaseTrainer):
               and content).
         eval_dataset ([`~datasets.Dataset`], [`~datasets.IterableDataset`] or `dict[str, Union[Dataset, IterableDataset]]`):
             Dataset to use for evaluation. It must meet the same requirements as `train_dataset`.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`] or `None`, *optional*, defaults to `None`):
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If `None`, the processing class is loaded from the model's name
             with [`~transformers.AutoProcessor.from_pretrained`]. A padding token, `tokenizer.pad_token`, must be set.
             If the processing class has not set a padding token, `tokenizer.eos_token` will be used as the default.
-        callbacks (list of [`~transformers.TrainerCallback`], *optional*, defaults to `None`):
+        compute_loss_func (`Callable`, *optional*):
+            A function that accepts the raw model outputs, labels, and the number of items in the entire accumulated
+            batch (batch_size * gradient_accumulation_steps) and returns the loss. For example, see the default [loss
+            function](https://github.com/huggingface/transformers/blob/052e652d6d53c2b26ffde87e039b723949a53493/src/transformers/trainer.py#L3618)
+            used by [`Trainer`].
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
+            The function that will be used to compute metrics at evaluation. Must take a
+            [`~transformers.EvalPrediction`] and return a dictionary string to metric values. When passing
+            [`DPOConfig`] with `batch_eval_metrics` set to `True`, your `compute_metrics` function must take a boolean
+            `compute_result` argument. This will be triggered after the last eval batch to signal that the function
+            needs to calculate and return the global summary statistics rather than accumulating the batch-level
+            statistics.
+        callbacks (list of [`~transformers.TrainerCallback`], *optional*):
             List of callbacks to customize the training loop. Will add those to the list of default callbacks detailed
             in [here](https://huggingface.co/docs/transformers/main_classes/callback).
 
             If you want to remove one of the default callbacks used, use the [`~transformers.Trainer.remove_callback`]
             method.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`, *optional*, defaults to `(None, None)`):
-            A tuple containing the optimizer and the scheduler to use. Will default to an instance of [`AdamW`] on your
-            model and a scheduler given by [`get_linear_schedule_with_warmup`] controlled by `args`.
-        optimizer_cls_and_kwargs (`Tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
+        optimizers (`tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]]`, *optional*, defaults to `(None, None)`):
+            A tuple containing the optimizer and the scheduler to use. Will default to an instance of `AdamW` on your
+            model and a scheduler given by [`~transformers.get_linear_schedule_with_warmup`] controlled by `args`.
+        optimizer_cls_and_kwargs (`tuple[Type[torch.optim.Optimizer], Dict[str, Any]]`, *optional*):
             A tuple containing the optimizer class and keyword arguments to use. Overrides `optim` and `optim_args` in
             `args`. Incompatible with the `optimizers` argument.
 
             Unlike `optimizers`, this argument avoids the need to place model parameters on the correct devices before
             initializing the Trainer.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*, defaults to
-        `None`):
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`, *optional*):
             A function that preprocess the logits right before caching them at each evaluation step. Must take two
             tensors, the logits and the labels, and return the logits once processed as desired. The modifications made
             by this function will be reflected in the predictions received by `compute_metrics`.
@@ -444,9 +467,9 @@ class DPOTrainer(BaseTrainer):
 
     def __init__(
         self,
-        model: Union[str, nn.Module, PreTrainedModel],
-        args: Optional[Union[DPOConfig, TrainingArguments]] = None,
-        data_collator: Optional[DataCollator] = None,  # type: ignore
+        model: Union[str, PreTrainedModel],
+        args: Optional[DPOConfig] = None,
+        data_collator: Optional[DataCollator] = None,
         train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
         eval_dataset: Optional[Union[Dataset, dict[str, Dataset]]] = None,
         processing_class: Optional[Union[PreTrainedTokenizerBase, ProcessorMixin]] = None,
@@ -463,38 +486,17 @@ class DPOTrainer(BaseTrainer):
             model_name = model if isinstance(model, str) else model.config._name_or_path
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
-        elif isinstance(args, TrainingArguments) and not isinstance(args, DPOConfig):
-            dict_args = args.to_dict()
-            dict_args["hub_token"] = args.hub_token  # to_dict hides the hub_token
-            dict_args.pop("push_to_hub_token")
-            args = DPOConfig(**dict_args)
 
         # Model
-        model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
-            model_id = model
-            torch_dtype = model_init_kwargs.get("torch_dtype")
-            if isinstance(torch_dtype, torch.dtype) or torch_dtype == "auto" or torch_dtype is None:
-                pass  # torch_dtype is already a torch.dtype or "auto" or None
-            elif isinstance(torch_dtype, str) and torch_dtype in ["bfloat16", "float16", "float32"]:
-                torch_dtype = getattr(torch, torch_dtype)
-                model_init_kwargs["torch_dtype"] = torch_dtype
-            else:
-                raise ValueError(
-                    "Invalid `torch_dtype` passed to `DPOConfig`. Expected either 'auto' or a string representing "
-                    f"a valid `torch.dtype` (e.g., 'float32'), but got {torch_dtype}."
-                )
-            config = AutoConfig.from_pretrained(model_id)
-            architecture = getattr(transformers, config.architectures[0])
-            model = architecture.from_pretrained(model_id, **model_init_kwargs)
-            self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
+            model = create_model_from_path(model, **args.model_init_kwargs or {})
         else:
-            model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
-                warnings.warn(
+                logger.warning(
                     "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
+        model_id = model.config._name_or_path
 
         # Processing class
         if processing_class is None:
@@ -510,41 +512,32 @@ class DPOTrainer(BaseTrainer):
         else:
             raise TypeError("The `processing_class` must be either a `PreTrainedTokenizerBase` or a `ProcessorMixin`")
 
-        # Catch some wrong configurations related to VLMs
         if self._is_vlm and args.padding_free:
             raise ValueError(
                 "Padding-free training is yet not supported for vision-language models. Please set "
                 "`padding_free=False` in the `DPOConfig`."
             )
 
-        # In Prompt Tuning a small set of trainable virtual tokens (continuous prompt embeddings) is prepended to the
-        # input. We store the number of these tokens so we can account for them correctly when calculating accuracy.
-        self.num_virtual_tokens = 0
-
         if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
             model = prepare_peft_model(model, peft_config, args)
-            if model.active_adapter in model.peft_config:
-                peft_model_config = model.peft_config[model.active_adapter]
-                self.num_virtual_tokens = getattr(peft_model_config, "num_virtual_tokens", 0)
 
         # Data collator
         self.padding_free = args.padding_free
-        use_flash_attention = model.config._attn_implementation in [
-            "flash_attention_2",
-            "kernels-community/vllm-flash-attn3",
-        ]
+        use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if not use_flash_attention:
-                warnings.warn(
-                    "Padding-free training is enabled, but the attention implementation is not set to "
-                    "'flash_attention_2'. Padding-free training flattens batches into a single sequence, and "
-                    "'flash_attention_2' is the only known attention mechanism that reliably supports this. Using "
-                    "other implementations may lead to unexpected behavior. To ensure compatibility, set "
-                    "`attn_implementation='flash_attention_2'` in the model configuration, or verify that your "
-                    "attention mechanism can handle flattened sequences."
+                logger.warning(
+                    "Padding-free training is enabled, but the attention implementation is not set to a supported "
+                    "flash attention variant. Padding-free training flattens batches into a single sequence, and only "
+                    "the following implementations are known to reliably support this: "
+                    f"{', '.join(sorted(FLASH_ATTENTION_VARIANTS))}. Using other implementations may lead to "
+                    "unexpected behavior. To ensure compatibility, set `attn_implementation` in the model "
+                    "configuration to one of these supported options or verify that your attention mechanism can "
+                    "handle flattened sequences."
                 )
+
             if args.per_device_train_batch_size == 1:
                 logger.warning(
                     "You are using a per_device_train_batch_size of 1 with padding-free training. Using a batch size "
@@ -552,11 +545,15 @@ class DPOTrainer(BaseTrainer):
                     "to at least 2."
                 )
 
-        # Decide whether to use completion-only loss: if not specified, then it is set to True if the dataset format
-        # is prompt-completion, and False if the dataset format is language modeling.
         dataset_sample = next(iter(train_dataset))
+        self._is_vision_dataset = "image" in dataset_sample or "images" in dataset_sample
+        if self._is_vision_dataset and not self._is_vlm:
+            raise ValueError(
+                "The dataset appears to be vision-related (contains 'image' or 'images' keys), but the provided "
+                "model does not seem to be a vision-language model. Please check your model and dataset."
+            )
 
-        if data_collator is None and not self._is_vlm:
+        if data_collator is None and not self._is_vision_dataset:
             # Get the pad token: if not provided, use the one from the processing class or the eos token
             # if the processing class does not have a pad token.
             pad_token = args.pad_token or tokenizer.pad_token or tokenizer.eos_token
@@ -570,11 +567,9 @@ class DPOTrainer(BaseTrainer):
             data_collator = DataCollatorForLanguageModeling(
                 pad_token_id=pad_token_id,
                 padding_free=self.padding_free,
-                # Using position_ids without flash_attn hurts the training
-                return_position_ids=use_flash_attention,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
-        elif data_collator is None and self._is_vlm:
+        elif data_collator is None and self._is_vision_dataset:
             data_collator = DataCollatorForVisionLanguageModeling(
                 processor=processing_class,
                 max_length=args.max_length,
@@ -584,7 +579,7 @@ class DPOTrainer(BaseTrainer):
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
         # and done on the fly instead.
-        skip_prepare_dataset = self._is_vlm
+        skip_prepare_dataset = self._is_vision_dataset
         if not skip_prepare_dataset:
             train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
             if eval_dataset is not None:
@@ -663,17 +658,15 @@ class DPOTrainer(BaseTrainer):
                     map_kwargs["desc"] = f"Adding EOS to {dataset_name} dataset"
 
                 def add_eos(example, eos_token):
-                    if "text" in example and not example["text"].endswith(eos_token):  # language modeling case
-                        example["text"] = example["text"] + eos_token
-                    elif "completion" in example and not example["completion"].endswith(eos_token):
-                        example["completion"] = example["completion"] + eos_token
+                    if not example["chosen"].endswith(eos_token):
+                        example["chosen"] = example["chosen"] + eos_token
+                    if not example["rejected"].endswith(eos_token):
+                        example["rejected"] = example["rejected"] + eos_token
                     return example
 
-                column_names = list(next(iter(dataset)).keys())
                 dataset = dataset.map(
                     add_eos,
                     fn_kwargs={"eos_token": processing_class.eos_token},
-                    remove_columns="messages" if "messages" in column_names else None,  # renamed to "text"
                     **map_kwargs,
                 )
 
@@ -681,55 +674,71 @@ class DPOTrainer(BaseTrainer):
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                 map_kwargs["desc"] = f"Tokenizing {dataset_name} dataset"
 
-            def tokenize(example, processing_class):
+            def tokenize_fn(example, processing_class):
                 output = {}
                 if is_conversational(example):
+                    if self._is_vlm:
+                        prepare_multimodal_messages(example["prompt"], num_images=0)
+                        prepare_multimodal_messages(example["completion"], num_images=0)
                     prompt_ids = processing_class.apply_chat_template(
                         example["prompt"],
+                        tokenize=True,
+                        add_generation_prompt=True,
                         tools=example.get("tools"),
                         **example.get("chat_template_kwargs", {}),
                     )
-                    prompt_chosen_ids = processing_class.apply_chat_template(
+                    # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
+                    # even for single examples, while for LLMs it returns lists of ints.
+                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
+                    prompt_chosen_processed = processing_class.apply_chat_template(
                         example["prompt"] + example["chosen"],
+                        return_dict=True,
+                        tokenize=True,
                         tools=example.get("tools"),
                         **example.get("chat_template_kwargs", {}),
                     )
-                    prompt_rejected_ids = processing_class.apply_chat_template(
+                    prompt_rejected_processed = processing_class.apply_chat_template(
                         example["prompt"] + example["rejected"],
+                        return_dict=True,
+                        tokenize=True,
                         tools=example.get("tools"),
                         **example.get("chat_template_kwargs", {}),
                     )
+                    # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
+                    # even for single examples, while for LLMs it returns lists of ints.
+                    prompt_chosen_processed = {
+                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_chosen_processed.items()
+                    }
+                    prompt_rejected_processed = {
+                        k: v[0] if isinstance(v[0], list) else v for k, v in prompt_rejected_processed.items()
+                    }
+                    prompt_chosen_ids = prompt_chosen_processed["input_ids"]
+                    prompt_rejected_ids = prompt_rejected_processed["input_ids"]
                 else:
                     prompt_ids = processing_class(text=example["prompt"])["input_ids"]
-                    prompt_completion_ids = processing_class(text=example["prompt"] + example["completion"])[
-                        "input_ids"
-                    ]
+                    prompt_chosen_ids = processing_class(text=example["prompt"] + example["chosen"])["input_ids"]
+                    prompt_rejected_ids = processing_class(text=example["prompt"] + example["rejected"])["input_ids"]
 
                 # Check if the tokenized prompt starts with the tokenized prompt+completion
                 if not prompt_chosen_ids[: len(prompt_ids)] == prompt_ids:
-                    warnings.warn(
+                    logger.warning(
                         "Mismatch between tokenized prompt and the start of tokenized prompt+chosen. "
                         "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
                         "token handling. Verify that the tokenizer is processing text consistently."
                     )
                 if not prompt_rejected_ids[: len(prompt_ids)] == prompt_ids:
-                    warnings.warn(
+                    logger.warning(
                         "Mismatch between tokenized prompt and the start of tokenized prompt+rejected. "
                         "This may be due to unexpected tokenizer behavior, whitespace issues, or special "
                         "token handling. Verify that the tokenizer is processing text consistently."
                     )
 
-                # Create a completion mask
-                chosen_mask = [0] * len(prompt_ids) + [1] * (len(prompt_chosen_ids) - len(prompt_ids))
-                rejected_mask = [0] * len(prompt_ids) + [1] * (len(prompt_rejected_ids) - len(prompt_ids))
-                output["chosen_ids"] = prompt_chosen_ids
-                output["rejected_ids"] = prompt_rejected_ids
-                output["chosen_mask"] = chosen_mask
-                output["rejected_mask"] = rejected_mask
-
+                output["prompt_ids"] = prompt_ids
+                output["chosen_ids"] = prompt_chosen_ids[len(prompt_ids) :]
+                output["rejected_ids"] = prompt_rejected_ids[len(prompt_ids) :]
                 return output
 
-            dataset = dataset.map(tokenize, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
+            dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
             # Truncate
             if args.max_length is not None:
@@ -738,9 +747,10 @@ class DPOTrainer(BaseTrainer):
                 dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
-                dataset = dataset.select_columns(
-                    {"input_ids", "seq_lengths", "completion_mask"}.intersection(dataset.column_names)
-                )
+                collator_expected_keys = {"input_ids", "completion_mask"}
+                column_names = get_dataset_column_names(dataset)
+                dataset = dataset.select_columns(collator_expected_keys.intersection(column_names))
+
         return dataset
 
     def _set_signature_columns_if_needed(self):
@@ -748,40 +758,86 @@ class DPOTrainer(BaseTrainer):
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
         # and "attention_mask").
         if self._signature_columns is None:
-            if self._is_vlm:
-                self._signature_columns = ["messages", "images"]
+            if self._is_vision_dataset:
+                self._signature_columns = ["prompt", "chosen", "rejectedimages"]
             else:
-                self._signature_columns = ["chosen_ids", "rejected_ids", "chosen_mask", "rejected_mask"]
+                self._signature_columns = ["prompt_ids", "chosen_ids", "rejected_ids"]
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def _inner_training_loop(
+        self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
+    ):
+        data_loader = DataLoader(
+            self.train_dataset,
+            batch_size=self.args.per_device_train_batch_size,
+            collate_fn=self.data_collator,
+            num_workers=self.args.dataloader_num_workers,
+            pin_memory=self.args.dataloader_pin_memory,
+            shuffle=False,
+        )
+        data_loader = self.accelerator.prepare(data_loader)
+        ref_chosen_logps = []
+        ref_rejected_logps = []
+        with torch.no_grad():
+            for sample in iter(data_loader):
+                output = self.model(sample["input_ids"])
+                per_token_logps = selective_log_softmax(output.logits, sample["input_ids"])
+                per_token_logps[sample["completion_mask"] == 0] = 0
+                logps = per_token_logps.sum(dim=1)  # sum over sequence length
+                chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
+                ref_chosen_logps.extend(chosen_logps.tolist())
+                ref_rejected_logps.extend(rejected_logps.tolist())
+
+        self.train_dataset = self.train_dataset.add_column(name="ref_chosen_logps", column=ref_chosen_logps)
+        self.train_dataset = self.train_dataset.add_column(name="ref_rejected_logps", column=ref_rejected_logps)
+
+        return super()._inner_training_loop(
+            batch_size=batch_size,
+            args=args,
+            resume_from_checkpoint=resume_from_checkpoint,
+            trial=trial,
+            ignore_keys_for_eval=ignore_keys_for_eval,
+        )
+
+    def compute_loss(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        return_outputs: bool = False,
+        num_items_in_batch: Optional[torch.Tensor] = None,
+    ):
         """
         Compute training loss and additionally compute token accuracies
         """
         mode = "train" if self.model.training else "eval"
 
-        
-        shifted_labels = inputs["input_ids"][:, 1:]         # (B, L-1)
-        shifted_mask = inputs["completion_mask"][:, 1:] # (B, L-1)
+        # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
+        # This can be removed when this issue is fixed.
+        labels = inputs["labels"]
 
-        logits = model(**inputs, use_cache=False).logits
-        ref_logits = self.ref_model(**inputs, use_cache=False).logits
+        # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
+        inputs["use_cache"] = False
+        (loss, outputs) = super().compute_loss(
+            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
+        )
 
-        shifted_logits = ref_logits[:, :-1, :]        # (B, L-1, V)
-        ref_all_logps = F.log_softmax(shifted_logits, dim=-1)  # (B, L-1, V)
-        ref_per_token_logprobs = ref_all_logps.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)  # (B, L-1)
-        ref_per_token_logprobs = ref_per_token_logprobs * shifted_mask
-        ref_logprobs = ref_per_token_logprobs.sum(dim=-1)  # (B,)
-        ref_chosen_logprobs = ref_logprobs[: ref_logprobs.size(0) // 2]  # (B//2,)
-        ref_rejected_logprobs = ref_logprobs[ref_logprobs.size(0) // 2 :]  # (B//2,)
-
-        shifted_logits = logits[:, :-1, :]        # (B, L-1, V)
-        all_logps = F.log_softmax(shifted_logits, dim=-1)  # (B, L-1, V)
-        per_token_logprobs = all_logps.gather(-1, shifted_labels.unsqueeze(-1)).squeeze(-1)  # (B, L-1)
-        per_token_logprobs = per_token_logprobs * shifted_mask
-        logprobs = per_token_logprobs.sum(dim=-1)  # (B,)
-        chosen_logprobs = logprobs[: logprobs.size(0) // 2]  # (B//2,)
-        rejected_logprobs = logprobs[logprobs.size(0) // 2 :]  # (B//2,)
-        
+        # Compute entropy
+        if not self.args.use_liger_kernel:  # liger doesn't return logits
+            with torch.no_grad():
+                per_token_entropy = entropy_from_logits(outputs.logits)
+                if "attention_mask" in inputs:
+                    attention_mask = inputs["attention_mask"]
+                    # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
+                    virtual_attention_mask = torch.ones(
+                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
+                    )
+                    attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
+                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
+                elif "position_ids" in inputs:
+                    entropy = torch.mean(per_token_entropy)
+                else:
+                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+            self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":
             # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
@@ -797,10 +853,17 @@ class DPOTrainer(BaseTrainer):
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if "labels" in inputs and not self.args.use_liger_kernel:
+        if not self.args.use_liger_kernel:
             with torch.no_grad():
-                shift_logits = outputs.logits[..., :-1, :].contiguous()
-                shift_labels = inputs["labels"][..., 1:].contiguous()
+                if "shift_labels" in inputs:
+                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
+                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
+                    # - The last logits require the label from process n+1
+                    shift_logits = outputs.logits.contiguous()
+                    shift_labels = inputs["shift_labels"]
+                else:
+                    shift_logits = outputs.logits[..., :-1, :].contiguous()
+                    shift_labels = labels[..., 1:].contiguous()
 
                 # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
                 # not correspond to actual input labels.
@@ -825,6 +888,10 @@ class DPOTrainer(BaseTrainer):
                 total_sum = total_tokens.sum()
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+                if self.aux_loss_enabled:
+                    aux_loss = outputs.aux_loss
+                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
+                    self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
 
@@ -854,54 +921,3 @@ class DPOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the model.
-            dataset_name (`str` or `None`, *optional*, defaults to `None`):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        tags.update(self._tag_names)
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="DPO",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))
