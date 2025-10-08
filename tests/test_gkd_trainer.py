@@ -17,7 +17,7 @@ import os
 import pytest
 import torch
 import torch.nn.functional as F
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers.testing_utils import require_liger_kernel
 
@@ -220,6 +220,7 @@ class TestGKDTrainer(TrlTestCase):
             save_steps=2,
             per_device_train_batch_size=2,
             per_device_eval_batch_size=2,
+            bf16=False,
             report_to="none",
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
@@ -245,6 +246,7 @@ class TestGKDTrainer(TrlTestCase):
         training_args = GKDConfig(
             output_dir=self.tmp_dir,
             report_to="none",
+            bf16=False,
             use_liger_kernel=True,
         )
         dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
@@ -267,7 +269,7 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.state.log_history[-1]["train_loss"] is not None
 
     def test_generation_config_init(self):
-        training_args = GKDConfig(output_dir=self.tmp_dir)
+        training_args = GKDConfig(output_dir=self.tmp_dir, bf16=False)
         dummy_dataset = load_dataset("trl-internal-testing/zen", "conversational_language_modeling")
 
         trainer = GKDTrainer(
@@ -284,3 +286,91 @@ class TestGKDTrainer(TrlTestCase):
         assert trainer.generation_config.max_new_tokens == training_args.max_new_tokens
         assert trainer.generation_config.temperature == training_args.temperature
         assert trainer.generation_config.top_k == 0
+
+    def test_gkd_trainer_smollm3_thinking_modes(self):
+        smoll_tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM3-3B")
+        training_args = GKDConfig(
+            output_dir=self.tmp_dir,
+            per_device_train_batch_size=2,
+            per_device_eval_batch_size=2,
+            max_steps=1,
+            eval_strategy="no",
+            bf16=False,
+            save_steps=10,
+            report_to="none",
+        )
+
+        raw_examples = [
+            (
+                False,
+                [
+                    {"role": "user", "content": "Explain gravity in simple terms."},
+                    {"role": "assistant", "content": "Gravity pulls matter together."},
+                ],
+            ),
+            (
+                True,
+                [
+                    {"role": "user", "content": "Share a quick fun fact about space."},
+                    {"role": "assistant", "content": "Space is mostly empty, yet full of wonders."},
+                ],
+            ),
+        ]
+        dataset = Dataset.from_list(
+            [
+                {
+                    "messages": messages,
+                    "prompt": smoll_tokenizer.apply_chat_template(
+                        messages[:-1], tokenize=False, add_generation_prompt=True, enable_thinking=enable_thinking
+                    ),
+                }
+                for enable_thinking, messages in raw_examples
+            ]
+        )
+
+        trainer = GKDTrainer(
+            model=self.model,
+            teacher_model=self.teacher_model,
+            args=training_args,
+            train_dataset=dataset,
+            processing_class=smoll_tokenizer,
+        )
+
+        batch = trainer.data_collator([dataset[i] for i in range(len(dataset))])
+
+        placeholder = "<think>\n\n</think>"
+        decoded_inputs = [
+            smoll_tokenizer.decode(example.tolist(), skip_special_tokens=False) for example in batch["input_ids"]
+        ]
+        assert "Reasoning Mode: /no_think" in decoded_inputs[0]
+        assert placeholder in decoded_inputs[0]
+        assert "Reasoning Mode: /think" in decoded_inputs[1]
+        assert placeholder not in decoded_inputs[1]
+
+        pad_id = smoll_tokenizer.pad_token_id
+        for idx in range(len(raw_examples)):
+            prompt_tokens = batch["prompts"][idx][batch["prompts"][idx] != pad_id]
+            input_without_padding = batch["input_ids"][idx][batch["input_ids"][idx] != pad_id]
+            assert torch.equal(
+                prompt_tokens, input_without_padding[: prompt_tokens.size(0)]
+            ), "Prompt tokens should align with the prefix of input_ids after collation."
+
+        decoded_prompts = [
+            smoll_tokenizer.decode(example.tolist(), skip_special_tokens=False) for example in batch["prompts"]
+        ]
+        assert raw_examples[0][1][-1]["content"] not in decoded_prompts[0]
+        assert raw_examples[1][1][-1]["content"] not in decoded_prompts[1]
+
+        ignore_index = trainer.data_collator.ignore_index
+        decoded_no_think_completion = smoll_tokenizer.decode(
+            [token for token in batch["labels"][0].tolist() if token != ignore_index],
+            skip_special_tokens=False,
+        )
+        assert raw_examples[0][1][-1]["content"] in decoded_no_think_completion
+        assert placeholder.strip() not in decoded_no_think_completion
+
+        decoded_think_completion = smoll_tokenizer.decode(
+            [token for token in batch["labels"][1].tolist() if token != ignore_index],
+            skip_special_tokens=False,
+        )
+        assert raw_examples[1][1][-1]["content"] in decoded_think_completion

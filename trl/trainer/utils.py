@@ -102,18 +102,26 @@ class DataCollatorForChatML:
         labels = []
 
         for example in examples:
+            enable_thinking = self._extract_enable_thinking_metadata(example)
             formatted_prompt = example.get(self.prompt_key, None)
+
             if formatted_prompt is None:
-                prompt = example[self.messages_key][:-1]
-                formatted_prompt = self.tokenizer.apply_chat_template(
-                    prompt, tokenize=False, add_generation_prompt=True
-                )
+                prompt_messages = example[self.messages_key][:-1]
+                prompt_kwargs = {"tokenize": False, "add_generation_prompt": True}
+                if enable_thinking is not None:
+                    prompt_kwargs["enable_thinking"] = enable_thinking
+                formatted_prompt = self.tokenizer.apply_chat_template(prompt_messages, **prompt_kwargs)
+            else:
+                if enable_thinking is None:
+                    enable_thinking = self._infer_enable_thinking_from_prompt(formatted_prompt)
+
+            template_kwargs = {"tokenize": False, "add_generation_prompt": False}
+            if enable_thinking is not None:
+                template_kwargs["enable_thinking"] = enable_thinking
 
             if "input_ids" not in example:
                 message = example[self.messages_key]
-                formatted_message = self.tokenizer.apply_chat_template(
-                    message, tokenize=False, add_generation_prompt=False
-                )
+                formatted_message = self.tokenizer.apply_chat_template(message, **template_kwargs)
                 tokenized_message = self.tokenizer(
                     formatted_message,
                     truncation=True,
@@ -172,6 +180,58 @@ class DataCollatorForChatML:
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
         }
+
+    def _extract_enable_thinking_metadata(self, example: Mapping[str, Any]) -> Optional[bool]:
+        if not isinstance(example, Mapping):
+            return None
+        enable_thinking = example.get("enable_thinking", None)
+        if isinstance(enable_thinking, bool):
+            return enable_thinking
+
+        for key in ("chat_template_kwargs", "apply_chat_template_kwargs"):
+            maybe_kwargs = example.get(key)
+            if isinstance(maybe_kwargs, Mapping):
+                candidate = maybe_kwargs.get("enable_thinking")
+                if isinstance(candidate, bool):
+                    return candidate
+
+        messages = example.get(self.messages_key)
+        if isinstance(messages, Sequence) and messages:
+            first_message = messages[0]
+            if isinstance(first_message, Mapping) and first_message.get("role") == "system":
+                content = first_message.get("content", "")
+                if isinstance(content, str):
+                    if "/no_think" in content:
+                        return False
+                    if "/think" in content:
+                        return True
+
+        return None
+
+    @staticmethod
+    def _infer_enable_thinking_from_prompt(formatted_prompt: Any) -> Optional[bool]:
+        if not isinstance(formatted_prompt, str):
+            return None
+
+        if "Reasoning Mode: /no_think" in formatted_prompt:
+            return False
+        if "Reasoning Mode: /think" in formatted_prompt:
+            return True
+
+        def contains_flag(flag: str) -> bool:
+            start = formatted_prompt.find(flag)
+            while start != -1:
+                if start == 0 or formatted_prompt[start - 1] != "<":
+                    return True
+                start = formatted_prompt.find(flag, start + 1)
+            return False
+
+        if contains_flag("/no_think"):
+            return False
+        if contains_flag("/think"):
+            return True
+
+        return None
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:

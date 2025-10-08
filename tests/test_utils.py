@@ -317,6 +317,48 @@ class TestDataCollatorForChatML(TrlTestCase):
 
         assert response_labels == last_assistant_response_tokens, "Labels should match assistant response tokens"
 
+    @pytest.mark.parametrize("enable_thinking", [True, False])
+    def test_smolllm3_reasoning_mode_alignment(self, enable_thinking):
+        tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM3-3B")
+        collator = DataCollatorForChatML(tokenizer=tokenizer, max_length=tokenizer.model_max_length)
+        messages = [
+            {"role": "system", "content": "System msg"},
+            {"role": "user", "content": "Who are you?"},
+            {"role": "assistant", "content": "I am SmolLM."},
+        ]
+        prompt = tokenizer.apply_chat_template(
+            messages[:-1], tokenize=False, add_generation_prompt=True, enable_thinking=enable_thinking
+        )
+        batch = collator([{"messages": messages, "prompt": prompt}])
+        decoded_input = tokenizer.decode(batch["input_ids"][0])
+        expected_mode = "/think" if enable_thinking else "/no_think"
+        assert f"Reasoning Mode: {expected_mode}" in decoded_input
+
+    def test_smolllm3_system_prompt_override(self):
+        tokenizer = AutoTokenizer.from_pretrained("HuggingFaceTB/SmolLM3-3B")
+        collator = DataCollatorForChatML(tokenizer=tokenizer, max_length=tokenizer.model_max_length)
+        messages = [
+            {"role": "user", "content": "Explain gravity."},
+            {"role": "assistant", "content": "Gravity pulls matter together."},
+        ]
+        prompt = tokenizer.apply_chat_template(
+            messages[:-1], tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        batch = collator([{"messages": messages, "prompt": prompt}])
+        decoded_input = tokenizer.decode(batch["input_ids"][0])
+        assert "Reasoning Mode: /no_think" in decoded_input
+        placeholder = "<think>\n\n</think>"
+        assert placeholder in decoded_input, "Serialized prompt should contain the empty think block for /no_think."
+        labels = batch["labels"][0].tolist()
+        effective_labels = [token for token in labels if token != collator.ignore_index]
+        assert effective_labels, "Assistant completion should remain supervised when /no_think is active."
+        expected_completion = tokenizer.encode(
+            messages[-1]["content"] + tokenizer.eos_token, add_special_tokens=False
+        )
+        assert effective_labels[: len(expected_completion)] == expected_completion
+        decoded_completion = tokenizer.decode(effective_labels)
+        assert placeholder.strip() not in decoded_completion, "Think placeholder should be masked from completion labels."
+
 
 class TestBatchGeneration(TrlTestCase):
     def setup_method(self):
