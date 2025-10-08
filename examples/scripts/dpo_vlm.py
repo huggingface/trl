@@ -85,7 +85,7 @@ if __name__ == "__main__":
     script_args, training_args, model_args = parser.parse_args_and_config()
 
     ################
-    # Model & Tokenizer
+    # Model & Processor
     ################
     dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
 
@@ -117,7 +117,6 @@ if __name__ == "__main__":
     processor = AutoProcessor.from_pretrained(
         model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, do_image_splitting=False
     )
-    tokenizer = processor.tokenizer
 
     # Set up the chat template
     if model.config.model_type == "idefics2":
@@ -127,8 +126,6 @@ if __name__ == "__main__":
     elif model.config.model_type == "llava":
         processor.chat_template = """{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}{% for message in messages %}{% if message['role'] == 'user' %}USER: {% else %}ASSISTANT: {% endif %}{% for item in message['content'] %}{% if item['type'] == 'text' %}{{ item['text'] }}{% elif item['type'] == 'image' %}<image>{% endif %}{% endfor %}{% if message['role'] == 'user' %} {% else %}{{eos_token}}{% endif %}{% endfor %}{% if add_generation_prompt %}ASSISTANT: {% endif %}"""
 
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
     if script_args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -153,7 +150,6 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=processor,
         peft_config=peft_config,
     )
 
