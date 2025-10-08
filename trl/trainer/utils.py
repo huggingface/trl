@@ -268,6 +268,7 @@ class DataCollatorForChatML:
             mask = mask[:max_length]
         return {"input_ids": ids, "attention_mask": mask}
 
+    @staticmethod
     def _extract_enable_thinking_metadata(self, example: Mapping[str, Any]) -> Optional[bool]:
         if not isinstance(example, Mapping):
             return None
