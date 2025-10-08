@@ -143,7 +143,13 @@ def apply_chat_template(
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
-        messages = tokenizer.apply_chat_template(example["messages"], tools=tools, tokenize=False, **template_kwargs)
+        messages = tokenizer.apply_chat_template(
+            example["messages"],
+            tools=tools,
+            tokenize=False,
+            **example.get("chat_template_kwargs", {}),
+            **template_kwargs,
+        )
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
@@ -162,6 +168,7 @@ def apply_chat_template(
             continue_final_message=continue_final_message,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
+            **example.get("chat_template_kwargs", {}),
             **template_kwargs,
         )
 
@@ -169,7 +176,11 @@ def apply_chat_template(
     if "prompt" in example:  # explicit prompt and prompt-completion case
         if "chosen" in example:
             prompt_chosen = tokenizer.apply_chat_template(
-                example["prompt"] + example["chosen"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["chosen"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # DeepSeek-R1 inserts a <tool_call> token when using `add_generation_prompt`, which can cause discrepancies
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
@@ -179,24 +190,42 @@ def apply_chat_template(
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = tokenizer.apply_chat_template(
-                example["prompt"] + example["rejected"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["rejected"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
-                example["prompt"] + example["completion"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["completion"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
-            chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False, **template_kwargs)
+            chosen = tokenizer.apply_chat_template(
+                example["chosen"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
+            )
         if "rejected" in example:
             rejected = tokenizer.apply_chat_template(
-                example["rejected"], tools=tools, tokenize=False, **template_kwargs
+                example["rejected"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
 
     # Extract the completion by removing the prompt part from the prompt-completion string
