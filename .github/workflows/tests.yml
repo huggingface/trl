@@ -11,7 +11,7 @@ on:
       - "scripts/**.py"
       - "tests/**.py"
       - "trl/**.py"
-      - "setup.py"
+      - "pyproject.toml"
 
 env:
   TQDM_DISABLE: 1
