@@ -1,16 +1,15 @@
 # Examples
 
-
 ## Introduction
 
 The examples should work in any of the following settings (with the same script):
-   - single GPU
-   - multi GPUs (using PyTorch distributed mode)
-   - multi GPUs (using DeepSpeed ZeRO-Offload stages 1, 2, & 3)
-   - fp16 (mixed-precision), fp32 (normal precision), or bf16 (bfloat16 precision)
 
-To run it in each of these various modes, first initialize the accelerate
-configuration with `accelerate config`
+- single GPU
+- multi GPUs (using PyTorch distributed mode)
+- multi GPUs (using DeepSpeed ZeRO-Offload stages 1, 2, & 3)
+- fp16 (mixed-precision), fp32 (normal precision), or bf16 (bfloat16 precision)
+
+To run it in each of these various modes, first initialize the accelerate configuration with `accelerate config`.
 
 To train with a 4-bit or 8-bit model, please run:
 
@@ -27,7 +26,6 @@ accelerate config # will prompt you to define the training configuration
 ```
 
 Then, it is encouraged to launch jobs with `accelerate launch`!
-
 
 ## Maintained Examples
 
@@ -72,10 +70,7 @@ Here are also some easier-to-run colab notebooks that you can use to get started
 | [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-sentiment.ipynb) | This notebook demonstrates how to reproduce the GPT2 imdb sentiment tuning example on a jupyter notebook. |
 | [`examples/notebooks/gpt2-control.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-control.ipynb) | This notebook demonstrates how to reproduce the GPT2 sentiment control example on a jupyter notebook. |
 
-
-We also have some other examples that are less maintained but can be used as a reference:
-1. **[research_projects](https://github.com/huggingface/trl/tree/main/examples/research_projects)**: Check out this folder to find the scripts used for some research projects that used TRL (LM de-toxification, Stack-Llama, etc.)
-
+We also have some other examples that are less maintained but can be used as a reference in [research_projects](https://github.com/huggingface/trl/tree/main/examples/research_projects). Check out this folder to find the scripts used for some research projects that used TRL (LM de-toxification, Stack-Llama, etc.)
 
 ## Distributed training
 

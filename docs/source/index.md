@@ -9,11 +9,13 @@ The library is integrated with 🤗 [transformers](https://github.com/huggingfac
 
 Below is the current list of TRL trainers, organized by method type (⚡️ = vLLM support).
 
-<div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
+## Taxonomy
 
+<div style="display: flex; justify-content: space-between; width: 100%; gap: 2rem;">
 <div style="flex: 1; min-width: 0;">
 
-**Online methods**
+### Online methods
+
 - [`GRPOTrainer`] ⚡️
 - [`RLOOTrainer`] ⚡️
 - [`OnlineDPOTrainer`] ⚡️
@@ -21,15 +23,16 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 - [`XPOTrainer`] ⚡️
 - [`PPOTrainer`]
 
-**Reward modeling**
+### Reward modeling
+
 - [`PRMTrainer`]
 - [`RewardTrainer`]
 
 </div>
-
 <div style="flex: 1; min-width: 0;">
 
-**Offline methods**
+### Offline methods
+
 - [`SFTTrainer`]
 - [`DPOTrainer`]
 - [`ORPOTrainer`]
@@ -37,13 +40,12 @@ Below is the current list of TRL trainers, organized by method type (⚡️ = vL
 - [`CPOTrainer`]
 - [`KTOTrainer`]
 
-**Knowledge distillation**
+### Knowledge distillation
+
 - [`GKDTrainer`]
 
 </div>
-
 </div>
-
 
 ## 🎉 What's New
 
