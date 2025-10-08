@@ -158,6 +158,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         rejected_mask = [torch.tensor(mask, dtype=torch.long) for mask in rejected_mask]
         input_ids = prompt_chosen_ids + prompt_rejected_ids
         completion_mask = chosen_mask + rejected_mask
+        if "ref_chosen_logps" in examples[0]:
+            ref_chosen_logps = torch.tensor([example["ref_chosen_logps"] for example in examples])
+        if "ref_rejected_logps" in examples[0]:
+            ref_rejected_logps = torch.tensor([example["ref_rejected_logps"] for example in examples])
 
         # Pad
         output = {}
@@ -173,6 +177,10 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
+        if "ref_chosen_logps" in examples[0]:
+            output["ref_chosen_logps"] = ref_chosen_logps
+        if "ref_rejected_logps" in examples[0]:
+            output["ref_rejected_logps"] = ref_rejected_logps
         return output
 
 
@@ -616,6 +624,30 @@ class DPOTrainer(BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        def ref_chosen_logps(examples, collator, model):
+            examples = [dict(zip(examples.keys(), v)) for v in zip(*examples.values())]  # dict[list] to list[dict]
+            inputs = collator(examples)
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+            with torch.no_grad():
+                output = model(inputs["input_ids"])
+            shifted_logits = output.logits[..., :-1, :].contiguous()
+            shifted_labels = inputs["input_ids"][..., 1:].contiguous()
+            per_token_logps = selective_log_softmax(shifted_logits, shifted_labels)
+            per_token_logps[inputs["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
+            logps = per_token_logps.sum(dim=1)  # sum over sequence length
+            chosen_logps, rejected_logps = logps.chunk(2, dim=0)
+            return {
+                "ref_chosen_logps": chosen_logps.tolist(),
+                "ref_rejected_logps": rejected_logps.tolist(),
+            }
+
+        self.train_dataset = self.train_dataset.map(
+            ref_chosen_logps,
+            batched=True,
+            batch_size=args.per_device_train_batch_size,
+            fn_kwargs={"collator": data_collator, "model": self.model},
+        )
+
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
@@ -761,11 +793,15 @@ class DPOTrainer(BaseTrainer):
             if self._is_vision_dataset:
                 self._signature_columns = ["prompt", "chosen", "rejectedimages"]
             else:
-                self._signature_columns = ["prompt_ids", "chosen_ids", "rejected_ids"]
+                self._signature_columns = [
+                    "prompt_ids",
+                    "chosen_ids",
+                    "rejected_ids",
+                    "ref_chosen_logps",
+                    "ref_rejected_logps",
+                ]
 
-    def _inner_training_loop(
-        self, batch_size=None, args=None, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None
-    ):
+    def _precompute_ref_logps(self):
         data_loader = DataLoader(
             self.train_dataset,
             batch_size=self.args.per_device_train_batch_size,
@@ -779,9 +815,11 @@ class DPOTrainer(BaseTrainer):
         ref_rejected_logps = []
         with torch.no_grad():
             for sample in iter(data_loader):
-                output = self.model(sample["input_ids"])
-                per_token_logps = selective_log_softmax(output.logits, sample["input_ids"])
-                per_token_logps[sample["completion_mask"] == 0] = 0
+                output = self.model(sample["input_ids"], use_cache=False)
+                shifted_logits = output.logits[..., :-1, :].contiguous()
+                shifted_labels = sample["input_ids"][..., 1:].contiguous()
+                per_token_logps = selective_log_softmax(shifted_logits, shifted_labels)
+                per_token_logps[sample["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
                 logps = per_token_logps.sum(dim=1)  # sum over sequence length
                 chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
                 ref_chosen_logps.extend(chosen_logps.tolist())
@@ -789,14 +827,6 @@ class DPOTrainer(BaseTrainer):
 
         self.train_dataset = self.train_dataset.add_column(name="ref_chosen_logps", column=ref_chosen_logps)
         self.train_dataset = self.train_dataset.add_column(name="ref_rejected_logps", column=ref_rejected_logps)
-
-        return super()._inner_training_loop(
-            batch_size=batch_size,
-            args=args,
-            resume_from_checkpoint=resume_from_checkpoint,
-            trial=trial,
-            ignore_keys_for_eval=ignore_keys_for_eval,
-        )
 
     def compute_loss(
         self,
@@ -812,7 +842,13 @@ class DPOTrainer(BaseTrainer):
 
         # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
         # This can be removed when this issue is fixed.
-        labels = inputs["labels"]
+        output = self.model(inputs["input_ids"])
+        shifted_logits = output.logits[..., :-1, :].contiguous()
+        shifted_labels = inputs["input_ids"][..., 1:].contiguous()
+        per_token_logps = selective_log_softmax(shifted_logits, shifted_labels)
+        per_token_logps[inputs["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
+        logps = per_token_logps.sum(dim=1)  # sum over sequence length
+        chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
