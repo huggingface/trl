@@ -17,6 +17,7 @@ import importlib.resources as pkg_resources
 import json
 import os
 import random
+import re
 import socket
 import warnings
 from collections.abc import Mapping, Sequence, Sized
@@ -95,81 +96,17 @@ class DataCollatorForChatML:
             self.max_length = min(self.tokenizer.model_max_length, 1024)
 
     def __call__(self, examples: list[dict[str, Any]]) -> dict[str, torch.Tensor]:
-        input_ids = []
-        attention_mask = []
-        prompts_input_ids = []
-        prompt_attention_mask = []
-        labels = []
+        processed = [self._process_example(example) for example in examples]
 
-        for example in examples:
-            enable_thinking = self._extract_enable_thinking_metadata(example)
-            formatted_prompt = example.get(self.prompt_key, None)
+        input_ids = [torch.tensor(item["input_ids"], dtype=torch.long) for item in processed]
+        attention_mask = [torch.tensor(item["attention_mask"], dtype=torch.long) for item in processed]
+        labels = [torch.tensor(item["labels"], dtype=torch.long) for item in processed]
+        prompts_input_ids = [torch.tensor(item["prompt_input_ids"], dtype=torch.long) for item in processed]
+        prompt_attention_mask = [torch.tensor(item["prompt_attention_mask"], dtype=torch.long) for item in processed]
 
-            if formatted_prompt is None:
-                prompt_messages = example[self.messages_key][:-1]
-                prompt_kwargs = {"tokenize": False, "add_generation_prompt": True}
-                if enable_thinking is not None:
-                    prompt_kwargs["enable_thinking"] = enable_thinking
-                formatted_prompt = self.tokenizer.apply_chat_template(prompt_messages, **prompt_kwargs)
-            else:
-                if enable_thinking is None:
-                    enable_thinking = self._infer_enable_thinking_from_prompt(formatted_prompt)
-
-            template_kwargs = {"tokenize": False, "add_generation_prompt": False}
-            if enable_thinking is not None:
-                template_kwargs["enable_thinking"] = enable_thinking
-
-            if "input_ids" not in example:
-                message = example[self.messages_key]
-                formatted_message = self.tokenizer.apply_chat_template(message, **template_kwargs)
-                tokenized_message = self.tokenizer(
-                    formatted_message,
-                    truncation=True,
-                    max_length=self.max_length,
-                    padding=False,
-                    return_tensors=None,
-                    add_special_tokens=False,
-                )
-                input_ids.append(tokenized_message["input_ids"])
-                if "attention_mask" in example:
-                    attention_mask.append(tokenized_message["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(tokenized_message["input_ids"]))
-            else:
-                input_ids.append(example["input_ids"])
-                if "attention_mask" in example:
-                    attention_mask.append(example["attention_mask"])
-                else:
-                    attention_mask.append([1] * len(example["input_ids"]))
-
-            tokenized_prompt = self.tokenizer(
-                formatted_prompt,
-                truncation=True,
-                max_length=len(input_ids[-1]),
-                padding=False,
-                return_tensors=None,
-                add_special_tokens=False,
-            )
-
-            prompts_input_ids.append(tokenized_prompt["input_ids"])
-            prompt_attention_mask.append(tokenized_prompt["attention_mask"])
-
-            # Create the labels that will have all but the completion tokens of the example["input_ids"] set to ignore_index
-            label = [self.ignore_index] * len(input_ids[-1])
-            completion_start_idx = len(tokenized_prompt["input_ids"])
-            label[completion_start_idx:] = input_ids[-1][completion_start_idx:]
-            labels.append(label)
-
-        # convert to list of tensors and pad
-        input_ids = [torch.tensor(ids, dtype=torch.long) for ids in input_ids]
-        attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in attention_mask]
-        labels = [torch.tensor(label, dtype=torch.long) for label in labels]
         input_ids = pad(input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         attention_mask = pad(attention_mask, padding_side="left", padding_value=0)
         labels = pad(labels, padding_side="left", padding_value=self.ignore_index)
-
-        prompts_input_ids = [torch.tensor(ids, dtype=torch.long) for ids in prompts_input_ids]
-        prompt_attention_mask = [torch.tensor(mask, dtype=torch.long) for mask in prompt_attention_mask]
         prompts_input_ids = pad(prompts_input_ids, padding_side="left", padding_value=self.tokenizer.pad_token_id)
         prompt_attention_mask = pad(prompt_attention_mask, padding_side="left", padding_value=0)
 
@@ -180,6 +117,156 @@ class DataCollatorForChatML:
             "prompts": prompts_input_ids,
             "prompt_attention_mask": prompt_attention_mask,
         }
+
+    def _process_example(self, example: Mapping[str, Any]) -> dict[str, list[int]]:
+        messages = example.get(self.messages_key)
+        prompt_text = example.get(self.prompt_key)
+
+        # Prefer conversational examples; fall back to tokenized inputs.
+        if messages is not None:
+            return self._process_from_messages(example, messages, prompt_text)
+
+        if "input_ids" in example:
+            return self._process_from_tokenized(example, prompt_text)
+
+        raise ValueError(
+            f"Each example must include `{self.messages_key}` or pre-tokenized `input_ids` for ChatML collation."
+        )
+
+    def _process_from_messages(
+        self,
+        example: Mapping[str, Any],
+        messages: Sequence[Mapping[str, Any]],
+        prompt_text: Optional[str],
+    ) -> dict[str, list[int]]:
+        enable_thinking = self._resolve_enable_thinking(example, messages, prompt_text)
+
+        if prompt_text is None:
+            prompt_messages = messages[:-1]
+            prompt_text = self._apply_chat_template(
+                prompt_messages, add_generation_prompt=True, enable_thinking=enable_thinking
+            )
+
+        conversation_text = self._apply_chat_template(
+            messages, add_generation_prompt=False, enable_thinking=enable_thinking
+        )
+
+        conversation_tokens = self._tokenize_text(conversation_text, self.max_length)
+        prompt_tokens = self._tokenize_text(
+            prompt_text, len(conversation_tokens["input_ids"])
+        )  # ensure prompt isn't longer than the conversation
+
+        prompt_len = len(prompt_tokens["input_ids"])
+        if prompt_len > len(conversation_tokens["input_ids"]):
+            prompt_len = len(conversation_tokens["input_ids"])
+
+        if conversation_tokens["input_ids"][:prompt_len] != prompt_tokens["input_ids"][:prompt_len]:
+            prompt_tokens["input_ids"] = conversation_tokens["input_ids"][:prompt_len]
+            prompt_tokens["attention_mask"] = conversation_tokens["attention_mask"][:prompt_len]
+        else:
+            prompt_tokens["input_ids"] = prompt_tokens["input_ids"][:prompt_len]
+            prompt_tokens["attention_mask"] = prompt_tokens["attention_mask"][:prompt_len]
+
+        labels = self._build_labels(conversation_tokens["input_ids"], prompt_len)
+
+        return {
+            "input_ids": conversation_tokens["input_ids"],
+            "attention_mask": conversation_tokens["attention_mask"],
+            "labels": labels,
+            "prompt_input_ids": prompt_tokens["input_ids"],
+            "prompt_attention_mask": prompt_tokens["attention_mask"],
+        }
+
+    def _process_from_tokenized(self, example: Mapping[str, Any], prompt_text: Optional[str]) -> dict[str, list[int]]:
+        input_ids = list(example["input_ids"])
+        attention_mask = list(example.get("attention_mask", [1] * len(input_ids)))
+
+        if len(attention_mask) != len(input_ids):
+            raise ValueError("`attention_mask` must be the same length as `input_ids`.")
+
+        if "prompts" in example:
+            prompt_ids = list(example["prompts"])
+            prompt_mask = list(example.get("prompt_attention_mask", [1] * len(prompt_ids)))
+        elif prompt_text is not None:
+            prompt_tokens = self._tokenize_text(prompt_text, len(input_ids))
+            prompt_ids = prompt_tokens["input_ids"]
+            prompt_mask = prompt_tokens["attention_mask"]
+        else:
+            raise ValueError(
+                "Pre-tokenized example must provide either `prompts` or textual prompt to infer the prompt tokens."
+            )
+
+        if len(prompt_ids) > len(input_ids):
+            prompt_ids = prompt_ids[: len(input_ids)]
+            prompt_mask = prompt_mask[: len(input_ids)]
+
+        if input_ids[: len(prompt_ids)] != prompt_ids:
+            prompt_ids = input_ids[: len(prompt_ids)]
+            prompt_mask = [1] * len(prompt_ids)
+
+        labels = self._build_labels(input_ids, len(prompt_ids))
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "prompt_input_ids": prompt_ids,
+            "prompt_attention_mask": prompt_mask,
+        }
+
+    def _build_labels(self, input_ids: list[int], prompt_length: int) -> list[int]:
+        labels = [self.ignore_index] * len(input_ids)
+        labels[prompt_length:] = input_ids[prompt_length:]
+        return labels
+
+    def _resolve_enable_thinking(
+        self, example: Mapping[str, Any], messages: Optional[Sequence[Mapping[str, Any]]], prompt: Optional[str]
+    ) -> Optional[bool]:
+        enable_thinking = self._extract_enable_thinking_metadata(example)
+        if enable_thinking is not None:
+            return enable_thinking
+
+        if prompt is not None:
+            inferred = self._infer_enable_thinking_from_prompt(prompt)
+            if inferred is not None:
+                return inferred
+
+        if messages:
+            first_message = messages[0] if messages and isinstance(messages[0], Mapping) else None
+            if first_message:
+                content = first_message.get("content")
+                if isinstance(content, str):
+                    if "/no_think" in content:
+                        return False
+                    if "/think" in content:
+                        return True
+        return None
+
+    def _apply_chat_template(
+        self, messages: Sequence[Mapping[str, Any]], *, add_generation_prompt: bool, enable_thinking: Optional[bool]
+    ) -> str:
+        kwargs: dict[str, Any] = {"tokenize": False, "add_generation_prompt": add_generation_prompt}
+        if enable_thinking is not None:
+            kwargs["enable_thinking"] = enable_thinking
+        return self.tokenizer.apply_chat_template(messages, **kwargs)
+
+    def _tokenize_text(self, text: str, max_length: Optional[int]) -> dict[str, list[int]]:
+        tokenized = self.tokenizer(
+            text,
+            truncation=True,
+            max_length=max_length if max_length is not None else self.max_length,
+            padding=False,
+            return_tensors=None,
+            add_special_tokens=False,
+        )
+        ids = tokenized["input_ids"]
+        mask = tokenized.get("attention_mask")
+        if mask is None:
+            mask = [1] * len(ids)
+        if max_length is not None and len(ids) > max_length:
+            ids = ids[:max_length]
+            mask = mask[:max_length]
+        return {"input_ids": ids, "attention_mask": mask}
 
     def _extract_enable_thinking_metadata(self, example: Mapping[str, Any]) -> Optional[bool]:
         if not isinstance(example, Mapping):
@@ -195,17 +282,6 @@ class DataCollatorForChatML:
                 if isinstance(candidate, bool):
                     return candidate
 
-        messages = example.get(self.messages_key)
-        if isinstance(messages, Sequence) and messages:
-            first_message = messages[0]
-            if isinstance(first_message, Mapping) and first_message.get("role") == "system":
-                content = first_message.get("content", "")
-                if isinstance(content, str):
-                    if "/no_think" in content:
-                        return False
-                    if "/think" in content:
-                        return True
-
         return None
 
     @staticmethod
@@ -213,25 +289,16 @@ class DataCollatorForChatML:
         if not isinstance(formatted_prompt, str):
             return None
 
-        if "Reasoning Mode: /no_think" in formatted_prompt:
+        if DataCollatorForChatML._contains_mode_flag(formatted_prompt, "/no_think"):
             return False
-        if "Reasoning Mode: /think" in formatted_prompt:
+        if DataCollatorForChatML._contains_mode_flag(formatted_prompt, "/think"):
             return True
-
-        def contains_flag(flag: str) -> bool:
-            start = formatted_prompt.find(flag)
-            while start != -1:
-                if start == 0 or formatted_prompt[start - 1] != "<":
-                    return True
-                start = formatted_prompt.find(flag, start + 1)
-            return False
-
-        if contains_flag("/no_think"):
-            return False
-        if contains_flag("/think"):
-            return True
-
         return None
+
+    @staticmethod
+    def _contains_mode_flag(text: str, flag: str) -> bool:
+        pattern = rf"(?<![<\w/]){re.escape(flag)}(?=\W|$)"
+        return re.search(pattern, text) is not None
 
 
 def _is_port_free(port: int, host: str = "127.0.0.1") -> bool:
