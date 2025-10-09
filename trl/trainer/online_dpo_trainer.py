@@ -592,15 +592,16 @@ class OnlineDPOTrainer(BaseTrainer):
                 self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
-        for i, reward_func in enumerate(self.reward_funcs):
-            if isinstance(reward_func, PreTrainedModel):
-                if self.is_deepspeed_enabled:
-                    self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
-                else:
-                    # set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
-                    self.reward_funcs[i] = self.accelerator.prepare_model(
-                        reward_func, evaluation_mode=True, device_placement=True
-                    )
+        if self.reward_funcs is not None:
+            for i, reward_func in enumerate(self.reward_funcs):
+                if isinstance(reward_func, PreTrainedModel):
+                    if self.is_deepspeed_enabled:
+                        self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
+                    else:
+                        # set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
+                        self.reward_funcs[i] = self.accelerator.prepare_model(
+                            reward_func, evaluation_mode=True, device_placement=True
+                        )
 
     @property
     def beta(self):
