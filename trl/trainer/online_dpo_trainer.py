@@ -841,8 +841,10 @@ class OnlineDPOTrainer(BaseTrainer):
 
     def _generate_vllm_colocate(self, prompts, images=None):
         """Generate completions using vLLM colocate mode"""
-        # Update model weights if needed
-        self._move_model_to_vllm()
+        # Update model weights if needed - only after gradient accumulation completes
+        if self.state.global_step != self._last_loaded_step:
+            self._move_model_to_vllm()
+            self._last_loaded_step = self.state.global_step
 
         # Apply chat template if conversational
         if is_conversational({"prompt": prompts[0]}):
