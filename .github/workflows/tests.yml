@@ -11,7 +11,7 @@ on:
       - "scripts/**.py"
       - "tests/**.py"
       - "trl/**.py"
-      - "setup.py"
+      - "pyproject.toml"
 
 env:
   TQDM_DISABLE: 1
@@ -41,7 +41,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
@@ -93,7 +93,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
@@ -149,7 +149,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:
@@ -201,7 +201,7 @@ jobs:
     runs-on:
       group: aws-g4dn-2xlarge
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all
     defaults:
       run:

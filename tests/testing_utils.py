@@ -16,6 +16,7 @@ import functools
 import random
 import signal
 import warnings
+from collections.abc import Callable
 
 import psutil
 import pytest
@@ -73,7 +74,7 @@ class TrlTestCase:
         self.tmp_dir = str(tmp_path)
 
 
-def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> callable:
+def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> Callable:
     """
     Decorator to ignore warnings with a specific message and/or category.
 
