@@ -61,6 +61,8 @@
     title: Sentiment Tuning
   - local: using_llama_models
     title: Training StackLlama
+  - local: detoxifying_a_lm
+    title: Detoxifying a Language Model
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
   title: Examples
