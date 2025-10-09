@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import time
 
 import pytest
@@ -59,6 +60,9 @@ class TestJudges(TrlTestCase):
         raise ValueError("Failed to load PairRMJudge")
 
     @require_llm_blender
+    @pytest.mark.skipif(
+        sys.version_info == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
+    )
     def test_pair_rm_judge(self):
         judge = self.load_pair_rm_judge()
         prompts, completions = self._get_prompts_and_pairwise_completions()
@@ -68,6 +72,9 @@ class TestJudges(TrlTestCase):
         assert ranks == [0, 1]
 
     @require_llm_blender
+    @pytest.mark.skipif(
+        sys.version_info == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
+    )
     def test_pair_rm_judge_return_scores(self):
         judge = self.load_pair_rm_judge()
         prompts, completions = self._get_prompts_and_pairwise_completions()
