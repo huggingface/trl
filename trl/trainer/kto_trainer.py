@@ -51,6 +51,7 @@ from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt, maybe_
 from ..import_utils import is_liger_kernel_available
 from ..models import create_reference_model, prepare_deepspeed
 from .base_trainer import BaseTrainer
+from .callbacks import HumanlineSyncRefModelCallback
 from .kto_config import KTOConfig
 from .utils import (
     DPODataCollatorWithPadding,
@@ -572,6 +573,10 @@ class KTOTrainer(BaseTrainer):
         self.beta = args.beta
         self.desirable_weight = args.desirable_weight
         self.undesirable_weight = args.undesirable_weight
+        self.humanline = args.humanline
+        self.humanline_log_eps_P = args.humanline_log_eps_P
+        self.humanline_log_eps_R = args.humanline_log_eps_R
+        self.humanline_sync_freq = args.humanline_sync_freq
         self.aux_loss_enabled = getattr(model.config, "output_router_logits", False)
         self.aux_loss_coef = getattr(model.config, "router_aux_loss_coef", 0.0)
         if self.aux_loss_enabled and self.aux_loss_coef == 0.0:
@@ -787,6 +792,9 @@ class KTOTrainer(BaseTrainer):
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
+        if self.args.humanline:
+            self.add_callback(HumanlineSyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+            
         # Import Liger loss if enabled
         if self.args.use_liger_loss:
             if not is_liger_kernel_available():
@@ -1004,8 +1012,8 @@ class KTOTrainer(BaseTrainer):
 
         return completion_logps, KL_logps
 
-    @staticmethod
     def get_batch_logps(
+        self,
         logits: torch.FloatTensor,
         labels: torch.LongTensor,
         average_log_prob: bool = False,
@@ -1051,7 +1059,9 @@ class KTOTrainer(BaseTrainer):
 
         per_token_logps = selective_log_softmax(logits, labels)
 
-        if average_log_prob:
+        if self.humanline:
+            return (per_token_logps * loss_mask)
+        elif average_log_prob:
             return (per_token_logps * loss_mask).sum(-1) / loss_mask.sum(-1)
         else:
             return (per_token_logps * loss_mask).sum(-1)
@@ -1138,7 +1148,10 @@ class KTOTrainer(BaseTrainer):
             between the policy and reference models.
         """
         if self.calculate_KL:
-            kl = (policy_KL_logps - reference_KL_logps).mean().detach()
+            if self.humanline:
+                policy_KL_logps.clamp_(min=self.humanline_log_eps_P, max=self.humanline_log_eps_R)
+                reference_KL_logps.clamp_(min=self.humanline_log_eps_P, max=self.humanline_log_eps_R)
+            kl = (policy_KL_logps - reference_KL_logps).sum(-1).mean().detach()
             kl = self.accelerator.gather_for_metrics(kl).mean().clamp(min=0)
         else:
             kl = torch.zeros(1).to(policy_chosen_logps.device)
@@ -1146,6 +1159,10 @@ class KTOTrainer(BaseTrainer):
         # Chosen losses
         if policy_chosen_logps.shape[0] != 0 or reference_chosen_logps.shape[0] != 0:
             chosen_logratios = policy_chosen_logps - reference_chosen_logps
+
+            if self.humanline:
+                chosen_logratios.clamp_(min=self.humanline_log_eps_P, max=self.humanline_log_eps_R)
+                chosen_logratios = chosen_logratios.sum(-1)
 
             if self.loss_type == "kto":
                 # Eqn (7) of the KTO paper (https://huggingface.co/papers/2402.01306)
@@ -1165,6 +1182,10 @@ class KTOTrainer(BaseTrainer):
         # Rejected losses
         if policy_rejected_logps.shape[0] != 0 or reference_rejected_logps.shape[0] != 0:
             rejected_logratios = policy_rejected_logps - reference_rejected_logps
+
+            if self.humanline:
+                rejected_logratios.clamp_(min=self.humanline_log_eps_P, max=self.humanline_log_eps_R)
+                rejected_logratios = rejected_logratios.sum(-1)
 
             if self.loss_type == "kto":
                 rejected_losses = 1 - F.sigmoid(self.beta * (kl - rejected_logratios))
