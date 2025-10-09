@@ -159,13 +159,16 @@ class HumanlineSyncRefModelCallback(TrainerCallback):
         """
         Update the reference model to have the policy weights.
         """
-        if state.global_step % args.humanline_sync_freq == 0:
+        if self.ref_model is None:
+            return
+        if (state.global_step + 1) % args.humanline_sync_freq == 0:
             model: PreTrainedModel = kwargs["model"]
-            if self.ref_model is not None:
-                self.policy_state_dict = self.accelerator.get_state_dict(model)
+            self.policy_state_dict = self.accelerator.get_state_dict(model)
 
     def on_step_end(self, args, state, control, **kwargs):
         if state.global_step % args.humanline_sync_freq == 0:
+            if self.policy_state_dict is None or self.ref_model is None:
+                return
             self.accelerator.unwrap_model(self.ref_model).load_state_dict(self.policy_state_dict)
             self.accelerator.wait_for_everyone()
             self.ref_model.eval()

@@ -55,7 +55,7 @@ from ..data_utils import maybe_apply_chat_template, maybe_extract_prompt
 from ..models import create_reference_model, prepare_deepspeed
 from ..models.utils import prepare_fsdp
 from .base_trainer import BaseTrainer
-from .callbacks import SyncRefModelCallback
+from .callbacks import SyncRefModelCallback, HumanlineSyncRefModelCallback
 from .dpo_config import DPOConfig, FDivergenceConstants, FDivergenceType
 from .utils import (
     RunningMoments,
@@ -413,6 +413,10 @@ class DPOTrainer(BaseTrainer):
         self.truncation_mode = args.truncation_mode
         self.precompute_ref_log_probs = args.precompute_ref_log_probs
         self.use_logits_to_keep = args.use_logits_to_keep
+        self.humanline = args.humanline
+        self.humanline_log_eps_P = args.humanline_log_eps_P
+        self.humanline_log_eps_R = args.humanline_log_eps_R
+        self.humanline_sync_freq = args.humanline_sync_freq
 
         if args.padding_free:
             if model.config._attn_implementation != "flash_attention_2":
@@ -539,6 +543,9 @@ class DPOTrainer(BaseTrainer):
                 )
 
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+        
+        if self.args.humanline:
+            self.add_callback(HumanlineSyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
         if "bco_pair" in self.loss_type:
             self.running = RunningMoments(self.accelerator)
@@ -930,7 +937,7 @@ class DPOTrainer(BaseTrainer):
                     ref_model_output = self.concatenated_forward(self.model, batch, is_ref_model=True)
             else:
                 ref_model_output = self.concatenated_forward(self.ref_model, batch, is_ref_model=True)
-        return ref_model_output["chosen_logps"], ref_model_output["rejected_logps"]
+        return ref_model_output["chosen_logps"], ref_model_output["rejected_logps"], ref_model_output["per_token_chosen_logps"], ref_model_output["per_token_rejected_logps"]
 
     @staticmethod
     def concatenated_inputs(
@@ -1064,6 +1071,10 @@ class DPOTrainer(BaseTrainer):
         # Get the log ratios for the chosen and rejected responses
         chosen_logratios = chosen_logps.to(device) - (not self.reference_free) * ref_chosen_logps.to(device)
         rejected_logratios = rejected_logps.to(device) - (not self.reference_free) * ref_rejected_logps.to(device)
+
+        if self.humanline:
+            chosen_logratios.clamp_(min=self.humanline_log_eps_P, max=self.humanline_log_eps_R)
+            rejected_logratios.clamp_(min=self.humanline_log_eps_P, max=self.humanline_log_eps_R)
 
         if self.f_divergence_type == FDivergenceType.ALPHA_DIVERGENCE:
             # The alpha-divergence formula: (1 - u^-alpha) / alpha
@@ -1663,6 +1674,8 @@ class DPOTrainer(BaseTrainer):
 
         output["chosen_logps"] = all_logps[:num_examples]
         output["rejected_logps"] = all_logps[num_examples:]
+        output["per_token_chosen_logps"] = per_token_logps[:num_examples]
+        output["per_token_rejected_logps"] = per_token_logps[num_examples:]
 
         # Compute the mean logits
         if self.padding_free:
@@ -1706,8 +1719,10 @@ class DPOTrainer(BaseTrainer):
             if "ref_chosen_logps" in batch and "ref_rejected_logps" in batch:
                 ref_chosen_logps = batch["ref_chosen_logps"]
                 ref_rejected_logps = batch["ref_rejected_logps"]
+                ref_per_token_chosen_logps = batch["ref_per_token_chosen_logps"]
+                ref_per_token_rejected_logps = batch["ref_per_token_rejected_logps"]
             else:
-                ref_chosen_logps, ref_rejected_logps = self.compute_ref_log_probs(batch)
+                ref_chosen_logps, ref_rejected_logps, ref_per_token_chosen_logps, ref_per_token_rejected_logps = self.compute_ref_log_probs(batch)
 
             # Initialize combined losses
             losses = 0
@@ -1717,14 +1732,26 @@ class DPOTrainer(BaseTrainer):
             # Compute losses for each loss type
             for idx, loss_type in enumerate(self.loss_type):
                 # Compute individual loss using standard DPO loss function
-                _losses, _chosen_rewards, _rejected_rewards = self.dpo_loss(
-                    model_output["chosen_logps"],
-                    model_output["rejected_logps"],
-                    ref_chosen_logps,
-                    ref_rejected_logps,
-                    loss_type,
-                    model_output,
-                )
+                if self.humanline:
+                    _losses, _per_token_chosen_rewards, _per_token_rejected_rewards = self.dpo_loss(
+                        model_output["per_token_chosen_logps"], 
+                        model_output["per_token_rejected_logps"], 
+                        ref_per_token_chosen_logps, 
+                        ref_per_token_rejected_logps, 
+                        loss_type,
+                        model_output,
+                    )
+                    _chosen_rewards = _per_token_chosen_rewards.sum(dim=1)
+                    _rejected_rewards = _per_token_rejected_rewards.sum(dim=1)
+                else:
+                    _losses, _chosen_rewards, _rejected_rewards = self.dpo_loss(
+                        model_output["chosen_logps"],
+                        model_output["rejected_logps"],
+                        ref_chosen_logps,
+                        ref_rejected_logps,
+                        loss_type,
+                        model_output,
+                    )
 
                 # Add weighted contributions
                 weight = self.loss_weights[idx] if self.loss_weights else 1.0
