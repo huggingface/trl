@@ -70,7 +70,6 @@ Here are also some easier-to-run colab notebooks that you can use to get started
 | [`examples/notebooks/gpt2-sentiment.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-sentiment.ipynb) | This notebook demonstrates how to reproduce the GPT2 imdb sentiment tuning example on a jupyter notebook. |
 | [`examples/notebooks/gpt2-control.ipynb`](https://github.com/huggingface/trl/tree/main/examples/notebooks/gpt2-control.ipynb) | This notebook demonstrates how to reproduce the GPT2 sentiment control example on a jupyter notebook. |
 
-We also have some other examples that are less maintained but can be used as a reference in [research_projects](https://github.com/huggingface/trl/tree/main/examples/research_projects). Check out this folder to find the scripts used for some research projects that used TRL (LM de-toxification, Stack-Llama, etc.)
 
 ## Distributed training
 
