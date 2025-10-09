@@ -13,7 +13,7 @@ pip install trl[judges]
 
 ## Using the provided judges
 
-TRL provides several judges out of the box. For example, you can use the `HfPairwiseJudge` to compare two completions using a pre-trained model from the Hugging Face model hub:
+TRL provides several judges out of the box. For example, you can use the [`HfPairwiseJudge`] to compare two completions using a pre-trained model from the Hugging Face model hub:
 
 ```python
 from trl import HfPairwiseJudge

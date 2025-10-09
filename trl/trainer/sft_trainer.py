@@ -273,9 +273,9 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
     Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
 
     Args:
-        processor (`ProcessorMixin`):
-            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin` and
-            include a `tokenizer` with a defined `pad_token_id`.
+        processor ([`~transformers.ProcessorMixin`]):
+            The processor used to tokenize text and process images. It must be a subclass of
+            [`~transformers.ProcessorMixin`] and include a `tokenizer` with a defined `pad_token_id`.
         max_length (`int` or `None`, optional, defaults to `None`):
             Maximum sequence length for input tokens. If `None`, no truncation is applied.
         completion_only_loss (`bool`, *optional*, defaults to `False`):

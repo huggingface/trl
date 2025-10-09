@@ -95,10 +95,10 @@ class OnlineDPOConfig(TrainingArguments):
         cache_implementation (`str`, *optional*):
             Implementation of the cache method for faster generation when `use_vllm` is set to `False`.
         generation_kwargs (`dict[str, Any]`, *optional*):
-            Additional keyword arguments to pass to `GenerationConfig` (if using transformers) or `SamplingParams` (if
-            using vLLM) when sampling completions. This can be used to further customize the generation behavior, such
-            as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict with the other generation
-            parameters (like `min_p`, `top_p`, etc.), they will override them.
+            Additional keyword arguments to pass to [`~transformers.GenerationConfig`] (if using transformers) or
+            `SamplingParams` (if using vLLM) when sampling completions. This can be used to further customize the
+            generation behavior, such as setting `suppress_tokens`, `num_beams`, etc. If it contains keys that conflict
+            with the other generation parameters (like `min_p`, `top_p`, etc.), they will override them.
 
         > Parameters that control generation acceleration powered by vLLM
 

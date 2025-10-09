@@ -3,7 +3,7 @@
 As reinforcement learning algorithms are historically challenging to debug, it's important to pay careful attention to logging.
 By default, TRL trainers like [`PPOTrainer`] and [`GRPOTrainer`] save a lot of relevant information to supported experiment trackers like Trackio, Weights & Biases (wandb) or TensorBoard.
 
-Upon initialization, pass the `report_to` argument to the respective configuration object (e.g., [`PPOConfig`] for `PPOTrainer`, or [`GRPOConfig`] for `GRPOTrainer`):
+Upon initialization, pass the `report_to` argument to the respective configuration object (e.g., [`PPOConfig`] for [`PPOTrainer`], or [`GRPOConfig`] for [`GRPOTrainer`]):
 
 ```python
 # For PPOTrainer
@@ -19,7 +19,7 @@ grpo_config = GRPOConfig(
 )
 ```
 
-If you want to log with TensorBoard, you might also need to specify logging directories, for example, by adding `logging_dir=PATH_TO_LOGS` to the configuration object (e.g., `PPOConfig` or `GRPOConfig`).
+If you want to log with TensorBoard, you might also need to specify logging directories, for example, by adding `logging_dir=PATH_TO_LOGS` to the configuration object (e.g., [`PPOConfig`] or [`GRPOConfig`]).
 
 ## PPO Logging
 
@@ -82,9 +82,9 @@ Here's a brief explanation for the logged metrics provided in the data for the G
 
 #### Policy and Loss Metrics
 
-* `kl`: The mean Kullback-Leibler (KL) divergence between the current policy and the reference policy. This is logged only if `beta` (the KL coefficient in `GRPOConfig`) is non-zero.
+* `kl`: The mean Kullback-Leibler (KL) divergence between the current policy and the reference policy. This is logged only if `beta` (the KL coefficient in [`GRPOConfig`]) is non-zero.
 * `entropy`: Average entropy of token predictions across generated completions.
-* If Liger GRPOLoss is used (`use_liger_loss: True` in `GRPOConfig`):
+* If Liger GRPOLoss is used (`use_liger_loss: True` in [`GRPOConfig`]):
     *   `clip_ratio`: The fraction of policy updates where the probability ratio was clipped according to the GRPO loss's epsilon bounds.
 * If standard GRPOLoss is used (`use_liger_loss: False`):
     *   `clip_ratio/low_mean`: The mean fraction of instances where the probability ratio `r_t(θ)` was clipped at the lower bound `1 - epsilon_low` (occurs when advantage is negative and ratio is below the bound).

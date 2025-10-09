@@ -53,7 +53,7 @@ best_of_n = BestOfNSampler(model, tokenizer, queries_to_scores, length_sampler=o
 ```
 
 There is the option of setting the generation settings (like `temperature`, `pad_token_id`) at the time of instance creation as opposed to when calling the `generate` method.
-This is done by passing a `GenerationConfig` from the `transformers` library at the time of initialization
+This is done by passing a [`~transformers.GenerationConfig`] from the `transformers` library at the time of initialization
 
 ```python
 
