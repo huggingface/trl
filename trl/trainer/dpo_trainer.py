@@ -21,6 +21,7 @@ from typing import Any, Callable, Optional, Union
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
 from torch.utils.data import DataLoader
@@ -79,26 +80,24 @@ def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[s
 
 
 @dataclass
-class DataCollatorForLanguageModeling(DataCollatorMixin):
+class DataCollatorForPreference(DataCollatorMixin):
     """
-    Data collator used for language modeling data. Inputs are dynamically padded to the maximum length of a batch.
+    Data collator used for preference data. Inputs are dynamically padded to the maximum length of a batch.
 
-    This collator expects each example in the input list to be a dictionary containing at least the `"input_ids"` key.
-    If the input contains a `"completion_mask"`, it is used to set the labels to `-100` for tokens that are not in the
-    completion. The collator returns a dictionary containing the following keys:
-    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch.
-    - `"labels"`: Tensor of labels, padded to the maximum length of the batch. If `padding_free` is set to `False`, the following key
-    is also returned:
-    - `"attention_mask"`: Tensor of attention masks, padded to the maximum length of the batch.
-    If `padding_free` is set to `True`, the following key is also returned:
-    - `"position_ids"`: Tensor of position IDs, padded to the maximum length of the batch.
+    This collator expects each example in the input list to be a dictionary containing the keys `"prompt_ids"`,
+    `"chosen_ids"` and `"rejected_input_ids"`. The collator returns a dictionary containing the following keys:
+    - `"input_ids"`: Tensor of input IDs, padded to the maximum length of the batch. The first half of the batch
+        corresponds to the `"chosen_input_ids"` and the second half to the `"rejected_input_ids"`.
+    - `"attention_mask"`: Tensor of attention mask, padded to the maximum length of the batch.
+    - `"completion_mask"`: Tensor indicating the positions of the completion tokens, padded to the maximum length of
+        the batch.
+
+    Optionally, the examples can contain a `"ref_chosen_logps"` and `"ref_rejected_logps"` keys, in which case the
+    returned dictionary will also contain these keys with the corresponding tensors.
 
     Args:
         pad_token_id (`int`):
             Token ID to use for padding.
-        padding_free (`bool`, *optional*, defaults to `False`):
-            If set to `True`, the sequences will be flattened into a single sequence, and the position IDs will be
-            generated accordingly and returned instead of the attention mask.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
         return_tensors (`str`, *optional*, defaults to `"pt"`):
@@ -106,58 +105,39 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
 
     Examples:
     ```python
-    >>> from trl.trainer.dpo_trainer import DataCollatorForLanguageModeling
+    >>> from trl.trainer.dpo_trainer import DataCollatorForPreference
 
-    >>> collator = DataCollatorForLanguageModeling(pad_token_id=0)
-    >>> examples = [{"input_ids": [1, 2, 3]}, {"input_ids": [4, 5]}]
+    >>> collator = DataCollatorForPreference(pad_token_id=0)
+    >>> examples = [{"prompt_ids": [1, 2, 3], {"chosen_ids": [4, 5], "rejected_ids": [6]}]
     >>> collator(examples)
-    {'input_ids': tensor([[  1,  2,  3],
-                          [  4,  5,  0]]),
-     'attention_mask': tensor([[  1,  1,  1],
-                               [  1,  1,  0]]),
-     'labels': tensor([[   1,    2,    3],
-                       [   4,    5, -100]])}
-
-    >>> # With completion mask
-    >>> examples = [
-    ...     {"input_ids": [1, 2, 3], "completion_mask": [0, 1, 1]},
-    ...     {"input_ids": [4, 5], "completion_mask": [0, 1]},
-    ... ]
-    >>> collator(examples)
-    {'input_ids': tensor([[  1,  2,  3],
-                          [  4,  5,  0]]),
-     'attention_mask': tensor([[  1,  1,  1],
-                               [  1,  1,  0]]),
-     'labels': tensor([[-100,    2,    3],
-                       [-100,    5, -100]])}
-
-    >>> # With padding_free
-    >>> collator = DataCollatorForLanguageModeling(pad_token_id=0, padding_free=True)
-    >>> collator(examples)
-    {'input_ids': tensor([[ 1, 2, 3, 4, 5]]),
-     'position_ids': tensor([[0, 1, 2, 0, 1]]),
-     'labels': tensor([[1, 2, 3, 4, 5]])}
+    {'input_ids': tensor([[ 1,  2,  3,  4,  5],
+                          [ 1,  2,  3,  6,  0]]),
+     'attention_mask': tensor([[1, 1, 1, 1, 1],
+                               [1, 1, 1, 1, 0]]),
+     'completion_mask': tensor([[0, 0, 0, 1, 1],
+                                [0, 0, 0, 1, 0]])}
     ```
     """
 
     pad_token_id: int
-    padding_free: bool = False
     pad_to_multiple_of: Optional[int] = None
     return_tensors: str = "pt"
 
     def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
         prompt_chosen_ids = [example["prompt_ids"] + example["chosen_ids"] for example in examples]
         prompt_rejected_ids = [example["prompt_ids"] + example["rejected_ids"] for example in examples]
+        chosen_attention_mask = [[1] * len(example["prompt_ids"] + example["chosen_ids"]) for example in examples]
+        rejected_attention_mask = [[1] * len(example["prompt_ids"] + example["rejected_ids"]) for example in examples]
         chosen_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["chosen_ids"]) for example in examples]
         rejected_mask = [[0] * len(example["prompt_ids"]) + [1] * len(example["rejected_ids"]) for example in examples]
+        input_ids = prompt_chosen_ids + prompt_rejected_ids
+        attention_mask = chosen_attention_mask + rejected_attention_mask
+        completion_mask = chosen_mask + rejected_mask
 
         # Convert to tensor
-        prompt_chosen_ids = [torch.tensor(ids) for ids in prompt_chosen_ids]
-        prompt_rejected_ids = [torch.tensor(ids) for ids in prompt_rejected_ids]
-        chosen_mask = [torch.tensor(mask, dtype=torch.long) for mask in chosen_mask]
-        rejected_mask = [torch.tensor(mask, dtype=torch.long) for mask in rejected_mask]
-        input_ids = prompt_chosen_ids + prompt_rejected_ids
-        completion_mask = chosen_mask + rejected_mask
+        input_ids = [torch.tensor(ids) for ids in input_ids]
+        attention_mask = [torch.tensor(m, dtype=torch.long) for m in attention_mask]
+        completion_mask = [torch.tensor(m, dtype=torch.long) for m in completion_mask]
         if "ref_chosen_logps" in examples[0]:
             ref_chosen_logps = torch.tensor([example["ref_chosen_logps"] for example in examples])
         if "ref_rejected_logps" in examples[0]:
@@ -168,6 +148,12 @@ class DataCollatorForLanguageModeling(DataCollatorMixin):
         output["input_ids"] = pad(
             input_ids,
             padding_value=self.pad_token_id,
+            padding_side="right",
+            pad_to_multiple_of=self.pad_to_multiple_of,
+        )
+        output["attention_mask"] = pad(
+            attention_mask,
+            padding_value=0,
             padding_side="right",
             pad_to_multiple_of=self.pad_to_multiple_of,
         )
@@ -404,7 +390,7 @@ class DPOTrainer(BaseTrainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to [`~trainer.dpo_trainer.DataCollatorForLanguageModeling`] if the model is a language model
+            Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model
             and [`~trainer.dpo_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. DPO supports both [language modeling](#language-modeling) type and
@@ -572,9 +558,8 @@ class DPOTrainer(BaseTrainer):
                     f"`processing_class` ({processing_class.__class__.__name__}). Ensure that the `pad_token` exists "
                     "in the vocabulary before using it as a padding token."
                 )
-            data_collator = DataCollatorForLanguageModeling(
+            data_collator = DataCollatorForPreference(
                 pad_token_id=pad_token_id,
-                padding_free=self.padding_free,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
@@ -583,6 +568,9 @@ class DPOTrainer(BaseTrainer):
                 max_length=args.max_length,
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
+
+        # Training arguments
+        self.beta = args.beta
 
         # Dataset
         # Skip dataset preparation if it's a VLM, where preprocessing (e.g., image-to-pixel conversion) is too costly
@@ -624,29 +612,20 @@ class DPOTrainer(BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
-        def ref_chosen_logps(examples, collator, model):
-            examples = [dict(zip(examples.keys(), v)) for v in zip(*examples.values())]  # dict[list] to list[dict]
-            inputs = collator(examples)
-            inputs = {k: v.to(model.device) for k, v in inputs.items()}
-            with torch.no_grad():
-                output = model(inputs["input_ids"])
-            shifted_logits = output.logits[..., :-1, :].contiguous()
-            shifted_labels = inputs["input_ids"][..., 1:].contiguous()
-            per_token_logps = selective_log_softmax(shifted_logits, shifted_labels)
-            per_token_logps[inputs["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
-            logps = per_token_logps.sum(dim=1)  # sum over sequence length
-            chosen_logps, rejected_logps = logps.chunk(2, dim=0)
-            return {
-                "ref_chosen_logps": chosen_logps.tolist(),
-                "ref_rejected_logps": rejected_logps.tolist(),
-            }
-
-        self.train_dataset = self.train_dataset.map(
-            ref_chosen_logps,
-            batched=True,
-            batch_size=args.per_device_train_batch_size,
-            fn_kwargs={"collator": data_collator, "model": self.model},
-        )
+        if args.precompute_ref_log_probs:
+            self.train_dataset = self._precompute_ref_logps(
+                self.train_dataset, args.per_device_train_batch_size, "train"
+            )
+            if self.eval_dataset is not None:
+                if isinstance(self.eval_dataset, dict):
+                    self.eval_dataset = {
+                        key: self._precompute_ref_logps(dataset, args.per_device_eval_batch_size, key)
+                        for key, dataset in self.eval_dataset.items()
+                    }
+                else:
+                    self.eval_dataset = self._precompute_ref_logps(
+                        self.eval_dataset, args.per_device_eval_batch_size, "eval"
+                    )
 
         # Initialize activation offloading context
         if self.args.activation_offloading:
@@ -785,6 +764,35 @@ class DPOTrainer(BaseTrainer):
 
         return dataset
 
+    def _precompute_ref_logps(
+        self, dataset: Union[Dataset, IterableDataset], batch_size: int, dataset_name: str
+    ) -> None:
+        def compute_ref_logps(examples, collator, model):
+            examples = [dict(zip(examples.keys(), v)) for v in zip(*examples.values())]  # dict[list] to list[dict]
+            inputs = collator(examples)
+            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+            with torch.no_grad():
+                output = model(inputs["input_ids"], attention_mask=inputs["attention_mask"], use_cache=False)
+            shift_logits = output.logits[..., :-1, :].contiguous()
+            shift_labels = inputs["input_ids"][..., 1:].contiguous()
+            per_token_logps = selective_log_softmax(shift_logits, shift_labels)
+            per_token_logps[inputs["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
+            logps = per_token_logps.sum(dim=1)  # sum over sequence length
+            chosen_logps, rejected_logps = logps.chunk(2, dim=0)
+            return {
+                "ref_chosen_logps": chosen_logps.tolist(),
+                "ref_rejected_logps": rejected_logps.tolist(),
+            }
+
+        dataset = dataset.map(
+            compute_ref_logps,
+            batched=True,
+            batch_size=batch_size,
+            fn_kwargs={"collator": self.data_collator, "model": self.model},
+            desc=f"Computing reference logps for {dataset_name} dataset",
+        )
+        return dataset
+
     def _set_signature_columns_if_needed(self):
         # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
         # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
@@ -801,33 +809,6 @@ class DPOTrainer(BaseTrainer):
                     "ref_rejected_logps",
                 ]
 
-    def _precompute_ref_logps(self):
-        data_loader = DataLoader(
-            self.train_dataset,
-            batch_size=self.args.per_device_train_batch_size,
-            collate_fn=self.data_collator,
-            num_workers=self.args.dataloader_num_workers,
-            pin_memory=self.args.dataloader_pin_memory,
-            shuffle=False,
-        )
-        data_loader = self.accelerator.prepare(data_loader)
-        ref_chosen_logps = []
-        ref_rejected_logps = []
-        with torch.no_grad():
-            for sample in iter(data_loader):
-                output = self.model(sample["input_ids"], use_cache=False)
-                shifted_logits = output.logits[..., :-1, :].contiguous()
-                shifted_labels = sample["input_ids"][..., 1:].contiguous()
-                per_token_logps = selective_log_softmax(shifted_logits, shifted_labels)
-                per_token_logps[sample["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
-                logps = per_token_logps.sum(dim=1)  # sum over sequence length
-                chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
-                ref_chosen_logps.extend(chosen_logps.tolist())
-                ref_rejected_logps.extend(rejected_logps.tolist())
-
-        self.train_dataset = self.train_dataset.add_column(name="ref_chosen_logps", column=ref_chosen_logps)
-        self.train_dataset = self.train_dataset.add_column(name="ref_rejected_logps", column=ref_rejected_logps)
-
     def compute_loss(
         self,
         model: nn.Module,
@@ -840,80 +821,47 @@ class DPOTrainer(BaseTrainer):
         """
         mode = "train" if self.model.training else "eval"
 
-        # Set aside labels as it will be dropped by super().compute_loss() if a custom `compute_loss_func` is used.
-        # This can be removed when this issue is fixed.
-        output = self.model(inputs["input_ids"])
-        shifted_logits = output.logits[..., :-1, :].contiguous()
-        shifted_labels = inputs["input_ids"][..., 1:].contiguous()
-        per_token_logps = selective_log_softmax(shifted_logits, shifted_labels)
-        per_token_logps[inputs["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
+        outputs = self.model(inputs["input_ids"], attention_mak=inputs["attention_mask"], use_cache=False)
+        shift_logits = outputs.logits[..., :-1, :].contiguous()
+        shift_labels = inputs["input_ids"][..., 1:].contiguous()
+        shift_completion_mask = inputs["completion_mask"][..., 1:].contiguous()
+        per_token_logps = selective_log_softmax(shift_logits, shift_labels)
+        per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
         logps = per_token_logps.sum(dim=1)  # sum over sequence length
         chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
+        ref_chosen_logps, ref_rejected_logps = inputs["ref_chosen_logps"], inputs["ref_rejected_logps"]
 
-        # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
-        inputs["use_cache"] = False
-        (loss, outputs) = super().compute_loss(
-            model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
-        )
+        # Get the log ratios for the chosen and rejected responses
+        chosen_logratios = chosen_logps - ref_chosen_logps
+        rejected_logratios = rejected_logps - ref_rejected_logps
+        per_sequence_loss = -F.logsigmoid(self.beta * chosen_logratios - self.beta * rejected_logratios)
+
+        loss = per_sequence_loss.mean()
 
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits
             with torch.no_grad():
-                per_token_entropy = entropy_from_logits(outputs.logits)
-                if "attention_mask" in inputs:
-                    attention_mask = inputs["attention_mask"]
-                    # When using Prompt Tuning, we need to add attention for the virtual tokens (all set to 1).
-                    virtual_attention_mask = torch.ones(
-                        attention_mask.size(0), self.num_virtual_tokens, device=attention_mask.device
-                    )
-                    attention_mask = torch.cat((virtual_attention_mask, attention_mask), dim=1)
-                    entropy = torch.sum(per_token_entropy * attention_mask) / attention_mask.sum()
-                elif "position_ids" in inputs:
-                    entropy = torch.mean(per_token_entropy)
-                else:
-                    raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+                per_token_entropy = entropy_from_logits(shift_logits)
+                entropy = per_token_entropy[shift_completion_mask == 1].mean()
                 entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
             self._metrics[mode]["entropy"].append(entropy)
 
         if mode == "train":
-            # When using padding-free, the attention_mask is not present in the inputs, instead we have cu_seq_lens_q,
-            # cu_seq_lens_k, and max_length_k, max_length_q and position_ids.
-            if "attention_mask" in inputs:
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
-            elif "position_ids" in inputs:
-                local_num_tokens = torch.tensor(inputs["position_ids"].size(1), device=inputs["position_ids"].device)
-                num_tokens_in_batch = self.accelerator.gather_for_metrics(local_num_tokens).sum().item()
-            else:
-                raise ValueError("Expected 'attention_mask' or 'position_ids' in inputs.")
+            num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
         # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
         if not self.args.use_liger_kernel:
             with torch.no_grad():
-                if "shift_labels" in inputs:
-                    # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
-                    # - The first discarded token from inputs["labels"] actually belongs to process n-1
-                    # - The last logits require the label from process n+1
-                    shift_logits = outputs.logits.contiguous()
-                    shift_labels = inputs["shift_labels"]
-                else:
-                    shift_logits = outputs.logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
-
-                # When using Prompt Tuning, skip the virtual tokens in logits before accuracy computation, since they do
-                # not correspond to actual input labels.
-                shift_logits = shift_logits[:, self.num_virtual_tokens :, :]
-
-                # Get predictions
-                predictions = shift_logits.argmax(dim=-1)
-
-                # Create mask for non-padding tokens (assuming ignore_index is -100)
-                mask = shift_labels != -100
+                # Get predictions (first half of the logits corresponding to the chosen responses)
+                predictions = shift_logits[: len(shift_logits) // 2].argmax(dim=-1)
+                chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
+                chosen_labels = shift_labels[: len(shift_labels) // 2]
 
                 # Calculate accuracy only on non-padding tokens
-                correct_predictions = (predictions == shift_labels) & mask
-                total_tokens = mask.sum()
+                correct_predictions = (predictions == chosen_labels) & chosen_mask
+                total_tokens = chosen_mask.sum()
                 correct_tokens = correct_predictions.sum()
 
                 # Gather the correct_tokens and total_tokens across all processes
@@ -924,10 +872,6 @@ class DPOTrainer(BaseTrainer):
                 total_sum = total_tokens.sum()
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-                if self.aux_loss_enabled:
-                    aux_loss = outputs.aux_loss
-                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
-                    self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
 

@@ -58,6 +58,10 @@ class DPOConfig(TrainingArguments):
             supported with the FlashAttention 2 or 3, which can efficiently handle the flattened batch structure.
         pad_to_multiple_of (`int`, *optional*):
             If set, the sequences will be padded to a multiple of this value.
+        precompute_ref_log_probs (`bool`, *optional*, defaults to `True`):
+            Whether to precompute the reference model log probabilities for the entire training dataset before
+            training. This allows to save memory during training, as the reference model does not need to be kept in
+            memory.
 
         > Parameters that control the training
 
@@ -147,8 +151,23 @@ class DPOConfig(TrainingArguments):
         default=None,
         metadata={"help": "If set, the sequences will be padded to a multiple of this value."},
     )
+    precompute_ref_log_probs: bool = field(
+        default=True,
+        metadata={
+            "help": "Whether to precompute the reference model log probabilities for the entire training dataset "
+            "before training. This allows to save memory during training, as the reference model does not need to be "
+            "kept in memory."
+        },
+    )
 
     # Parameters that control the training
+    beta: float = field(
+        default=0.1,
+        metadata={
+            "help": "Parameter controlling the deviation from the reference model. Higher β means less deviation from "
+            "the reference model."
+        },
+    )
     activation_offloading: bool = field(
         default=False,
         metadata={"help": "Whether to offload the activations to the CPU."},
