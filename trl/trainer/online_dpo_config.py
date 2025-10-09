@@ -414,7 +414,7 @@ class OnlineDPOConfig(TrainingArguments):
             self.beta = self.beta[0]
 
         if self.max_new_tokens >= self.max_length:
-            logger.warning(
+            warnings.warn(
                 f"The configuration has `max_new_tokens` ({self.max_new_tokens}) >= `max_length` ({self.max_length}). "
                 "This will cause prompts to be truncated or completely removed in the forward pass. "
                 "To preserve prompts, ensure  e.g. `max_length > max_new_tokens + 512`. ",
