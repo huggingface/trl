@@ -8,7 +8,6 @@ With the `AutoModelForCausalLMWithValueHead` class TRL supports all decoder mode
 
 ## AutoModelForCausalLMWithValueHead
 
-
 [[autodoc]] AutoModelForCausalLMWithValueHead
     - __init__
     - forward
