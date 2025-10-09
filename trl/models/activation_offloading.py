@@ -219,7 +219,6 @@ class OffloadActivations(saved_tensors_hooks):
                         verify_sufficient_virtual_memory()
 
                 self.is_first_backward_call = False
-                self.is_first_forward_call = True
 
             if unpack_tensor_id not in self.tracker:
                 raise ValueError(f"Untracked tensor with id {unpack_tensor_id}")
@@ -231,6 +230,8 @@ class OffloadActivations(saved_tensors_hooks):
 
             # clear tensor from tracking
             del self.tracker[unpack_tensor_id]
+            if len(self.tracker) == 0:
+                self.is_first_forward_call = True
             return maybe_accelerator_tensor
 
         def unpack_tensor_with_streams(unpack_tensor_id: int) -> torch.Tensor:
@@ -254,7 +255,6 @@ class OffloadActivations(saved_tensors_hooks):
                         verify_sufficient_virtual_memory()
 
                 self.is_first_backward_call = False
-                self.is_first_forward_call = True
 
             if unpack_tensor_id not in self.tracker:
                 raise ValueError(f"untracked tensor with id {unpack_tensor_id}")
@@ -359,6 +359,8 @@ class OffloadActivations(saved_tensors_hooks):
 
             # clear tensor from tracking
             del self.tracker[unpack_tensor_id]
+            if len(self.tracker) == 0:
+                self.is_first_forward_call = True
             return maybe_accelerator_tensor
 
         unpack_tensor = unpack_tensor_with_streams if self.use_streams else unpack_tensor_single_stream
