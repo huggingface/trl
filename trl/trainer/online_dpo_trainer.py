@@ -57,8 +57,13 @@ from ..data_utils import apply_chat_template, is_conversational, maybe_apply_cha
 from ..extras.profiling import profiling_context
 from ..extras.vllm_client import VLLMClient
 from ..import_utils import is_vllm_available
-from ..models import create_reference_model, prepare_peft_model
-from ..models.utils import prepare_fsdp, unwrap_model_for_generation
+from ..models import (
+    create_reference_model,
+    prepare_deepspeed,
+    prepare_fsdp,
+    prepare_peft_model,
+    unwrap_model_for_generation,
+)
 from .base_trainer import BaseTrainer
 from .judges import BasePairwiseJudge
 from .online_dpo_config import OnlineDPOConfig
@@ -69,7 +74,6 @@ from .utils import (
     empty_cache,
     ensure_master_addr_port,
     pad,
-    prepare_deepspeed,
     truncate_right,
 )
 
@@ -581,42 +585,22 @@ class OnlineDPOTrainer(BaseTrainer):
             generation_kwargs = {k: v for k, v in generation_kwargs.items() if v is not None}
             self.generation_config = GenerationConfig(**generation_kwargs)
 
-        if self.is_deepspeed_enabled:
-            if self.ref_model is not None:
-                self.ref_model = prepare_deepspeed(
-                    self.ref_model, args.per_device_train_batch_size, args.fp16, args.bf16
-                )
-            # Prepare reward function models for DeepSpeed
-            if self.reward_funcs is not None:
-                for i, reward_func in enumerate(self.reward_funcs):
-                    if isinstance(reward_func, PreTrainedModel):
-                        self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
-        elif self.is_fsdp_enabled:
-            # Prepare ref model for FSDP training
-            if self.ref_model is not None:
+        if self.ref_model is not None:
+            if self.is_deepspeed_enabled:
+                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            elif self.is_fsdp_enabled:
                 self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
-            if self.reward_funcs is not None:
-                # Set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
-                self.reward_funcs = [
-                    self.accelerator.prepare_model(reward_func, evaluation_mode=True, device_placement=True)
-                    if isinstance(reward_func, PreTrainedModel)
-                    else reward_func
-                    for reward_func in self.reward_funcs
-                ]
-        else:
-            # Prepare ref model for regular training
-            if self.ref_model is not None:
-                self.ref_model = self.accelerator.prepare_model(
-                    self.ref_model, evaluation_mode=True, device_placement=True
-                )
-            # Prepare reward function models for FSDP/regular training
-            if self.reward_funcs is not None:
-                for i, reward_func in enumerate(self.reward_funcs):
-                    if isinstance(reward_func, PreTrainedModel):
-                        # Set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
-                        self.reward_funcs[i] = self.accelerator.prepare_model(
-                            reward_func, evaluation_mode=True, device_placement=True
-                        )
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+        for i, reward_func in enumerate(self.reward_funcs):
+            if isinstance(reward_func, PreTrainedModel):
+                if self.is_deepspeed_enabled:
+                    self.reward_funcs[i] = prepare_deepspeed(reward_func, self.accelerator)
+                else:
+                    # set device placement to True to make `prepare_model` move `reward_func` to device when using fsdp
+                    self.reward_funcs[i] = self.accelerator.prepare_model(
+                        reward_func, evaluation_mode=True, device_placement=True
+                    )
 
     @property
     def beta(self):
