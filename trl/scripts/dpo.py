@@ -67,7 +67,7 @@ from typing import Optional
 import torch
 from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 
 from trl import (
     DatasetMixtureConfig,
@@ -81,7 +81,6 @@ from trl import (
     get_peft_config,
     get_quantization_config,
 )
-from trl.trainer.utils import SIMPLE_CHAT_TEMPLATE
 
 
 logger = logging.get_logger(__name__)
@@ -92,7 +91,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 def main(script_args, training_args, model_args, dataset_args):
     ################
-    # Model & Tokenizer
+    # Model
     ###################
     dtype = model_args.dtype if model_args.dtype in ["auto", None] else getattr(torch, model_args.dtype)
     model_kwargs = dict(
@@ -116,13 +115,6 @@ def main(script_args, training_args, model_args, dataset_args):
         )
     else:
         ref_model = None
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    if tokenizer.chat_template is None:
-        tokenizer.chat_template = SIMPLE_CHAT_TEMPLATE
     if script_args.ignore_bias_buffers:
         # torch distributed hack
         model._ddp_params_and_buffers_to_ignore = [
@@ -152,7 +144,6 @@ def main(script_args, training_args, model_args, dataset_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,
         peft_config=peft_config,
     )
 

@@ -1101,11 +1101,12 @@ class GRPOTrainer(BaseTrainer):
             **kwargs,
         )
         prompt_inputs = super()._prepare_inputs(prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
         forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
-        prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
 
         if self.max_prompt_length is not None:
+            prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+            prompt_ids = [p[m].tolist() for p, m in zip(prompt_ids, prompt_mask.bool())]
+
             # If max_prompt_length is set, we trim the prompt to keep only the last `max_prompt_length` tokens.
             # Then we decode those tokens back into text. We set `skip_special_tokens=False` because some special
             # tokens are needed for generation.
@@ -1187,19 +1188,23 @@ class GRPOTrainer(BaseTrainer):
                             guided_decoding_regex=self.guided_decoding_regex,
                             generation_kwargs=self.args.generation_kwargs,
                         )
-                        payload = (output["completion_ids"], output["logprobs"])
+                        payload = (output["prompt_ids"], output["completion_ids"], output["logprobs"])
                 else:
                     payload = None
 
                 # Broadcast the completions from the main process to all processes, ensuring each process receives its corresponding slice.
                 obj_list = [payload]
                 broadcast_object_list(obj_list, from_process=0)
-                all_completion_ids, all_logprobs = obj_list[0]
+                all_prompt_ids, all_completion_ids, all_logprobs = obj_list[0]
+
+                # At this point, we only get 1 copy of each prompt, so we need to repeat them num_generations times
+                all_prompt_ids = [ids for ids in all_prompt_ids for _ in range(self.num_generations)]
 
                 process_slice = slice(
                     self.accelerator.process_index * len(prompts),
                     (self.accelerator.process_index + 1) * len(prompts),
                 )
+                prompt_ids = all_prompt_ids[process_slice]
                 completion_ids = all_completion_ids[process_slice]
                 logprobs = all_logprobs[process_slice]
 
@@ -1254,6 +1259,7 @@ class GRPOTrainer(BaseTrainer):
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
+                all_prompt_ids = [output.prompt_token_ids for output in all_outputs]
                 all_completion_ids = [output.token_ids for outputs in all_outputs for output in outputs.outputs]
                 all_logprobs = [
                     [next(iter(lp.values())).logprob for lp in output.logprobs]
@@ -1266,9 +1272,11 @@ class GRPOTrainer(BaseTrainer):
                     # Each rank generates all outputs — we keep only our share.
                     local_rank_in_group = torch.distributed.get_rank(group=self.tp_group)
                     tp_slice = slice(local_rank_in_group * orig_size, (local_rank_in_group + 1) * orig_size)
+                    prompt_ids = all_prompt_ids[tp_slice]
                     completion_ids = all_completion_ids[tp_slice]
                     logprobs = all_logprobs[tp_slice]
                 else:
+                    prompt_ids = all_prompt_ids
                     completion_ids = all_completion_ids
                     logprobs = all_logprobs
 
@@ -1311,10 +1319,7 @@ class GRPOTrainer(BaseTrainer):
 
         else:
             # Regular generation path
-            prompt_ids = [torch.tensor(ids, device=device) for ids in prompt_ids]
-            prompt_mask = [torch.ones_like(ids, dtype=torch.long) for ids in prompt_ids]
-            prompt_ids = pad(prompt_ids, padding_value=self.pad_token_id, padding_side="left")
-            prompt_mask = pad(prompt_mask, padding_value=0, padding_side="left")
+            prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
 
             with (
                 profiling_context(self, "transformers.generate"),
@@ -1399,6 +1404,9 @@ class GRPOTrainer(BaseTrainer):
         elif "image" in inputs[0]:
             images = [[example.get("image")] if example.get("image") is not None else None for example in inputs]
         else:
+            images = None
+        # Transformers requires at least one image in the batch, otherwise it throws an error
+        if images is not None and all(img_list == [] for img_list in images):
             images = None
 
         (
