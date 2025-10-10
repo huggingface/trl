@@ -14,7 +14,7 @@ precommit:
 	doc-builder style trl tests docs/source --max_len 119
 
 slow_tests:
-	pytest -m "slow" tests/slow/test_grpo_slow.py::TestGRPOTrainerSlow::test_training_with_liger_grpo_loss_and_peft_0_trl_internal_testing_tiny_LlamaForCausalLM_3_2 $(if $(IS_GITHUB_CI),--report-log "slow_tests.log",)
+	pytest -m "slow" tests/ $(if $(IS_GITHUB_CI),--report-log "slow_tests.log",)
 
 test_examples:
 	touch temp_results_sft_tests.txt
