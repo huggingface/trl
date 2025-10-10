@@ -158,6 +158,7 @@ class TestActivationOffloading(TrlTestCase):
     @require_torch_accelerator
     def test_tensor_deduplication(self):
         """Test that deduplication works correctly for tensors sharing storage"""
+
         # Create a model that produces tensor views
         class ModelWithViews(nn.Module):
             def __init__(self):
