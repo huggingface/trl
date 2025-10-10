@@ -4,21 +4,23 @@
 
 Install all the dependencies in the `requirements.txt`:
 
-```
-$ pip install -U -r requirements.txt
+```shell
+pip install -U -r requirements.txt
 ```
 
 Since we will use `accelerate` for training, make sure to run:
-```
-$ accelerate config
+
+```shell
+accelerate config
 ```
 
 ## Training
 
 There were two main steps to the DPO training process:
+
 1. Supervised fine-tuning of the base llama-v2-7b model to create llama-v2-7b-se:
 
-    ```
+    ```shell
     accelerate launch examples/research_projects/stack_llama_2/scripts/sft_llama2.py \
         --output_dir="./sft" \
         --max_steps=500 \
@@ -38,19 +40,20 @@ There were two main steps to the DPO training process:
         --run_name="sft_llama2" \
         --report_to="wandb"
     ```
-1. Run the DPO trainer using the model saved by the previous step:
-    ```
-    accelerate launch examples/research_projects/stack_llama_2/scripts/dpo_llama2.py \
-        --model_name_or_path="sft/final_checkpoint" \
-        --output_dir="dpo"
-    ```
 
+2. Run the DPO trainer using the model saved by the previous step:
+
+  ```shell
+  accelerate launch examples/research_projects/stack_llama_2/scripts/dpo_llama2.py \
+      --model_name_or_path="sft/final_checkpoint" \
+      --output_dir="dpo"
+  ```
 
 ## Merging the adaptors
 
 To merge the adaptors into the base model we can use the `merge_peft_adapter.py` helper script that comes with TRL:
 
-```
+```shell
 python examples/research_projects/stack_llama/scripts/merge_peft_adapter.py --base_model_name="meta-llama/Llama-2-7b-hf" --adapter_model_name="dpo/final_checkpoint/" --output_name="stack-llama-2"
 ```
 
@@ -60,7 +63,7 @@ which will also push the model to your HuggingFace hub account.
 
 We can load the DPO-trained LoRA adaptors which were saved by the DPO training step and load them via:
 
-```py
+```python
 from peft import AutoPeftModelForCausalLM
 
 
