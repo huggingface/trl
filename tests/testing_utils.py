@@ -16,6 +16,7 @@ import functools
 import random
 import signal
 import warnings
+from collections.abc import Callable
 
 import psutil
 import pytest
@@ -46,6 +47,21 @@ require_3_accelerators = pytest.mark.skipif(
 )
 
 
+def is_bitsandbytes_multi_backend_available() -> bool:
+    if is_bitsandbytes_available():
+        import bitsandbytes as bnb
+
+        return "multi_backend" in getattr(bnb, "features", set())
+    return False
+
+
+# Function ported from transformers.testing_utils before transformers#41283
+require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
+    not is_bitsandbytes_multi_backend_available() and not torch_device == "cuda",
+    reason="test requires bitsandbytes multi-backend enabled or 'cuda' torch device",
+)
+
+
 class RandomBinaryJudge(BaseBinaryJudge):
     """
     Random binary judge, for testing purposes.
@@ -73,7 +89,7 @@ class TrlTestCase:
         self.tmp_dir = str(tmp_path)
 
 
-def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> callable:
+def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> Callable:
     """
     Decorator to ignore warnings with a specific message and/or category.
 
