@@ -32,7 +32,15 @@ from .testing_utils import TrlTestCase, ignore_warnings, require_bitsandbytes, r
 
 
 if is_peft_available():
-    from peft import LoraConfig, PeftModel, PromptEncoderConfig, TaskType, get_peft_model
+    from peft import (
+        LoraConfig,
+        PeftModel,
+        PrefixTuningConfig,
+        PromptEncoderConfig,
+        PromptTuningConfig,
+        TaskType,
+        get_peft_model,
+    )
 
 
 class TestDFTLoss(TrlTestCase):
@@ -453,7 +461,7 @@ class TestSFTTrainer(TrlTestCase):
             assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
-    def test_train_dense_with_peft_config(self):
+    def test_train_dense_with_peft_config_lora(self):
         # Get the base model parameter names
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         model = AutoModelForCausalLM.from_pretrained(model_id)
@@ -487,6 +495,66 @@ class TestSFTTrainer(TrlTestCase):
             if n in base_param_names:  # We expect the base model parameters to be the same
                 assert torch.allclose(param, new_param), f"Parameter {n} has changed"
             elif "base_layer" not in n:  # We expect the peft parameters to be different (except for the base layer)
+                assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
+
+    @parameterized.expand(
+        [
+            ("prompt_tuning",),
+            ("prefix_tuning",),
+            ("prompt_encoder",),
+        ]
+    )
+    @require_peft
+    def test_train_with_peft_config_prompt_tuning(self, peft_type):
+        # Get the base model parameter names
+        model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        base_param_names = [f"base_model.{n}" for n, _ in model.named_parameters()]
+
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen", "standard_language_modeling", split="train")
+
+        # Initialize the trainer, p-tuning doesn't support gradient checkpointing
+        training_args = SFTConfig(bf16=False, output_dir=self.tmp_dir, report_to="none", gradient_checkpointing=False)
+        if peft_type == "prompt_tuning":
+            peft_config = PromptTuningConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+                tokenizer_name_or_path="trl-internal-testing/tiny-Qwen2ForCausalLM-2.5",
+            )
+        elif peft_type == "prefix_tuning":
+            peft_config = PrefixTuningConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+            )
+        elif peft_type == "prompt_encoder":
+            peft_config = PromptEncoderConfig(
+                task_type=TaskType.CAUSAL_LM,
+                num_virtual_tokens=4,
+                encoder_hidden_size=model.config.hidden_size,  # This will be overwritten below
+            )
+        trainer = SFTTrainer(
+            model=model_id,
+            args=training_args,
+            train_dataset=dataset,
+            peft_config=peft_config,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the peft params have changed and the base model params have not changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            if n in base_param_names:  # We expect the base model parameters to be the same
+                assert torch.allclose(param, new_param), f"Parameter {n} has changed"
+            else:  # We expect the peft parameters to be different
                 assert not torch.allclose(param, new_param), f"Parameter {n} has not changed"
 
     @require_peft
@@ -1355,6 +1423,38 @@ class TestSFTTrainer(TrlTestCase):
         )
         trainer = SFTTrainer(
             model="trl-internal-testing/tiny-Qwen2_5_VLForConditionalGeneration",
+            args=training_args,
+            train_dataset=dataset,
+        )
+
+        # Save the initial parameters to compare them later
+        previous_trainable_params = {n: param.clone() for n, param in trainer.model.named_parameters()}
+
+        # Train the model
+        trainer.train()
+
+        # Check that the training loss is not None
+        assert trainer.state.log_history[-1]["train_loss"] is not None
+
+        # Check the params have changed
+        for n, param in previous_trainable_params.items():
+            new_param = trainer.model.get_parameter(n)
+            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
+
+    # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator.
+    @require_vision
+    def test_train_vlm_prompt_completion_gemma(self):
+        # Get the dataset
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_prompt_completion", split="train")
+
+        # Initialize the trainer
+        training_args = SFTConfig(
+            output_dir=self.tmp_dir,
+            max_length=None,  # For VLMs, truncating can remove image tokens, leading to errors
+            report_to="none",
+        )
+        trainer = SFTTrainer(
+            model="trl-internal-testing/tiny-Gemma3ForConditionalGeneration",
             args=training_args,
             train_dataset=dataset,
         )
