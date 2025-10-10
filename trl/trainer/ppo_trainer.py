@@ -17,6 +17,7 @@ import math
 import os
 import textwrap
 import time
+import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
@@ -159,6 +160,13 @@ class PPOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         peft_config: Optional["PeftConfig"] = None,
     ) -> None:
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
