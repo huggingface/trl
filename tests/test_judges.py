@@ -61,7 +61,7 @@ class TestJudges(TrlTestCase):
 
     @require_llm_blender
     @pytest.mark.skipif(
-        sys.version_info == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
+        sys.version_info[:3] == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
     )
     def test_pair_rm_judge(self):
         judge = self.load_pair_rm_judge()
@@ -73,7 +73,7 @@ class TestJudges(TrlTestCase):
 
     @require_llm_blender
     @pytest.mark.skipif(
-        sys.version_info == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
+        sys.version_info[:3] == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
     )
     def test_pair_rm_judge_return_scores(self):
         judge = self.load_pair_rm_judge()
