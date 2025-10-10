@@ -268,7 +268,9 @@ def maybe_apply_chat_template(
                 - Unpaired preference dataset: `"prompt"`, `"completion"`, and `"label"`.
 
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
-            messages, where each message is a dictionary with keys `"role"` and `"content"`.
+            messages, where each message is a dictionary with keys `"role"` and `"content"`. Additionally, the example
+            may contain a `"chat_template_kwargs"` key, which is a dictionary of additional keyword arguments to pass
+            to the chat template renderer.
         tokenizer (`PreTrainedTokenizerBase`):
             Tokenizer to apply the chat template with.
         tools (`list[Union[dict, Callable]]`, *optional*):
