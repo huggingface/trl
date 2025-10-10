@@ -1,4 +1,4 @@
-python online_dpo.py \
+accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml online_dpo.py \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --dataset_name HuggingFaceH4/OpenR1-Math-220k-default-verified \
     --output_dir online-dpo-lora-qwen3-0.6b \
