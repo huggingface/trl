@@ -19,7 +19,7 @@ Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scr
 
 ## How to use it?
 
-Simply declare a `PeftConfig` object in your script and pass it through `.from_pretrained` to load the TRL+PEFT model. 
+Simply declare a `PeftConfig` object in your script and pass it through `.from_pretrained` to load the TRL+PEFT model.
 
 ```python
 from peft import LoraConfig
