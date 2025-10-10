@@ -377,7 +377,7 @@ class TestSFTTrainerSlow(TrlTestCase):
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
     @require_liger_kernel
-    def test_sft_trainer_with_liger(self, model_name, packing):
+    def test_sft_trainer_with_liger(self, model_name, packing, request):
         """
         Tests if passing use_liger=True to SFTConfig loads and runs the trainer with AutoLigerKernelForCausalLM as
         expected.
@@ -412,8 +412,8 @@ class TestSFTTrainerSlow(TrlTestCase):
             eval_dataset=self.eval_dataset,
         )
 
-        # Register cleanup now that we have the trainer
-        self.addCleanup(cleanup_liger_patches, trainer)
+        # Ensure cleanup of liger patches after the test
+        request.addfinalizer(lambda: cleanup_liger_patches(trainer))
 
         trainer.train()
 
