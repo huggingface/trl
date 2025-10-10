@@ -4,8 +4,9 @@ The notebooks and scripts in these examples show how to use Low Rank Adaptation 
 For more information on LoRA, see the [original paper](https://huggingface.co/papers/2106.09685).
 
 ## Installation
+
 Note: peft is in active development, so we install directly from their Github page.
-Peft also relies on the latest version of transformers. 
+Peft also relies on the latest version of transformers.
 
 ```bash
 pip install trl[peft]
@@ -39,7 +40,9 @@ model = AutoModelForCausalLMWithValueHead.from_pretrained(
     peft_config=lora_config,
 )
 ```
+
 And if you want to load your model in 8bit precision:
+
 ```python
 pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name, 
@@ -47,7 +50,9 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     peft_config=lora_config,
 )
 ```
+
 ... or in 4bit precision:
+
 ```python
 pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name, 
@@ -55,7 +60,6 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     load_in_4bit=True,
 )
 ```
-
 
 ## Launch scripts
 
@@ -69,6 +73,7 @@ accelerate launch examples/scripts/ppo.py --use_peft # launch`es training
 ## Using `trl` + `peft` and Data Parallelism
 
 You can scale up to as many GPUs as you want, as long as you are able to fit the training process in a single device. The only tweak you need to apply is to load the model as follows:
+
 ```python
 from peft import LoraConfig
 ...
@@ -86,7 +91,9 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     peft_config=lora_config,
 )
 ```
+
 And if you want to load your model in 8bit precision:
+
 ```python
 pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name, 
@@ -94,7 +101,9 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     load_in_8bit=True,
 )
 ```
+
 ... or in 4bit precision:
+
 ```python
 pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     config.model_name, 
@@ -102,21 +111,20 @@ pretrained_model = AutoModelForCausalLMWithValueHead.from_pretrained(
     load_in_4bit=True,
 )
 ```
+
 Finally, make sure that the rewards are computed on correct device as well, for that you can use `ppo_trainer.model.current_device`.
 
 ## Naive pipeline parallelism (NPP) for large models (>60B models)
 
-The `trl` library also supports naive pipeline parallelism (NPP) for large models (>60B models). This is a simple way to parallelize the model across multiple GPUs. 
+The `trl` library also supports naive pipeline parallelism (NPP) for large models (>60B models). This is a simple way to parallelize the model across multiple GPUs.
 This paradigm, termed as "Naive Pipeline Parallelism" (NPP) is a simple way to parallelize the model across multiple GPUs. We load the model and the adapters across multiple GPUs and the activations and gradients will be naively communicated across the GPUs. This supports `int8` models as well as other `dtype` models.
 
-<div style="text-align: center">
-<img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-npp.png">
-</div>
+![NPP](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/trl-npp.png)
 
 ### How to use NPP?
 
-Simply load your model with a custom `device_map` argument on the `from_pretrained` to split your model across multiple devices. Check out this [nice tutorial](https://github.com/huggingface/blog/blob/main/accelerate-large-models.md) on how to properly create a `device_map` for your model. 
- 
+Simply load your model with a custom `device_map` argument on the `from_pretrained` to split your model across multiple devices. Check out this [nice tutorial](https://github.com/huggingface/blog/blob/main/accelerate-large-models.md) on how to properly create a `device_map` for your model.
+
 Also make sure to have the `lm_head` module on the first GPU device as it may throw an error if it is not on the first device. As this time of writing, you need to install the `main` branch of `accelerate`: `pip install git+https://github.com/huggingface/accelerate.git@main` and `peft`: `pip install git+https://github.com/huggingface/peft.git@main`.
 
 ### Launch scripts
