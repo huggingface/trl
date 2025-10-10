@@ -714,7 +714,10 @@ def pack_dataset(
 
 
 def truncate_dataset(
-    dataset: DatasetType, max_length: int, map_kwargs: Optional[dict[str, Any]] = None
+    dataset: DatasetType,
+    max_length: int,
+    columns: Union[str, list[str]] = "all",
+    map_kwargs: Optional[dict[str, Any]] = None,
 ) -> DatasetType:
     r"""
     Truncate sequences in a dataset to a specified `max_length`.
@@ -724,6 +727,8 @@ def truncate_dataset(
             Dataset to truncate.
         max_length (`int`):
             Maximum sequence length to truncate to.
+        columns (`str` or `list[str]`, *optional*, defaults to `"all"`):
+            Which columns to truncate. If `"all"` (default), all columns are truncated.
         map_kwargs (`dict`, *optional*):
             Additional keyword arguments to pass to the dataset's map method when truncating examples.
 
@@ -749,32 +754,30 @@ def truncate_dataset(
         map_kwargs = {}
     if isinstance(dataset, Dataset):
         # Fast truncation with pyarrow
-        def truncate(examples):
+        def truncate(examples, columns):
             truncated_columns = []
             for column in examples.columns:
-                if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
-                    column = pc.list_slice(column, 0, max_length)
+                if columns == "all" or column._name in columns:
+                    if pyarrow.types.is_list(column.type) or pyarrow.types.is_large_list(column.type):
+                        column = pc.list_slice(column, 0, max_length)
                 truncated_columns.append(column)
             return pa.Table.from_arrays(truncated_columns, names=examples.column_names)
 
         dataset = dataset.with_format("arrow")
-        dataset = dataset.map(truncate, batched=True, **map_kwargs)
+        dataset = dataset.map(truncate, batched=True, **map_kwargs, fn_kwargs={"columns": columns})
         dataset = dataset.with_format(None)
     else:
 
-        def truncate(examples):
+        def truncate(examples, columns):
             truncated_examples = {}
             for key, column in examples.items():
-                if column and isinstance(column[0], list):
-                    column = [val[:max_length] for val in column]
+                if columns == "all" or key in columns:
+                    if column and isinstance(column[0], list):
+                        column = [val[:max_length] for val in column]
                 truncated_examples[key] = column
             return truncated_examples
 
-        dataset = dataset.map(
-            truncate,
-            batched=True,
-            **map_kwargs,
-        )
+        dataset = dataset.map(truncate, batched=True, **map_kwargs, fn_kwargs={"columns": columns})
     return dataset
 
 

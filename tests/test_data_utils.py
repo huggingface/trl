@@ -955,6 +955,20 @@ class TestTruncateExamples(TrlTestCase):
         dataset = truncate_dataset(dataset, max_length)
         assert dataset.to_dict() == expected_output
 
+    def test_with_specified_columns(self):
+        examples = {
+            "prompt_ids": [[1, 2, 3], [6, 7], [12]],
+            "completion_ids": [[4, 5], [8, 9, 10, 11], [13, 14]],
+        }
+        dataset = Dataset.from_dict(examples)
+        max_length = 2
+        expected_output = {
+            "prompt_ids": [[1, 2], [6, 7], [12]],
+            "completion_ids": [[4, 5], [8, 9, 10, 11], [13, 14]],
+        }
+        dataset = truncate_dataset(dataset, max_length, columns=["prompt_ids"])
+        assert dataset.to_dict() == expected_output
+
 
 class TestMaybeConvertToChatML(TrlTestCase):
     def test_with_conversations_key(self):

@@ -24,7 +24,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
-from torch.utils.data import DataLoader
 from transformers import (
     AutoProcessor,
     BaseImageProcessor,
@@ -53,6 +52,7 @@ from .utils import (
     create_model_from_path,
     entropy_from_logits,
     flush_left,
+    flush_right,
     pad,
     remove_none_values,
     selective_log_softmax,
@@ -390,8 +390,8 @@ class DPOTrainer(BaseTrainer):
             Configuration for this trainer. If `None`, a default configuration is used.
         data_collator ([`~transformers.DataCollator`], *optional*):
             Function to use to form a batch from a list of elements of the processed `train_dataset` or `eval_dataset`.
-            Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model
-            and [`~trainer.dpo_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
+            Will default to [`~trainer.dpo_trainer.DataCollatorForPreference`] if the model is a language model and
+            [`~trainer.dpo_trainer.DataCollatorForVisionLanguageModeling`] if the model is a vision-language model.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             Dataset to use for training. DPO supports both [language modeling](#language-modeling) type and
             [prompt-completion](#prompt-completion) type. The format of the samples can be either:
@@ -570,6 +570,7 @@ class DPOTrainer(BaseTrainer):
             )
 
         # Training arguments
+        self.loss_type = args.loss_type if isinstance(args.loss_type, list) else [args.loss_type]
         self.beta = args.beta
 
         # Dataset
@@ -611,21 +612,6 @@ class DPOTrainer(BaseTrainer):
             optimizer_cls_and_kwargs=optimizer_cls_and_kwargs,
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
-
-        if args.precompute_ref_log_probs:
-            self.train_dataset = self._precompute_ref_logps(
-                self.train_dataset, args.per_device_train_batch_size, "train"
-            )
-            if self.eval_dataset is not None:
-                if isinstance(self.eval_dataset, dict):
-                    self.eval_dataset = {
-                        key: self._precompute_ref_logps(dataset, args.per_device_eval_batch_size, key)
-                        for key, dataset in self.eval_dataset.items()
-                    }
-                else:
-                    self.eval_dataset = self._precompute_ref_logps(
-                        self.eval_dataset, args.per_device_eval_batch_size, "eval"
-                    )
 
         # Initialize activation offloading context
         if self.args.activation_offloading:
@@ -752,10 +738,19 @@ class DPOTrainer(BaseTrainer):
             dataset = dataset.map(tokenize_fn, fn_kwargs={"processing_class": processing_class}, **map_kwargs)
 
             # Truncate
-            if args.max_length is not None:
+            if args.max_prompt_length is not None:
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
-                    map_kwargs["desc"] = f"Truncating {dataset_name} dataset"
-                dataset = truncate_dataset(dataset, args.max_length, map_kwargs)
+                    map_kwargs["desc"] = f"Truncating prompt in {dataset_name} dataset"
+                # FIXME: this ignores truncation side
+                dataset = truncate_dataset(
+                    dataset, args.max_prompt_length, columns=["prompt_ids"], map_kwargs=map_kwargs
+                )
+            if args.max_completion_length is not None:
+                if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
+                    map_kwargs["desc"] = f"Truncating completions in {dataset_name} dataset"
+                dataset = truncate_dataset(
+                    dataset, args.max_completion_length, columns=["chosen_ids", "rejected_ids"], map_kwargs=map_kwargs
+                )
             # For Liger kernel, ensure only the essential columns
             if args.use_liger_kernel:
                 collator_expected_keys = {"input_ids", "completion_mask"}
@@ -764,6 +759,39 @@ class DPOTrainer(BaseTrainer):
 
         return dataset
 
+    def _set_signature_columns_if_needed(self):
+        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
+        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
+        # and "attention_mask").
+        if self._signature_columns is None:
+            if self._is_vision_dataset:
+                self._signature_columns = ["prompt", "chosen", "rejectedimages"]
+            else:
+                self._signature_columns = [
+                    "prompt_ids",
+                    "chosen_ids",
+                    "rejected_ids",
+                    "ref_chosen_logps",
+                    "ref_rejected_logps",
+                ]
+
+    def train(self, resume_from_checkpoint=None, trial=None, ignore_keys_for_eval=None, **kwargs):
+        if self.args.precompute_ref_log_probs:
+            self.train_dataset = self._precompute_ref_logps(
+                self.train_dataset, self.args.per_device_train_batch_size, "train"
+            )
+            if self.eval_dataset is not None:
+                if isinstance(self.eval_dataset, dict):
+                    self.eval_dataset = {
+                        key: self._precompute_ref_logps(dataset, self.args.per_device_eval_batch_size, key)
+                        for key, dataset in self.eval_dataset.items()
+                    }
+                else:
+                    self.eval_dataset = self._precompute_ref_logps(
+                        self.eval_dataset, self.args.per_device_eval_batch_size, "eval"
+                    )
+        return super().train()
+
     def _precompute_ref_logps(
         self, dataset: Union[Dataset, IterableDataset], batch_size: int, dataset_name: str
     ) -> None:
@@ -771,6 +799,26 @@ class DPOTrainer(BaseTrainer):
             examples = [dict(zip(examples.keys(), v)) for v in zip(*examples.values())]  # dict[list] to list[dict]
             inputs = collator(examples)
             inputs = {k: v.to(model.device) for k, v in inputs.items()}
+
+            # Truncate inputs
+            if self.args.max_length is not None:
+                if self.args.truncation_mode == "keep_start":
+                    input_ids = inputs["input_ids"][:, : self.args.max_length]
+                    attention_mask = inputs["attention_mask"][:, : self.args.max_length]
+                    completion_mask = inputs["completion_mask"][:, : self.args.max_length]
+                elif self.args.truncation_mode == "keep_end":
+                    attention_mask, input_ids, completion_mask = flush_right(
+                        inputs["attention_mask"], inputs["input_ids"], inputs["completion_mask"]
+                    )
+                    input_ids = input_ids[:, -self.args.max_length :]
+                    attention_mask = attention_mask[:, -self.args.max_length :]
+                    completion_mask = completion_mask[:, -self.args.max_length :]
+                    attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+                else:
+                    raise ValueError(
+                        f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                    )
+
             with torch.no_grad():
                 output = model(inputs["input_ids"], attention_mask=inputs["attention_mask"], use_cache=False)
             shift_logits = output.logits[..., :-1, :].contiguous()
@@ -793,22 +841,6 @@ class DPOTrainer(BaseTrainer):
         )
         return dataset
 
-    def _set_signature_columns_if_needed(self):
-        # If `self.args.remove_unused_columns` is True, non-signature columns are removed.
-        # By default, this method sets `self._signature_columns` to the model's expected inputs (usually, "input_ids"
-        # and "attention_mask").
-        if self._signature_columns is None:
-            if self._is_vision_dataset:
-                self._signature_columns = ["prompt", "chosen", "rejectedimages"]
-            else:
-                self._signature_columns = [
-                    "prompt_ids",
-                    "chosen_ids",
-                    "rejected_ids",
-                    "ref_chosen_logps",
-                    "ref_rejected_logps",
-                ]
-
     def compute_loss(
         self,
         model: nn.Module,
@@ -821,10 +853,29 @@ class DPOTrainer(BaseTrainer):
         """
         mode = "train" if self.model.training else "eval"
 
-        outputs = self.model(inputs["input_ids"], attention_mak=inputs["attention_mask"], use_cache=False)
+        # Truncate inputs
+        if self.args.max_length is not None:
+            if self.args.truncation_mode == "keep_start":
+                input_ids = inputs["input_ids"][:, : self.args.max_length]
+                attention_mask = inputs["attention_mask"][:, : self.args.max_length]
+                completion_mask = inputs["completion_mask"][:, : self.args.max_length]
+            elif self.args.truncation_mode == "keep_end":
+                attention_mask, input_ids, completion_mask = flush_right(
+                    inputs["attention_mask"], inputs["input_ids"], inputs["completion_mask"]
+                )
+                input_ids = input_ids[:, -self.args.max_length :]
+                attention_mask = attention_mask[:, -self.args.max_length :]
+                completion_mask = completion_mask[:, -self.args.max_length :]
+                attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
+            else:
+                raise ValueError(
+                    f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                )
+
+        outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
         shift_logits = outputs.logits[..., :-1, :].contiguous()
-        shift_labels = inputs["input_ids"][..., 1:].contiguous()
-        shift_completion_mask = inputs["completion_mask"][..., 1:].contiguous()
+        shift_labels = input_ids[..., 1:].contiguous()
+        shift_completion_mask = completion_mask[..., 1:].contiguous()
         per_token_logps = selective_log_softmax(shift_logits, shift_labels)
         per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
         logps = per_token_logps.sum(dim=1)  # sum over sequence length
@@ -834,9 +885,17 @@ class DPOTrainer(BaseTrainer):
         # Get the log ratios for the chosen and rejected responses
         chosen_logratios = chosen_logps - ref_chosen_logps
         rejected_logratios = rejected_logps - ref_rejected_logps
-        per_sequence_loss = -F.logsigmoid(self.beta * chosen_logratios - self.beta * rejected_logratios)
 
-        loss = per_sequence_loss.mean()
+        loss = 0
+
+        for loss_type in self.loss_type:
+            if loss_type == "sigmoid":
+                per_sequence_loss = -F.logsigmoid(self.beta * chosen_logratios - self.beta * rejected_logratios)
+
+            elif loss_type == "hinge":
+                per_sequence_loss = torch.relu(1 - (self.beta * chosen_logratios - self.beta * rejected_logratios))
+
+            loss += per_sequence_loss.mean()
 
         # Compute entropy
         if not self.args.use_liger_kernel:  # liger doesn't return logits

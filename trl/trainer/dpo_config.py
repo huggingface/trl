@@ -32,7 +32,7 @@ class DPOConfig(TrainingArguments):
     command line.
 
     Parameters:
-        > Parameters that control the model
+        > Parameters that control the model and reference model
 
         model_init_kwargs (`dict[str, Any]`, *optional*):
             Keyword arguments for [`~transformers.AutoModelForCausalLM.from_pretrained`], used when the `model`
@@ -52,6 +52,9 @@ class DPOConfig(TrainingArguments):
         max_length (`int` or `None`, *optional*, defaults to `1024`):
             Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from the right.
             If `None`, no truncation is applied.
+        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
+            Truncation mode to use when the sequence exceeds `max_length`. Possible values are `"keep_end"` and
+            `"keep_start"`.
         padding_free (`bool`, *optional*, defaults to `False`):
             Whether to perform forward passes without padding by flattening all sequences in the batch into a single
             continuous sequence. This reduces memory usage by eliminating padding overhead. Currently, this is only
@@ -65,6 +68,15 @@ class DPOConfig(TrainingArguments):
 
         > Parameters that control the training
 
+        loss_type (`str` or `list[str]`, *optional*, defaults to `"sigmoid"`):
+            Type of loss to use. Possible values are:
+
+                - `"sigmoid"`: sigmoid loss from the original [DPO](https://huggingface.co/papers/2305.18290) paper.
+                - `"hinge"`: hinge loss on the normalized likelihood from the
+                [SLiC](https://huggingface.co/papers/2305.10425) paper.
+        beta (`float`, *optional*, defaults to `0.1`):
+            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+            reference model.
         activation_offloading (`bool`, *optional*, defaults to `False`):
             Whether to offload the activations to the CPU.
     """
@@ -121,21 +133,27 @@ class DPOConfig(TrainingArguments):
     )
     max_prompt_length: Optional[int] = field(
         default=512,
-        metadata={
-            "help": "Maximum length of the prompt part of the sequence. If `None`, no truncation is applied. When packing is enabled, this value sets the prompt length."
-        },
+        metadata={"help": "Maximum length of the prompt part of the sequence. If `None`, no truncation is applied."},
     )
     max_completion_length: Optional[int] = field(
         default=None,
         metadata={
-            "help": "Maximum length of the completion part of the sequence. If `None`, no truncation is applied. When packing is enabled, this value sets the completion length."
+            "help": "Maximum length of the completion part of the sequence. If `None`, no truncation is applied."
         },
     )
     max_length: Optional[int] = field(
         default=1024,
         metadata={
-            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from"
+            "help": "Maximum length of the tokenized sequence. Sequences longer than `max_length` are truncated from "
             "the right. If `None`, no truncation is applied."
+        },
+    )
+    truncation_mode: str = field(
+        default="keep_end",
+        metadata={
+            "help": "Truncation mode to use when the sequence exceeds `max_length`. Possible values are `'keep_end'` "
+            "and `'keep_start'`.",
+            "choices": ["keep_end", "keep_start"],
         },
     )
     padding_free: bool = field(
@@ -161,6 +179,12 @@ class DPOConfig(TrainingArguments):
     )
 
     # Parameters that control the training
+    loss_type: list[str] = field(
+        default_factory=lambda: ["sigmoid"],
+        metadata={
+            "help": "Type of loss to use. Possible values are: `'sigmoid'`, `'hinge'`.",
+        },
+    )
     beta: float = field(
         default=0.1,
         metadata={
@@ -175,4 +199,8 @@ class DPOConfig(TrainingArguments):
 
     def __post_init__(self):
         self.bf16 = not (self.fp16) if self.bf16 is None else self.bf16
+
+        # Normalize loss_type to string format for internal use
+        if hasattr(self.loss_type, "__len__") and len(self.loss_type) == 1:
+            self.loss_type = self.loss_type[0]
         super().__post_init__()
