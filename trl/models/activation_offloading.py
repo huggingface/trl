@@ -30,6 +30,11 @@ from transformers import is_torch_npu_available
 if is_torch_npu_available():
     import torch_npu  # noqa: F401
 
+# Try to import DTensor for FSDP v2 support
+try:
+    from torch.distributed._tensor import DTensor
+except (ImportError, AttributeError):
+    DTensor = None
 
 logger = logging.get_logger(__name__)
 
@@ -418,10 +423,29 @@ class OffloadActivations(saved_tensors_hooks):
         offloading, which is especially important for FSDP models where parameters may not be detected by isinstance
         checks.
 
+        For FSDP v2, this method handles DTensor parameters which may be sharded across ranks and not have valid local
+        storage on all ranks. We extract the local tensor from DTensors using _local_tensor when available.
+
         Args:
             model: The model whose parameters should be tracked
         """
-        self.param_storages = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
+        param_storages = set()
+
+        for p in model.parameters():
+            # For FSDP v2: extract local tensor from DTensor
+            actual_tensor = p
+            if DTensor is not None and isinstance(p, DTensor) and hasattr(p, "_local_tensor"):
+                actual_tensor = p._local_tensor
+
+            # Try to get storage pointer
+            try:
+                storage_ptr = actual_tensor.untyped_storage().data_ptr()
+                param_storages.add(storage_ptr)
+            except RuntimeError:
+                # Parameter doesn't have accessible storage (e.g., FSDP v2 sharded without local shard)
+                continue
+
+        self.param_storages = param_storages
 
 
 class NoOpManager(saved_tensors_hooks):
