@@ -34,6 +34,22 @@ if is_torch_npu_available():
 logger = logging.get_logger(__name__)
 
 
+def _get_unique_tensor_key(tensor: torch.Tensor) -> tuple:
+    """
+    Get a unique key for a tensor based on its storage pointer and dtype. This allows deduplication of tensors that
+    share the same underlying storage. From:
+    https://github.com/volcengine/verl/blob/main/verl/utils/activation_offload.py
+
+    Args:
+        tensor: The tensor to get the key for
+
+    Returns:
+        A tuple of (storage_pointer, dtype) that uniquely identifies the tensor's storage
+    """
+    storage_ptr = tensor.untyped_storage().data_ptr() + tensor.storage_offset()
+    return (storage_ptr, tensor.dtype)
+
+
 class OffloadActivations(saved_tensors_hooks):
     """
     Context manager under which activation tensors created in the forward pass will be offloaded.
@@ -90,6 +106,12 @@ class OffloadActivations(saved_tensors_hooks):
         self.is_first_forward_call = True
         self.is_first_backward_call = True
         self.is_first_forward_pass = True
+
+        # Storage deduplication: maps storage key to tensor_id to avoid offloading same storage multiple times
+        self.storage_to_tensor_id = {}
+
+        # Parameter filtering: track parameter storage pointers to skip them during offloading
+        self.param_storages = set()
 
         # Managing cpu memory
         self.use_pin_memory = use_pin_memory
@@ -152,60 +174,82 @@ class OffloadActivations(saved_tensors_hooks):
                 # set training phase trackers
                 self.is_first_forward_call = False
                 self.is_first_backward_call = True
+                # Reset deduplication map for new forward pass
+                self.storage_to_tensor_id = {}
 
             # query for basic tensor info
             num_bytes = get_num_bytes_tensor(activation)
             tensor_id = get_tensor_id()
 
-            # only offload hefty bois if they're activations on CUDA (our heuristic
-            # for that is to check if they're not params or buffers)!
-            if (
-                activation.device.type in ["cuda", "xpu", "npu"]
-                and num_bytes >= self.min_tensor_size_bytes
-                and (
-                    not isinstance(activation, torch.nn.Parameter)
-                    and not (hasattr(torch.nn, "Buffer") and isinstance(activation, torch.nn.Buffer))
-                )
+            # Check for tensor deduplication using storage pointer
+            # If this storage is already being tracked, we still create a new tensor_id
+            # but don't offload again (just keep the tensor in GPU)
+            storage_key = _get_unique_tensor_key(activation)
+            if storage_key in self.storage_to_tensor_id:
+                # Storage already offloaded - don't offload again, just track the reference
+                self.tracker[tensor_id] = (activation, False)  # Keep on GPU, don't offload
+                return tensor_id
+
+            # Check if tensor is on CPU (skip offloading)
+            if activation.device.type not in ["cuda", "xpu", "npu"]:
+                self.tracker[tensor_id] = (activation, False)
+                return tensor_id
+
+            # Check if tensor is too small
+            if num_bytes < self.min_tensor_size_bytes:
+                self.tracker[tensor_id] = (activation, False)
+                return tensor_id
+
+            # Check if tensor is a parameter or buffer
+            if isinstance(activation, torch.nn.Parameter) or (
+                hasattr(torch.nn, "Buffer") and isinstance(activation, torch.nn.Buffer)
             ):
-                if self.use_streams:
-                    # First, sync back and dereference previously offloaded tensors
-                    # as the offloading should be done sufficiently long ago.
-                    for id in list(self.fwd_stash.keys()):
-                        if id <= tensor_id - self.max_fwd_stash_size:
-                            _, ev = self.fwd_stash[id]
-                            self.s0.wait_event(ev)
-                            del self.fwd_stash[id]
-                        else:
-                            break
+                self.tracker[tensor_id] = (activation, False)
+                return tensor_id
 
-                    # Sync in, offload, and add an event to sync back later
-                    self.s1.wait_stream(self.s0)
+            # Check if tensor storage is a model parameter (for FSDP compatibility)
+            if activation.untyped_storage().data_ptr() in self.param_storages:
+                self.tracker[tensor_id] = (activation, False)
+                return tensor_id
 
-                stream = self.s1 if self.use_streams else self.s0
-                if self.accelerator_type == "xpu":
-                    stream_ctx = torch.xpu.stream(stream)
-                elif self.accelerator_type == "npu":
-                    stream_ctx = torch.npu.stream(stream)
-                else:
-                    stream_ctx = torch.cuda.stream(stream)
-                with stream_ctx:
-                    cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
-                    cpu_tensor.copy_(activation, non_blocking=True)
-                    self.tracker[tensor_id] = (
-                        cpu_tensor,
-                        True,  # True = (in future) modified
-                    )
+            # Tensor qualifies for offloading
+            if self.use_streams:
+                # First, sync back and dereference previously offloaded tensors
+                # as the offloading should be done sufficiently long ago.
+                for id in list(self.fwd_stash.keys()):
+                    if id <= tensor_id - self.max_fwd_stash_size:
+                        _, ev = self.fwd_stash[id]
+                        self.s0.wait_event(ev)
+                        del self.fwd_stash[id]
+                    else:
+                        break
 
-                if self.use_streams:
-                    event = self.s1.record_event()
+                # Sync in, offload, and add an event to sync back later
+                self.s1.wait_stream(self.s0)
 
-                    # Stash to keep activation alive til s1 is done
-                    self.fwd_stash[tensor_id] = (activation, event)
+            stream = self.s1 if self.use_streams else self.s0
+            if self.accelerator_type == "xpu":
+                stream_ctx = torch.xpu.stream(stream)
+            elif self.accelerator_type == "npu":
+                stream_ctx = torch.npu.stream(stream)
             else:
+                stream_ctx = torch.cuda.stream(stream)
+            with stream_ctx:
+                cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
+                cpu_tensor.copy_(activation, non_blocking=True)
                 self.tracker[tensor_id] = (
-                    activation,
-                    False,
-                )  # False = not modified, tensor is as is
+                    cpu_tensor,
+                    True,  # True = (in future) modified
+                )
+
+            if self.use_streams:
+                event = self.s1.record_event()
+
+                # Stash to keep activation alive til s1 is done
+                self.fwd_stash[tensor_id] = (activation, event)
+
+            # Track this storage for deduplication
+            self.storage_to_tensor_id[storage_key] = tensor_id
 
             return tensor_id
 
@@ -368,6 +412,17 @@ class OffloadActivations(saved_tensors_hooks):
         unpack_tensor = unpack_tensor_with_streams if self.use_streams else unpack_tensor_single_stream
         super().__init__(pack_tensor, unpack_tensor)
 
+    def update_model_params(self, model: nn.Module):
+        """
+        Update the set of parameter storage pointers from the model. This allows filtering out model parameters during
+        offloading, which is especially important for FSDP models where parameters may not be detected by isinstance
+        checks.
+
+        Args:
+            model: The model whose parameters should be tracked
+        """
+        self.param_storages = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
+
 
 class NoOpManager(saved_tensors_hooks):
     """
@@ -432,6 +487,9 @@ def get_act_offloading_ctx_manager(
         min_offload_size=min_offload_size,
         max_fwd_stash_size=max_fwd_stash_size,
     )
+
+    # Update parameter storages to filter them during offloading (important for FSDP)
+    activations_handling_ctx.update_model_params(model)
 
     # Below is our hack to disable offloading the last output Linear in every
     # step, as the cost for offloading the activation and then soon after bringing

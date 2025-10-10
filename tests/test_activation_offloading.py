@@ -154,3 +154,49 @@ class TestActivationOffloading(TrlTestCase):
         assert torch.allclose(out1, out2, rtol=1e-5)
         for g1, g2 in zip(grads1, grads2):
             assert torch.allclose(g1, g2, rtol=1e-5)
+
+    @require_torch_accelerator
+    def test_tensor_deduplication(self):
+        """Test that deduplication works correctly for tensors sharing storage"""
+        # Create a model that produces tensor views
+        class ModelWithViews(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.linear = nn.Linear(100, 100)
+
+            def forward(self, x):
+                out = self.linear(x)
+                # Create views - they share storage but are different tensor objects
+                view1 = out.view(-1)
+                view2 = out.transpose(0, 1)
+                return view1.sum() + view2.sum()
+
+        model = ModelWithViews().to(torch_device)
+        offload_ctx = OffloadActivations()
+        offload_ctx.update_model_params(model)
+
+        # Run forward+backward with offloading
+        x = torch.randn(10, 100, device=torch_device, requires_grad=True)
+        with offload_ctx:
+            loss = model(x)
+        loss.backward()
+
+        # Test passes if no errors occur - deduplication prevents redundant offloading
+
+    @require_torch_accelerator
+    def test_parameter_filtering(self):
+        """Test that model parameters are filtered during offloading"""
+        model = nn.Sequential(nn.Linear(10, 20), nn.Linear(20, 10)).to(torch_device)
+        offload_ctx = OffloadActivations()
+
+        # Update parameter storages
+        offload_ctx.update_model_params(model)
+
+        # Verify parameters were tracked
+        assert len(offload_ctx.param_storages) > 0, "Should have tracked parameter storages"
+
+        # Get actual parameter storage pointers
+        param_ptrs = {p.data.untyped_storage().data_ptr() for p in model.parameters()}
+
+        # Verify they match
+        assert offload_ctx.param_storages == param_ptrs, "Tracked storages should match parameter storages"
