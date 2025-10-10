@@ -182,6 +182,7 @@ class VLLMClient:
         top_k: int = -1,
         min_p: float = 0.0,
         max_tokens: int = 16,
+        truncate_prompt_tokens: Optional[int] = None,
         guided_decoding_regex: Optional[str] = None,
         generation_kwargs: Optional[dict] = None,
     ) -> list[list[int]]:
@@ -207,6 +208,10 @@ class VLLMClient:
                 Minimum probability for sampling.
             max_tokens (`int`, *optional*, defaults to `16`):
                 Maximum number of tokens to generate for each prompt.
+            truncate_prompt_tokens (`int`, *optional*):
+                If set to `-1`, will use the truncation size supported by the model. If set to an integer k, will use
+                only the last k tokens from the prompt (i.e., left truncation). If set to `None`, truncation is
+                disabled.
             guided_decoding_regex (`str`, *optional*):
                 Regular expression to guide the decoding process.
             generation_kwargs (`dict`, *optional*):
@@ -246,6 +251,7 @@ class VLLMClient:
                 "top_k": top_k,
                 "min_p": min_p,
                 "max_tokens": max_tokens,
+                "truncate_prompt_tokens": truncate_prompt_tokens,
                 "guided_decoding_regex": guided_decoding_regex,
                 "generation_kwargs": generation_kwargs or {},
             },

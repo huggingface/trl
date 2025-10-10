@@ -48,11 +48,13 @@ You can customize the server configuration by passing additional arguments. For 
 > When using vLLM, ensure that the GPUs assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation using `CUDA_VISIBLE_DEVICES`.  
 >
 > Set GPUs **0-3** for vLLM generation:  
+>
 > ```sh
 > CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model <model_name>
 > ```  
 >
-> And GPUs **4-7** for training:  
+> And GPUs **4-7** for training:
+>
 > ```sh
 > CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 > ```
@@ -79,12 +81,14 @@ You can customize the server configuration by passing additional arguments. For 
 > [!WARNING]
 > When using vLLM, ensure that the GPUs assigned for training and generation are separate to avoid resource conflicts. For instance, if you plan to use 4 GPUs for training and another 4 for vLLM generation, you can specify GPU allocation using `CUDA_VISIBLE_DEVICES`.  
 >
-> Set GPUs **0-3** for vLLM generation:  
+> Set GPUs **0-3** for vLLM generation:
+>
 > ```sh
 > CUDA_VISIBLE_DEVICES=0,1,2,3 trl vllm-serve --model <model_name>
 > ```  
 >
-> And GPUs **4-7** for training:  
+> And GPUs **4-7** for training:
+>
 > ```sh
 > CUDA_VISIBLE_DEVICES=4,5,6,7 accelerate launch train.py
 > ```
