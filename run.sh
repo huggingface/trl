@@ -1,0 +1,28 @@
+python online_dpo.py \
+    --model_name_or_path Qwen/Qwen3-0.6B \
+    --dataset_name HuggingFaceH4/OpenR1-Math-220k-default-verified \
+    --output_dir online-dpo-lora-qwen3-0.6b \
+    --learning_rate 1.0e-6 \
+    --lr_scheduler_type cosine \
+    --warmup_ratio 0.0 \
+    --max_grad_norm 1.0 \
+    --beta 0.1 \
+    --max_length 2048 \
+    --max_new_tokens 2048 \
+    --gradient_accumulation_steps 8 \
+    --per_device_train_batch_size 1 \
+    --num_train_epochs 1 \
+    --use_peft \
+    --lora_r 1 \
+    --lora_alpha 32 \
+    --lora_dropout 0.0 \
+    --lora_target_modules all-linear \
+    --use_vllm \
+    --vllm_mode colocate \
+    --vllm_gpu_memory_utilization 0.4 \
+    --save_strategy steps \
+    --save_steps 50 \
+    --save_total_limit 1 \
+    --logging_steps 1 \
+    --max_steps 200 \
+    --report_to trackio
