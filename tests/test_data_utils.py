@@ -396,6 +396,29 @@ class TestApplyChatTemplate(TrlTestCase):
             assert isinstance(result["label"], bool)
             assert result["label"] == example["label"]
 
+    def test_apply_chat_template_with_chat_template_kwargs(self):
+        tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-Qwen3ForCausalLM")
+
+        example = {
+            "prompt": [{"role": "user", "content": "What color is the sky?"}],
+            # with this tokenizer, when you pass enable_thinking=False, it will add "<think>\n\n</think>\n\n"
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+        result = apply_chat_template(example, tokenizer)
+
+        # docstyle-ignore
+        expected = textwrap.dedent("""\
+        <|im_start|>user
+        What color is the sky?<|im_end|>
+        <|im_start|>assistant
+        <think>
+
+        </think>
+
+        """)
+
+        assert result["prompt"] == expected
+
     def test_apply_chat_template_with_tools(self):
         tokenizer = AutoProcessor.from_pretrained("trl-internal-testing/tiny-LlamaForCausalLM-3.2")
 
