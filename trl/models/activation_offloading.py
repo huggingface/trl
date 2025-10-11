@@ -22,6 +22,7 @@
 import psutil
 import torch
 from accelerate import logging
+from accelerate.utils.versions import is_torch_version
 from torch import nn
 from torch.autograd.graph import saved_tensors_hooks
 from transformers import is_torch_npu_available
@@ -30,11 +31,17 @@ from transformers import is_torch_npu_available
 if is_torch_npu_available():
     import torch_npu  # noqa: F401
 
-# Try to import DTensor for FSDP v2 support
-try:
-    from torch.distributed._tensor import DTensor
-except (ImportError, AttributeError):
-    DTensor = None
+# Import DTensor for FSDP v2 support with version-aware import path
+DTensor = None
+if torch.distributed.is_available():
+    try:
+        if is_torch_version(">=", "2.5.0"):
+            from torch.distributed.tensor import DTensor
+        else:
+            # from torch 2.0.0 (oldest supported accelerate torch version), DTensor is in torch.distributed._tensor
+            from torch.distributed._tensor import DTensor
+    except (ImportError, AttributeError):
+        DTensor = None
 
 logger = logging.get_logger(__name__)
 
@@ -51,8 +58,22 @@ def _get_unique_tensor_key(tensor: torch.Tensor) -> tuple:
     Returns:
         A tuple of (storage_pointer, dtype) that uniquely identifies the tensor's storage
     """
-    storage_ptr = tensor.untyped_storage().data_ptr() + tensor.storage_offset()
-    return (storage_ptr, tensor.dtype)
+    # Handle special tensor types - primarily for FSDP v2 DTensor
+    actual_tensor = tensor
+
+    # For DTensor (FSDP v2), extract the local tensor
+    if DTensor is not None and isinstance(tensor, DTensor) and hasattr(tensor, "_local_tensor"):
+        actual_tensor = tensor._local_tensor
+
+    # Try to get storage pointer, but fall back to tensor id if not accessible
+    try:
+        storage_ptr = actual_tensor.untyped_storage().data_ptr() + actual_tensor.storage_offset()
+    except (RuntimeError, AttributeError):
+        # For tensors with invalid storage, use tensor id
+        # This won't enable deduplication for these tensors, but allows offloading to work
+        storage_ptr = id(actual_tensor)
+
+    return (storage_ptr, actual_tensor.dtype)
 
 
 class OffloadActivations(saved_tensors_hooks):
@@ -212,10 +233,25 @@ class OffloadActivations(saved_tensors_hooks):
                 self.tracker[tensor_id] = (activation, False)
                 return tensor_id
 
-            # Check if tensor storage is a model parameter (for FSDP compatibility)
-            if activation.untyped_storage().data_ptr() in self.param_storages:
+            # Check if tensor is an FP8 tensor (TorchAO) - skip offloading as they're already compressed
+            tensor_class_name = type(activation).__name__
+            if tensor_class_name in ["Float8TrainingTensor", "ScaledMMConfig", "LinearMMConfig"]:
                 self.tracker[tensor_id] = (activation, False)
                 return tensor_id
+
+            # Check if tensor storage is a model parameter (for FSDP compatibility)
+            try:
+                # Extract actual tensor for DTensor
+                check_tensor = activation
+                if DTensor is not None and isinstance(activation, DTensor) and hasattr(activation, "_local_tensor"):
+                    check_tensor = activation._local_tensor
+
+                if check_tensor.untyped_storage().data_ptr() in self.param_storages:
+                    self.tracker[tensor_id] = (activation, False)
+                    return tensor_id
+            except (RuntimeError, AttributeError):
+                # If we can't get data_ptr, skip this check
+                pass
 
             # Tensor qualifies for offloading
             if self.use_streams:
@@ -440,9 +476,11 @@ class OffloadActivations(saved_tensors_hooks):
             # Try to get storage pointer
             try:
                 storage_ptr = actual_tensor.untyped_storage().data_ptr()
-                param_storages.add(storage_ptr)
+                if storage_ptr != 0:
+                    param_storages.add(storage_ptr)
             except RuntimeError:
-                # Parameter doesn't have accessible storage (e.g., FSDP v2 sharded without local shard)
+                # Parameter doesn't have accessible storage (e.g., FSDP v2 sharded without local shard, FP8 parameters)
+                # These will be caught by other checks (isinstance for Parameter, class name for FP8)
                 continue
 
         self.param_storages = param_storages
