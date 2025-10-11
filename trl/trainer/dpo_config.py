@@ -85,7 +85,7 @@ class DPOConfig(TrainingArguments):
 
     # Parameters whose default values are overridden from TrainingArguments
     learning_rate: float = field(
-        default=2e-5,
+        default=1e-6,
         metadata={"help": "The initial learning rate for AdamW."},
     )
     logging_steps: float = field(
