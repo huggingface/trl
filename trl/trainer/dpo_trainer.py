@@ -819,14 +819,15 @@ class DPOTrainer(BaseTrainer):
                         f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
                     )
 
-            with torch.no_grad():
-                output = model(inputs["input_ids"], attention_mask=inputs["attention_mask"], use_cache=False)
-            shift_logits = output.logits[..., :-1, :].contiguous()
-            shift_labels = inputs["input_ids"][..., 1:].contiguous()
+            outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
+            shift_logits = outputs.logits[..., :-1, :].contiguous()
+            shift_labels = input_ids[..., 1:].contiguous()
+            shift_completion_mask = completion_mask[..., 1:].contiguous()
             per_token_logps = selective_log_softmax(shift_logits, shift_labels)
-            per_token_logps[inputs["completion_mask"][..., 1:] == 0] = 0.0  # mask out non-completion tokens
+            per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
             logps = per_token_logps.sum(dim=1)  # sum over sequence length
-            chosen_logps, rejected_logps = logps.chunk(2, dim=0)
+            chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
+
             return {
                 "ref_chosen_logps": chosen_logps.tolist(),
                 "ref_rejected_logps": rejected_logps.tolist(),
