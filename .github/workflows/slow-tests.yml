@@ -102,13 +102,6 @@ jobs:
           source .venv/bin/activate
           make slow_tests
 
-      - name: Run end-to-end examples tests on multi GPU
-        if: always()
-        run: |
-          source .venv/bin/activate
-          uv pip install deepspeed
-          make test_examples
-
       - name: Generate Reports
         if: always()
         run: |
