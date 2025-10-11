@@ -18,7 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
-
+from .utils import     disable_dropout_in_model
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -491,6 +491,8 @@ class DPOTrainer(BaseTrainer):
                     "The `model_init_kwargs` will be ignored."
                 )
         model_id = model.config._name_or_path
+
+        disable_dropout_in_model(model)
 
         # Processing class
         if processing_class is None:
