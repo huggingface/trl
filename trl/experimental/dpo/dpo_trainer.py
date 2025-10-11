@@ -18,12 +18,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
-from ...trainer.utils import     disable_dropout_in_model
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from accelerate import PartialState, logging
 from datasets import Dataset, IterableDataset
+from datasets.fingerprint import Hasher
 from transformers import (
     AutoProcessor,
     BaseImageProcessor,
@@ -38,25 +39,26 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ..data_utils import (
-    apply_chat_template,
+from ...data_utils import (
     extract_prompt,
     is_conversational,
     prepare_multimodal_messages,
     truncate_dataset,
 )
-from ..models import get_act_offloading_ctx_manager, prepare_peft_model
-from .base_trainer import BaseTrainer
-from .dpo_config import DPOConfig
-from .utils import (
+from ...models import get_act_offloading_ctx_manager, prepare_peft_model
+from ...trainer.base_trainer import BaseTrainer
+from ...trainer.utils import (
     create_model_from_path,
+    disable_dropout_in_model,
     entropy_from_logits,
     flush_left,
     flush_right,
+    hash_module,
     pad,
     remove_none_values,
     selective_log_softmax,
 )
+from .dpo_config import DPOConfig
 
 
 if is_peft_available():
@@ -167,192 +169,6 @@ class DataCollatorForPreference(DataCollatorMixin):
             output["ref_chosen_logps"] = ref_chosen_logps
         if "ref_rejected_logps" in examples[0]:
             output["ref_rejected_logps"] = ref_rejected_logps
-        return output
-
-
-@dataclass
-class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
-    """
-    Data collator for vision-language modeling tasks.
-
-    Unlike text-only datasets—where the collator typically receives pre-tokenized inputs ready for batching,
-    vision-language data processing involves converting images into pixel values. This conversion is disk-intensive,
-    making upfront preprocessing of the entire dataset impractical. Therefore, this collator performs tokenization and
-    image processing on-the-fly to efficiently prepare batches.
-
-    Each input example should be a dictionary containing at least:
-    - An `"images"` key holding the image data.
-    - [language modeling](#language-modeling) type: either a `"messages"` key for conversational inputs or a `"text"`
-      key for standard text inputs.
-    - [prompt-completion](#prompt-completion) type: keys `"prompt"` and `"completion"` for the prompt and completion.
-
-    The collator outputs a dictionary including:
-    - `"input_ids"`: Tensor of token IDs.
-    - `"attention_mask"`: Tensor indicating attention mask.
-    - `"pixel_values"`: Tensor representing image pixel values.
-    - `"labels"`: Tensor for training labels.
-
-    Additional keys may be present depending on the processor, such as `"image_grid_thw"`.
-
-    Args:
-        processor (`ProcessorMixin`):
-            The processor used to tokenize text and process images. It must be a subclass of `ProcessorMixin` and
-            include a `tokenizer` with a defined `pad_token_id`.
-        max_length (`int` or `None`, optional, defaults to `None`):
-            Maximum sequence length for input tokens. If `None`, no truncation is applied.
-        pad_to_multiple_of (`int` or `None`, optional, defaults to `None`):
-            If set, the sequences will be padded to a multiple of this value.
-        return_tensors (`str`, optional, defaults to `"pt"`):
-            The tensor type to return. Currently, only `"pt"` (PyTorch tensors) is supported.
-
-    Example:
-    ```python
-    >>> from trl.trainer.dpo_trainer import DataCollatorForVisionLanguageModeling
-    >>> from transformers import AutoProcessor
-
-    >>> processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct")
-    >>> collator = DataCollatorForVisionLanguageModeling(processor)
-    >>> examples = [
-    ...     {"images": [Image.open("image_0.png")], "messages": [{"role": "user", "content": "What is this?"}]},
-    ...     {"images": [Image.open("image_1.png")], "messages": [{"role": "user", "content": "Describe this image."}]},
-    ... ]
-    >>> collator(examples)
-    {'input_ids': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
-                           151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,   3838,    374,
-                              419,     30, 151645,    198],
-                          [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
-                           151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,  74785,    419,
-                             2168,     13, 151645,    198]]),
-     'attention_mask': tensor([[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-                               [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]),
-     'pixel_values': tensor([[-0.9893,  0.1785,  1.5362,  ..., -0.0582,  0.8661, -0.2431],
-                             [-0.2302,  0.9522, -1.1061,  ...,  0.0555,  1.3354, -0.6412],
-                             [ 1.2150,  0.9084,  0.7041,  ...,  0.2404, -0.8403, -0.5133],
-                             ...,
-                             [ 0.6895,  0.2807,  0.2515,  ..., -0.2004, -1.2100,  0.0555],
-                             [ 0.8209, -0.9748,  1.5654,  ...,  1.6055, -0.4706,  0.5817],
-                             [-1.0915,  0.4559,  0.9230,  ...,  0.5106,  0.0982, -0.1720]]),
-     'image_grid_thw': tensor([[1, 4, 4],
-                               [1, 4, 4]]),
-     'labels': tensor([[151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
-                        151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,   3838,    374,
-                           419,     30, 151645,    198],
-                        [151644,   8948,    198,   2610,    525,    264,  10950,  17847,     13,  151645,    198,
-                         151644,    872,    198, 151652, 151655, 151655, 151655,  151655, 151653,  74785,    419,
-                           2168,     13, 151645,    198]])}
-    ```
-    """
-
-    processor: ProcessorMixin
-    max_length: Optional[int] = None
-    pad_to_multiple_of: Optional[int] = None
-    return_tensors: str = "pt"
-
-    def torch_call(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        if "messages" in examples[0] or self.dataset_text_field in examples[0]:
-            return self._collate_language_modeling(examples)
-        elif "prompt" in examples[0] and "completion" in examples[0]:
-            return self._collate_prompt_completion(examples)
-        else:
-            raise KeyError(f"Unexpected input keys in examples: {list(examples[0].keys())}.")
-
-    def _collate_language_modeling(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        images = [example["images"] for example in examples]
-        # Transformers requires at least one image in the batch, otherwise it throws an error
-        if all(img_list == [] for img_list in images):
-            images = None
-
-        if "messages" in examples[0]:  # conversational case
-            for example in examples:
-                prepare_multimodal_messages(example["messages"], len(example["images"]))
-            messages = [example["messages"] for example in examples]
-            texts = self.processor.apply_chat_template(messages)
-        elif self.dataset_text_field in examples[0]:  # standard case
-            texts = [example[self.dataset_text_field] for example in examples]
-        else:
-            raise KeyError(
-                "The input examples must contain either 'messages' for conversational data or 'text' for standard "
-                "data."
-            )
-
-        output = self.processor(
-            images=images,
-            text=texts,
-            padding=True,
-            padding_side="right",
-            pad_to_multiple_of=self.pad_to_multiple_of,
-            truncation=self.max_length is not None,
-            max_length=self.max_length,
-            return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-        )
-        labels = output["input_ids"].clone()
-        labels[output["attention_mask"] == 0] = -100
-        # We mask only padding tokens (-100) in the labels. Vision tokens are left unchanged because their handling in
-        # loss computation has to be done by the model, and masking them here would be infeasible in practice as vision
-        # token definitions vary across architectures.
-        output["labels"] = labels
-        return output
-
-    def _collate_prompt_completion(self, examples: list[dict[str, Any]]) -> dict[str, Any]:
-        if self.pad_to_multiple_of is not None:
-            raise NotImplementedError(
-                "Padding to a multiple of a value is not yet implemented for vision-language modeling and "
-                "prompt-completion data yet."
-            )
-        images = [example["images"] for example in examples]
-        # Transformers requires at least one image in the batch, otherwise it throws an error
-        if all(img_list == [] for img_list in images):
-            images = None
-        if is_conversational(examples[0]):  # conversational case
-            for example in examples:
-                prepare_multimodal_messages(example["prompt"] + example["completion"], len(example["images"]))
-            examples = [apply_chat_template(example, self.processor) for example in examples]
-
-        prompts = [example["prompt"] for example in examples]
-        completions = [example["completion"] for example in examples]
-
-        processed_prompts = self.processor(
-            images=images,
-            text=prompts,
-            padding=True,
-            padding_side="left",
-            return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-        )
-        processed_completions = self.processor(
-            text=completions,
-            padding=True,
-            padding_side="right",
-            return_tensors=self.return_tensors,
-            add_special_tokens=False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
-        )
-
-        # Concatenate prompts and completions
-        prompt_ids, completion_ids = processed_prompts["input_ids"], processed_completions["input_ids"]
-        prompt_mask, completion_mask = processed_prompts["attention_mask"], processed_completions["attention_mask"]
-        input_ids = torch.cat((prompt_ids, completion_ids), dim=1)
-        attention_mask = torch.cat((prompt_mask, completion_mask), dim=1)
-        completion_mask = torch.cat((torch.zeros_like(prompt_mask), completion_mask), dim=1)
-
-        # Flush left to reduce padding
-        attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
-
-        # Truncate if necessary
-        if self.max_length is not None:
-            input_ids = input_ids[:, : self.max_length]
-            attention_mask = attention_mask[:, : self.max_length]
-            completion_mask = completion_mask[:, : self.max_length]
-
-        # Create labels and mask padding tokens
-        labels = input_ids.clone()
-        labels[attention_mask == 0] = -100
-
-        # Build the output dictionary
-        output = processed_prompts  # we take processed_prompts because it contains the images
-        output["input_ids"] = input_ids
-        output["attention_mask"] = attention_mask
-        output["labels"] = labels
         return output
 
 
@@ -521,6 +337,7 @@ class DPOTrainer(BaseTrainer):
         self.padding_free = args.padding_free
         use_flash_attention = model.config._attn_implementation in FLASH_ATTENTION_VARIANTS
         if self.padding_free:
+            raise NotImplementedError("Padding-free training is not yet implemented.")
             if data_collator is not None:
                 raise ValueError("Passing a custom data collator is not supported when using padding-free.")
             if not use_flash_attention:
@@ -565,11 +382,7 @@ class DPOTrainer(BaseTrainer):
                 pad_to_multiple_of=args.pad_to_multiple_of,
             )
         elif data_collator is None and self._is_vision_dataset:
-            data_collator = DataCollatorForVisionLanguageModeling(
-                processor=processing_class,
-                max_length=args.max_length,
-                pad_to_multiple_of=args.pad_to_multiple_of,
-            )
+            raise NotImplementedError("VLM training is not yet implemented.")
 
         # Training arguments
         self.loss_type = args.loss_type if isinstance(args.loss_type, list) else [args.loss_type]
@@ -686,9 +499,6 @@ class DPOTrainer(BaseTrainer):
                         tools=example.get("tools"),
                         **example.get("chat_template_kwargs", {}),
                     )
-                    # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
-                    # even for single examples, while for LLMs it returns lists of ints.
-                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                     prompt_chosen_processed = processing_class.apply_chat_template(
                         example["prompt"] + example["chosen"],
                         return_dict=True,
@@ -705,6 +515,7 @@ class DPOTrainer(BaseTrainer):
                     )
                     # Fix transformers inconsistency: for VLMs, apply_chat_template returns lists of lists
                     # even for single examples, while for LLMs it returns lists of ints.
+                    prompt_ids = prompt_ids[0] if isinstance(prompt_ids[0], list) else prompt_ids
                     prompt_chosen_processed = {
                         k: v[0] if isinstance(v[0], list) else v for k, v in prompt_chosen_processed.items()
                     }
@@ -741,9 +552,9 @@ class DPOTrainer(BaseTrainer):
 
             # Truncate
             if args.max_prompt_length is not None:
+                raise NotImplementedError("Prompt truncation is not yet implemented.")
                 if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
                     map_kwargs["desc"] = f"Truncating prompt in {dataset_name} dataset"
-                # FIXME: this ignores truncation side
                 dataset = truncate_dataset(
                     dataset, args.max_prompt_length, columns=["prompt_ids"], map_kwargs=map_kwargs
                 )
@@ -767,7 +578,7 @@ class DPOTrainer(BaseTrainer):
         # and "attention_mask").
         if self._signature_columns is None:
             if self._is_vision_dataset:
-                self._signature_columns = ["prompt", "chosen", "rejectedimages"]
+                self._signature_columns = ["prompt", "chosen", "rejected"]
             else:
                 self._signature_columns = [
                     "prompt_ids",
@@ -797,31 +608,33 @@ class DPOTrainer(BaseTrainer):
     def _precompute_ref_logps(
         self, dataset: Union[Dataset, IterableDataset], batch_size: int, dataset_name: str
     ) -> None:
-        def compute_ref_logps(examples, collator, model):
+        def compute_ref_logps(examples, collator, max_length, truncation_mode):
             examples = [dict(zip(examples.keys(), v)) for v in zip(*examples.values())]  # dict[list] to list[dict]
             inputs = collator(examples)
-            inputs = {k: v.to(model.device) for k, v in inputs.items()}
+            input_ids = inputs["input_ids"].to(self.model.device)
+            attention_mask = inputs["attention_mask"].to(self.model.device)
+            completion_mask = inputs["completion_mask"].to(self.model.device)
 
             # Truncate inputs
-            if self.args.max_length is not None:
-                if self.args.truncation_mode == "keep_start":
-                    input_ids = inputs["input_ids"][:, : self.args.max_length]
-                    attention_mask = inputs["attention_mask"][:, : self.args.max_length]
-                    completion_mask = inputs["completion_mask"][:, : self.args.max_length]
-                elif self.args.truncation_mode == "keep_end":
+            if max_length is not None:
+                if truncation_mode == "keep_start":
+                    input_ids = input_ids[:, :max_length]
+                    attention_mask = attention_mask[:, :max_length]
+                    completion_mask = completion_mask[:, :max_length]
+                elif truncation_mode == "keep_end":
                     attention_mask, input_ids, completion_mask = flush_right(
-                        inputs["attention_mask"], inputs["input_ids"], inputs["completion_mask"]
+                        attention_mask, input_ids, completion_mask
                     )
-                    input_ids = input_ids[:, -self.args.max_length :]
-                    attention_mask = attention_mask[:, -self.args.max_length :]
-                    completion_mask = completion_mask[:, -self.args.max_length :]
+                    input_ids = input_ids[:, -max_length:]
+                    attention_mask = attention_mask[:, -max_length:]
+                    completion_mask = completion_mask[:, -max_length:]
                     attention_mask, input_ids, completion_mask = flush_left(attention_mask, input_ids, completion_mask)
                 else:
                     raise ValueError(
-                        f"Unsupported truncation mode: {self.args.truncation_mode}, expected 'keep_start' or 'keep_end'"
+                        f"Unsupported truncation mode: {truncation_mode}, expected 'keep_start' or 'keep_end'"
                     )
 
-            outputs = model(input_ids, attention_mak=attention_mask, use_cache=False)
+            outputs = self.model(input_ids, attention_mak=attention_mask, use_cache=False)
             shift_logits = outputs.logits[..., :-1, :].contiguous()
             shift_labels = input_ids[..., 1:].contiguous()
             shift_completion_mask = completion_mask[..., 1:].contiguous()
@@ -829,18 +642,24 @@ class DPOTrainer(BaseTrainer):
             per_token_logps[shift_completion_mask == 0] = 0.0  # mask out non-completion tokens
             logps = per_token_logps.sum(dim=1)  # sum over sequence length
             chosen_logps, rejected_logps = logps.chunk(2, dim=0)  # batch is [chosen, rejected]
+            return {"ref_chosen_logps": chosen_logps.tolist(), "ref_rejected_logps": rejected_logps.tolist()}
 
-            return {
-                "ref_chosen_logps": chosen_logps.tolist(),
-                "ref_rejected_logps": rejected_logps.tolist(),
-            }
-
+        # Normally, `map` creates a fingerprint based on the transform function and its arguments. However, the model’s
+        # produces a different fingerprint on each run, which prevents the cache from being used. To fix this, we
+        # manually compute a stable fingerprint for the model instead.
+        fn_kwargs = {
+            "collator": self.data_collator,
+            "max_length": self.args.max_length,
+            "truncation_mode": self.args.truncation_mode,
+        }
+        model_hash = hash_module(self.model)
         dataset = dataset.map(
             compute_ref_logps,
             batched=True,
             batch_size=batch_size,
-            fn_kwargs={"collator": self.data_collator, "model": self.model},
+            fn_kwargs=fn_kwargs,
             desc=f"Computing reference logps for {dataset_name} dataset",
+            new_fingerprint=Hasher.hash((fn_kwargs, model_hash)),
         )
         return dataset
 
@@ -856,16 +675,18 @@ class DPOTrainer(BaseTrainer):
         """
         mode = "train" if self.model.training else "eval"
 
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+        completion_mask = inputs["completion_mask"]
+
         # Truncate inputs
         if self.args.max_length is not None:
             if self.args.truncation_mode == "keep_start":
-                input_ids = inputs["input_ids"][:, : self.args.max_length]
-                attention_mask = inputs["attention_mask"][:, : self.args.max_length]
-                completion_mask = inputs["completion_mask"][:, : self.args.max_length]
+                input_ids = input_ids[:, : self.args.max_length]
+                attention_mask = attention_mask[:, : self.args.max_length]
+                completion_mask = completion_mask[:, : self.args.max_length]
             elif self.args.truncation_mode == "keep_end":
-                attention_mask, input_ids, completion_mask = flush_right(
-                    inputs["attention_mask"], inputs["input_ids"], inputs["completion_mask"]
-                )
+                attention_mask, input_ids, completion_mask = flush_right(attention_mask, input_ids, completion_mask)
                 input_ids = input_ids[:, -self.args.max_length :]
                 attention_mask = attention_mask[:, -self.args.max_length :]
                 completion_mask = completion_mask[:, -self.args.max_length :]
@@ -900,40 +721,69 @@ class DPOTrainer(BaseTrainer):
 
             loss += per_sequence_loss.mean()
 
-        # Compute entropy
-        if not self.args.use_liger_kernel:  # liger doesn't return logits
-            with torch.no_grad():
-                per_token_entropy = entropy_from_logits(shift_logits)
-                entropy = per_token_entropy[shift_completion_mask == 1].mean()
-                entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
-            self._metrics[mode]["entropy"].append(entropy)
+        # Log the metrics
+        # Entropy
+        per_token_entropy = entropy_from_logits(shift_logits.detach())
+        entropy = per_token_entropy[shift_completion_mask.bool()].mean()
+        entropy = self.accelerator.gather_for_metrics(entropy).mean().item()
+        self._metrics[mode]["entropy"].append(entropy)
 
+        # Number of tokens
         if mode == "train":
             num_tokens_in_batch = self.accelerator.gather_for_metrics(inputs["attention_mask"].sum()).sum().item()
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if not self.args.use_liger_kernel:
-            with torch.no_grad():
-                # Get predictions (first half of the logits corresponding to the chosen responses)
-                predictions = shift_logits[: len(shift_logits) // 2].argmax(dim=-1)
-                chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
-                chosen_labels = shift_labels[: len(shift_labels) // 2]
+        # Average logits for chosen and rejected completions
+        chosen_logits, rejected_logits = shift_logits.detach().chunk(2, dim=0)
+        chosen_mask, rejected_mask = shift_completion_mask.chunk(2, dim=0)
+        total_chosen_logits = chosen_logits[chosen_mask.bool()].mean(-1)
+        total_chosen_tokens = chosen_mask.sum()
+        total_rejected_logits = rejected_logits[rejected_mask.bool()].mean(-1)
+        total_rejected_tokens = rejected_mask.sum()
+        total_chosen_logits = self.accelerator.gather_for_metrics(total_chosen_logits).sum().item()
+        total_chosen_tokens = self.accelerator.gather_for_metrics(total_chosen_tokens).sum().item()
+        total_rejected_logits = self.accelerator.gather_for_metrics(total_rejected_logits).sum().item()
+        total_rejected_tokens = self.accelerator.gather_for_metrics(total_rejected_tokens).sum().item()
+        avg_chosen_logits = total_chosen_logits / total_chosen_tokens if total_chosen_tokens > 0 else 0.0
+        avg_rejected_logits = total_rejected_logits / total_rejected_tokens if total_rejected_tokens > 0 else 0.0
+        self._metrics[mode]["logits/chosen"].append(avg_chosen_logits)
+        self._metrics[mode]["logits/rejected"].append(avg_rejected_logits)
 
-                # Calculate accuracy only on non-padding tokens
-                correct_predictions = (predictions == chosen_labels) & chosen_mask
-                total_tokens = chosen_mask.sum()
-                correct_tokens = correct_predictions.sum()
+        # Token accuracy for the chosen completions
+        predictions = chosen_logits.argmax(dim=-1)
+        chosen_mask = shift_completion_mask[: len(shift_completion_mask) // 2].bool()
+        chosen_labels = shift_labels[: len(shift_labels) // 2]
+        correct_predictions = (predictions == chosen_labels) & chosen_mask
+        total_tokens = chosen_mask.sum()
+        correct_tokens = correct_predictions.sum()
+        correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
+        total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+        total_sum = total_tokens.sum()
+        accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
+        self._metrics[mode]["mean_token_accuracy"].append(accuracy)
 
-                # Gather the correct_tokens and total_tokens across all processes
-                correct_tokens = self.accelerator.gather_for_metrics(correct_tokens)
-                total_tokens = self.accelerator.gather_for_metrics(total_tokens)
+        # Rewards for chosen and rejected completions
+        chosen_rewards = self.beta * (chosen_logps.detach() - ref_chosen_logps)
+        rejected_rewards = self.beta * (rejected_logps.detach() - ref_rejected_logps)
+        agg_chosen_rewards = self.accelerator.gather(chosen_rewards)
+        agg_rejected_rewards = self.accelerator.gather(rejected_rewards)
+        self._metrics[mode]["rewards/chosen"].append(agg_chosen_rewards.mean().item())
+        self._metrics[mode]["rewards/rejected"].append(agg_rejected_rewards.mean().item())
 
-                # Compute the mean token accuracy and log it
-                total_sum = total_tokens.sum()
-                accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
-                self._metrics[mode]["mean_token_accuracy"].append(accuracy)
+        # Reward accuracy
+        reward_accuracies = (chosen_rewards > rejected_rewards).float()
+        agg_reward_accuracies = self.accelerator.gather(reward_accuracies)
+        self._metrics[mode]["rewards/accuracies"].append(agg_reward_accuracies.mean().item())
+
+        # Reward margins
+        margins = chosen_rewards - rejected_rewards
+        agg_margins = self.accelerator.gather(margins)
+        self._metrics[mode]["rewards/margins"].append(agg_margins.mean().item())
+
+        # Average log probabilities for chosen and rejected completions
+        self._metrics[mode]["logps/chosen"].append(self.accelerator.gather(chosen_logps).mean().item())
+        self._metrics[mode]["logps/rejected"].append(self.accelerator.gather(rejected_logps).mean().item())
 
         return (loss, outputs) if return_outputs else loss
 
