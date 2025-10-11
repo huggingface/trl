@@ -1257,7 +1257,7 @@ class DPOTrainer(BaseTrainer):
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
         # For Qwen-VL models
         if "image_grid_thw" in concatenated_batch:
-            model_kwargs["image_grid_thw"] = concatenated_batch["image_grid_tw"]
+            model_kwargs["image_grid_thw"] = concatenated_batch["image_grid_thw"]
 
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
         completion_attention_mask = concatenated_batch["completion_attention_mask"]
@@ -1505,6 +1505,9 @@ class DPOTrainer(BaseTrainer):
             model_kwargs["pixel_attention_mask"] = concatenated_batch["pixel_attention_mask"]
         if "image_sizes" in concatenated_batch:
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
+        # For Qwen-VL models
+        if "image_grid_thw" in concatenated_batch:
+            model_kwargs["image_grid_thw"] = concatenated_batch["image_grid_thw"]
 
         prompt_input_ids = concatenated_batch["prompt_input_ids"]
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
