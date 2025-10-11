@@ -126,6 +126,9 @@ class DPOConfig(TrainingArguments):
         tools (`Optional[list[Union[dict, Callable]]]`, *optional*):
             List of tools (callable functions) that will be accessible to the model. If the template does not support
             function calling, this argument will have no effect.
+        dataset_kwargs (`dict[str, Any]`, *optional*):
+            Dictionary of optional keyword arguments for the dataset preparation. The only supported key is
+            `skip_prepare_dataset`.
 
         > Parameters that control the training
 
@@ -300,6 +303,13 @@ class DPOConfig(TrainingArguments):
     dataset_num_proc: Optional[int] = field(
         default=None,
         metadata={"help": "Number of processes to use for processing the dataset."},
+    )
+    dataset_kwargs: Optional[dict[str, Any]] = field(
+        default=None,
+        metadata={
+            "help": "Dictionary of optional keyword arguments for the dataset preparation. The only supported key is "
+            "`skip_prepare_dataset`."
+        },
     )
     pad_token: Optional[str] = field(
         default=None,
