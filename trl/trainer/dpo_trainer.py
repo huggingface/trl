@@ -470,7 +470,9 @@ class DPOTrainer(BaseTrainer):
         self.dataset_num_proc = args.dataset_num_proc
 
         # Dataset preparation
-        skip_prepare_dataset = args.dataset_kwargs.get("skip_prepare_dataset", False)
+        skip_prepare_dataset = args.dataset_kwargs is not None and args.dataset_kwargs.get(
+            "skip_prepare_dataset", False
+        )
         if not skip_prepare_dataset:
             train_dataset = self._prepare_dataset(train_dataset, processing_class, args, "train")
             if eval_dataset is not None:
@@ -1255,7 +1257,7 @@ class DPOTrainer(BaseTrainer):
             model_kwargs["image_sizes"] = concatenated_batch["image_sizes"]
         # For Qwen-VL models
         if "image_grid_thw" in concatenated_batch:
-            model_kwargs['image_grid_thw'] = concatenated_batch['image_grid_tw']
+            model_kwargs["image_grid_thw"] = concatenated_batch["image_grid_tw"]
 
         prompt_attention_mask = concatenated_batch["prompt_attention_mask"]
         completion_attention_mask = concatenated_batch["completion_attention_mask"]
