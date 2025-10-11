@@ -17,12 +17,10 @@ from typing import TYPE_CHECKING
 from ..import_utils import _LazyModule
 
 
-_import_structure = {
-    "best_of_n_sampler": ["BestOfNSampler"],
-}
+_import_structure = {}
 
 if TYPE_CHECKING:
-    from .best_of_n_sampler import BestOfNSampler
+    pass
 else:
     import sys
 
