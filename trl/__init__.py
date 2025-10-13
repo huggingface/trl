@@ -28,7 +28,7 @@ if sys.version_info[:2] == (3, 9):
             "(after its end-of-life on October 31, 2025). "
             "Please upgrade to Python 3.10 or newer."
         ),
-        category=DeprecationWarning,
+        category=FutureWarning,
         stacklevel=2,
     )
 
