@@ -59,8 +59,6 @@
     title: LoRA Without Regret
   - local: sentiment_tuning
     title: Sentiment Tuning
-  - local: using_llama_models
-    title: Training StackLlama
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
   title: Examples
