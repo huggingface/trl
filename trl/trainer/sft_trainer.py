@@ -440,18 +440,18 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             )
 
         # Process with both images and videos
-        # Disable truncation for videos since they require many tokens
-        should_truncate = self.max_length is not None and videos is None
         processor_kwargs = {
             "text": texts,
             "padding": True,
             "padding_side": "right",
             "pad_to_multiple_of": self.pad_to_multiple_of,
-            "truncation": should_truncate,
             "return_tensors": self.return_tensors,
             "add_special_tokens": False,  # to avoid adding the BOS, twice see https://huggingface.co/blog/qgallouedec/gotchas-in-tokenizer-behavior#7-chat-template-and-tokenization-dont-compose-due-to-special-tokens
         }
-        if should_truncate:
+        # Pass truncation parameters to processor if max_length is set
+        # The processor will handle truncation appropriately for both images and videos
+        if self.max_length is not None:
+            processor_kwargs["truncation"] = True
             processor_kwargs["max_length"] = self.max_length
 
         if images is not None:
