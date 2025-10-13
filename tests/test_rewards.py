@@ -93,18 +93,18 @@ class TestAccuracyReward:
         completion = [[{"content": r"\boxed{\frac{63}{400}}"}]]
         solution = [r"\frac{63}{400}"]
         rewards = accuracy_reward(completion, solution)
-        self.assertEqual(rewards[0], 1.0)
+        assert rewards[0] == 1.0
 
     def test_accuracy_reward_wrong_answer(self):
         """Test accuracy_reward with an incorrect answer."""
         completion = [[{"content": r"\boxed{\frac{64}{400}}"}]]
         solution = [r"\frac{63}{400}"]
         rewards = accuracy_reward(completion, solution)
-        self.assertEqual(rewards[0], 0.0)
+        assert rewards[0] == 0.0
 
     def test_accuracy_reward_wrong_answer_no_latex(self):
         """Test accuracy_reward with an incorrect answer and gold solution with no latex."""
         completion = [[{"content": r"\boxed{3}"}]]
         solution = ["6"]
         rewards = accuracy_reward(completion, solution)
-        self.assertEqual(rewards[0], 0.0)
+        assert rewards[0] == 0.0
