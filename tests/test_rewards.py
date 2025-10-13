@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from trl.rewards import get_soft_overlong_punishment, think_format_reward
+from trl.rewards import accuracy_reward, get_soft_overlong_punishment, think_format_reward
 
 from .testing_utils import TrlTestCase
 
@@ -85,3 +85,26 @@ class TestSoftOverlongPunishmentReward:
         completion_ids = [[1] * 90]  # 90 is between 80 and 100
         rewards = reward_fn(completion_ids)
         assert round(abs(rewards[0] - -0.5), 4) == 0
+
+
+class TestAccuracyReward:
+    def test_accuracy_reward_correct_answer(self):
+        """Test accuracy_reward with a correct answer."""
+        completion = [[{"content": r"\boxed{\frac{63}{400}}"}]]
+        solution = [r"\frac{63}{400}"]
+        rewards = accuracy_reward(completion, solution)
+        self.assertEqual(rewards[0], 1.0)
+
+    def test_accuracy_reward_wrong_answer(self):
+        """Test accuracy_reward with an incorrect answer."""
+        completion = [[{"content": r"\boxed{\frac{64}{400}}"}]]
+        solution = [r"\frac{63}{400}"]
+        rewards = accuracy_reward(completion, solution)
+        self.assertEqual(rewards[0], 0.0)
+
+    def test_accuracy_reward_wrong_answer_no_latex(self):
+        """Test accuracy_reward with an incorrect answer and gold solution with no latex."""
+        completion = [[{"content": r"\boxed{3}"}]]
+        solution = ["6"]
+        rewards = accuracy_reward(completion, solution)
+        self.assertEqual(rewards[0], 0.0)

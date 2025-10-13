@@ -22,10 +22,12 @@ from ..import_utils import _LazyModule
 _import_structure = {
     "format_rewards": ["think_format_reward"],
     "other_rewards": ["get_soft_overlong_punishment"],
+    "accuracy_rewards": ["accuracy_reward"],
 }
 
 
 if TYPE_CHECKING:
+    from .accuracy_rewards import accuracy_reward
     from .format_rewards import think_format_reward
     from .other_rewards import get_soft_overlong_punishment
 

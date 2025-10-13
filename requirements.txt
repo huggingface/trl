@@ -1,3 +1,5 @@
 accelerate>=1.4.0
 datasets>=3.0.0
 transformers>=4.56.1
+math-verify==0.5.2
+latex2sympy2_extended>=1.0.6
