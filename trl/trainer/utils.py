@@ -245,7 +245,7 @@ class RewardDataCollatorWithPadding:
         warnings.warn(
             "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
             "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
-            DeprecationWarning,
+            FutureWarning,
         )
         super().__init__(*args, **kwargs)
 
@@ -1273,7 +1273,7 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     warnings.warn(
         "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
         "to keep using it, please copy the code into your codebase and use it from there.",
-        DeprecationWarning,
+        FutureWarning,
     )
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
     return [d.replace(tokenizer.pad_token, "") for d in decoded]
