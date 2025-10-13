@@ -58,8 +58,11 @@ LAYER_PATTERNS = [
 
 class PreTrainedModelWrapper(nn.Module):
     """
-    A wrapper class around a [`~transformers.PreTrainedModel`] to be compatible with the (`~transformers.PreTrained`)
-    class in order to keep some attributes and methods of the [`~transformers.PreTrainedModel`] class.
+    Wrapper for a [`~transformers.PreTrainedModel`] implemented as a standard PyTorch [`torch.nn.Module`].
+
+    This class provides a compatibility layer that preserves the key attributes and methods of the original
+    [`~transformers.PreTrainedModel`], while exposing a uniform interface consistent with PyTorch modules. It enables
+    seamless integration of pretrained Transformer models into custom training, evaluation, or inference workflows.
 
     Attributes:
         pretrained_model ([`~transformers.PreTrainedModel`]):
