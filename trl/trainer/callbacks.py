@@ -14,6 +14,7 @@
 
 import logging
 import os
+from collections.abc import Callable
 from typing import Optional, Union
 
 import pandas as pd
@@ -616,7 +617,7 @@ class WeaveCallback(TrainerCallback):
         self,
         trainer: Trainer,
         project_name: Optional[str] = None,
-        scorers: Optional[dict[str, callable]] = None,
+        scorers: Optional[dict[str, Callable]] = None,
         generation_config: Optional[GenerationConfig] = None,
         num_prompts: Optional[int] = None,
         dataset_name: str = "eval_dataset",

@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import inspect
+import os
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from operator import itemgetter
@@ -354,6 +356,13 @@ class KTOTrainer(BaseTrainer):
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
     ):
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         if type(args) is TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
 
