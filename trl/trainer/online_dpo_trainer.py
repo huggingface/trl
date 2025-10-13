@@ -117,10 +117,10 @@ class OnlineDPOTrainer(BaseTrainer):
               using [`~transformers.AutoModelForCausalLM.from_pretrained`] with the keyword arguments in
               `args.model_init_kwargs`.
             - A [`~transformers.PreTrainedModel`] object. Only causal language models are supported.
-        ref_model (`transformers.PreTrainedModel` or `torch.nn.Module` or `None`):
+        ref_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `None`):
             The reference model to use for training. If None is specified, the reference model will be created from the
             model.
-        judge (`BasePairwiseJudge`):
+        judge ([`BasePairwiseJudge`]):
             The judge to use for pairwise comparison of model completions.
         reward_funcs (`Union[RewardFunc, list[RewardFunc]]`, *optional*):
             Reward functions to be used for computing the rewards. To compute the rewards, we call all the reward
@@ -131,11 +131,11 @@ class OnlineDPOTrainer(BaseTrainer):
             - A list of reward functions: Must all be of compatible types.
 
             Note: Only one of `judge`, or `reward_funcs` should be provided.
-        args (`OnlineDPOConfig`):
+        args ([`OnlineDPOConfig`]):
             The online DPO config arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
             sequences in the batch, given a dataset of paired sequences.
         train_dataset ([`~datasets.Dataset`] or [`~datasets.IterableDataset`]):
             The dataset to use for training.
@@ -145,7 +145,7 @@ class OnlineDPOTrainer(BaseTrainer):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
             for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
             reuse the fine-tuned model.
-        reward_processing_classes (`Union[PreTrainedTokenizerBase, list[PreTrainedTokenizerBase]]`, *optional*):
+        reward_processing_classes ([`~transformers.PreTrainedTokenizerBase`] or `list[PreTrainedTokenizerBase]`, *optional*):
             Processing classes corresponding to the reward functions specified in `reward_funcs`. Can be either:
 
             - A single processing class: Used when `reward_funcs` contains only one reward function.

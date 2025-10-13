@@ -226,7 +226,7 @@ class RewardDataCollatorWithPadding:
     `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
 
     Args:
-        tokenizer (`PreTrainedTokenizerBase`):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             The tokenizer used for encoding the data.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
@@ -1111,7 +1111,7 @@ def generate(
             The tensor containing the input queries.
         pad_token_id (`int`):
             The token ID representing the pad token.
-        generation_config (`GenerationConfig`):
+        generation_config ([`~transformers.GenerationConfig`]):
             The configuration for the generation process.
 
     Returns:
@@ -1263,7 +1263,7 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     Args:
         inputs (`torch.Tensor`):
             The input tensor to be decoded.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             The tokenizer used to decode the input tensor.
 
     Returns:
@@ -1294,7 +1294,7 @@ def generate_model_card(
     comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
-    Generate a `ModelCard` from a template.
+    Generate a [`~huggingface_hub.ModelCard`] from a template.
 
     Args:
         base_model (`str` or `None`):
@@ -1323,7 +1323,7 @@ def generate_model_card(
             ArXiv paper ID as `YYMM.NNNNN`.
 
     Returns:
-        `ModelCard`:
+        [`~huggingface_hub.ModelCard`]:
             A ModelCard object.
     """
     card_data = ModelCardData(
@@ -1377,7 +1377,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     Args:
         name (`str`):
             Table name.
-        table (`pd.DataFrame`):
+        table (`pandas.DataFrame`):
             The Pandas DataFrame containing the table to log.
     """
     if not is_comet_available():
