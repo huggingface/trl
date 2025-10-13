@@ -13,12 +13,16 @@
 # limitations under the License.
 
 from typing import Optional
+
 from latex2sympy2_extended import NormalizationConfig
 from math_verify import LatexExtractionConfig, parse, verify
+
 
 def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[Optional[float]]:
     r"""
     Reward function that checks if the completion is the same as the ground truth.
+        - If both gold and prediction are parseable → use math verification.
+        - If not parseable → compare as normalized text.
 
     Args:
         completions (`list[list[dict[str, str]]]`):
@@ -73,13 +77,11 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
             # Compute binary rewards if verifiable, `None` otherwise to skip this example
             try:
                 reward = float(verify(gold_parsed, answer_parsed))
-            except Exception as e:
-                print(f"verify failed: {e}, answer: {answer_parsed}, gold: {gold_parsed}")
+            except Exception:
                 reward = None
         else:
             # If the gold solution is not parseable, we assign `None` to skip this example
-            reward = None
-            print("Failed to parse gold solution: ", sol)
+            reward = float(content.strip().lower() == sol.strip().lower())
         rewards.append(reward)
 
     return rewards

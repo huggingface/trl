@@ -108,3 +108,11 @@ class TestAccuracyReward:
         solution = ["6"]
         rewards = accuracy_reward(completion, solution)
         assert rewards[0] == 0.0
+
+    def test_accuracy_reward_unparseable_gold(self):
+        """Test accuracy_reward with an unparseable gold solution."""
+        completion = [[{"content": "Answer is forty two."}], [{"content": "Some other content."}]]
+        solution = ["Answer is forty two.", "Answer is forty three."]
+        rewards = accuracy_reward(completion, solution)
+        assert rewards[0] == 1.0  # Should revert to exact text match
+        assert rewards[1] == 0.0
