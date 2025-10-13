@@ -7,9 +7,7 @@
 
 Sequence lengths in the dataset can vary widely. When data is batched, sequences are padded to match the longest one in the batch, which can cause high memory usage, even if most sequences are relatively short.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png" alt="Truncation prompt-completion" width="600"/>
-</div>
+![Truncation prompt-completion](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/why_you_should_truncate.png)
 
 To reduce memory usage, it's important to truncate sequences to a reasonable length. While TRL trainers truncate sequences by default, you may want to adjust the default truncation length to better align with your specific use case.
 
@@ -18,9 +16,7 @@ To reduce memory usage, it's important to truncate sequences to a reasonable len
 
 DPO truncation is applied first to the prompt and to the completion via the `max_prompt_length` and `max_completion_length` parameters. The `max_length` parameter is then used to truncate the resulting sequence.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png" alt="DPO truncation" width="600"/>
-</div>
+![DPO truncation](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_prompt_completion.png)
 
 To set the truncation parameters, use the following code snippet:
 
@@ -43,9 +39,7 @@ training_args = DPOConfig(..., max_completion_length=...)
 
 SFT truncation is applied to the input sequence via the `max_length` parameter.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_input_ids.png" alt="Truncation input ids" width="600"/>
-</div>
+![Truncation input ids](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/truncation_input_ids.png)
 
 To set the truncation parameter, use the following code snippet:
 
@@ -71,16 +65,14 @@ To help you choose an appropriate value, we provide a utility to visualize the s
 > [!TIP]
 > This technique applies only to SFT.
 
-
 [Truncation](#truncation) has several drawbacks:
+
 1. **Loss of information**: Key data at the end of a sequence may be discarded.
 2. **Choosing truncation length**: Too short loses data; too long undermines efficiency.
 
 Packing, introduced in [Raffel et al., 2020](https://huggingface.co/papers/1910.10683), addresses these issues by grouping sequences instead of truncating. It concatenates and splits dataset sequences into the desired lengths.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png" alt="Packing" width="600"/>
-</div>
+![Packing](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/packing_2.png)
 
 Packing reduces padding by merging several sequences in one row when possible. We use an advanced method to be near-optimal in the way we pack the dataset. To enable packing, use `packing=True` in the [`SFTConfig`].
 
@@ -142,9 +134,7 @@ training_args = KTOConfig(..., use_liger_loss=True)
 
 Padding-free batching is an alternative approach for reducing memory usage. In this method, a batch is first sampled and then flattened into a single sequence, avoiding padding. Unlike packing, which can result in incomplete sequences by combining parts of different samples, padding-free batching ensures that all sequences remain complete and intact.
 
-<div class="flex justify-center">
-    <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/padding-free.png" alt="Padding-free batching" width="600"/>
-</div>
+![Padding-free](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/padding-free.png)
 
 > [!WARNING]
 > It's highly recommended to use padding-free batching with **FlashAttention 2** or **FlashAttention 3**. Otherwise, you may encounter batch contamination issues.

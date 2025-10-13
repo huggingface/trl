@@ -22,14 +22,13 @@ Let's implement and train LoRA adapters in TRL scripts based on the core finding
 The blog post performs SFT on a range of models and datasets from the Hub, which we can reproduce in TRL.
 
 | Model | Dataset |
-|-------|---------|
+| --- | --- |
 | [Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B) | [allenai/tulu-3-sft-mixture](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture) |
 | [Llama-3.2-1B-Instruct](https://huggingface.co/meta-llama/Llama-3.2-1B) | [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) |
 | [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B) | [allenai/tulu-3-sft-mixture](https://huggingface.co/datasets/allenai/tulu-3-sft-mixture) |
 | [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B) | [open-thoughts/OpenThoughts-114k](https://huggingface.co/datasets/open-thoughts/OpenThoughts-114k) |
 
 <hfoptions id="sft">
-
 <hfoption id="python">
 
 We can integrate these findings with the TRL Python API like so:
@@ -64,7 +63,6 @@ trainer.train()
 ```
 
 </hfoption>
-
 <hfoption id="jobs">
 
 ```bash
@@ -127,10 +125,10 @@ Once training starts, you can monitor the progress in [Trackio](https://huggingf
 
 ### Reinforcement Learning (GRPO)
 
-The blog post performs GRPO on a range of models and datasets from the Hub, and once again we can reproduce the results in TRL. 
+The blog post performs GRPO on a range of models and datasets from the Hub, and once again we can reproduce the results in TRL.
 
 | Model | Dataset |
-|-------|---------|
+| --- | --- |
 | [Llama-3.1-8B-Base](https://huggingface.co/meta-llama/Llama-3.2-1B) | [GSM8k](https://huggingface.co/datasets/openai/gsm8k) |
 | [Llama-3.1-8B-Base](https://huggingface.co/meta-llama/Llama-3.2-1B) | [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) |
 | [Qwen3-8b-base](https://huggingface.co/Qwen/Qwen3-8b-base) | [DeepMath-103K](https://huggingface.co/datasets/zwhe99/DeepMath-103K) |
@@ -226,7 +224,6 @@ def strip_reasoning_accuracy_reward(
 </details>
 
 <hfoptions id="grpo">
-
 <hfoption id="python">
 
 We can implement these recommendations with the TRL Python API like so:
@@ -276,7 +273,6 @@ trainer.train()
 > This snippet skips the reward function which is defined above to keep the example concise.
 
 </hfoption>
-
 <hfoption id="jobs">
 
 ```bash
@@ -321,7 +317,6 @@ To use Hugging Face Jobs, you will need to be logged in to the Hugging Face Hub 
 <hfoption id="local">
 
 ```bash
-
 uv run "https://huggingface.co/datasets/burtenshaw/lora-without-regrets/resolve/main/grpo.py" \
     --model_name_or_path Qwen/Qwen3-0.6B \
     --dataset_name HuggingFaceH4/OpenR1-Math-220k-default-verified \
@@ -372,23 +367,23 @@ And most importantly, the LoRA model uses significantly less memory than the ful
 
 Here are the parameters we used to train the above models
 
-| Parameter                       | LoRA                                               | Full FT                        |
-|----------------------------------|----------------------------------------------------|-------------------------------|
-| `--model_name_or_path`           | HuggingFaceTB/SmolLM3-3B                           | HuggingFaceTB/SmolLM3-3B      |
-| `--dataset_name`                 | HuggingFaceH4/OpenR1-Math-220k-default-verified    | HuggingFaceH4/OpenR1-Math-220k-default-verified |
-| `--learning_rate`                | 1.0e-5                                             | 1.0e-6                        |
-| `--max_prompt_length`            | 1024                                               | 1024                          |
-| `--max_completion_length`        | 4096                                               | 4096                          |
-| `--lora_r`                       | 1                                                  | -                           |
-| `--lora_alpha`                   | 32                                                 | -                           |
-| `--lora_dropout`                 | 0.0                                                | -                           |
-| `--lora_target_modules`          | all-linear                                         | -                           |
+| Parameter | LoRA | Full FT |
+| --- | --- | --- |
+| `--model_name_or_path` | HuggingFaceTB/SmolLM3-3B | HuggingFaceTB/SmolLM3-3B |
+| `--dataset_name` | HuggingFaceH4/OpenR1-Math-220k-default-verified | HuggingFaceH4/OpenR1-Math-220k-default-verified |
+| `--learning_rate` | 1.0e-5 | 1.0e-6 |
+| `--max_prompt_length` | 1024 | 1024 |
+| `--max_completion_length` | 4096 | 4096 |
+| `--lora_r` | 1 | - |
+| `--lora_alpha` | 32 | - |
+| `--lora_dropout` | 0.0 | - |
+| `--lora_target_modules` | all-linear | - |
 
 Let's break down the key findings of the blog post and how we were able to reproduce them.
 
 ### 1. *LoRA performs better when applied to all weight matrices*
 
-The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction. 
+The authors recommend applying LoRA to all weight matrices rather than limiting it to attention layers, as increasing the rank does not compensate for this restriction.
 
 ![all layers](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/1.png)
 
@@ -402,7 +397,7 @@ peft_config = LoraConfig(target_modules="all-linear")
 
 ### 2. *The adapter needs sufficient capacity to learn from the dataset*
 
-The blog post recommends using a sufficient LoRA rank to learn from the dataset. The rank determines the number of trainable parameters in the LoRA adapter. Therefore, "For datasets that exceed LoRA capacity, LoRA underperforms FullFT". 
+The blog post recommends using a sufficient LoRA rank to learn from the dataset. The rank determines the number of trainable parameters in the LoRA adapter. Therefore, "For datasets that exceed LoRA capacity, LoRA underperforms FullFT".
 
 ![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/3.png)
 
@@ -413,13 +408,13 @@ Reinforcement learning tasks typically require lower capacity, so smaller LoRA r
 The blog post defines the ideal dataset size for LoRA to match full fine-tuning as "Post-training scale". Which we can use to determine the recommended rank for SFT and RL LoRAs as:
 
 | Task Type | Dataset Size | Recommended Rank |
-|-----------|-------------|------------------|
+| --- | --- | --- |
 | **SFT** | Post-training scale | 256 |
 | **RL** | Any size | 1-32 |
 
 ### 3. *"FullFT and high-rank LoRAs have similar learning curves"*
 
-Counterintuitively, the blog post recommends using similar learning rates to full fine-tuning. In the TRL script, we could use `--learning_rate` to set the learning rate. The  \\( \frac{1}{r} \\) scaling in LoRA makes the optimal learning rate approximately rank-independent.
+Counterintuitively, the blog post recommends using a higher learning rate than for full fine-tuning. In the table above, we used 1.0e-5 for LoRA and 1.0e-6 for full fine-tuning. In the TRL script, we could use `--learning_rate` to set the learning rate. The  \\( \frac{1}{r} \\) scaling in LoRA makes the optimal learning rate approximately rank-independent.
 
 ![learning rate](https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/lora_without_regret/2.png)
 

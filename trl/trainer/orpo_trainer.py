@@ -13,8 +13,10 @@
 # limitations under the License.
 
 import inspect
+import os
 import random
 import textwrap
+import warnings
 from collections import defaultdict
 from contextlib import nullcontext
 from pathlib import Path
@@ -144,6 +146,13 @@ class ORPOTrainer(BaseTrainer):
         peft_config: Optional[dict] = None,
         compute_metrics: Optional[Callable[[EvalLoopOutput], dict]] = None,
     ):
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         if args.model_init_kwargs is None:
             model_init_kwargs = {}
         elif not isinstance(model, str):
