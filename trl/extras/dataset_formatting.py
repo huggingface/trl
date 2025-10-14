@@ -50,7 +50,7 @@ def conversations_formatting_function(
     warnings.warn(
         "`conversations_formatting_function` is deprecated and will be removed in TRL 0.27. "
         "Please use `tokenizer.apply_chat_template()` directly instead.",
-        DeprecationWarning,
+        FutureWarning,
         stacklevel=2,
     )
 
@@ -80,7 +80,7 @@ def instructions_formatting_function(tokenizer: AutoTokenizer):
     warnings.warn(
         "`instructions_formatting_function` is deprecated and will be removed in TRL 0.27. "
         "Please use `tokenizer.apply_chat_template()` directly instead.",
-        DeprecationWarning,
+        FutureWarning,
         stacklevel=2,
     )
 
@@ -128,7 +128,7 @@ def get_formatting_func_from_dataset(
     warnings.warn(
         "`get_formatting_func_from_dataset` is deprecated and will be removed in TRL 0.27. "
         "Please use `tokenizer.apply_chat_template()` directly instead.",
-        DeprecationWarning,
+        FutureWarning,
         stacklevel=2,
     )
 

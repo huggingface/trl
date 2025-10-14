@@ -334,7 +334,7 @@ class OnlineDPOTrainer(BaseTrainer):
                 logger.warning(
                     "The `missing_eos_penalty` parameter is deprecated when used with the deprecated `reward_model` parameter. "
                     "Please use `reward_funcs` instead of `reward_model` to continue using this feature.",
-                    DeprecationWarning,
+                    FutureWarning,
                     stacklevel=2,
                 )
             else:
