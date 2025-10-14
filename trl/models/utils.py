@@ -116,7 +116,7 @@ def setup_chat_format(
     warnings.warn(
         "The `setup_chat_format` function is deprecated and will be removed in version 0.26.0. Please use "
         "`clone_chat_template` instead.",
-        DeprecationWarning,
+        FutureWarning,
     )
     # check if model already had a chat template
     if tokenizer.chat_template is not None:
