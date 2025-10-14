@@ -26,7 +26,14 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available, is_rich_available, is_vision_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
-from trl.import_utils import is_joblib_available, is_llm_blender_available, is_mergekit_available, is_vllm_available
+from trl.import_utils import (
+    is_joblib_available,
+    is_latex2sympy2_extended_available,
+    is_llm_blender_available,
+    is_math_verify_available,
+    is_mergekit_available,
+    is_vllm_available,
+)
 
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
@@ -44,6 +51,10 @@ require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test require
 require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",
+)
+require_math_latex = pytest.mark.skipif(
+    not (is_math_verify_available() and is_latex2sympy2_extended_available()),
+    reason="test requires math_verify and latex2sympy2_extended",
 )
 
 

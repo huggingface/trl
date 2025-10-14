@@ -15,7 +15,7 @@
 
 from trl.rewards import accuracy_reward, get_soft_overlong_punishment, think_format_reward
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_math_latex
 
 
 class TestThinkFormatReward(TrlTestCase):
@@ -88,6 +88,7 @@ class TestSoftOverlongPunishmentReward:
 
 
 class TestAccuracyReward:
+    @require_math_latex
     def test_accuracy_reward_correct_answer(self):
         """Test accuracy_reward with a correct answer."""
         completion = [[{"content": r"\boxed{\frac{63}{400}}"}], [{"content": r"\boxed{\frac{63}{400}}"}]]
@@ -96,6 +97,7 @@ class TestAccuracyReward:
         assert rewards[0] == 1.0
         assert rewards[1] == 1.0
 
+    @require_math_latex
     def test_accuracy_reward_wrong_answer(self):
         """Test accuracy_reward with an incorrect answer."""
         completion = [[{"content": r"\boxed{\frac{64}{400}}"}]]
@@ -103,6 +105,7 @@ class TestAccuracyReward:
         rewards = accuracy_reward(completion, solution)
         assert rewards[0] == 0.0
 
+    @require_math_latex
     def test_accuracy_reward_wrong_answer_no_latex(self):
         """Test accuracy_reward with an incorrect answer and gold solution with no latex."""
         completion = [[{"content": r"\boxed{3}"}]]
@@ -110,6 +113,7 @@ class TestAccuracyReward:
         rewards = accuracy_reward(completion, solution)
         assert rewards[0] == 0.0
 
+    @require_math_latex
     def test_accuracy_reward_unparseable_gold(self):
         """Test accuracy_reward with an unparseable gold solution."""
         completion = [
