@@ -43,7 +43,6 @@ To use the data efficiently, we use a technique called packing: instead of havin
 With this approach the training is much more efficient as each token that is passed through the model is also trained in contrast to padding tokens which are usually masked from the loss.
 If you don't have much data and are more concerned about occasionally cutting off some tokens that are overflowing the context you can also use a classical data loader.
 
-
 ```python
 # load model in 8bit
 model = AutoModelForCausalLM.from_pretrained(
@@ -109,6 +108,7 @@ peft_config = LoraConfig(
     lora_dropout=0.1,
 )
 ```
+
 As detailed in the next section, the resulting adapter can be merged into the frozen model and saved for further downstream use.
 
 ## Reinforcement Learning from Human Feedback

@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 import time
-import unittest
+
+import pytest
 
 from trl import AllTrueJudge, HfPairwiseJudge, PairRMJudge
 
@@ -35,17 +37,17 @@ class TestJudges(TrlTestCase):
         judge = AllTrueJudge(judges=[RandomBinaryJudge(), RandomBinaryJudge()])
         prompts, completions = self._get_prompts_and_single_completions()
         judgements = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(judgements), 2)
-        self.assertTrue(all(judgement in {0, 1, -1} for judgement in judgements))
+        assert len(judgements) == 2
+        assert all(judgement in {0, 1, -1} for judgement in judgements)
 
-    @unittest.skip("This test needs to be run manually since it requires a valid Hugging Face API key.")
+    @pytest.mark.skip(reason="This test needs to be run manually since it requires a valid Hugging Face API key.")
     def test_hugging_face_judge(self):
         judge = HfPairwiseJudge()
         prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(ranks), 2)
-        self.assertTrue(all(isinstance(rank, int) for rank in ranks))
-        self.assertEqual(ranks, [0, 1])
+        assert len(ranks) == 2
+        assert all(isinstance(rank, int) for rank in ranks)
+        assert ranks == [0, 1]
 
     def load_pair_rm_judge(self):
         # When using concurrent tests, PairRM may fail to load the model while another job is still downloading.
@@ -58,19 +60,25 @@ class TestJudges(TrlTestCase):
         raise ValueError("Failed to load PairRMJudge")
 
     @require_llm_blender
+    @pytest.mark.skipif(
+        sys.version_info[:3] == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
+    )
     def test_pair_rm_judge(self):
         judge = self.load_pair_rm_judge()
         prompts, completions = self._get_prompts_and_pairwise_completions()
         ranks = judge.judge(prompts=prompts, completions=completions)
-        self.assertEqual(len(ranks), 2)
-        self.assertTrue(all(isinstance(rank, int) for rank in ranks))
-        self.assertEqual(ranks, [0, 1])
+        assert len(ranks) == 2
+        assert all(isinstance(rank, int) for rank in ranks)
+        assert ranks == [0, 1]
 
     @require_llm_blender
+    @pytest.mark.skipif(
+        sys.version_info[:3] == (3, 13, 8), reason="Python 3.13.8 has a bug in inspect.BlockFinder (cpython GH-139783)"
+    )
     def test_pair_rm_judge_return_scores(self):
         judge = self.load_pair_rm_judge()
         prompts, completions = self._get_prompts_and_pairwise_completions()
         probs = judge.judge(prompts=prompts, completions=completions, return_scores=True)
-        self.assertEqual(len(probs), 2)
-        self.assertTrue(all(isinstance(prob, float) for prob in probs))
-        self.assertTrue(all(0 <= prob <= 1 for prob in probs))
+        assert len(probs) == 2
+        assert all(isinstance(prob, float) for prob in probs)
+        assert all(0 <= prob <= 1 for prob in probs)

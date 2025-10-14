@@ -2,9 +2,11 @@
 
 TRL provides a powerful command-line interface (CLI) to fine-tune large language models (LLMs) using methods like Supervised Fine-Tuning (SFT), Direct Preference Optimization (DPO), and more. The CLI abstracts away much of the boilerplate, letting you launch training jobs quickly and reproducibly.
 
+## Commands
+
 Currently supported commands are:
 
-#### Training Commands
+### Training Commands
 
 - `trl dpo`: fine-tune a LLM with DPO
 - `trl grpo`: fine-tune a LLM with GRPO
@@ -13,7 +15,7 @@ Currently supported commands are:
 - `trl rloo`: fine-tune a LLM with RLOO
 - `trl sft`: fine-tune a LLM with SFT
 
-#### Other Commands
+### Other Commands
 
 - `trl env`: get the system information
 - `trl vllm-serve`: serve a model with vLLM
@@ -197,22 +199,22 @@ trl reward --config reward_config.yaml
 
 The `--accelerate_config` flag lets you easily configure distributed training with [🤗 Accelerate](https://github.com/huggingface/accelerate). This flag accepts either:
 
-* the name of a predefined config profile (built into TRL), or
-* a path to a custom Accelerate YAML config file.
+- the name of a predefined config profile (built into TRL), or
+- a path to a custom Accelerate YAML config file.
 
 #### Predefined Config Profiles
 
 TRL provides several ready-to-use Accelerate configs to simplify common training setups:
 
-| Name         | Description                         |
-| ------------ | ----------------------------------- |
-| `fsdp1`      | Fully Sharded Data Parallel Stage 1 |
-| `fsdp2`      | Fully Sharded Data Parallel Stage 2 |
-| `zero1`      | DeepSpeed ZeRO Stage 1              |
-| `zero2`      | DeepSpeed ZeRO Stage 2              |
-| `zero3`      | DeepSpeed ZeRO Stage 3              |
-| `multi_gpu`  | Multi-GPU training                  |
-| `single_gpu` | Single-GPU training                 |
+| Name | Description |
+| --- | --- |
+| `fsdp1` | Fully Sharded Data Parallel Stage 1 |
+| `fsdp2` | Fully Sharded Data Parallel Stage 2 |
+| `zero1` | DeepSpeed ZeRO Stage 1 |
+| `zero2` | DeepSpeed ZeRO Stage 2 |
+| `zero3` | DeepSpeed ZeRO Stage 3 |
+| `multi_gpu` | Multi-GPU training |
+| `single_gpu` | Single-GPU training |
 
 To use one of these, just pass the name to `--accelerate_config`. TRL will automatically load the corresponding config file from `trl/accelerate_config/`.
 

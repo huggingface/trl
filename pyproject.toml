@@ -1,3 +1,135 @@
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trl"
+description = "Train transformer language models with reinforcement learning."
+authors = [
+    { name = "Leandro von Werra", email = "leandro.vonwerra@gmail.com" }
+]
+readme = { file = "README.md", content-type = "text/markdown" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+keywords = [
+    "transformers", "huggingface", "language modeling", "post-training", "rlhf", "sft", "dpo", "grpo"
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13"
+]
+requires-python = ">=3.9"
+dependencies = [
+    "accelerate>=1.4.0",
+    "datasets>=3.0.0",
+    "transformers>=4.56.1",
+    "transformers!=4.57.0; python_version == '3.9'"
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/huggingface/trl"
+
+[project.scripts]
+trl = "trl.cli:main"
+
+[project.optional-dependencies]
+bco = [
+    "scikit-learn",
+    "joblib"
+]
+deepspeed = [
+    "deepspeed>=0.14.4"
+]
+judges = [
+    "openai>=1.23.2",
+    "llm-blender>=0.0.2"
+]
+liger = [
+    "liger-kernel>=0.6.2"
+]
+peft = [
+    "peft>=0.8.0"
+]
+quality = [
+    "pre-commit",
+    "hf-doc-builder"
+]
+quantization = [
+    "bitsandbytes"
+]
+scikit = [
+    "scikit-learn"
+]
+test = [
+    "parameterized",
+    "pytest-cov",
+    "pytest-rerunfailures==15.1",
+    "pytest-xdist",
+    "pytest"
+]
+vllm = [
+    "vllm==0.10.2",
+    "fastapi",
+    "pydantic",
+    "requests",
+    "uvicorn"
+]
+vlm = [
+    "Pillow",
+    "torchvision",
+    "num2words==0.5.14"
+]
+dev = [
+    # bco
+    "scikit-learn",
+    "joblib",
+    # deepspeed
+    "deepspeed>=0.14.4",
+    # judges
+    "openai>=1.23.2",
+    "llm-blender>=0.0.2",
+    # liger
+    "liger-kernel>=0.6.2",
+    # peft
+    "peft>=0.8.0",
+    # quality
+    "pre-commit",
+    "hf-doc-builder",
+    # quantization
+    "bitsandbytes",
+    # scikit: included in bco
+    # test
+    "parameterized",
+    "pytest-cov",
+    "pytest-rerunfailures==15.1",
+    "pytest-xdist",
+    "pytest",
+    # vllm: not included in dev by default due to CUDA error; see GH-4228
+    # vlm
+    "Pillow",
+    "torchvision",
+    "num2words==0.5.14"
+]
+
+[tool.setuptools]
+package-dir = {"trl" = "trl"}
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[tool.coverage.run]
+branch = true
+
 [tool.ruff]
 target-version = "py39"
 line-length = 119
