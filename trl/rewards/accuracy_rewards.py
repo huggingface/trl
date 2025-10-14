@@ -14,8 +14,13 @@
 
 from typing import Optional
 
-from latex2sympy2_extended import NormalizationConfig
-from math_verify import LatexExtractionConfig, parse, verify
+from trl.import_utils import is_latex2sympy2_extended_available, is_math_verify_available
+
+
+if is_latex2sympy2_extended_available():
+    from latex2sympy2_extended import NormalizationConfig
+if is_math_verify_available():
+    from math_verify import LatexExtractionConfig, parse, verify
 
 
 def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str], **kwargs) -> list[Optional[float]]:
@@ -46,6 +51,10 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     [1.0, 0.0]
     ```
     """
+    if not (is_latex2sympy2_extended_available() and is_math_verify_available()):
+        raise ImportError(
+            "Please install the `latex2sympy2_extended` and `math_verify` packages to use accuracy_reward"
+        )
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
     for content, sol in zip(contents, solution):

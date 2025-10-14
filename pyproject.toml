@@ -32,9 +32,7 @@ dependencies = [
     "accelerate>=1.4.0",
     "datasets>=3.0.0",
     "transformers>=4.56.1",
-    "transformers!=4.57.0; python_version == '3.9'",
-    "latex2sympy2_extended>=1.0.6",
-    "math-verify==0.5.2",
+    "transformers!=4.57.0; python_version == '3.9'"
 ]
 dynamic = ["version"]
 
@@ -90,6 +88,10 @@ vlm = [
     "Pillow",
     "torchvision",
     "num2words==0.5.14"
+]
+latex_math = [
+    "latex2sympy2_extended>=1.0.6",
+    "math-verify==0.5.2",
 ]
 dev = [
     # bco
