@@ -41,6 +41,7 @@ _vllm_ascend_available = _is_package_available("vllm_ascend")
 _weave_available = _is_package_available("weave")
 _math_verify_available = _is_package_available("math_verify")
 
+
 def is_deepspeed_available() -> bool:
     return _deepspeed_available
 
