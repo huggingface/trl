@@ -9,8 +9,6 @@ To address this, we recommend focusing on two key metrics first:
 **Mean Reward**: The primary goal is to maximize the reward achieved by the model during RL training.
 **Objective KL Divergence**: KL divergence (Kullback-Leibler divergence) measures the dissimilarity between two probability distributions. In the context of RL training, we use it to quantify the difference between the current model and a reference model. Ideally, we want to keep the KL divergence between 0 and 10 to ensure the model's generated text remains close to what the reference model produces.
 
-However, there are more metrics that can be useful for debugging, check out the [logging section](logging).
-
 ## Why Do We Use a Reference Model, and What's the Purpose of KL Divergence?
 
 When training RL models, optimizing solely for reward may lead to unexpected behaviors, where the model exploits the environment in ways that don't align with good language generation. In the case of RLHF, we use a reward model trained to predict whether a generated text is highly ranked by humans.
