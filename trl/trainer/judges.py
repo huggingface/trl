@@ -185,6 +185,7 @@ class BaseBinaryJudge(BaseJudge):
 
 
 class PairRMJudge(BasePairwiseJudge):
+    # docstyle-ignore
     """
     LLM judge based on the PairRM model from AllenAI.
 

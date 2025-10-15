@@ -55,12 +55,12 @@
     title: Example Overview
   - local: community_tutorials
     title: Community Tutorials
+  - local: lora_without_regret
+    title: LoRA Without Regret
   - local: sentiment_tuning
     title: Sentiment Tuning
   - local: using_llama_models
     title: Training StackLlama
-  - local: detoxifying_a_lm
-    title: Detoxifying a Language Model
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
   title: Examples
