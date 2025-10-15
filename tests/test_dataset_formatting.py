@@ -14,6 +14,7 @@
 
 from typing import Callable
 
+import pytest
 from datasets import Dataset, load_dataset
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
 
@@ -23,6 +24,7 @@ from trl.models.utils import ChatMlSpecialTokens, clone_chat_template, setup_cha
 from .testing_utils import TrlTestCase
 
 
+@pytest.mark.filterwarnings("ignore::FutureWarning")
 class TestDatasetFormatting(TrlTestCase):
     def setup_method(self):
         self.llama_tokenizer = AutoTokenizer.from_pretrained("trl-internal-testing/tiny-MistralForCausalLM-0.1")

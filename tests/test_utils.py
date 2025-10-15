@@ -42,7 +42,6 @@ from trl.trainer.utils import (
     shuffle_sequence_dict,
     split_pixel_values_by_grid,
     split_tensor_dict,
-    truncate_with_protected_tokens,
     unsplit_pixel_values_by_grid,
 )
 
@@ -1049,84 +1048,6 @@ class TestSplitPixelValuesByGrid(TrlTestCase):
         assert len(result["image_grid_thw"]) == 2
         assert torch.equal(result["image_grid_thw"][0], torch.tensor([[1, 1, 2]]))
         assert torch.equal(result["image_grid_thw"][1], torch.tensor([[1, 2, 2], [1, 2, 1]]))
-
-
-class TestTruncateWithProtectedTokens(TrlTestCase):
-    def test_basic_example(self):
-        """Test the basic example from the problem description."""
-        prompt_ids = [1, 2, 3, 4, 5]
-        protected_tokens = [2, 3]
-        target_length = 3
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        expected_ids = [2, 3, 5]
-        assert new_ids == expected_ids
-
-    def test_no_truncation_needed(self):
-        """Test when target length equals current length."""
-        prompt_ids = [1, 2, 3]
-        protected_tokens = [2]
-        target_length = 3
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        assert new_ids == prompt_ids
-
-    def test_no_protected_tokens(self):
-        """Test truncation with no protected tokens (normal right truncation)."""
-        prompt_ids = [1, 2, 3, 4, 5]
-        protected_tokens = []
-        target_length = 3
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        expected_ids = [3, 4, 5]  # Last 3 tokens
-        assert new_ids == expected_ids
-
-    def test_all_tokens_protected(self):
-        """Test when all remaining tokens are protected."""
-        prompt_ids = [1, 2, 3, 4, 5]
-        protected_tokens = [3, 4, 5]
-        target_length = 3
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        expected_ids = [3, 4, 5]
-        assert new_ids == expected_ids
-
-    def test_too_many_protected_tokens(self):
-        """Test error when too many protected tokens for target length."""
-        prompt_ids = [1, 2, 3, 4, 5]
-        protected_tokens = [1, 2, 3, 4]
-        target_length = 3
-
-        with pytest.raises(ValueError):
-            truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-    def test_single_batch_single_token(self):
-        """Test edge case with single batch and single token."""
-        prompt_ids = [5]
-        protected_tokens = [5]
-        target_length = 1
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        assert new_ids == prompt_ids
-
-    def test_order_preservation(self):
-        """Test that relative order is preserved."""
-        prompt_ids = [10, 2, 20, 3, 30, 40]
-        protected_tokens = [2, 3]
-        target_length = 4
-
-        new_ids = truncate_with_protected_tokens(prompt_ids, target_length, protected_tokens)
-
-        # Should keep protected tokens 2, 3 and last 2 non-protected tokens 30, 40
-        # Order should be: 2, 3, 30, 40 (maintaining original relative positions)
-        expected_ids = [2, 3, 30, 40]
-
-        assert new_ids == expected_ids
 
 
 class TestUnsplitPixelValuesByGrid(TrlTestCase):
