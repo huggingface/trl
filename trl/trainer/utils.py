@@ -226,7 +226,7 @@ class RewardDataCollatorWithPadding:
     `trl.trainer.reward_trainer.DataCollatorForPreference` instead.
 
     Args:
-        tokenizer (`PreTrainedTokenizerBase`):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             The tokenizer used for encoding the data.
         padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
             padding_strategy to pass to the tokenizer.
@@ -245,7 +245,7 @@ class RewardDataCollatorWithPadding:
         warnings.warn(
             "The `RewardDataCollatorWithPadding` is deprecated and will be removed in version 0.27.0. Please use "
             "`trl.trainer.reward_trainer.DataCollatorForPreference` instead.",
-            DeprecationWarning,
+            FutureWarning,
         )
         super().__init__(*args, **kwargs)
 
@@ -1111,7 +1111,7 @@ def generate(
             The tensor containing the input queries.
         pad_token_id (`int`):
             The token ID representing the pad token.
-        generation_config (`GenerationConfig`):
+        generation_config ([`~transformers.GenerationConfig`]):
             The configuration for the generation process.
 
     Returns:
@@ -1263,7 +1263,7 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     Args:
         inputs (`torch.Tensor`):
             The input tensor to be decoded.
-        tokenizer (`transformers.PreTrainedTokenizerBase`):
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             The tokenizer used to decode the input tensor.
 
     Returns:
@@ -1273,7 +1273,7 @@ def decode_and_strip_padding(inputs: torch.Tensor, tokenizer: PreTrainedTokenize
     warnings.warn(
         "The function `decode_and_strip_padding` is deprecated and will be removed in a version 0.25.0. If you want "
         "to keep using it, please copy the code into your codebase and use it from there.",
-        DeprecationWarning,
+        FutureWarning,
     )
     decoded = tokenizer.batch_decode(inputs, skip_special_tokens=False)
     return [d.replace(tokenizer.pad_token, "") for d in decoded]
@@ -1294,7 +1294,7 @@ def generate_model_card(
     comet_url: Optional[str] = None,
 ) -> ModelCard:
     """
-    Generate a `ModelCard` from a template.
+    Generate a [`~huggingface_hub.ModelCard`] from a template.
 
     Args:
         base_model (`str` or `None`):
@@ -1323,7 +1323,7 @@ def generate_model_card(
             ArXiv paper ID as `YYMM.NNNNN`.
 
     Returns:
-        `ModelCard`:
+        [`~huggingface_hub.ModelCard`]:
             A ModelCard object.
     """
     card_data = ModelCardData(
@@ -1377,7 +1377,7 @@ def log_table_to_comet_experiment(name: str, table: pd.DataFrame) -> None:
     Args:
         name (`str`):
             Table name.
-        table (`pd.DataFrame`):
+        table (`pandas.DataFrame`):
             The Pandas DataFrame containing the table to log.
     """
     if not is_comet_available():
@@ -1923,47 +1923,6 @@ def unsplit_pixel_values_by_grid(batch: dict[str, Union[torch.Tensor, list[torch
         batch = {**batch, "image_grid_thw": merged}
 
     return batch
-
-
-def truncate_with_protected_tokens(ids: list[int], target_length: int, protected_tokens: list[int]) -> list[int]:
-    """
-    Truncate list to target length while preserving protected tokens.
-
-    Args:
-        ids (`list[int]`):
-            Input sequence of token IDs.
-        target_length (`int`):
-            Desired length of the output sequence.
-        protected_tokens (`list[int]`):
-            List of token IDs that should be preserved in the output.
-
-    Returns:
-        `list[int]`: Truncated sequence.
-
-    Raises:
-        `ValueError`: If `len(protected_tokens ∩ seq) > target_length`.
-    """
-    protected_set = set(protected_tokens)
-
-    # Count protected tokens
-    num_protected = sum(1 for t in ids if t in protected_set)
-    if num_protected > target_length:
-        raise ValueError(
-            f"target_length ({target_length}) is too small for the protected tokens ({num_protected} tokens). "
-            f"Please increase target length to at least {num_protected} or disable truncation."
-        )
-    num_non_protected_needed = target_length - num_protected
-    result = []
-
-    # Iterate backward to select all protected tokens and rightmost non-protected tokens
-    for t in reversed(ids):
-        if t in protected_set:
-            result.append(t)
-        elif num_non_protected_needed > 0:
-            result.append(t)
-            num_non_protected_needed -= 1
-    # Reverse to restore original order
-    return result[::-1]
 
 
 TListOrMapping = TypeVar("TListOrMapping", list, Mapping)

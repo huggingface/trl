@@ -26,11 +26,12 @@ accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml train
 This automatically distributes the workload across all available GPUs.
 
 Under the hood, [🤗 Accelerate](https://github.com/huggingface/accelerate) creates one model per GPU. Each process:
+
 - Processes its own batch of data
 - Computes the loss and gradients for that batch
 - Shares gradient updates across all GPUs
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/multi_gpu.png)
+![multi gpu](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/multi_gpu.png)
 
 The effective batch size is calculated as:
 
@@ -177,8 +178,7 @@ These results show that **Context Parallelism (CP) scales effectively with more 
 >
 > You can learn more and explore configuration examples in the [Accelerate ND-parallelism guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism).
 
-
-**Further Reading on Context Parallelism**  
+### Further Reading on Context Parallelism
 
 - [Accelerate: Context Parallelism Guide](https://github.com/huggingface/accelerate/blob/main/docs/source/concept_guides/context_parallelism.md)  
 - [Accelerate Example: 128k Sequence Length](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#context-parallelism-128k-sequence-length)  

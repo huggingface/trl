@@ -1466,17 +1466,18 @@ class TestSFTTrainer(TrlTestCase):
         trainer.train()
 
         # Check that the training loss is not None
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            self.assertFalse(torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated")
+            assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
     # Gemma 3n uses a timm encoder, making it difficult to create a smaller variant for testing.
     # To ensure coverage, we run tests on the full model but mark them as slow to exclude from default runs.
     @pytest.mark.slow
     @require_vision
+    @pytest.mark.skip(reason="Model google/gemma-3n-E2B-it is gated and requires HF token")
     def test_train_vlm_gemma_3n(self):
         # Get the dataset
         dataset = load_dataset("trl-internal-testing/zen-image", "conversational_language_modeling", split="train")

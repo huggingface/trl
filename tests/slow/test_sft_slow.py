@@ -412,12 +412,12 @@ class TestSFTTrainerSlow(TrlTestCase):
             eval_dataset=self.eval_dataset,
         )
 
-        # Register cleanup now that we have the trainer
-        self.addCleanup(cleanup_liger_patches, trainer)
-
-        trainer.train()
-
-        release_memory(trainer.model, trainer)
+        # Ensure cleanup of liger patches after the test
+        try:
+            trainer.train()
+            release_memory(trainer.model, trainer)
+        finally:
+            cleanup_liger_patches(trainer)
 
     @parameterized.expand(list(itertools.product(MODELS_TO_TEST, PACKING_OPTIONS)))
     @require_torch_accelerator

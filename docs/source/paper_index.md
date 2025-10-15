@@ -170,7 +170,7 @@ $$
 }
 $$
 
-Despite  \\( \textcolor{red}{\pi_{\text{inference}}} \\) and  \\( \textcolor{blue}{\pi_{\text{training}}} \\) sharing the same model parameters  \\( \theta \\), they can produce significantly different token probabilities. This unexpected behavior implicitly breaks the on-policy assumption, and silently turns training off-policy. 
+Despite  \\( \textcolor{red}{\pi_{\text{inference}}} \\) and  \\( \textcolor{blue}{\pi_{\text{training}}} \\) sharing the same model parameters  \\( \theta \\), they can produce significantly different token probabilities. This unexpected behavior implicitly breaks the on-policy assumption, and silently turns training off-policy.
 
 Truncated Importance Sampling (TIS) addresses this issue by adapting the model update via importance-sampling correction. The gradient computation of the aforementioned PPO objective becomes
 
@@ -338,7 +338,7 @@ training_args = DPOConfig(
 )
 ```
 
-For the unpaired version, the user should utilize `BCOConfig` and `BCOTrainer`.
+For the unpaired version, the user should utilize [`BCOConfig`] and [`BCOTrainer`].
 
 ### Self-Play Preference Optimization for Language Model Alignment
 
@@ -458,10 +458,7 @@ trainer = SFTTrainer(
 Dynamic Fine-Tuning (DFT) improves the generalization of Large Language Models (LLMs) by dynamically rescaling gradients, outperforming standard Supervised Fine-Tuning (SFT) and showing competitive results in offline reinforcement learning.
 
 $$
-\mathcal{L}_{\text{DFT}}(\theta) 
-= \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ - \sum_{t=1}^{|y|} 
-\textcolor{red}{\text{sg}\big(\pi_\theta(y_t \mid y_{<t}, x)\big)} 
-\; \log \pi_\theta(y_t \mid y_{<t}, x) \right]
+\mathcal{L}_{\text{DFT}}(\theta) = \mathbb{E}_{(x,y) \sim \mathcal{D}} \left[ - \sum_{t=1}^{|y|} \textcolor{red}{\text{sg}\big(\pi_\theta(y_t \mid y_{<t}, x)\big)} \; \log \pi_\theta(y_t \mid y_{<t}, x) \right]
 $$
 
 where  \\( \text{sg}(\cdot) \\) is the stop-gradient operator. To use DFT with SFT as described in the paper, you can use the `loss_type="dft"` argument:
