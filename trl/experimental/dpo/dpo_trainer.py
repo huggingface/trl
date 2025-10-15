@@ -22,10 +22,13 @@ from typing import Any, Callable, Optional, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import transformers
 from accelerate import PartialState, logging
+from accelerate.utils import is_peft_model
 from datasets import Dataset, IterableDataset
 from datasets.fingerprint import Hasher
 from transformers import (
+    AutoConfig,
     AutoProcessor,
     BaseImageProcessor,
     DataCollator,
@@ -33,22 +36,17 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
+    TrainerCallback,
 )
 from transformers.data.data_collator import DataCollatorMixin
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from transformers.utils import is_peft_available
 
-from ...data_utils import (
-    extract_prompt,
-    is_conversational,
-    prepare_multimodal_messages,
-    truncate_dataset,
-)
-from ...models import get_act_offloading_ctx_manager, prepare_peft_model
+from ...data_utils import extract_prompt, is_conversational, prepare_multimodal_messages, truncate_dataset
+from ...models import get_act_offloading_ctx_manager, prepare_deepspeed, prepare_fsdp, prepare_peft_model
 from ...trainer.base_trainer import BaseTrainer
 from ...trainer.utils import (
-    create_model_from_path,
     disable_dropout_in_model,
     entropy_from_logits,
     flush_left,
@@ -297,22 +295,44 @@ class DPOTrainer(BaseTrainer):
             model_name = model_name.split("/")[-1]
             args = DPOConfig(f"{model_name}-DPO")
 
-        # Model
+        # Models
+        # Trained model
+        model_init_kwargs = args.model_init_kwargs or {}
         if isinstance(model, str):
-            model = create_model_from_path(model, **args.model_init_kwargs or {})
+            model_id = model
+            dtype = model_init_kwargs.get("dtype")
+            if isinstance(dtype, torch.dtype) or dtype == "auto" or dtype is None:
+                pass  # dtype is already a torch.dtype or "auto" or None
+            elif isinstance(dtype, str):  # it's a str, but not "auto"
+                dtype = getattr(torch, dtype)
+                model_init_kwargs["dtype"] = dtype
+            else:
+                raise ValueError(
+                    "Invalid `dtype` passed to `GRPOConfig`. Expected either 'auto' or a string representing "
+                    f"a `torch.dtype` (e.g., 'float32'), but got {dtype}."
+                )
+            # Disable caching if gradient checkpointing is enabled (not supported)
+            config = AutoConfig.from_pretrained(model_id)
+            architecture = getattr(transformers, config.architectures[0])
+            model = architecture.from_pretrained(model_id, **model_init_kwargs)
         else:
+            model_id = model.config._name_or_path
             if args.model_init_kwargs is not None:
                 logger.warning(
-                    "You passed `model_init_kwargs` to the `DPOConfig`, but your model is already instantiated. "
+                    "You passed `model_init_kwargs` to the `GRPOConfig`, but your model is already instantiated. "
                     "The `model_init_kwargs` will be ignored."
                 )
-        model_id = model.config._name_or_path
 
-        disable_dropout_in_model(model)
+        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
+            model = prepare_peft_model(model, peft_config, args)
+
+        # Disable dropout in the model
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
 
         # Processing class
         if processing_class is None:
-            processing_class = AutoProcessor.from_pretrained(model_id)
+            processing_class = AutoProcessor.from_pretrained(model.config._name_or_path)
 
         # Handle pad token for processors or tokenizers
         if isinstance(processing_class, ProcessorMixin):
@@ -329,9 +349,6 @@ class DPOTrainer(BaseTrainer):
                 "Padding-free training is yet not supported for vision-language models. Please set "
                 "`padding_free=False` in the `DPOConfig`."
             )
-
-        if peft_config is not None or (is_peft_available() and isinstance(model, PeftModel)):
-            model = prepare_peft_model(model, peft_config, args)
 
         # Data collator
         self.padding_free = args.padding_free
@@ -428,15 +445,58 @@ class DPOTrainer(BaseTrainer):
             preprocess_logits_for_metrics=preprocess_logits_for_metrics,
         )
 
+        # Reference model
+        self.beta = args.beta
+        if self.beta == 0.0:
+            # If beta is 0.0, the reference model is not needed
+            self.ref_model = None
+        elif is_peft_model(model):
+            # If PEFT is used, the reference model is not needed since the adapter can be disabled
+            # to revert to the initial model.
+            self.ref_model = None
+        else:
+            # For deepspeed, fsdp or non-distributed models, create a reference model from scratch
+            config = AutoConfig.from_pretrained(model_id)
+            architecture = getattr(transformers, config.architectures[0])
+            self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
+
+        # Disable dropout in the models
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
+
+        # Disable dropout in the models
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
+            if self.ref_model is not None:
+                disable_dropout_in_model(self.ref_model)
+
+        # Initialize the metrics
+        self._metrics = {"train": defaultdict(list), "eval": defaultdict(list)}
+        self._total_train_tokens = 0
+
+        # Gradient accumulation requires scaled loss. Normally, loss scaling in the parent class depends on whether the
+        # model accepts loss-related kwargs. Since we compute our own loss, this check is irrelevant. We set
+        # self.model_accepts_loss_kwargs to False to enable scaling.
+        self.model_accepts_loss_kwargs = False
+
+        # Add tags for model
+        self.model.add_model_tags(self._tag_names)
+
+        if self.ref_model is not None:
+            if self.is_deepspeed_enabled:
+                self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
+            elif self.is_fsdp_enabled:
+                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
+            else:
+                self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
+
         # Initialize activation offloading context
         if self.args.activation_offloading:
             self.maybe_activation_offload_context = get_act_offloading_ctx_manager(model=self.model)
         else:
             self.maybe_activation_offload_context = contextlib.nullcontext()
-
-        # Add tags for models that have been loaded with the correct transformers version
-        if hasattr(self.model, "add_model_tags"):
-            self.model.add_model_tags(self._tag_names)
 
     def _prepare_dataset(
         self,
@@ -476,11 +536,7 @@ class DPOTrainer(BaseTrainer):
                         example["rejected"] = example["rejected"] + eos_token
                     return example
 
-                dataset = dataset.map(
-                    add_eos,
-                    fn_kwargs={"eos_token": processing_class.eos_token},
-                    **map_kwargs,
-                )
+                dataset = dataset.map(add_eos, fn_kwargs={"eos_token": processing_class.eos_token}, **map_kwargs)
 
             # Tokenize the dataset
             if isinstance(dataset, Dataset):  # `IterableDataset.map` does not support `desc`
@@ -659,7 +715,7 @@ class DPOTrainer(BaseTrainer):
             batch_size=batch_size,
             fn_kwargs=fn_kwargs,
             desc=f"Computing reference logps for {dataset_name} dataset",
-            new_fingerprint=Hasher.hash((fn_kwargs, model_hash)),
+            new_fingerprint=Hasher.hash((dataset._fingerprint, fn_kwargs, model_hash)),
         )
         return dataset
 
