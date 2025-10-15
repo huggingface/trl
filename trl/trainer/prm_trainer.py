@@ -51,17 +51,17 @@ class PRMTrainer(BaseTrainer):
     Initialize PRMTrainer.
 
     Args:
-        model (`transformers.PreTrainedModel`):
+        model ([`~transformers.PreTrainedModel`]):
             The model to train, preferably an `AutoModelForTokenClassification`.
-        args (`PRMConfig`):
+        args ([`PRMConfig`]):
             The arguments to use for training.
-        data_collator (`transformers.DataCollator`):
+        data_collator ([`~transformers.DataCollator`]):
             The data collator to use for training. If None is specified, the default data collator
-            (`DataCollatorForTokenClassification`) will be used which will pad the sequences to the maximum length of
-            the sequences in the batch, given a dataset of paired sequences.
-        train_dataset (`datasets.Dataset`):
+            ([`~transformers.DataCollatorForTokenClassification`]) will be used which will pad the sequences to the
+            maximum length of the sequences in the batch, given a dataset of paired sequences.
+        train_dataset ([`~datasets.Dataset`]):
             The dataset to use for training.
-        eval_dataset (`datasets.Dataset`):
+        eval_dataset ([`~datasets.Dataset`]):
             The dataset to use for evaluation.
         processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
             Processing class used to process the data. If provided, will be used to automatically process the inputs
@@ -219,7 +219,7 @@ class PRMTrainer(BaseTrainer):
         Args:
             features (`dict[str, str]`):
                 Row of the dataset, should contain the keys `"prompt"`, `"completions"`, and `"labels"`.
-            tokenizer (`PreTrainedTokenizerBase`):
+            tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
                 Tokenizer used to process the data.
             step_separator (`str`):
                 Separator between steps in the completion.
