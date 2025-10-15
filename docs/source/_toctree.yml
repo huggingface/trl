@@ -13,8 +13,6 @@
     title: Paper Index
   - local: experimental
     title: Experimental
-  - local: how_to_train
-    title: Training FAQ
   title: Conceptual Guides
 - sections:
   - local: clis
