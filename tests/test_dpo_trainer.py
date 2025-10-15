@@ -1158,45 +1158,6 @@ class TestDPOTrainer(TrlTestCase):
 
         trainer.train()
 
-    # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator.
-    def test_dpo_trainer_token_type_ids(self):
-        model_id = "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
-        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference")
-
-        def add_image_to_prompt(sample):
-            sample["prompt"][0]["content"] = [
-                {"type": "image"},
-                {"type": "text", "text": sample["prompt"][0]["content"]},
-            ]
-            return sample
-
-        dataset = dataset.map(add_image_to_prompt)
-
-        # Instantiate the model and processor
-        model = AutoModelForImageTextToText.from_pretrained(model_id)
-        ref_model = AutoModelForImageTextToText.from_pretrained(model_id)
-        processor = AutoProcessor.from_pretrained(model_id)
-
-        training_args = DPOConfig(
-            output_dir=self.tmp_dir,
-            per_device_train_batch_size=2,
-            remove_unused_columns=False,
-            learning_rate=0.01,  # increase learning rate to speed up test
-            max_prompt_length=None,  # don't truncate to avoid issues with patch tokens
-            max_length=None,
-            report_to="none",
-        )
-        trainer = DPOTrainer(
-            model=model,
-            ref_model=ref_model,
-            args=training_args,
-            processing_class=processor,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset["test"],
-        )
-
-        trainer.train()
-
     def test_dpo_trainer_with_tools(self):
         model_id = "trl-internal-testing/tiny-LlamaForCausalLM-3.2"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -1461,6 +1422,7 @@ class TestDPOVisionTrainer(TrlTestCase):
             # ("trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",),
             ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
             ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
         ]
     )
     def test_vdpo_trainer(self, model_id):
