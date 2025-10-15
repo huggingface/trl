@@ -23,9 +23,8 @@ def cleanup_gpu():
     """
     Automatically cleanup GPU memory after each test.
 
-    This fixture helps prevent CUDA out of memory errors when running tests in parallel
-    with pytest-xdist by ensuring models and tensors are properly garbage collected
-    and GPU memory caches are cleared between tests.
+    This fixture helps prevent CUDA out of memory errors when running tests in parallel with pytest-xdist by ensuring
+    models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
     """
     yield
     # Cleanup after test
