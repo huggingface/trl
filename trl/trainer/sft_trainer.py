@@ -81,60 +81,6 @@ def get_dataset_column_names(dataset: Union[Dataset, IterableDataset]) -> list[s
     return list(next(iter(dataset)).keys()) if dataset.column_names is None else dataset.column_names
 
 
-def convert_to_structured_content(messages: list[dict[str, Any]], images: list, videos: list) -> list[dict[str, Any]]:
-    """
-    Convert messages with <image> and <video> placeholder tags to structured content format.
-
-    This format is required by some VLM processors (like Qwen) that expect typed content objects rather than plain text
-    with placeholder tags.
-
-    Args:
-        messages: List of message dicts with role and content
-        images: List of image paths/objects corresponding to <image> tags
-        videos: List of video paths/objects corresponding to <video> tags
-
-    Returns:
-        List of messages with structured content format
-
-    Example:
-        Input: {"role": "user", "content": "<video>\nWhat's happening?"} Output: {"role": "user", "content": [
-                    {"type": "video", "video": "/path/to/video.mp4"}, {"type": "text", "text": "What's happening?"}
-                ]}
-    """
-    structured_messages = []
-    image_idx = 0
-    video_idx = 0
-
-    for msg in messages:
-        role = msg["role"]
-        content_str = msg["content"]
-
-        # Check if this message contains media placeholders
-        if "<video>" in content_str or "<image>" in content_str:
-            # Parse placeholders and create structured content
-            content = []
-            parts = re.split(r"(<video>|<image>)", content_str)
-
-            for part in parts:
-                if part == "<video>":
-                    if video_idx < len(videos):
-                        content.append({"type": "video", "video": videos[video_idx]})
-                        video_idx += 1
-                elif part == "<image>":
-                    if image_idx < len(images):
-                        content.append({"type": "image", "image": images[image_idx]})
-                        image_idx += 1
-                elif part.strip():
-                    content.append({"type": "text", "text": part.strip()})
-
-            structured_messages.append({"role": role, "content": content})
-        else:
-            # No media placeholders - keep as plain text
-            structured_messages.append({"role": role, "content": content_str})
-
-    return structured_messages
-
-
 @dataclass
 class DataCollatorForLanguageModeling(DataCollatorMixin):
     """
@@ -413,24 +359,34 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
         if all(vid_list == [] for vid_list in videos):
             videos = None
 
+        # Check if messages contain structured content with images or videos
+        has_image_content = False
+        has_video_content = False
         if "messages" in examples[0]:  # conversational case
-            messages_list = []
-            for example in examples:
-                num_images = len(example.get("images", []))
-                num_videos = len(example.get("videos", []))
+            messages_list = [example["messages"] for example in examples]
+            if messages_list and isinstance(messages_list[0], list):
+                for msg in messages_list[0]:
+                    if isinstance(msg.get("content"), list):
+                        for item in msg["content"]:
+                            if isinstance(item, dict):
+                                if item.get("type") == "image":
+                                    has_image_content = True
+                                elif item.get("type") == "video":
+                                    has_video_content = True
+                    if has_image_content and has_video_content:
+                        break
 
-                # Use structured content format when we have any media (images or videos)
-                # This format works for processors like Qwen that expect typed content objects
-                if num_videos > 0 or num_images > 0:
-                    structured_messages = convert_to_structured_content(
-                        example["messages"], example.get("images", []), example.get("videos", [])
-                    )
-                    messages_list.append(structured_messages)
-                else:
-                    # No media - keep original messages
-                    messages_list.append(example["messages"])
+            # For images/videos with structured content, pass them to apply_chat_template
+            kwargs = {}
+            if has_image_content and images is not None:
+                kwargs["images"] = images
+            if has_video_content and videos is not None:
+                kwargs["videos"] = videos
 
-            texts = self.processor.apply_chat_template(messages_list)
+            if kwargs:
+                texts = self.processor.apply_chat_template(messages_list, **kwargs)
+            else:
+                texts = self.processor.apply_chat_template(messages_list)
         elif self.dataset_text_field in examples[0]:  # standard case
             texts = [example[self.dataset_text_field] for example in examples]
         else:
@@ -439,7 +395,7 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
                 "data."
             )
 
-        # Process with both images and videos
+        # Process with images and videos
         processor_kwargs = {
             "text": texts,
             "padding": True,
@@ -454,9 +410,11 @@ class DataCollatorForVisionLanguageModeling(DataCollatorMixin):
             processor_kwargs["truncation"] = True
             processor_kwargs["max_length"] = self.max_length
 
-        if images is not None:
+        # Don't pass images/videos to processor if they're already in structured content
+        # The processor will extract them from the formatted text
+        if images is not None and not has_image_content:
             processor_kwargs["images"] = images
-        if videos is not None:
+        if videos is not None and not has_video_content:
             processor_kwargs["videos"] = videos
 
         output = self.processor(**processor_kwargs)
