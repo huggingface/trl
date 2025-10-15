@@ -7,15 +7,15 @@
 
 With this memory reduction, you can potentially turn off `cpu_offloading` or gradient checkpointing to further boost the performance.
 
-| Speed Up                 | Memory Reduction        |
-|--------------------------|-------------------------|
+| Speed Up | Memory Reduction |
+| --- | --- |
 | ![Speed up](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-tps.png) | ![Memory](https://raw.githubusercontent.com/linkedin/Liger-Kernel/main/docs/images/e2e-memory.png) |
 
 1. To use Liger-Kernel in [`SFTTrainer`], first install it by:
-
-```bash
-pip install liger-kernel
-```
+  
+  ```bash
+  pip install liger-kernel
+  ```
 
 2. Once installed, set `use_liger_kernel` in [`SFTConfig`]. No other changes are needed!
 

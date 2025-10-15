@@ -57,7 +57,7 @@ import os
 import torch
 from accelerate import logging
 from datasets import load_dataset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer, HfArgumentParser
+from transformers import AutoModelForSequenceClassification, HfArgumentParser
 
 from trl import (
     ModelConfig,
@@ -67,7 +67,6 @@ from trl import (
     get_kbit_device_map,
     get_peft_config,
     get_quantization_config,
-    setup_chat_format,
 )
 
 
@@ -97,18 +96,9 @@ if __name__ == "__main__":
         model_kwargs["device_map"] = get_kbit_device_map()
         model_kwargs["quantization_config"] = quantization_config
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code, use_fast=True
-    )
     model = AutoModelForSequenceClassification.from_pretrained(
         model_args.model_name_or_path, num_labels=1, trust_remote_code=model_args.trust_remote_code, **model_kwargs
     )
-    # Align padding tokens between tokenizer and model
-    model.config.pad_token_id = tokenizer.pad_token_id
-
-    # If post-training a base model, use ChatML as the default template
-    if tokenizer.chat_template is None:
-        model, tokenizer = setup_chat_format(model, tokenizer)
 
     if model_args.use_peft and model_args.lora_task_type != "SEQ_CLS":
         logger.warning(
@@ -126,7 +116,6 @@ if __name__ == "__main__":
     ##########
     trainer = RewardTrainer(
         model=model,
-        processing_class=tokenizer,
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,

@@ -14,11 +14,11 @@ You need to address this approach in three stages that we summarize as follows:
 2- Train a reward model using `peft`. This is required in order to re-use the adapter during the RL optimisation process (step 3 below). We show an example of leveraging the `RewardTrainer` from TRL in [this example](https://github.com/huggingface/trl/tree/main/examples/scripts/reward_modeling.py)
 3- Fine tune new adapters on the base model using PPO and the reward adapter. ("0 abstraction RL")
 
-Make sure to use the same model (i.e. same architecture and same weights) for the stages 2 & 3. 
+Make sure to use the same model (i.e. same architecture and same weights) for the stages 2 & 3.
 
 ## Quickstart
 
-Let us assume you have trained your reward adapter on `llama-7b` model using `RewardTrainer` and pushed the weights on the hub under `trl-lib/llama-7b-hh-rm-adapter`. 
+Let us assume you have trained your reward adapter on `llama-7b` model using `RewardTrainer` and pushed the weights on the hub under `trl-lib/llama-7b-hh-rm-adapter`.
 When doing PPO, before passing the model to `PPOTrainer` create your model as follows:
 
 ```python
@@ -48,6 +48,7 @@ trainer = PPOTrainer(
 
 ...
 ```
+
 Then inside your PPO training loop, call the `compute_reward_score` method by accessing the `model` attribute from `PPOTrainer`.
 
 ```python
@@ -56,9 +57,9 @@ rewards = trainer.model.compute_reward_score(**inputs)
 
 ## Advanced usage
 
-### Control on the adapter name 
+### Control on the adapter name
 
-If you are familiar with the `peft` library, you know that you can use multiple adapters inside the same model. What you can do is train multiple adapters on the same base model to fine-tune on different policies. 
+If you are familiar with the `peft` library, you know that you can use multiple adapters inside the same model. What you can do is train multiple adapters on the same base model to fine-tune on different policies.
 In this case, you want to be able to control the adapter name you want to activate back, after retrieving the reward. For that, simply pass the appropriate `adapter_name` to `ppo_adapter_name` argument when calling `compute_reward_score`.
 
 ```python
@@ -71,6 +72,7 @@ rewards = trainer.model.compute_reward_score(**inputs, ppo_adapter_name=adapter_
 
 For more memory efficient fine-tuning, you can load your base model in 8-bit or 4-bit while keeping the adapters in the default precision (float32).
 Just pass the appropriate arguments (i.e. `load_in_8bit=True` or `load_in_4bit=True`) to `AutoModelForCausalLMWithValueHead.from_pretrained` as follows (assuming you have installed `bitsandbytes`):
+
 ```python
 model_name = "llama-7b"
 rm_adapter_id = "trl-lib/llama-7b-hh-rm-adapter"

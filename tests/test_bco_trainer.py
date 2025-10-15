@@ -14,25 +14,25 @@
 
 from functools import partial
 
+import pytest
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset
 from parameterized import parameterized
 from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_peft
 from transformers.utils import is_peft_available
 
 from trl import BCOConfig, BCOTrainer
 from trl.trainer.bco_trainer import _process_tokens, _tokenize
 
-from .testing_utils import TrlTestCase, require_no_wandb, require_sklearn
+from .testing_utils import TrlTestCase, require_no_wandb, require_peft, require_sklearn
 
 
 if is_peft_available():
     from peft import LoraConfig
 
 
-class BCOTrainerTester(TrlTestCase):
+class TestBCOTrainer(TrlTestCase):
     @parameterized.expand(
         [
             ("standard_preference",),
@@ -71,13 +71,13 @@ class BCOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
+                assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
     def test_train_with_precompute(self):
@@ -108,13 +108,13 @@ class BCOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
+                assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
     def test_train_eval(self):
@@ -158,7 +158,7 @@ class BCOTrainerTester(TrlTestCase):
             report_to="none",
         )
 
-        with self.assertRaises(ValueError):
+        with pytest.raises(ValueError):
             BCOTrainer(
                 model=model,
                 ref_model=model,  # ref_model can't be the same as model
@@ -196,13 +196,13 @@ class BCOTrainerTester(TrlTestCase):
             batched=True,
             batch_size=2,
         )
-        self.assertListEqual(tokenized_dataset["prompt"][:], dataset["prompt"][:])
-        self.assertListEqual(tokenized_dataset["completion"][:], dataset["completion"][:])
-        self.assertListEqual(tokenized_dataset["label"][:], dataset["label"][:])
-        self.assertListEqual(tokenized_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
-        self.assertListEqual(tokenized_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
-        self.assertListEqual(tokenized_dataset["answer_input_ids"][0], [27261, 13])
-        self.assertListEqual(tokenized_dataset["answer_attention_mask"][0], [1, 1])
+        assert tokenized_dataset["prompt"][:] == dataset["prompt"][:]
+        assert tokenized_dataset["completion"][:] == dataset["completion"][:]
+        assert tokenized_dataset["label"][:] == dataset["label"][:]
+        assert tokenized_dataset["prompt_input_ids"][0] == [46518, 374, 2664, 1091]
+        assert tokenized_dataset["prompt_attention_mask"][0] == [1, 1, 1, 1]
+        assert tokenized_dataset["answer_input_ids"][0] == [27261, 13]
+        assert tokenized_dataset["answer_attention_mask"][0] == [1, 1]
 
         fn_kwargs = {
             "prefix": "",
@@ -214,14 +214,14 @@ class BCOTrainerTester(TrlTestCase):
             "max_prompt_length": trainer.max_prompt_length,
         }
         processed_dataset = tokenized_dataset.map(_process_tokens, fn_kwargs=fn_kwargs)
-        self.assertListEqual(processed_dataset["prompt"][:], dataset["prompt"][:])
-        self.assertListEqual(processed_dataset["completion"][:], dataset["completion"][:])
-        self.assertListEqual(processed_dataset["label"][:], dataset["label"][:])
-        self.assertListEqual(processed_dataset["prompt_input_ids"][0], [46518, 374, 2664, 1091])
-        self.assertListEqual(processed_dataset["prompt_attention_mask"][0], [1, 1, 1, 1])
-        self.assertListEqual(processed_dataset["completion_input_ids"][0], [46518, 374, 2664, 1091, 27261, 13, 151645])
-        self.assertListEqual(processed_dataset["completion_attention_mask"][0], [1, 1, 1, 1, 1, 1, 1])
-        self.assertListEqual(processed_dataset["completion_labels"][0], [-100, -100, -100, -100, 27261, 13, 151645])
+        assert processed_dataset["prompt"][:] == dataset["prompt"][:]
+        assert processed_dataset["completion"][:] == dataset["completion"][:]
+        assert processed_dataset["label"][:] == dataset["label"][:]
+        assert processed_dataset["prompt_input_ids"][0] == [46518, 374, 2664, 1091]
+        assert processed_dataset["prompt_attention_mask"][0] == [1, 1, 1, 1]
+        assert processed_dataset["completion_input_ids"][0] == [46518, 374, 2664, 1091, 27261, 13, 151645]
+        assert processed_dataset["completion_attention_mask"][0] == [1, 1, 1, 1, 1, 1, 1]
+        assert processed_dataset["completion_labels"][0] == [-100, -100, -100, -100, 27261, 13, 151645]
 
     @require_sklearn
     def test_train_without_providing_ref_model(self):
@@ -249,13 +249,13 @@ class BCOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
+                assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
     def test_train_udm(self):
@@ -298,13 +298,13 @@ class BCOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
             if param.sum() != 0:  # ignore 0 biases
-                self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
+                assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
     @require_peft
@@ -335,14 +335,14 @@ class BCOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertIsNotNone(trainer.state.log_history[-1]["train_loss"])
+        assert trainer.state.log_history[-1]["train_loss"] is not None
 
         # Check that the parameters have changed
         for n, param in previous_trainable_params.items():
             if "lora" in n:
                 new_param = trainer.model.get_parameter(n)
                 if param.sum() != 0:  # ignore 0 biases
-                    self.assertFalse(torch.equal(param.cpu(), new_param.cpu()))
+                    assert not torch.equal(param.cpu(), new_param.cpu())
 
     @require_sklearn
     @require_no_wandb
@@ -362,9 +362,9 @@ class BCOTrainerTester(TrlTestCase):
             report_to="none",
         )
 
-        with self.assertRaisesRegex(
+        with pytest.raises(
             ValueError,
-            expected_regex="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
+            match="`generate_during_eval=True` requires Weights and Biases or Comet to be installed."
             " Please install `wandb` or `comet-ml` to resolve.",
         ):
             BCOTrainer(
@@ -440,4 +440,4 @@ class BCOTrainerTester(TrlTestCase):
 
         trainer.train()
 
-        self.assertEqual(trainer.state.log_history[-2]["eval_test"], 0.0)
+        assert trainer.state.log_history[-2]["eval_test"] == 0.0

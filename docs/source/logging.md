@@ -3,7 +3,7 @@
 As reinforcement learning algorithms are historically challenging to debug, it's important to pay careful attention to logging.
 By default, TRL trainers like [`PPOTrainer`] and [`GRPOTrainer`] save a lot of relevant information to supported experiment trackers like Trackio, Weights & Biases (wandb) or TensorBoard.
 
-Upon initialization, pass the `report_to` argument to the respective configuration object (e.g., [`PPOConfig`] for `PPOTrainer`, or [`GRPOConfig`] for `GRPOTrainer`):
+Upon initialization, pass the `report_to` argument to the respective configuration object (e.g., [`PPOConfig`] for [`PPOTrainer`], or [`GRPOConfig`] for [`GRPOTrainer`]):
 
 ```python
 # For PPOTrainer
@@ -19,7 +19,7 @@ grpo_config = GRPOConfig(
 )
 ```
 
-If you want to log with TensorBoard, you might also need to specify logging directories, for example, by adding `logging_dir=PATH_TO_LOGS` to the configuration object (e.g., `PPOConfig` or `GRPOConfig`).
+If you want to log with TensorBoard, you might also need to specify logging directories, for example, by adding `logging_dir=PATH_TO_LOGS` to the configuration object (e.g., [`PPOConfig`] or [`GRPOConfig`]).
 
 ## PPO Logging
 
@@ -44,6 +44,7 @@ Here's a brief explanation for the logged metrics provided in the data:
 * `episode`: The current episode count in the training process.
 
 ### Crucial values
+
 During training, many values are logged, here are the most important ones:
 
 1. `objective/scores`: The mean scores returned by the reward model / environment.
@@ -63,7 +64,7 @@ Here's a brief explanation for the logged metrics provided in the data for the G
 
 * `num_tokens`: Total number of input tokens processed during training so far.
 
-#### Completions
+### Completions
 
 * `completions/mean_length`: Mean length of all generated completions (including those not ending with an EOS token).
 * `completions/min_length`: Minimum length among all generated completions.
@@ -73,34 +74,33 @@ Here's a brief explanation for the logged metrics provided in the data for the G
 * `completions/min_terminated_length`: Minimum length among completions that ended with an EOS token.
 * `completions/max_terminated_length`: Maximum length among completions that ended with an EOS token.
 
-#### Rewards
+### Rewards
 
 * `rewards/{reward_func_name}/mean`: The mean reward obtained from a specific, named reward function (e.g., `rewards/my_custom_reward/mean`). This is logged for each reward function used.
 * `rewards/{reward_func_name}/std`: The standard deviation of rewards from a specific, named reward function.
 * `reward`: The overall mean of the (potentially weighted and, if `args.scale_rewards` is true, normalized) rewards, after group-wise normalization (advantages).
 * `reward_std`: The standard deviation of the (potentially weighted) rewards *before* group-wise normalization for advantages.
 
-#### Policy and Loss Metrics
+### Policy and Loss Metrics
 
-* `kl`: The mean Kullback-Leibler (KL) divergence between the current policy and the reference policy. This is logged only if `beta` (the KL coefficient in `GRPOConfig`) is non-zero.
+* `kl`: The mean Kullback-Leibler (KL) divergence between the current policy and the reference policy. This is logged only if `beta` (the KL coefficient in [`GRPOConfig`]) is non-zero.
 * `entropy`: Average entropy of token predictions across generated completions.
-* If Liger GRPOLoss is used (`use_liger_loss: True` in `GRPOConfig`):
-    *   `clip_ratio`: The fraction of policy updates where the probability ratio was clipped according to the GRPO loss's epsilon bounds.
+* If Liger GRPOLoss is used (`use_liger_loss: True` in [`GRPOConfig`]):
+  * `clip_ratio`: The fraction of policy updates where the probability ratio was clipped according to the GRPO loss's epsilon bounds.
 * If standard GRPOLoss is used (`use_liger_loss: False`):
-    *   `clip_ratio/low_mean`: The mean fraction of instances where the probability ratio `r_t(θ)` was clipped at the lower bound `1 - epsilon_low` (occurs when advantage is negative and ratio is below the bound).
-    *   `clip_ratio/low_min`: The minimum observed fraction for `clip_ratio/low_mean` across batches/processes.
-    *   `clip_ratio/high_mean`: The mean fraction of instances where the probability ratio `r_t(θ)` was clipped at the upper bound `1 + epsilon_high` (occurs when advantage is positive and ratio is above the bound).
-    *   `clip_ratio/high_max`: The maximum observed fraction for `clip_ratio/high_mean` across batches/processes.
-    *   `clip_ratio/region_mean`: The mean fraction of instances where the probability ratio was clipped at either the lower or upper bound.
+  * `clip_ratio/low_mean`: The mean fraction of instances where the probability ratio `r_t(θ)` was clipped at the lower bound `1 - epsilon_low` (occurs when advantage is negative and ratio is below the bound).
+  * `clip_ratio/low_min`: The minimum observed fraction for `clip_ratio/low_mean` across batches/processes.
+  * `clip_ratio/high_mean`: The mean fraction of instances where the probability ratio `r_t(θ)` was clipped at the upper bound `1 + epsilon_high` (occurs when advantage is positive and ratio is above the bound).
+  * `clip_ratio/high_max`: The maximum observed fraction for `clip_ratio/high_mean` across batches/processes.
+  * `clip_ratio/region_mean`: The mean fraction of instances where the probability ratio was clipped at either the lower or upper bound.
 
 ### Crucial GRPO values
 
 During GRPO training, monitor these values for insights into performance and stability:
 
-1.  `reward`: This is the primary objective. It reflects the (group-wise normalized) rewards the policy is achieving. It should generally increase during successful training.
-1.  `kl`: If `beta > 0`, this tracks the divergence from the reference model. Keep an eye on it to ensure the policy doesn't stray too far, which can lead to instability.
-1.  `clip_ratio/*` (either `clip_ratio` for Liger loss or the more detailed `clip_ratio/...` metrics for standard loss): These indicate how often the policy updates are being constrained by the GRPO clipping mechanism. Very high values might suggest that the policy is trying to change too drastically (potentially due to large advantages or a learning rate that's too high) or that the epsilon clipping range is too restrictive.
-1.  `completions/clipped_ratio`: A high ratio here indicates that the model is frequently generating completions that are cut off by `max_completion_length` rather than naturally ending with an EOS token. This might suggest issues with learning sequence termination or that `max_completion_length` is too short.
-1. `rewards/{reward_func_name}/mean`: Monitoring the mean of individual reward functions can help diagnose which aspects of the desired behavior the model is learning or struggling with, especially when using multiple reward sources.
-1. `entropy`: Measures how uncertain the policy is in its action choices, higher entropy suggests more exploration. A collapse in entropy means the policy is becoming overconfident and deterministic, often too early. This can stall learning by reducing exploration and making updates overly biased. Stable but non-zero entropy is usually a sign that the policy retains flexibility and continues to explore.
-
+* `reward`: This is the primary objective. It reflects the (group-wise normalized) rewards the policy is achieving. It should generally increase during successful training.
+* `kl`: If `beta > 0`, this tracks the divergence from the reference model. Keep an eye on it to ensure the policy doesn't stray too far, which can lead to instability.
+* `clip_ratio/*` (either `clip_ratio` for Liger loss or the more detailed `clip_ratio/...` metrics for standard loss): These indicate how often the policy updates are being constrained by the GRPO clipping mechanism. Very high values might suggest that the policy is trying to change too drastically (potentially due to large advantages or a learning rate that's too high) or that the epsilon clipping range is too restrictive.
+* `completions/clipped_ratio`: A high ratio here indicates that the model is frequently generating completions that are cut off by `max_completion_length` rather than naturally ending with an EOS token. This might suggest issues with learning sequence termination or that `max_completion_length` is too short.
+* `rewards/{reward_func_name}/mean`: Monitoring the mean of individual reward functions can help diagnose which aspects of the desired behavior the model is learning or struggling with, especially when using multiple reward sources.
+* `entropy`: Measures how uncertain the policy is in its action choices, higher entropy suggests more exploration. A collapse in entropy means the policy is becoming overconfident and deterministic, often too early. This can stall learning by reducing exploration and making updates overly biased. Stable but non-zero entropy is usually a sign that the policy retains flexibility and continues to explore.

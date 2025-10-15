@@ -1,6 +1,6 @@
 # RLOO Trainer
 
-[![](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
+[![model badge](https://img.shields.io/badge/All_models-RLOO-blue)](https://huggingface.co/models?other=rloo,trl)
 
 ## Overview
 
@@ -101,13 +101,12 @@ where  \\( \beta > 0 \\) controls the strength of the KL penalty.
 
 ### Computing the advantage
 
-Once the rewards for each completion have been computed, we calculate a baseline as the average reward of all other samples in the same batch, excluding the current sample. This baseline is used to reduce the variance of the policy gradient estimate. The advantage for each completion is then obtained as the difference between its own reward and this leave-one-out baseline. 
+Once the rewards for each completion have been computed, we calculate a baseline as the average reward of all other samples in the same batch, excluding the current sample. This baseline is used to reduce the variance of the policy gradient estimate. The advantage for each completion is then obtained as the difference between its own reward and this leave-one-out baseline.
 
 Formally, for a batch of G completions, the baseline for completion is:
 $$
 b_i = \frac{1}{G-1} \sum_{j \neq i} r_j
 $$
-
 
 and then the advantage for each completion is computed as the difference between its reward and the baseline:
 
@@ -151,9 +150,9 @@ While training and evaluating, we record the following reward metrics:
 - `entropy`: Average entropy of token predictions across generated completions. (If `mask_truncated_completions=True`, masked sequences tokens are excluded.)
 - `kl`: The average KL divergence between the model and the reference model, calculated over generated completions. Logged only if `beta` is nonzero.
 - `clip_ratio/region_mean`: The ratio of sequence probabilities where the RLOO objective is clipped to stay within the trust region:
-$$
-\text{clip}\left( r_{i}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i}(\theta) = \frac{\pi_\theta(o_{i} \mid q)}{\pi_{\theta_{\text{old}}}(o_{i} \mid q)}\,.
-$$
+  $$
+  \text{clip}\left( r_{i}(\theta), 1 - \epsilon_\mathrm{low}, 1 + \epsilon_\mathrm{high} \right)\,, \qquad r_{i}(\theta) = \frac{\pi_\theta(o_{i} \mid q)}{\pi_{\theta_{\text{old}}}(o_{i} \mid q)}\,.
+  $$
 
     A higher value means more samples are clipped, which constrains how much the policy $\pi_\theta$ can change.
 - `clip_ratio/low_mean`: The average ratio of sequence probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
@@ -166,6 +165,7 @@ $$
 ### Speed up training with vLLM-powered generation
 
 Generation is often the main bottleneck when training with online methods. To accelerate generation, you can use [vLLM](https://github.com/vllm-project/vllm), a high-throughput, low-latency inference engine for LLMs. To enable it, first install the package with
+
 ```shell
 pip install trl[vllm]
 ```
@@ -177,11 +177,13 @@ We support two ways of using vLLM during training: **server mode** and **colocat
 In this mode, vLLM runs in a separate process (and using separate GPUs) and communicates with the trainer via HTTP. This is ideal if you have dedicated GPUs for inference.
 
 1. **Start the vLLM server**:
+
    ```bash
    trl vllm-serve --model <model_name>
    ```
 
 2. **Enable server mode in your training script**:
+
    ```python
    from trl import RLOOConfig
 
@@ -214,12 +216,7 @@ training_args = RLOOConfig(
 >
 > We provide a [HF Space](https://huggingface.co/spaces/trl-lib/recommend-vllm-memory) to help estimate the recommended GPU memory utilization based on your model configuration and experiment settings. Simply use it as follows to get `vllm_gpu_memory_utilization` recommendation:
 >
-> <iframe
-> 	src="https://trl-lib-recommend-vllm-memory.hf.space"
-> 	frameborder="0"
-> 	width="850"
-> 	height="450"
-> ></iframe>
+> <iframe src="https://trl-lib-recommend-vllm-memory.hf.space" frameborder="0" width="850" height="450"></iframe>
 >
 > If the recommended value does not work in your environment, we suggest adding a small buffer (e.g., +0.05 or +0.1) to the recommended value to ensure stability.
 >
@@ -418,6 +415,7 @@ You can test this function as follows:
 >>> reward_func(prompts=prompts, completions=completions, ground_truth=ground_truth)
 [1.0, 0.0]
 ```
+
 #### Example 4: Multi-task reward functions
 
 Below is an example of using multiple reward functions in the [`RLOOTrainer`]. In this example, we define two task-specific reward functions: `math_reward_func` and `coding_reward_func`. The `math_reward_func` rewards math problems based on their correctness, while the `coding_reward_func` rewards coding problems based on whether the solution works.
@@ -477,8 +475,6 @@ trainer.train()
 In this example, the `math_reward_func` and `coding_reward_func` are designed to work with a mixed dataset that contains both math and coding problems. The `task` column in the dataset is used to determine which reward function to apply to each problem. If there is no relevant reward function for a sample in the dataset, the reward function will return `None`, and the [`RLOOTrainer`] will continue with the valid functions and tasks. This allows the [`RLOOTrainer`] to handle multiple reward functions with different applicability.
 
 Note that the [`RLOOTrainer`] will ignore the `None` rewards returned by the reward functions and only consider the rewards returned by the relevant functions. This ensures that the model is trained on the relevant tasks and ignores the tasks for which there is no relevant reward function.
-
-
 
 #### Passing the reward function to the trainer
 

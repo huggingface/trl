@@ -13,9 +13,11 @@
 # limitations under the License.
 
 import gc
-import unittest
 
+import pytest
 import torch
+import transformers
+from packaging import version
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSeq2SeqLM, GenerationConfig
 
@@ -55,8 +57,7 @@ class BaseTester:
         trl_model_class = None
         transformers_model_class = None
 
-        def setUp(self):
-            super().setUp()
+        def setup_method(self):
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         def test_value_head(self):
@@ -64,16 +65,28 @@ class BaseTester:
             Test if the v-head is added to the model successfully
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                    transformers.__version__
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
-                self.assertTrue(hasattr(model, "v_head"))
+                assert hasattr(model, "v_head")
 
         def test_value_head_shape(self):
             r"""
             Test if the v-head has the correct shape
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                    transformers.__version__
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
-                self.assertEqual(model.v_head.summary.weight.shape[0], 1)
+                assert model.v_head.summary.weight.shape[0] == 1
 
         def test_value_head_init_random(self):
             r"""
@@ -81,10 +94,14 @@ class BaseTester:
             than zeros by default.
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                    transformers.__version__
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
-                self.assertFalse(
-                    torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias))
-                )
+                assert not torch.allclose(model.v_head.summary.bias, torch.zeros_like(model.v_head.summary.bias))
 
         def test_value_head_not_str(self):
             r"""
@@ -92,9 +109,15 @@ class BaseTester:
             `from_pretrained`.
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                    transformers.__version__
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                    continue
+
                 pretrained_model = self.transformers_model_class.from_pretrained(model_name)
                 model = self.trl_model_class.from_pretrained(pretrained_model)
-                self.assertTrue(hasattr(model, "v_head"))
+                assert hasattr(model, "v_head")
 
         def test_from_save_trl(self):
             """
@@ -102,6 +125,12 @@ class BaseTester:
             additional modules (e.g. v_head)
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                    transformers.__version__
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
 
                 model.save_pretrained(self.tmp_dir)
@@ -110,13 +139,19 @@ class BaseTester:
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
-                    self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
+                    assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
 
         def test_from_save_trl_sharded(self):
             """
             Test if the model can be saved and loaded from a directory and get the same weights - sharded case
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                    transformers.__version__
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                    continue
+
                 model = self.trl_model_class.from_pretrained(model_name)
 
                 model.save_pretrained(self.tmp_dir)
@@ -125,13 +160,19 @@ class BaseTester:
 
                 # Check if the weights are the same
                 for key in model_from_save.state_dict():
-                    self.assertTrue(torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key]))
+                    assert torch.allclose(model_from_save.state_dict()[key], model.state_dict()[key])
 
         def test_from_save_transformers_sharded(self):
             """
             Test if the model can be saved and loaded using transformers and get the same weights - sharded case
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                    transformers.__version__
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                    continue
+
                 transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
@@ -143,10 +184,8 @@ class BaseTester:
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
-                    self.assertTrue(
-                        torch.allclose(
-                            transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
-                        )
+                    assert torch.allclose(
+                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
                     )
 
         def test_from_save_transformers(self):
@@ -155,6 +194,12 @@ class BaseTester:
             of the super class to check if the weights are the same.
             """
             for model_name in self.all_model_names:
+                if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                    transformers.__version__
+                ) < version.parse("4.58.0.dev0"):
+                    # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                    continue
+
                 transformers_model = self.trl_model_class.transformers_parent_class.from_pretrained(model_name)
 
                 trl_model = self.trl_model_class.from_pretrained(model_name)
@@ -166,30 +211,25 @@ class BaseTester:
 
                 # Check if the weights are the same
                 for key in transformers_model.state_dict():
-                    self.assertTrue(
-                        torch.allclose(
-                            transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
-                        )
+                    assert torch.allclose(
+                        transformers_model_from_save.state_dict()[key], transformers_model.state_dict()[key]
                     )
 
                 # Check if the trl model has the same keys as the transformers model
                 # except the v_head
                 for key in trl_model.state_dict():
                     if "v_head" not in key:
-                        self.assertIn(key, transformers_model.state_dict())
+                        assert key in transformers_model.state_dict()
                         # check if the weights are the same
-                        self.assertTrue(
-                            torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key])
-                        )
+                        assert torch.allclose(trl_model.state_dict()[key], transformers_model.state_dict()[key])
 
                 # check if they have the same modules
-                self.assertEqual(
-                    set(transformers_model_from_save.state_dict().keys()),
-                    set(transformers_model.state_dict().keys()),
+                assert set(transformers_model_from_save.state_dict().keys()) == set(
+                    transformers_model.state_dict().keys()
                 )
 
 
-class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
+class TestCausalLMValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -198,10 +238,9 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     trl_model_class = AutoModelForCausalLMWithValueHead
     transformers_model_class = AutoModelForCausalLM
 
-    def tearDown(self):
+    def teardown_method(self):
         # free memory
         gc.collect()
-        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -211,48 +250,71 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         EXPECTED_OUTPUT_SIZE = 3
 
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                transformers.__version__
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                continue
+
             model = self.trl_model_class.from_pretrained(model_name).to(self.device)
             input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
             outputs = model(input_ids)
 
             # Check if the outputs are of the right size - here
             # we always output 3 values - logits, loss, and value states
-            self.assertEqual(len(outputs), EXPECTED_OUTPUT_SIZE)
+            assert len(outputs) == EXPECTED_OUTPUT_SIZE
 
     def test_dropout_config(self):
         r"""
         Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                transformers.__version__
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                continue
+
             pretrained_model = self.transformers_model_class.from_pretrained(model_name)
             pretrained_model.config.summary_dropout_prob = 0.5
             model = self.trl_model_class.from_pretrained(pretrained_model)
 
             # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, pretrained_model.config.summary_dropout_prob)
+            assert model.v_head.dropout.p == pretrained_model.config.summary_dropout_prob
 
     def test_dropout_kwargs(self):
         r"""
         Test if we instantiate a model by adding `summary_drop_prob` to the config it will be added to the v_head
         """
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                transformers.__version__
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                continue
             v_head_kwargs = {"summary_dropout_prob": 0.5}
 
             model = self.trl_model_class.from_pretrained(model_name, **v_head_kwargs)
 
             # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, 0.5)
+            assert model.v_head.dropout.p == 0.5
 
             model = self.trl_model_class.from_pretrained(model_name, summary_dropout_prob=0.5)
 
             # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, 0.5)
+            assert model.v_head.dropout.p == 0.5
 
     @parameterized.expand(ALL_CAUSAL_LM_MODELS)
     def test_generate(self, model_name):
         r"""
         Test if `generate` works for every model
         """
+        if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+            transformers.__version__
+        ) < version.parse("4.58.0.dev0"):
+            # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+            pytest.xfail("DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version")
+
         generation_config = GenerationConfig(max_new_tokens=9)
         model = self.trl_model_class.from_pretrained(model_name).to(self.device)
         input_ids = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]], device=self.device)
@@ -267,27 +329,38 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         run a dummy forward pass without any issue.
         """
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                transformers.__version__
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                continue
+
             trl_model = self.trl_model_class.from_pretrained(model_name, dtype=torch.bfloat16).to(self.device)
 
             lm_head_namings = ["lm_head", "embed_out", "output_layer"]
 
-            self.assertTrue(
-                any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings),
-                "Can't test the model because it doesn't have any of the expected lm_head namings",
+            assert any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings), (
+                "Can't test the model because it doesn't have any of the expected lm_head namings"
             )
 
             for lm_head_naming in lm_head_namings:
                 if hasattr(trl_model.pretrained_model, lm_head_naming):
-                    self.assertEqual(getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype, torch.bfloat16)
+                    assert getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype == torch.bfloat16
 
             dummy_input = torch.LongTensor([[0, 1, 0, 1]]).to(self.device)
 
             # check dummy forward pass works in half precision
             _ = trl_model(dummy_input)
 
-    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    @pytest.mark.skip(reason="This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
+            if model_name == "trl-internal-testing/tiny-DbrxForCausalLM" and version.parse(
+                transformers.__version__
+            ) < version.parse("4.58.0.dev0"):
+                # DbrxConfig generated after 4.58.0 isn't compatible with modeling code before this version
+                continue
+
             model = AutoModelForCausalLMWithValueHead.from_pretrained(model_name)
             if "sharded" in model_name:
                 model.push_to_hub(model_name + "-ppo", use_auth_token=True, max_shard_size="1MB")
@@ -296,16 +369,15 @@ class CausalLMValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
 
             model_from_pretrained = AutoModelForCausalLMWithValueHead.from_pretrained(model_name + "-ppo")
             # check all keys
-            self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
+            assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
 
             for name, param in model.state_dict().items():
-                self.assertTrue(
-                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
-                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
+                assert torch.allclose(param, model_from_pretrained.state_dict()[name]), (
+                    f"Parameter {name} is not the same after push_to_hub and from_pretrained"
                 )
 
 
-class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
+class TestSeq2SeqValueHeadModel(BaseTester.VHeadModelTester, TrlTestCase):
     """
     Testing suite for v-head models.
     """
@@ -314,10 +386,9 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
     trl_model_class = AutoModelForSeq2SeqLMWithValueHead
     transformers_model_class = AutoModelForSeq2SeqLM
 
-    def tearDown(self):
+    def teardown_method(self):
         # free memory
         gc.collect()
-        super().tearDown()
 
     def test_inference(self):
         r"""
@@ -334,7 +405,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
 
             # Check if the outputs are of the right size - here
             # we always output 3 values - logits, loss, and value states
-            self.assertEqual(len(outputs), EXPECTED_OUTPUT_SIZE)
+            assert len(outputs) == EXPECTED_OUTPUT_SIZE
 
     def test_dropout_config(self):
         r"""
@@ -346,7 +417,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
             model = self.trl_model_class.from_pretrained(pretrained_model)
 
             # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, pretrained_model.config.summary_dropout_prob)
+            assert model.v_head.dropout.p == pretrained_model.config.summary_dropout_prob
 
     def test_dropout_kwargs(self):
         r"""
@@ -358,12 +429,12 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
             model = self.trl_model_class.from_pretrained(model_name, **v_head_kwargs)
 
             # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, 0.5)
+            assert model.v_head.dropout.p == 0.5
 
             model = self.trl_model_class.from_pretrained(model_name, summary_dropout_prob=0.5)
 
             # Check if v head of the model has the same dropout as the config
-            self.assertEqual(model.v_head.dropout.p, 0.5)
+            assert model.v_head.dropout.p == 0.5
 
     @parameterized.expand(ALL_SEQ2SEQ_MODELS)
     def test_generate(self, model_name):
@@ -378,7 +449,7 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
         # Just check if the generation works
         _ = model.generate(input_ids, decoder_input_ids=decoder_input_ids, generation_config=generation_config)
 
-    @unittest.skip("This test needs to be run manually due to HF token issue.")
+    @pytest.mark.skip(reason="This test needs to be run manually due to HF token issue.")
     def test_push_to_hub(self):
         for model_name in self.all_model_names:
             model = self.trl_model_class.from_pretrained(model_name)
@@ -389,12 +460,11 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
 
             model_from_pretrained = self.trl_model_class.from_pretrained(model_name + "-ppo")
             # check all keys
-            self.assertEqual(model.state_dict().keys(), model_from_pretrained.state_dict().keys())
+            assert model.state_dict().keys() == model_from_pretrained.state_dict().keys()
 
             for name, param in model.state_dict().items():
-                self.assertTrue(
-                    torch.allclose(param, model_from_pretrained.state_dict()[name]),
-                    f"Parameter {name} is not the same after push_to_hub and from_pretrained",
+                assert torch.allclose(param, model_from_pretrained.state_dict()[name]), (
+                    f"Parameter {name} is not the same after push_to_hub and from_pretrained"
                 )
 
     def test_transformers_bf16_kwargs(self):
@@ -408,13 +478,11 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
 
             lm_head_namings = self.trl_model_class.lm_head_namings
 
-            self.assertTrue(
-                any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
-            )
+            assert any(hasattr(trl_model.pretrained_model, lm_head_naming) for lm_head_naming in lm_head_namings)
 
             for lm_head_naming in lm_head_namings:
                 if hasattr(trl_model.pretrained_model, lm_head_naming):
-                    self.assertTrue(getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype == torch.bfloat16)
+                    assert getattr(trl_model.pretrained_model, lm_head_naming).weight.dtype == torch.bfloat16
 
             dummy_input = torch.LongTensor([[0, 1, 0, 1]]).to(self.device)
 
@@ -422,9 +490,8 @@ class Seq2SeqValueHeadModelTester(BaseTester.VHeadModelTester, TrlTestCase):
             _ = trl_model(input_ids=dummy_input, decoder_input_ids=dummy_input)
 
 
-class ReferenceModelTest(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+class TestReferenceModel(TrlTestCase):
+    def setup_method(self):
         self.model = AutoModelForCausalLMWithValueHead.from_pretrained("trl-internal-testing/tiny-GPT2LMHeadModel")
         self.test_input = torch.tensor([[0, 1, 2, 3]])
         self.optimizer = torch.optim.AdamW(self.model.parameters(), lr=1)
@@ -453,16 +520,16 @@ class ReferenceModelTest(TrlTestCase):
         last_ref_layer_after = ref_model.get_parameter(layer_1).data.clone()
 
         # before optimization ref and model are identical
-        self.assertTrue((first_layer_before == first_ref_layer_before).all())
-        self.assertTrue((last_layer_before == last_ref_layer_before).all())
+        assert (first_layer_before == first_ref_layer_before).all()
+        assert (last_layer_before == last_ref_layer_before).all()
 
         # ref model stays identical after optimization
-        self.assertTrue((first_ref_layer_before == first_ref_layer_after).all())
-        self.assertTrue((last_ref_layer_before == last_ref_layer_after).all())
+        assert (first_ref_layer_before == first_ref_layer_after).all()
+        assert (last_ref_layer_before == last_ref_layer_after).all()
 
         # optimized model changes
-        self.assertFalse((first_layer_before == first_layer_after).all())
-        self.assertFalse((last_layer_before == last_layer_after).all())
+        assert not (first_layer_before == first_layer_after).all()
+        assert not (last_layer_before == last_layer_after).all()
 
     def test_shared_layers(self):
         layer_0 = self.layer_format.format(layer=0)
@@ -487,15 +554,15 @@ class ReferenceModelTest(TrlTestCase):
         second_ref_layer_after = ref_model.get_parameter(layer_1).data.clone()
 
         # before optimization ref and model are identical
-        self.assertTrue((first_layer_before == first_ref_layer_before).all())
-        self.assertTrue((second_layer_before == second_ref_layer_before).all())
+        assert (first_layer_before == first_ref_layer_before).all()
+        assert (second_layer_before == second_ref_layer_before).all()
 
         # ref model stays identical after optimization
-        self.assertTrue((first_ref_layer_before == first_ref_layer_after).all())
-        self.assertTrue((second_ref_layer_before == second_ref_layer_after).all())
+        assert (first_ref_layer_before == first_ref_layer_after).all()
+        assert (second_ref_layer_before == second_ref_layer_after).all()
 
         # first layer of optimized model stays the same
-        self.assertTrue((first_layer_before == first_layer_after).all())
+        assert (first_layer_before == first_layer_after).all()
 
         # other layers in optimized model change
-        self.assertFalse((second_layer_before == second_layer_after).all())
+        assert not (second_layer_before == second_layer_after).all()

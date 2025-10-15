@@ -155,7 +155,6 @@ def init_weights_tiny_model(model):
 for model_id, config_class, model_class, suffix in [
     ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),
     ("CohereForAI/aya-expanse-8b", CohereConfig, CohereForCausalLM, None),
-    ("databricks/dbrx-instruct", DbrxConfig, DbrxForCausalLM, None),
     ("deepseek-ai/DeepSeek-R1", DeepseekV3Config, DeepseekV3ForCausalLM, None),
     # It's important to have R1-0528 as it doesn't have the same chat template
     ("deepseek-ai/DeepSeek-R1-0528", DeepseekV3Config, DeepseekV3ForCausalLM, "0528"),
@@ -209,6 +208,17 @@ for model_id, config_class, model_class, suffix in [
     init_weights_tiny_model(model)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
+# Special case for databricks/dbrx-instruct as it requires specific changes in the config
+model_id = "databricks/dbrx-instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+config = DbrxConfig.from_pretrained(model_id, n_layers=2, n_heads=16, d_model=24)
+# transformers mistakenly ignores ffn_config keys when loading from pretrained. We need to set them manually after
+# loading the config
+config.ffn_config.ffn_hidden_size = 24
+config.ffn_config.hidden_size = 24
+model = DbrxForCausalLM(config).to(dtype=torch.bfloat16)
+init_weights_tiny_model(model)
+push_to_hub(model, tokenizer, "tiny")
 
 # Two slightly bigger models, required for vLLM testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")

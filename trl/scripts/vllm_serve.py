@@ -495,10 +495,12 @@ def main(script_args: ScriptArguments):
         top_k: int = -1
         min_p: float = 0.0
         max_tokens: int = 16
+        truncate_prompt_tokens: Optional[int] = None
         guided_decoding_regex: Optional[str] = None
         generation_kwargs: dict = field(default_factory=dict)
 
     class GenerateResponse(BaseModel):
+        prompt_ids: list[list[int]]
         completion_ids: list[list[int]]
         logprobs: list[list[float]]
 
@@ -524,6 +526,9 @@ def main(script_args: ScriptArguments):
                 - `min_p` (`float`, *optional*, defaults to `0.0`): Minimum probability threshold for sampling.
                 - `max_tokens` (`int`, *optional*, defaults to `16`): Maximum number of tokens to generate for each
                   completion.
+                - `truncate_prompt_tokens` (`int`, *optional*): If set to `-1`, will use the truncation size supported
+                  by the model. If set to an integer k, will use only the last k tokens from the prompt (i.e., left
+                  truncation). If set to `None`, truncation is disabled.
                 - `guided_decoding_regex` (`str`, *optional*): A regex pattern for guided decoding. If provided, the
                   model will only generate tokens that match this regex pattern.
                 - `generation_kwargs` (`dict`, *optional*): Additional generation parameters to pass to the vLLM
@@ -532,6 +537,7 @@ def main(script_args: ScriptArguments):
 
         Returns:
             `GenerateResponse`:
+                - `prompt_ids` (list of list of `int`): A list of lists of token IDs for each input prompt.
                 - `completion_ids` (list of list of `int`): A list of lists of token IDs for each generated completion.
                 - `logprobs` (list of list of `float`): A list of lists of log probabilities for each token in the
                   generated completions.
@@ -543,7 +549,11 @@ def main(script_args: ScriptArguments):
 
         Example response:
         ```json
-        {"completion_ids": [[101, 102, 103], [201, 202, 203]], "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]}
+        {
+          "prompt_ids": [[101, 102], [201, 202]],
+          "completion_ids": [[103, 104, 105], [203, 204, 205]],
+          "logprobs": [[-0.1, -0.2, -0.3], [-0.4, -0.5, -0.6]]
+        }
         ```
         """
         request.images = request.images or [None] * len(request.prompts)
@@ -569,6 +579,7 @@ def main(script_args: ScriptArguments):
             "top_k": request.top_k,
             "min_p": request.min_p,
             "max_tokens": request.max_tokens,
+            "truncate_prompt_tokens": request.truncate_prompt_tokens,
             "guided_decoding": guided_decoding,
             "logprobs": 0,
         }
@@ -596,13 +607,14 @@ def main(script_args: ScriptArguments):
 
         # Flatten and combine all results
         all_outputs = list(chain.from_iterable(all_outputs))  # from list of list to single list
+        prompt_ids = [output.prompt_token_ids for output in all_outputs]
         completion_ids = [list(output.token_ids) for outputs in all_outputs for output in outputs.outputs]
         logprobs: list[list[float]] = [
             [sanitize_logprob(next(iter(logprob.values()))) for logprob in output.logprobs]
             for outputs in all_outputs
             for output in outputs.outputs
         ]
-        return {"completion_ids": completion_ids, "logprobs": logprobs}
+        return {"prompt_ids": prompt_ids, "completion_ids": completion_ids, "logprobs": logprobs}
 
     class InitCommunicatorRequest(BaseModel):
         host: str

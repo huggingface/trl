@@ -46,7 +46,7 @@ import os
 import torch
 from datasets import load_dataset
 from PIL import Image
-from transformers import AutoModelForImageTextToText, AutoProcessor
+from transformers import AutoModelForImageTextToText
 
 from trl import (
     DPOConfig,
@@ -97,9 +97,6 @@ if __name__ == "__main__":
         )
     else:
         ref_model = None
-    processor = AutoProcessor.from_pretrained(
-        model_args.model_name_or_path, trust_remote_code=model_args.trust_remote_code
-    )
 
     ################
     # Dataset
@@ -135,7 +132,6 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=test_dataset,
-        processing_class=processor,
         peft_config=peft_config,
     )
 

@@ -52,7 +52,7 @@ accelerate launch \
 import os
 
 from datasets import load_dataset
-from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
+from transformers import AutoModelForCausalLM, Mxfp4Config
 
 from trl import ModelConfig, ScriptArguments, SFTConfig, SFTTrainer, TrlParser, get_peft_config
 
@@ -62,7 +62,7 @@ os.environ.setdefault("TRACKIO_SPACE_ID", "trl-trackio")
 
 
 def main(script_args, training_args, model_args):
-    # Load model & tokenizer
+    # Load model
     quantization_config = Mxfp4Config(dequantize=True)
     model_kwargs = dict(
         revision=model_args.model_revision,
@@ -75,8 +75,6 @@ def main(script_args, training_args, model_args):
 
     model = AutoModelForCausalLM.from_pretrained(model_args.model_name_or_path, **model_kwargs)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
-
     # Load dataset
     dataset = load_dataset(script_args.dataset_name, name=script_args.dataset_config)
 
@@ -86,7 +84,6 @@ def main(script_args, training_args, model_args):
         args=training_args,
         train_dataset=dataset[script_args.dataset_train_split],
         eval_dataset=dataset[script_args.dataset_test_split] if training_args.eval_strategy != "no" else None,
-        processing_class=tokenizer,
         peft_config=get_peft_config(model_args),
     )
 

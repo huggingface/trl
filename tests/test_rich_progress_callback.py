@@ -34,8 +34,7 @@ class DummyModel(nn.Module):
 
 @require_rich
 class TestRichProgressCallback(TrlTestCase):
-    def setUp(self):
-        super().setUp()
+    def setup_method(self):
         self.dummy_model = DummyModel()
         self.dummy_train_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 5)
         self.dummy_val_dataset = Dataset.from_list([{"x": 1.0, "y": 2.0}] * 101)

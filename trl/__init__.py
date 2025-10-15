@@ -12,11 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+import warnings
 from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .import_utils import _LazyModule
+
+
+if sys.version_info[:2] == (3, 9):
+    warnings.warn(
+        (
+            "Support for Python 3.9 will be dropped in the next release "
+            "(after its end-of-life on October 31, 2025). "
+            "Please upgrade to Python 3.10 or newer."
+        ),
+        category=FutureWarning,
+        stacklevel=2,
+    )
 
 
 try:
