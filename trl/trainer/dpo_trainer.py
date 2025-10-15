@@ -809,9 +809,9 @@ class DPOTrainer(BaseTrainer):
                 "chosen_input_ids",
                 "rejected_input_ids",
                 "image_sizes",
+                "token_type_ids",
                 "ref_chosen_logps",
                 "ref_rejected_logps",
-                "token_type_ids",
             ]
 
     def get_train_dataloader(self) -> DataLoader:
