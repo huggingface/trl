@@ -15,8 +15,6 @@
     title: Experimental
   - local: how_to_train
     title: Training FAQ
-  - local: logging
-    title: Understanding Logs
   title: Conceptual Guides
 - sections:
   - local: clis
@@ -59,8 +57,6 @@
     title: LoRA Without Regret
   - local: sentiment_tuning
     title: Sentiment Tuning
-  - local: using_llama_models
-    title: Training StackLlama
   - local: multi_adapter_rl
     title: Multi Adapter RLHF
   title: Examples
