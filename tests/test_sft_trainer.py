@@ -1507,6 +1507,9 @@ class TestSFTTrainer(TrlTestCase):
             if "model.vision_tower" in n or "model.audio_tower" in n:
                 # The vision tower and audio tower will not update.
                 continue
+            if "model.embed_audio" in n:
+                # The audio embedding parameters are not updated because this dataset contains no audio data
+                continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
     @require_vision
