@@ -40,8 +40,6 @@ _vllm_available, _vllm_version = _is_package_available("vllm", return_version=Tr
 _vllm_ascend_available = _is_package_available("vllm_ascend")
 _weave_available = _is_package_available("weave")
 _math_verify_available = _is_package_available("math_verify")
-_latex2sympy2_extended_available = _is_package_available("latex2sympy2_extended")
-
 
 def is_deepspeed_available() -> bool:
     return _deepspeed_available
@@ -103,10 +101,6 @@ def is_weave_available() -> bool:
 
 def is_math_verify_available() -> bool:
     return _math_verify_available
-
-
-def is_latex2sympy2_extended_available() -> bool:
-    return _latex2sympy2_extended_available
 
 
 class _LazyModule(ModuleType):

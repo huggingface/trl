@@ -89,8 +89,7 @@ vlm = [
     "torchvision",
     "num2words==0.5.14"
 ]
-latex_math = [
-    "latex2sympy2_extended>=1.0.6",
+math_verify = [
     "math-verify==0.5.2",
 ]
 dev = [

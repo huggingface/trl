@@ -13,3 +13,9 @@ This module contains some useful reward functions, primarily intended for use wi
 ### get_soft_overlong_punishment
 
 [[autodoc]] rewards.get_soft_overlong_punishment
+
+### Accuracy rewards
+
+#### accuracy_reward
+
+[[autodoc]] rewards.accuracy_reward

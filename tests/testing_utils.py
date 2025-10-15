@@ -28,7 +28,6 @@ from transformers.utils import is_peft_available, is_rich_available, is_vision_a
 from trl import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import (
     is_joblib_available,
-    is_latex2sympy2_extended_available,
     is_llm_blender_available,
     is_math_verify_available,
     is_mergekit_available,
@@ -52,10 +51,7 @@ require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",
 )
-require_math_latex = pytest.mark.skipif(
-    not (is_math_verify_available() and is_latex2sympy2_extended_available()),
-    reason="test requires math_verify and latex2sympy2_extended",
-)
+require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 
 
 def is_bitsandbytes_multi_backend_available() -> bool:
