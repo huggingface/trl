@@ -192,8 +192,11 @@ class MTPHeads(nn.Module):
                 elif isinstance(layer, nn.Dropout):
                     layers.append(nn.Dropout(layer.p))
                 else:
-                    # For other layer types, try to create a similar layer
-                    layers.append(type(layer)())
+                    # For other layer types, fallback to simple linear projection
+                    # This is safer than trying to instantiate unknown layer types
+                    import warnings
+                    warnings.warn(f"Unknown layer type {type(layer).__name__} in LM head, using Linear fallback")
+                    return nn.Linear(hidden_size, vocab_size)
             return nn.Sequential(*layers)
         else:
             # For complex modules, create a simple linear layer as fallback
@@ -229,6 +232,10 @@ class MTPHeads(nn.Module):
         """Apply initialization strategy to a module."""
         for name, param in module.named_parameters():
             if 'weight' in name:
+                # Skip initialization for 1D parameters (LayerNorm, etc.)
+                if param.dim() < 2:
+                    continue
+                    
                 if strategy == "kaiming_uniform":
                     nn.init.kaiming_uniform_(param, nonlinearity='relu')
                 elif strategy == "kaiming_normal":
@@ -254,12 +261,23 @@ class MTPHeads(nn.Module):
         hidden_states = self.dropout(hidden_states)
         
         # Ensure proper dtype for numerical stability
-        if isinstance(self.heads[0], nn.Sequential):
-            target_dtype = self.heads[0][0].weight.dtype
-        else:
-            target_dtype = self.heads[0].weight.dtype
+        # Get the first weight tensor from the first head to determine target dtype
+        target_dtype = None
+        first_head = self.heads[0]
         
-        if hidden_states.dtype != target_dtype:
+        # Try to get dtype from various head types
+        if isinstance(first_head, nn.Sequential):
+            # Sequential head (linear, ffn)
+            target_dtype = first_head[0].weight.dtype
+        elif isinstance(first_head, (MHAFFNHead, CNNHead)):
+            # Complex heads - get from output projection
+            target_dtype = first_head.output_projection.weight.dtype
+        elif hasattr(first_head, 'weight'):
+            # Simple linear head
+            target_dtype = first_head.weight.dtype
+        
+        # Convert dtype if needed
+        if target_dtype is not None and hidden_states.dtype != target_dtype:
             hidden_states = hidden_states.to(target_dtype)
         
         # Generate predictions for each future position
