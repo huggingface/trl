@@ -396,13 +396,13 @@ class MTPExtension:
         
         # Get reference to LM head for structure copying if needed
         # IMPORTANT: Don't store direct reference to avoid shared tensor issues during saving
+        # Support different model architectures with different LM head naming conventions
         lm_head_module = None
-        if hasattr(model, 'lm_head'):
-            lm_head_module = model.lm_head
-        elif hasattr(model, 'head'):
-            lm_head_module = model.head
-        elif hasattr(model, 'output_layer'):
-            lm_head_module = model.output_layer
+        possible_lm_head_names = ['lm_head', 'head', 'output_layer', 'embed_out', 'score', 'classifier']
+        for head_name in possible_lm_head_names:
+            if hasattr(model, head_name):
+                lm_head_module = getattr(model, head_name)
+                break
         
         # Create and attach MTP heads
         mtp_heads = MTPHeads(
