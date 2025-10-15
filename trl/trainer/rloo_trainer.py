@@ -859,7 +859,7 @@ class RLOOTrainer(BaseTrainer):
             name = name.replace(prefix, "")
         return name
 
-    def _sync_fsdp2_params_to_vllm(self, module: nn.Module):
+    def _sync_fsdp_params_to_vllm(self, module: nn.Module):
         # For FSDP2, module.state_dict() already covers all parameters, so no need for recursion
         for name, param in module.state_dict().items():
             if param.is_cpu:
@@ -894,7 +894,7 @@ class RLOOTrainer(BaseTrainer):
                 # Update vLLM weights while parameters are gathered
                 if self.is_fsdp_enabled:  # note if using FSDP, gather_if_zero3 is nullcontext
                     # Update vLLM weights while parameters are gathered
-                    self._sync_fsdp2_params_to_vllm(self.model)
+                    self._sync_fsdp_params_to_vllm(self.model)
                 else:
                     # DeepSpeed ZeRO-3 with PEFT
                     for name, param in self.model.named_parameters():
@@ -918,7 +918,7 @@ class RLOOTrainer(BaseTrainer):
         else:
             # For non-PEFT models, simply gather (if needed) and update each parameter individually.
             if self.is_fsdp_enabled:
-                self._sync_fsdp2_params_to_vllm(self.model)
+                self._sync_fsdp_params_to_vllm(self.model)
             else:
                 for name, param in self.model.named_parameters():
                     name = self._fix_param_name_to_vllm(name)
