@@ -1155,40 +1155,16 @@ class TestDPOTrainer(TrlTestCase):
     # Special case for Gemma, as it uses token_type_ids, and we need to ensure they are properly in the collator.
     def test_dpo_trainer_token_type_ids(self):
         model_id = "trl-internal-testing/tiny-Gemma3ForConditionalGeneration"
-        # fmt: off
-        dataset_dict = {
-            "prompt": [
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe the image in great detail."}]}],
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Is this bus in the USA?"}]}],
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Give a thorough description of the image."}]}],
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Who are the people in the image?"}]}],
-                [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What is written?"}]}],
-            ],
-            "chosen": [
-                [{"role": "assistant", "content": [{"type": "text", "text": "The image features a modern, multi-colored train."}]}],
-                [{"role": "assistant", "content": [{"type": "text", "text": "Yes, it can be assumed that this bus is in the USA."}]}],
-                [{"role": "assistant", "content": [{"type": "text", "text": "The image features a forest path."}]}],
-                [{"role": "assistant", "content": [{"type": "text", "text": "There are two individuals, possibly girls or women."}]}],
-                [{"role": "assistant", "content": [{"type": "text", "text": '"ccpb".'}]}],
-            ],
-            "rejected": [
-                [{"role": "assistant", "content": [{"type": "text", "text": "The image features a modern, colorful train."}]}],
-                [{"role": "assistant", "content": [{"type": "text", "text": "No, it's not in the USA."}]}],
-                [{"role": "assistant", "content": [{"type": "text", "text": "The image features a forest path surrounded by trees."}]}],
-                [{"role": "assistant", "content": [{"type": "text", "text": "In the image, there are two individuals."}]}],
-                [{"role": "assistant", "content": [{"type": "text", "text": '"ccpb".'}]}],
-            ],
-            "images": [
-                [Image.fromarray(np.random.randint(0, 255, (92, 33, 3), dtype=np.uint8))],
-                [Image.fromarray(np.random.randint(0, 255, (64, 48, 3), dtype=np.uint8))],
-                [Image.fromarray(np.random.randint(0, 255, (80, 152, 3), dtype=np.uint8))],
-                [Image.fromarray(np.random.randint(0, 255, (57, 24, 3), dtype=np.uint8))],
-                [Image.fromarray(np.random.randint(0, 255, (102, 48, 3), dtype=np.uint8))],
-            ],
-        }
-        # fmt: on
-        dataset = Dataset.from_dict(dataset_dict)
-        dataset = dataset.cast_column("images", features.Sequence(features.Image()))
+        dataset = load_dataset("trl-internal-testing/zen-image", "conversational_preference")
+
+        def add_image_to_prompt(sample):
+            sample["prompt"][0]["content"] = [
+                {"type": "image"},
+                {"type": "text", "text": sample["prompt"][0]["content"]},
+            ]
+            return sample
+
+        dataset = dataset.map(add_image_to_prompt)
 
         # Instantiate the model and processor
         model = AutoModelForImageTextToText.from_pretrained(model_id)
@@ -1209,8 +1185,8 @@ class TestDPOTrainer(TrlTestCase):
             ref_model=ref_model,
             args=training_args,
             processing_class=processor,
-            train_dataset=dataset,
-            eval_dataset=dataset,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
         )
 
         trainer.train()
