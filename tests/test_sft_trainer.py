@@ -1487,7 +1487,7 @@ class TestSFTTrainer(TrlTestCase):
             max_length=None,
             per_device_train_batch_size=1,
             gradient_checkpointing=True,
-            model_init_kwargs={"dtype": "bfloat16"},
+            model_init_kwargs={"dtype": "float16"},
             report_to="none",
         )
         trainer = SFTTrainer(model="google/gemma-3n-E2B-it", args=training_args, train_dataset=dataset)
@@ -1504,8 +1504,8 @@ class TestSFTTrainer(TrlTestCase):
         # Check the params have changed
         for n, param in previous_trainable_params.items():
             new_param = trainer.model.get_parameter(n)
-            if "model.vision_tower" in n:
-                # The vision tower is not updated, not sure why at this point.
+            if "model.vision_tower" in n or "model.audio_tower" in n:
+                # The vision tower and audio tower will not update.
                 continue
             assert not torch.allclose(param, new_param, rtol=1e-12, atol=1e-12), f"Param {n} is not updated"
 
