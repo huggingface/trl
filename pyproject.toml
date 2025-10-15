@@ -90,7 +90,7 @@ vlm = [
     "num2words==0.5.14"
 ]
 math_verify = [
-    "math-verify==0.5.2",
+    "math-verify>=0.5.2",
 ]
 dev = [
     # bco
