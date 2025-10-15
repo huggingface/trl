@@ -41,12 +41,12 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     ```python
     >>> from trl.rewards import accuracy_reward
 
-    >>> completions = [
-    ...     [{"content": "<think>\nThis is my reasoning.\n</think>\nThis is my answer \boxed{\frac{63}{400}}."}],
-    ...     [{"content": "<think>\nThis is my reasoning.\n</think>\nThis is my answer \boxed{\frac{64}{400}}."}],
+    >>> solution = [r"\frac{1}{3}", r"\frac{1}{3}"]
+    >>> completion = [
+    ...     [{"role": "assistant", "content": r"My answer is \boxed{\frac{1}{3}}"}],
+    ...     [{"role": "assistant", "content": r"My answer is \boxed{\frac{1}{2}}"}],
     ... ]
-    >>> solution = ["\boxed{\frac{63}{400}}", "\boxed{\frac{65}{400}}"]
-    >>> think_format_reward(completions)
+    >>> accuracy_reward(completion, solution)
     [1.0, 0.0]
     ```
     """
@@ -70,7 +70,6 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
                             nits=False,
                             malformed_operators=False,
                             basic_latex=True,
-                            equations=True,
                             boxed="all",
                             units=True,
                         ),
