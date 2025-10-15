@@ -38,6 +38,7 @@ from trl.import_utils import (
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_llm_blender = pytest.mark.skipif(not is_llm_blender_available(), reason="test requires llm-blender")
+require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
 require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
@@ -51,7 +52,6 @@ require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",
 )
-require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 
 
 def is_bitsandbytes_multi_backend_available() -> bool:

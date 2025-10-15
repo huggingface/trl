@@ -20,9 +20,9 @@ from ..import_utils import _LazyModule
 
 
 _import_structure = {
+    "accuracy_rewards": ["accuracy_reward"],
     "format_rewards": ["think_format_reward"],
     "other_rewards": ["get_soft_overlong_punishment"],
-    "accuracy_rewards": ["accuracy_reward"],
 }
 
 

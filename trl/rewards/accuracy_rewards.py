@@ -52,6 +52,7 @@ def accuracy_reward(completions: list[list[dict[str, str]]], solution: list[str]
     """
     if not is_math_verify_available():
         raise ImportError("Please install the `math_verify` package to use accuracy_reward")
+
     contents = [completion[0]["content"] for completion in completions]
     rewards = []
     for content, sol in zip(contents, solution):
