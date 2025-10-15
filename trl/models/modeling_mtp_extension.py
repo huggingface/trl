@@ -50,11 +50,12 @@ class MTPHeads(nn.Module):
         config: Model configuration containing hidden_size and vocab_size.
         num_predictions (`int`): Number of future tokens to predict.
         head_type (`str`): Type of head architecture ('linear', 'ffn', 'mha_ffn', 'cnn', 'identical').
-
         dropout_prob (`float`): Dropout probability for regularization.
         num_layers (`int`): Number of layers in each MTP head (for multi-layer heads).
         init_strategy (`str`): Parameter initialization strategy ('default', 'kaiming_uniform', 'kaiming_normal', 'xavier_uniform', 'xavier_normal', 'copy_lm_head').
         lm_head_module (`nn.Module`, optional): Reference to the original LM head for copying structure/weights.
+        num_attention_heads (`int`, optional): Number of attention heads for 'mha_ffn' head type. 
+            If None, will be auto-determined based on hidden_size. Must divide hidden_size evenly.
     """
     
     def __init__(
@@ -66,6 +67,7 @@ class MTPHeads(nn.Module):
         num_layers: int = 1,
         init_strategy: str = "default",
         lm_head_module: Optional[nn.Module] = None,
+        num_attention_heads: Optional[int] = None,  # For mha_ffn head type
         **kwargs
     ):
         super().__init__()
@@ -96,7 +98,8 @@ class MTPHeads(nn.Module):
             ])
         elif head_type == "mha_ffn":
             self.heads = nn.ModuleList([
-                MHAFFNHead(hidden_size, vocab_size, num_layers) for _ in range(num_predictions)
+                MHAFFNHead(hidden_size, vocab_size, num_layers, num_attention_heads) 
+                for _ in range(num_predictions)
             ])
         elif head_type == "cnn":
             self.heads = nn.ModuleList([
@@ -273,10 +276,34 @@ class MTPHeads(nn.Module):
 class MHAFFNHead(nn.Module):
     """Multi-Head Attention + FFN head for MTP with multi-layer support."""
     
-    def __init__(self, hidden_size: int, vocab_size: int, num_layers: int = 1):
+    def __init__(self, hidden_size: int, vocab_size: int, num_layers: int = 1, num_attention_heads: int = None):
         super().__init__()
         self.num_layers = num_layers
         self.hidden_size = hidden_size
+        
+        # Determine number of attention heads
+        if num_attention_heads is None:
+            # Auto-determine based on hidden_size, using common ratios
+            # Following common practice: head_dim should be 64 or 128
+            if hidden_size >= 1024:
+                num_heads = hidden_size // 128  # head_dim = 128
+            elif hidden_size >= 512:
+                num_heads = hidden_size // 64   # head_dim = 64
+            else:
+                # For small hidden sizes, find largest divisor <= 8
+                num_heads = 1
+                for h in range(8, 0, -1):
+                    if hidden_size % h == 0:
+                        num_heads = h
+                        break
+        else:
+            num_heads = num_attention_heads
+            # Validate that num_heads divides hidden_size evenly
+            if hidden_size % num_heads != 0:
+                raise ValueError(
+                    f"num_attention_heads ({num_heads}) must divide hidden_size ({hidden_size}) evenly. "
+                    f"Suggested values: {[h for h in range(1, 17) if hidden_size % h == 0]}"
+                )
         
         # Create multiple transformer-like layers
         self.layers = nn.ModuleList()
@@ -284,7 +311,7 @@ class MHAFFNHead(nn.Module):
             layer = nn.ModuleDict({
                 'attention': nn.MultiheadAttention(
                     embed_dim=hidden_size,
-                    num_heads=min(8, hidden_size // 64),  # Adaptive number of heads
+                    num_heads=num_heads,
                     dropout=0.1,
                     batch_first=True
                 ),
