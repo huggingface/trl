@@ -391,6 +391,9 @@ class GRPOTrainer(BaseTrainer):
         self.num_iterations = args.num_iterations  # = 𝜇 in the GRPO paper
         self.epsilon_low = args.epsilon
         self.epsilon_high = args.epsilon_high if args.epsilon_high is not None else args.epsilon
+        self.cispo_clip_max = args.cispo_clip_max
+        if self.loss_type == "cispo" and self.cispo_clip_max <= 0:
+            raise ValueError("`cispo_clip_max` must be a positive float when using the CISPO loss.")
         # Tracks the number of iterations (forward + backward passes), including those within a grad accum cycle
         self._step = 0
         # Buffer the batch to reuse generated outputs across multiple updates. For more details, see
@@ -445,6 +448,8 @@ class GRPOTrainer(BaseTrainer):
 
         # Liger loss
         if self.use_liger_loss:
+            if self.loss_type == "cispo":
+                raise NotImplementedError("Liger kernels do not currently support the CISPO loss.")
             if not is_liger_kernel_available():
                 raise ImportError(
                     "Liger is required to use `liger_loss` as the GRPO loss. Run `pip install liger-kernel`."
@@ -1705,19 +1710,28 @@ class GRPOTrainer(BaseTrainer):
                 f"Unknown importance sampling level: {self.importance_sampling_level}. Possible values are 'token' "
                 "and 'sequence'."
             )
-        # From here, log_importance_weights (and all subsequent tensors, coef_1, coef_2, etc.) shape depends on
-        # importance_sampling_level: "token" level: (B, T); "sequence" level: (B, 1)
-
+        # From here, log_importance_weights (and all subsequent tensors) shape depends on the importance sampling
+        # level: "token" level -> (B, T); "sequence" level -> (B, 1)
         coef_1 = torch.exp(log_importance_weights)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
+        cispo_truncated_weights = None
+        cispo_clipped_mask = None
 
-        # Two-sided clipping
-        if self.args.delta is not None:
-            coef_1 = torch.clamp(coef_1, max=self.args.delta)
+        if self.loss_type == "cispo":
+            cispo_cap = torch.full_like(coef_1, self.cispo_clip_max)
+            cispo_truncated_weights = torch.minimum(coef_1, cispo_cap)
+            cispo_clipped_mask = coef_1 > cispo_cap
+            cispo_weights = cispo_truncated_weights.detach()
+            per_token_loss = -cispo_weights * advantages.unsqueeze(1) * per_token_logps
+        else:
+            coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
 
-        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
-        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
-        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+            # Two-sided clipping
+            if self.args.delta is not None:
+                coef_1 = torch.clamp(coef_1, max=self.args.delta)
+
+            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+            per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+            per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if entropy_mask is not None:
             per_token_loss = per_token_loss * entropy_mask
 
@@ -1737,6 +1751,9 @@ class GRPOTrainer(BaseTrainer):
             loss = (per_token_loss * completion_mask).sum() / (per_token_loss.size(0) * self.max_completion_length)
             loss = loss / self.current_gradient_accumulation_steps
         elif self.loss_type == "dapo":
+            normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
+            loss = (per_token_loss * completion_mask).sum() / normalizer
+        elif self.loss_type == "cispo":
             normalizer = inputs["num_items_in_batch"] / self.accelerator.num_processes
             loss = (per_token_loss * completion_mask).sum() / normalizer
         else:
@@ -1759,6 +1776,41 @@ class GRPOTrainer(BaseTrainer):
 
         mean_entropy = masked_batch_mean(entropies)
         self._metrics[mode]["entropy"].append(self.accelerator.gather(mean_entropy).nanmean().item())
+
+        if self.loss_type == "cispo":
+            truncated_mean = masked_batch_mean(cispo_truncated_weights)
+            ratio_mean = masked_batch_mean(coef_1)
+            clip_fraction = masked_batch_mean(cispo_clipped_mask.float())
+
+            gathered_truncated_mean = self.accelerator.gather(truncated_mean)
+            gathered_ratio_mean = self.accelerator.gather(ratio_mean)
+            gathered_clip_fraction = self.accelerator.gather(clip_fraction)
+
+            self._metrics[mode]["cispo/importance_ratio/truncated_mean"].append(
+                gathered_truncated_mean.nanmean().item()
+            )
+            self._metrics[mode]["cispo/importance_ratio/mean"].append(gathered_ratio_mean.nanmean().item())
+            self._metrics[mode]["cispo/clip_fraction"].append(gathered_clip_fraction.nanmean().item())
+
+            if cispo_truncated_weights.shape[1] == 1:
+                flat_original = coef_1.squeeze(1)
+                flat_truncated = cispo_truncated_weights.squeeze(1)
+            else:
+                mask = completion_mask.bool()
+                flat_original = coef_1.masked_select(mask)
+                flat_truncated = cispo_truncated_weights.masked_select(mask)
+
+            max_ratio = flat_original.max() if flat_original.numel() > 0 else torch.tensor(0.0, device=coef_1.device)
+            max_truncated = (
+                flat_truncated.max() if flat_truncated.numel() > 0 else torch.tensor(0.0, device=coef_1.device)
+            )
+            self._metrics[mode]["cispo/importance_ratio/max"].append(
+                nanmax(self.accelerator.gather(max_ratio)).item()
+            )
+            self._metrics[mode]["cispo/importance_ratio/max_truncated"].append(
+                nanmax(self.accelerator.gather(max_truncated)).item()
+            )
+            return loss
 
         # Compute the clipped probability ratios
         is_low_clipped = (coef_1 < 1 - self.epsilon_low) & (advantages.unsqueeze(1) < 0)

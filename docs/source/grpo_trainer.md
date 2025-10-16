@@ -144,6 +144,16 @@ $$
 
 This constant is recommended to be the maximum completion length. To use this formulation, set `loss_type="dr_grpo"` in the [`GRPOConfig`].
 
+### CISPO: Truncated importance-sampling REINFORCE
+
+The ScaleRL paper[^scalerl] introduces CISPO, a variant of truncated importance-sampling REINFORCE that keeps the prompt-level normalization from DAPO while replacing the PPO-style min operator with a stop-gradient truncation of the importance ratios:
+
+$$
+\mathcal{L}_{\text{CISPO}}(\theta) = - \frac{1}{T_G} \sum_{i=1}^{G} \sum_{t=1}^{|o_i|} \operatorname{sg}\!\left(\min(\rho_{i,t}, \epsilon_{\max})\right) \, \hat{A}_i \log \pi_\theta(o_{i,t} \mid q, o_{i, < t}) \,,
+$$
+
+where \( \rho_{i,t} = \tfrac{\pi_\theta(o_{i,t} \mid q, o_{i,<t})}{\pi_{\theta_{\text{old}}}(o_{i,t} \mid q, o_{i,<t})} \), \(T_G = \sum_i |o_i|\), and `sg` denotes the stop-gradient operator. Setting `loss_type="cispo"` in [`GRPOConfig`] enables this objective. The truncation threshold can be controlled through `cispo_clip_max` (default `5.0`), which corresponds to \( \epsilon_{\max} \) in the equation above.
+
 ## Logged metrics
 
 While training and evaluating, we record the following reward metrics:
@@ -174,6 +184,11 @@ While training and evaluating, we record the following reward metrics:
 - `clip_ratio/low_min`: The minimum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the lower bound of the trust region:  \\(r_{i,t}(\theta) < 1 - \epsilon_\mathrm{low}\\)
 - `clip_ratio/high_mean`: The average ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\)
 - `clip_ratio/high_max`: The maximum ratio of token (or sequence, if `importance_sampling_level="sequence"`) probabilities that were clipped on the upper bound of the trust region:  \\(r_{i,t}(\theta) > 1 + \epsilon_\mathrm{high}\\).
+- `cispo/importance_ratio/mean`: (Only when `loss_type="cispo"`.) Average importance ratio \( \rho_{i,t} \) before truncation.
+- `cispo/importance_ratio/truncated_mean`: (Only when `loss_type="cispo"`.) Average truncated ratio \( \min(\rho_{i,t}, \epsilon_{\max}) \).
+- `cispo/importance_ratio/max`: (Only when `loss_type="cispo"`.) Maximum observed importance ratio \( \rho_{i,t} \) in the batch.
+- `cispo/importance_ratio/max_truncated`: (Only when `loss_type="cispo"`.) Maximum truncated ratio after applying \( \epsilon_{\max} \).
+- `cispo/clip_fraction`: (Only when `loss_type="cispo"`.) Fraction of tokens whose importance ratio exceeded \( \epsilon_{\max} \).
 
 ## Customization
 
@@ -184,6 +199,8 @@ Generation is often the main bottleneck when training with online methods. To ac
 ```shell
 pip install trl[vllm]
 ```
+
+[^scalerl]: Yao et al., *ScaleRL: Scaling RL Compute Effectively and Predictably*, 2025.
 
 We support two ways of using vLLM during training: **server mode** and **colocate mode**.
 
