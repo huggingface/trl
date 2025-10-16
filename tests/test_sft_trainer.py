@@ -22,7 +22,6 @@ from datasets import load_dataset
 from packaging.version import parse as parse_version
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from transformers.testing_utils import require_flash_attn
 from transformers.utils import is_peft_available
 
 from trl import SFTConfig, SFTTrainer
@@ -32,6 +31,7 @@ from .testing_utils import (
     TrlTestCase,
     ignore_warnings,
     require_bitsandbytes,
+    require_flash_attn,
     require_liger_kernel,
     require_peft,
     require_vision,
