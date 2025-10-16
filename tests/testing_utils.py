@@ -50,6 +50,7 @@ require_torch_accelerator = pytest.mark.skipif(
 )
 require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requires vision")
 require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
+require_wandb = pytest.mark.skipif(not is_wandb_available(), reason="test requires wandb")
 require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test requires no wandb")
 require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
