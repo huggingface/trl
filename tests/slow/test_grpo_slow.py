@@ -118,6 +118,7 @@ class TestGRPOTrainerSlow(TrlTestCase):
             max_completion_length=self.max_length,
             report_to="none",
             logging_strategy="no",
+            loss_type="bnpo",  # liger-kernel does not support "dapo" default; see https://github.com/linkedin/Liger-Kernel/issues/620
         )
 
         model = AutoModelForCausalLM.from_pretrained(model_name)
@@ -328,11 +329,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
             assert lora_params_changed, "No LoRA parameters were updated during training."
 
         except torch.OutOfMemoryError as e:
-            self.skipTest(f"Skipping VLM training test due to insufficient GPU memory: {e}")
+            pytest.skip(f"Skipping VLM training test due to insufficient GPU memory: {e}")
         except Exception as e:
             # Check for other memory-related errors
             if any(keyword in str(e).lower() for keyword in ["memory", "cuda", "out of memory", "insufficient"]):
-                self.skipTest(f"Skipping VLM training test due to hardware constraints: {e}")
+                pytest.skip(f"Skipping VLM training test due to hardware constraints: {e}")
             else:
                 raise
 
@@ -473,11 +474,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
                             "decrease gpu memory",
                         ]
                     ):
-                        self.skipTest(f"Skipping vLLM colocate test due to hardware constraints: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to hardware constraints: {e}")
                     elif "KeyError" in str(e) and "RANK" in str(e):
-                        self.skipTest(f"Skipping vLLM colocate test due to environment setup issues: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to environment setup issues: {e}")
                     elif "ValueError" in str(e) and "memory" in str(e).lower():
-                        self.skipTest(f"Skipping vLLM colocate test due to memory constraints: {e}")
+                        pytest.skip(f"Skipping vLLM colocate test due to memory constraints: {e}")
                     else:
                         raise
         finally:
@@ -540,11 +541,11 @@ class TestGRPOTrainerSlow(TrlTestCase):
                     "decrease gpu memory",
                 ]
             ):
-                self.skipTest(f"Skipping vLLM training test due to hardware constraints: {e}")
+                pytest.skip(f"Skipping vLLM training test due to hardware constraints: {e}")
             elif "KeyError" in str(e) and "RANK" in str(e):
-                self.skipTest(f"Skipping vLLM training test due to environment setup issues: {e}")
+                pytest.skip(f"Skipping vLLM training test due to environment setup issues: {e}")
             elif "ValueError" in str(e) and "memory" in str(e).lower():
-                self.skipTest(f"Skipping vLLM training test due to memory constraints: {e}")
+                pytest.skip(f"Skipping vLLM training test due to memory constraints: {e}")
             else:
                 raise
 

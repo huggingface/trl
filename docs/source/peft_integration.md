@@ -3,14 +3,6 @@
 The notebooks and scripts in these examples show how to use Low Rank Adaptation (LoRA) to fine-tune models in a memory efficient manner. Most of PEFT methods supported in peft library but note that some PEFT methods such as Prompt tuning are not supported.
 For more information on LoRA, see the [original paper](https://huggingface.co/papers/2106.09685).
 
-Here's an overview of the `peft`-enabled notebooks and scripts in the [trl repository](https://github.com/huggingface/trl/tree/main/examples):
-
-| File | Task | Description | Colab link |
-| ---| ---| --- |
-| [`stack_llama/rl_training.py`](https://github.com/huggingface/trl/blob/main/examples/research_projects/stack_llama/scripts/rl_training.py) | RLHF | Distributed fine-tuning of the 7b parameter LLaMA models with a learned reward model and `peft`. | |
-| [`stack_llama/reward_modeling.py`](https://github.com/huggingface/trl/blob/main/examples/research_projects/stack_llama/scripts/reward_modeling.py) | Reward Modeling | Distributed training of the 7b parameter LLaMA reward model with `peft`. | |
-| [`stack_llama/supervised_finetuning.py`](https://github.com/huggingface/trl/blob/main/examples/research_projects/stack_llama/scripts/supervised_finetuning.py) | SFT | Distributed instruction/supervised fine-tuning of the 7b parameter LLaMA model with `peft`. | |
-
 ## Installation
 
 Note: peft is in active development, so we install directly from their Github page.
@@ -28,7 +20,7 @@ Note: if you don't want to log with `wandb` remove `log_with="wandb"` in the scr
 
 ## How to use it?
 
-Simply declare a `PeftConfig` object in your script and pass it through `.from_pretrained` to load the TRL+PEFT model.
+Simply declare a [`~peft.PeftConfig`] object in your script and pass it through `.from_pretrained` to load the TRL+PEFT model.
 
 ```python
 from peft import LoraConfig

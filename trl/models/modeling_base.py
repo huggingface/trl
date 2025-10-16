@@ -57,14 +57,17 @@ LAYER_PATTERNS = [
 
 
 class PreTrainedModelWrapper(nn.Module):
-    r"""
-    A wrapper class around a (`transformers.PreTrainedModel`) to be compatible with the (`~transformers.PreTrained`)
-    class in order to keep some attributes and methods of the (`~transformers.PreTrainedModel`) class.
+    """
+    Wrapper for a [`~transformers.PreTrainedModel`] implemented as a standard PyTorch [`torch.nn.Module`].
+
+    This class provides a compatibility layer that preserves the key attributes and methods of the original
+    [`~transformers.PreTrainedModel`], while exposing a uniform interface consistent with PyTorch modules. It enables
+    seamless integration of pretrained Transformer models into custom training, evaluation, or inference workflows.
 
     Attributes:
-        pretrained_model (`transformers.PreTrainedModel`):
+        pretrained_model ([`~transformers.PreTrainedModel`]):
             The model to be wrapped.
-        parent_class (`transformers.PreTrainedModel`):
+        parent_class ([`~transformers.PreTrainedModel`]):
             The parent class of the model to be wrapped.
         supported_args (`list`):
             The list of arguments that are supported by the wrapper class.
@@ -111,19 +114,20 @@ class PreTrainedModelWrapper(nn.Module):
     def from_pretrained(cls, pretrained_model_name_or_path, *model_args, **kwargs):
         r"""
         Instantiates a new model from a pretrained model from `transformers`. The pretrained model is loaded using the
-        `from_pretrained` method of the `transformers.PreTrainedModel` class. The arguments that are specific to the
-        `transformers.PreTrainedModel` class are passed along this method and filtered out from the `kwargs` argument.
+        `from_pretrained` method of the [`~transformers.PreTrainedModel`] class. The arguments that are specific to the
+        [`~transformers.PreTrainedModel`] class are passed along this method and filtered out from the `kwargs`
+        argument.
 
         Args:
-            pretrained_model_name_or_path (`str` or `transformers.PreTrainedModel`):
+            pretrained_model_name_or_path (`str` or [`~transformers.PreTrainedModel`]):
                 The path to the pretrained model or its name.
-            *model_args (`list`, *optional*)):
+            *model_args (`list`, *optional*):
                 Additional positional arguments passed along to the underlying model's `from_pretrained` method.
             **kwargs (`dict`, *optional*):
                 Additional keyword arguments passed along to the underlying model's `from_pretrained` method. We also
-                pre-process the kwargs to extract the arguments that are specific to the `transformers.PreTrainedModel`
-                class and the arguments that are specific to trl models. The kwargs also support
-                `prepare_model_for_kbit_training` arguments from `peft` library.
+                pre-process the kwargs to extract the arguments that are specific to the
+                [`~transformers.PreTrainedModel`] class and the arguments that are specific to trl models. The kwargs
+                also support `prepare_model_for_kbit_training` arguments from `peft` library.
         """
         if kwargs is not None:
             peft_config = kwargs.pop("peft_config", None)
@@ -149,8 +153,13 @@ class PreTrainedModelWrapper(nn.Module):
 
         current_device = cls._get_current_device()
         if isinstance(pretrained_model_name_or_path, str):
-            is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
-            is_loaded_in_4bit = pretrained_kwargs["load_in_4bit"] if "load_in_4bit" in pretrained_kwargs else False
+            quantization_config = pretrained_kwargs.get("quantization_config", None)
+            if quantization_config is not None:
+                is_loaded_in_8bit = getattr(quantization_config, "load_in_8bit", False)
+                is_loaded_in_4bit = getattr(quantization_config, "load_in_4bit", False)
+            else:
+                is_loaded_in_8bit = pretrained_kwargs["load_in_8bit"] if "load_in_8bit" in pretrained_kwargs else False
+                is_loaded_in_4bit = pretrained_kwargs["load_in_4bit"] if "load_in_4bit" in pretrained_kwargs else False
         else:
             is_loaded_in_8bit = getattr(pretrained_model_name_or_path, "is_loaded_in_8bit", False)
             is_loaded_in_4bit = getattr(pretrained_model_name_or_path, "is_loaded_in_4bit", False)
@@ -507,8 +516,8 @@ class PreTrainedModelWrapper(nn.Module):
     def push_to_hub(self, *args, **kwargs):
         r"""
         Push the pretrained model to the hub. This method is a wrapper around
-        `transformers.PreTrainedModel.push_to_hub`. Please refer to the documentation of
-        `transformers.PreTrainedModel.push_to_hub` for more information.
+        [`~transformers.PreTrainedModel.push_to_hub`]. Please refer to the documentation of
+        [`~transformers.PreTrainedModel.push_to_hub`] for more information.
 
         Args:
             *args (`list`, *optional*):
@@ -521,8 +530,8 @@ class PreTrainedModelWrapper(nn.Module):
     def save_pretrained(self, *args, **kwargs):
         r"""
         Save the pretrained model to a directory. This method is a wrapper around
-        `transformers.PreTrainedModel.save_pretrained`. Please refer to the documentation of
-        `transformers.PreTrainedModel.save_pretrained` for more information.
+        [`~transformers.PreTrainedModel.save_pretrained`]. Please refer to the documentation of
+        [`~transformers.PreTrainedModel.save_pretrained`] for more information.
 
         Args:
             *args (`list`, *optional*):
@@ -596,14 +605,14 @@ def create_reference_model(
     Creates a static reference copy of a model. Note that model will be in `.eval()` mode.
 
     Args:
-        model (`PreTrainedModelWrapper`): The model to be copied.
+        model ([`PreTrainedModelWrapper`]): The model to be copied.
         num_shared_layers (`int`, *optional*):
             The number of initial layers that are shared between both models and kept frozen.
         pattern (`str`, *optional*): The shared layers are selected with a string pattern
             (e.g. "transformer.h.{layer}" for GPT2) and if a custom pattern is necessary it can be passed here.
 
     Returns:
-        `PreTrainedModelWrapper`
+        [`PreTrainedModelWrapper`]
     """
     if is_deepspeed_zero3_enabled():
         raise ValueError(
@@ -665,13 +674,13 @@ def create_reference_model(
 
 
 class GeometricMixtureWrapper(GenerationMixin):
-    r"""
+    """
     Geometric Mixture generation wrapper that samples from the logits of two model's geometric mixture.
 
     Args:
-        model (`PreTrainedModel`): The model to be wrapped.
-        ref_model (`PreTrainedModel`): The reference model.
-        generation_config (`GenerationConfig`): The generation config.
+        model ([`~transformers.PreTrainedModel`]): The model to be wrapped.
+        ref_model ([`~transformers.PreTrainedModel`]): The reference model.
+        generation_config ([`~transformers.GenerationConfig`]): The generation config.
         mixture_coef (`float`, *optional* - default: 0.5): The mixture coefficient.
     """
 
