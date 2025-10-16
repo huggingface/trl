@@ -45,6 +45,9 @@ require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires
 require_sklearn = pytest.mark.skipif(
     not (is_sklearn_available() and is_joblib_available()), reason="test requires sklearn"
 )
+require_torch_accelerator = pytest.mark.skipif(
+    torch_device is None or torch_device == "cpu", reason="test requires accelerator"
+)
 require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requires vision")
 require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
 require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test requires no wandb")
