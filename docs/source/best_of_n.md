@@ -1,5 +1,8 @@
 # Best of N sampling: Alternative ways to get better model output without RL based fine-tuning
 
+> [!WARNING]
+> Best-of-N sampling is deprecated and will be removed in TRL 0.25.0.
+
 Within the extras module is the `best-of-n` sampler class that serves as an alternative method of generating better model output.
 As to how it fares against the RL based fine-tuning, please look in the `examples` directory for a comparison example
 
