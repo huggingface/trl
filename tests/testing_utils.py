@@ -23,7 +23,13 @@ import pytest
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
 from transformers.testing_utils import torch_device
-from transformers.utils import is_peft_available, is_rich_available, is_vision_available
+from transformers.utils import (
+    is_flash_attn_2_available,
+    is_kernels_available,
+    is_peft_available,
+    is_rich_available,
+    is_vision_available,
+)
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
 from trl.import_utils import (
@@ -73,6 +79,20 @@ require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
     not is_bitsandbytes_multi_backend_available() and not torch_device == "cuda",
     reason="test requires bitsandbytes multi-backend enabled or 'cuda' torch device",
 )
+
+
+# Function ported from transformers.testing_utils
+def require_flash_attn():
+    flash_attn_available = is_flash_attn_2_available()
+    kernels_available = is_kernels_available()
+    try:
+        from kernels import get_kernel
+
+        get_kernel("kernels-community/flash-attn")
+    except Exception:
+        kernels_available = False
+
+    return pytest.mark.skipif(not (kernels_available or flash_attn_available), reason="test requires Flash Attention")
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
