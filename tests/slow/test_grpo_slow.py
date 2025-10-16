@@ -34,7 +34,6 @@ from transformers import (
 from transformers.testing_utils import (
     backend_empty_cache,
     require_flash_attn,
-    require_liger_kernel,
     torch_device,
 )
 from transformers.utils import is_peft_available
@@ -42,7 +41,14 @@ from transformers.utils import is_peft_available
 from trl import GRPOConfig, GRPOTrainer
 from trl.trainer.utils import get_kbit_device_map
 
-from ..testing_utils import TrlTestCase, require_bitsandbytes, require_peft, require_torch_accelerator, require_vllm
+from ..testing_utils import (
+    TrlTestCase,
+    require_bitsandbytes,
+    require_liger_kernel,
+    require_peft,
+    require_torch_accelerator,
+    require_vllm,
+)
 from .testing_constants import MODELS_TO_TEST
 
 
