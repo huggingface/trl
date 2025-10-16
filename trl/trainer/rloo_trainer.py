@@ -625,7 +625,7 @@ class RLOOTrainer(BaseTrainer):
                     enable_sleep_mode=self.args.vllm_enable_sleep_mode,
                 )
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
+                    self.llm.sleep(level=2)
             else:
                 raise ValueError(f"vllm_mode must be either 'server' or 'colocate', got '{self.vllm_mode}'.")
 
@@ -1094,7 +1094,7 @@ class RLOOTrainer(BaseTrainer):
             if self.vllm_mode == "colocate" and self.args.vllm_enable_sleep_mode:
                 # wake up colocated vLLM instances if needed
                 torch.cuda.empty_cache()  # required to avoid OOM in some cases
-                self.llm.wake_up()
+                self.llm.wake_up(tags=["weights"])
 
             # First, update the vLLM weights if needed
             if self.state.global_step != self._last_loaded_step:
@@ -1200,6 +1200,10 @@ class RLOOTrainer(BaseTrainer):
                 else:
                     vllm_inputs = all_prompts_text
 
+                if self.args.vllm_enable_sleep_mode:
+                    self.llm.wake_up(tags=["kv_cache"])
+
+
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
@@ -1218,7 +1222,7 @@ class RLOOTrainer(BaseTrainer):
                     completion_ids = all_completion_ids
 
                 if self.args.vllm_enable_sleep_mode:
-                    self.llm.sleep(level=1)
+                    self.llm.sleep(level=2)
 
         elif self.use_transformers_paged:
             # Re-process inputs for paged generation if needed
