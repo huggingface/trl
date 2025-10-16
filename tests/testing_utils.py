@@ -22,12 +22,13 @@ import psutil
 import pytest
 import torch
 from transformers import is_bitsandbytes_available, is_comet_available, is_sklearn_available, is_wandb_available
-from transformers.testing_utils import torch_device
+from transformers.testing_utils import backend_device_count, torch_device
 from transformers.utils import (
     is_flash_attn_2_available,
     is_kernels_available,
     is_peft_available,
     is_rich_available,
+    is_torch_available,
     is_vision_available,
 )
 
@@ -55,6 +56,9 @@ require_sklearn = pytest.mark.skipif(
 )
 require_torch_accelerator = pytest.mark.skipif(
     torch_device is None or torch_device == "cpu", reason="test requires accelerator"
+)
+require_torch_multi_accelerator = pytest.mark.skipif(
+    not is_torch_available() or backend_device_count(torch_device) <= 1, reason="test requires multiple accelerators"
 )
 require_vision = pytest.mark.skipif(not is_vision_available(), reason="test requires vision")
 require_vllm = pytest.mark.skipif(not is_vllm_available(), reason="test requires vllm")
