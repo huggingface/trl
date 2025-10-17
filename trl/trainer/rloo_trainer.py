@@ -1203,7 +1203,6 @@ class RLOOTrainer(BaseTrainer):
                 if self.args.vllm_enable_sleep_mode:
                     self.llm.wake_up(tags=["kv_cache"])
 
-
                 with profiling_context(self, "vLLM.generate"):
                     all_outputs = self.llm.generate(vllm_inputs, sampling_params=sampling_params, use_tqdm=False)
 
