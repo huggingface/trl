@@ -213,30 +213,30 @@ class OffloadActivations(saved_tensors_hooks):
             storage_key = _get_unique_tensor_key(activation)
             if storage_key in self.storage_to_tensor_id:
                 # Storage already offloaded - don't offload again, just track the reference
-                self.tracker[tensor_id] = (activation, False, None, None)  # Keep on GPU, don't offload
+                self.tracker[tensor_id] = (activation, False, None, None, None)  # Keep on GPU, don't offload
                 return tensor_id
 
             # Check if tensor is on CPU (skip offloading)
             if activation.device.type not in ["cuda", "xpu", "npu"]:
-                self.tracker[tensor_id] = (activation, False, None, None)
+                self.tracker[tensor_id] = (activation, False, None, None, None)
                 return tensor_id
 
             # Check if tensor is too small
             if num_bytes < self.min_tensor_size_bytes:
-                self.tracker[tensor_id] = (activation, False, None, None)
+                self.tracker[tensor_id] = (activation, False, None, None, None)
                 return tensor_id
 
             # Check if tensor is a parameter or buffer
             if isinstance(activation, torch.nn.Parameter) or (
                 hasattr(torch.nn, "Buffer") and isinstance(activation, torch.nn.Buffer)
             ):
-                self.tracker[tensor_id] = (activation, False, None, None)
+                self.tracker[tensor_id] = (activation, False, None, None, None)
                 return tensor_id
 
             # Check if tensor is an FP8 tensor (TorchAO) - skip offloading as they're already compressed
             tensor_class_name = type(activation).__name__
             if tensor_class_name in ["Float8TrainingTensor", "ScaledMMConfig", "LinearMMConfig"]:
-                self.tracker[tensor_id] = (activation, False, None, None)
+                self.tracker[tensor_id] = (activation, False, None, None, None)
                 return tensor_id
 
             # Check if tensor storage is a model parameter (for FSDP compatibility)
@@ -247,7 +247,7 @@ class OffloadActivations(saved_tensors_hooks):
                     check_tensor = activation._local_tensor
 
                 if check_tensor.untyped_storage().data_ptr() in self.param_storages:
-                    self.tracker[tensor_id] = (activation, False, None, None)
+                    self.tracker[tensor_id] = (activation, False, None, None, None)
                     return tensor_id
             except (RuntimeError, AttributeError):
                 # If we can't get data_ptr, skip this check
@@ -276,19 +276,43 @@ class OffloadActivations(saved_tensors_hooks):
             else:
                 stream_ctx = torch.cuda.stream(stream)
             with stream_ctx:
-                # Save original stride information to restore during unpack
+                # Save original stride and shape information
                 original_stride = activation.stride()
                 original_storage_offset = activation.storage_offset()
+                original_shape = activation.size()
 
-                cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
-                cpu_tensor.copy_(activation, non_blocking=True)
+                # Check if tensor has broadcast dimensions (stride == 0)
+                # If so, copy the underlying storage directly instead of materializing the broadcast
+                has_broadcast = 0 in original_stride
 
-                # Store CPU tensor along with original stride information
+                if has_broadcast:
+                    # Copy only the actual underlying storage, not the materialized broadcast
+                    # Create CPU tensor with same storage size as original
+                    storage_size = activation.untyped_storage().size()
+                    cpu_storage = torch.empty(
+                        storage_size // activation.element_size(),
+                        dtype=activation.dtype,
+                        pin_memory=self.use_pin_memory,
+                        device="cpu",
+                    )
+                    # Copy the raw storage
+                    cpu_storage_view = torch.as_strided(
+                        activation, size=(storage_size // activation.element_size(),), stride=(1,), storage_offset=0
+                    )
+                    cpu_storage.copy_(cpu_storage_view, non_blocking=True)
+                    cpu_tensor = cpu_storage
+                else:
+                    # No broadcast - use normal contiguous copy
+                    cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
+                    cpu_tensor.copy_(activation, non_blocking=True)
+
+                # Store CPU tensor along with stride information
                 self.tracker[tensor_id] = (
                     cpu_tensor,
                     True,  # True = (in future) modified
                     original_stride,  # Save original GPU stride
                     original_storage_offset,  # Save original storage offset
+                    original_shape,  # Save original shape for broadcast restoration
                 )
 
             if self.use_streams:
@@ -316,17 +340,22 @@ class OffloadActivations(saved_tensors_hooks):
             if unpack_tensor_id not in self.tracker:
                 raise ValueError(f"Untracked tensor with id {unpack_tensor_id}")
 
-            maybe_accelerator_tensor, modified, original_stride, original_storage_offset = self.tracker[
-                unpack_tensor_id
-            ]
+            (
+                maybe_accelerator_tensor,
+                modified,
+                original_stride,
+                original_storage_offset,
+                original_shape,
+            ) = self.tracker[unpack_tensor_id]
 
             if modified:
+                # Restore tensor to GPU
                 accelerator_tensor = maybe_accelerator_tensor.to(self.accelerator_type, non_blocking=True)
-                # Restore original stride if we saved it (only for offloaded tensors)
+                # Restore original stride if we saved it (handles both broadcast and non-broadcast cases)
                 if original_stride is not None:
                     accelerator_tensor = torch.as_strided(
                         accelerator_tensor,
-                        size=accelerator_tensor.size(),
+                        size=original_shape,
                         stride=original_stride,
                         storage_offset=original_storage_offset,
                     )
@@ -365,9 +394,13 @@ class OffloadActivations(saved_tensors_hooks):
             if unpack_tensor_id not in self.tracker:
                 raise ValueError(f"untracked tensor with id {unpack_tensor_id}")
 
-            maybe_accelerator_tensor, modified, original_stride, original_storage_offset = self.tracker[
-                unpack_tensor_id
-            ]
+            (
+                maybe_accelerator_tensor,
+                modified,
+                original_stride,
+                original_storage_offset,
+                original_shape,
+            ) = self.tracker[unpack_tensor_id]
 
             if modified:
                 # Get data on the current autograd node
@@ -393,12 +426,13 @@ class OffloadActivations(saved_tensors_hooks):
                     else:
                         stream_ctx = torch.cuda.stream(self.s1)
                     with stream_ctx:
+                        # Restore tensor to GPU
                         accelerator_tensor = maybe_accelerator_tensor.to(self.accelerator_type, non_blocking=True)
-                        # Restore original stride if we saved it
+                        # Restore original stride if we saved it (handles both broadcast and non-broadcast cases)
                         if original_stride is not None:
                             accelerator_tensor = torch.as_strided(
                                 accelerator_tensor,
-                                size=accelerator_tensor.size(),
+                                size=original_shape,
                                 stride=original_stride,
                                 storage_offset=original_storage_offset,
                             )
