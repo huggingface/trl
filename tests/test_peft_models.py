@@ -16,12 +16,11 @@ import os
 
 import torch
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_torch_gpu_if_bnb_not_multi_backend_enabled
 from transformers.utils import is_peft_available
 
 from trl import AutoModelForCausalLMWithValueHead
 
-from .testing_utils import TrlTestCase, require_peft
+from .testing_utils import TrlTestCase, require_peft, require_torch_gpu_if_bnb_not_multi_backend_enabled
 
 
 if is_peft_available():
@@ -102,9 +101,12 @@ class TestPeftModel(TrlTestCase):
         Simply creates a peft model and checks that it can be loaded.
         """
         from bitsandbytes.nn import Linear8bitLt
+        from transformers import BitsAndBytesConfig
 
         trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(
-            self.causal_lm_model_id, peft_config=self.lora_config, load_in_8bit=True
+            self.causal_lm_model_id,
+            peft_config=self.lora_config,
+            quantization_config=BitsAndBytesConfig(load_in_8bit=True),
         )
         # Check that the number of trainable parameters is correct
         nb_trainable_params = sum(p.numel() for p in trl_model.parameters() if p.requires_grad)
@@ -112,7 +114,7 @@ class TestPeftModel(TrlTestCase):
         assert isinstance(trl_model.pretrained_model.model.model.layers[0].mlp.gate_proj, Linear8bitLt)
 
         causal_lm_model = AutoModelForCausalLM.from_pretrained(
-            self.causal_lm_model_id, load_in_8bit=True, device_map="auto"
+            self.causal_lm_model_id, quantization_config=BitsAndBytesConfig(load_in_8bit=True), device_map="auto"
         )
         trl_model = AutoModelForCausalLMWithValueHead.from_pretrained(causal_lm_model, peft_config=self.lora_config)
         # Check that the number of trainable parameters is correct

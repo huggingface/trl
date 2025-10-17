@@ -206,7 +206,13 @@ def apply_chat_template(
 
     # Apply the chat template to the whole conversation
     if "messages" in example:
-        messages = tokenizer.apply_chat_template(example["messages"], tools=tools, tokenize=False, **template_kwargs)
+        messages = tokenizer.apply_chat_template(
+            example["messages"],
+            tools=tools,
+            tokenize=False,
+            **example.get("chat_template_kwargs", {}),
+            **template_kwargs,
+        )
 
     # Apply the chat template to the prompt, adding the generation prompt
     if "prompt" in example:
@@ -225,6 +231,7 @@ def apply_chat_template(
             continue_final_message=continue_final_message,
             tokenize=False,
             add_generation_prompt=add_generation_prompt,
+            **example.get("chat_template_kwargs", {}),
             **template_kwargs,
         )
 
@@ -232,7 +239,11 @@ def apply_chat_template(
     if "prompt" in example:  # explicit prompt and prompt-completion case
         if "chosen" in example:
             prompt_chosen = tokenizer.apply_chat_template(
-                example["prompt"] + example["chosen"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["chosen"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # DeepSeek-R1 inserts a <tool_call> token when using `add_generation_prompt`, which can cause discrepancies
             # between the prompt alone and the combined prompt+completion. To ensure consistency, we extract the
@@ -242,24 +253,42 @@ def apply_chat_template(
             chosen = prompt_chosen[len(prompt) :]
         if "rejected" in example and "prompt" in example:  # explicit prompt
             prompt_rejected = tokenizer.apply_chat_template(
-                example["prompt"] + example["rejected"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["rejected"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_rejected)))
             rejected = prompt_rejected[len(prompt) :]
         if "completion" in example:
             prompt_completion = tokenizer.apply_chat_template(
-                example["prompt"] + example["completion"], tools=tools, tokenize=False, **template_kwargs
+                example["prompt"] + example["completion"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
             # Handle DeepSeek-R1 <tool_call> token, see the above comment for details
             prompt = "".join(x for x, _ in takewhile(lambda x: x[0] == x[1], zip(prompt, prompt_completion)))
             completion = prompt_completion[len(prompt) :]
     else:  # implicit prompt case
         if "chosen" in example:
-            chosen = tokenizer.apply_chat_template(example["chosen"], tools=tools, tokenize=False, **template_kwargs)
+            chosen = tokenizer.apply_chat_template(
+                example["chosen"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
+            )
         if "rejected" in example:
             rejected = tokenizer.apply_chat_template(
-                example["rejected"], tools=tools, tokenize=False, **template_kwargs
+                example["rejected"],
+                tools=tools,
+                tokenize=False,
+                **example.get("chat_template_kwargs", {}),
+                **template_kwargs,
             )
 
     # Extract the completion by removing the prompt part from the prompt-completion string
@@ -302,8 +331,10 @@ def maybe_apply_chat_template(
                 - Unpaired preference dataset: `"prompt"`, `"completion"`, and `"label"`.
 
             For keys `"messages"`, `"prompt"`, `"chosen"`, `"rejected"`, and `"completion"`, the values are lists of
-            messages, where each message is a dictionary with keys `"role"` and `"content"`.
-        tokenizer (`PreTrainedTokenizerBase`):
+            messages, where each message is a dictionary with keys `"role"` and `"content"`. Additionally, the example
+            may contain a `"chat_template_kwargs"` key, which is a dictionary of additional keyword arguments to pass
+            to the chat template renderer.
+        tokenizer ([`~transformers.PreTrainedTokenizerBase`]):
             Tokenizer to apply the chat template with.
         tools (`list[Union[dict, Callable]]`, *optional*):
             A list of tools (callable functions) that will be accessible to the model. If the template does not support
@@ -360,7 +391,7 @@ def unpair_preference_dataset(
     Unpair a preference dataset.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
         num_proc (`int`, *optional*):
@@ -369,7 +400,7 @@ def unpair_preference_dataset(
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
-        `Dataset`: The unpaired preference dataset.
+        [`~datasets.Dataset`]: The unpaired preference dataset.
 
     Example:
 
@@ -403,7 +434,7 @@ def maybe_unpair_preference_dataset(
     Unpair a preference dataset if it is paired.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Preference dataset to unpair. The dataset must have columns `"chosen"`, `"rejected"` and optionally
             `"prompt"`.
         num_proc (`int`, *optional*):
@@ -412,7 +443,8 @@ def maybe_unpair_preference_dataset(
             Meaningful description to be displayed alongside with the progress bar while mapping examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The unpaired preference dataset if it was paired, otherwise the original dataset.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The unpaired preference dataset if it was paired, otherwise
+        the original dataset.
 
     Example:
 
@@ -505,7 +537,7 @@ def maybe_extract_prompt(example: dict[str, list]) -> dict[str, list]:
      'rejected': [{'role': 'assistant', 'content': 'It is green.'}]}
     ```
 
-    Or, with the `map` method of `datasets.Dataset`:
+    Or, with the `map` method of [`~datasets.Dataset`]:
 
     ```python
     >>> from trl import extract_prompt
@@ -696,7 +728,7 @@ def pack_dataset(
     Pack sequences in a dataset into chunks of size `seq_length`.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Dataset to pack
         seq_length (`int`):
             Target sequence length to pack to.
@@ -711,8 +743,8 @@ def pack_dataset(
             Additional keyword arguments to pass to the dataset's map method when packing examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The dataset with packed sequences. The number of examples may decrease as sequences
-        are combined.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with packed sequences. The number of examples
+        may decrease as sequences are combined.
 
     Example:
     ```python
@@ -752,7 +784,7 @@ def truncate_dataset(
     Truncate sequences in a dataset to a specified `max_length`.
 
     Args:
-        dataset (`Dataset` or `DatasetDict`):
+        dataset ([`~datasets.Dataset`] or [`~datasets.DatasetDict`]):
             Dataset to truncate.
         max_length (`int`):
             Maximum sequence length to truncate to.
@@ -760,7 +792,7 @@ def truncate_dataset(
             Additional keyword arguments to pass to the dataset's map method when truncating examples.
 
     Returns:
-        `Dataset` or `DatasetDict`: The dataset with truncated sequences.
+        [`~datasets.Dataset`] or [`~datasets.DatasetDict`]: The dataset with truncated sequences.
 
     Example:
     ```python

@@ -16,6 +16,7 @@ import functools
 import random
 import signal
 import warnings
+from collections.abc import Callable
 
 import psutil
 import pytest
@@ -25,12 +26,19 @@ from transformers.testing_utils import torch_device
 from transformers.utils import is_peft_available, is_rich_available, is_vision_available
 
 from trl import BaseBinaryJudge, BasePairwiseJudge
-from trl.import_utils import is_joblib_available, is_llm_blender_available, is_mergekit_available, is_vllm_available
+from trl.import_utils import (
+    is_joblib_available,
+    is_llm_blender_available,
+    is_math_verify_available,
+    is_mergekit_available,
+    is_vllm_available,
+)
 
 
 require_bitsandbytes = pytest.mark.skipif(not is_bitsandbytes_available(), reason="test requires bitsandbytes")
 require_comet = pytest.mark.skipif(not is_comet_available(), reason="test requires comet_ml")
 require_llm_blender = pytest.mark.skipif(not is_llm_blender_available(), reason="test requires llm-blender")
+require_math_latex = pytest.mark.skipif(not is_math_verify_available(), reason="test requires math_verify")
 require_mergekit = pytest.mark.skipif(not is_mergekit_available(), reason="test requires mergekit")
 require_peft = pytest.mark.skipif(not is_peft_available(), reason="test requires peft")
 require_rich = pytest.mark.skipif(not is_rich_available(), reason="test requires rich")
@@ -43,6 +51,21 @@ require_no_wandb = pytest.mark.skipif(is_wandb_available(), reason="test require
 require_3_accelerators = pytest.mark.skipif(
     not (getattr(torch, torch_device, torch.cuda).device_count() >= 3),
     reason=f"test requires at least 3 {torch_device}s",
+)
+
+
+def is_bitsandbytes_multi_backend_available() -> bool:
+    if is_bitsandbytes_available():
+        import bitsandbytes as bnb
+
+        return "multi_backend" in getattr(bnb, "features", set())
+    return False
+
+
+# Function ported from transformers.testing_utils before transformers#41283
+require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
+    not is_bitsandbytes_multi_backend_available() and not torch_device == "cuda",
+    reason="test requires bitsandbytes multi-backend enabled or 'cuda' torch device",
 )
 
 
@@ -73,7 +96,7 @@ class TrlTestCase:
         self.tmp_dir = str(tmp_path)
 
 
-def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> callable:
+def ignore_warnings(message: str = None, category: type[Warning] = Warning) -> Callable:
     """
     Decorator to ignore warnings with a specific message and/or category.
 

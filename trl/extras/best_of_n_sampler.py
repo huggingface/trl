@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import warnings
 from typing import Any, Callable, Optional, Union
 
 import torch
@@ -42,7 +43,15 @@ class BestOfNSampler:
         generation_config ([`~transformers.GenerationConfig`], *optional*):
             Generation config passed to the underlying model's `generate` method. See
             [`~transformers.GenerationConfig`] for more details.
+
+    <Deprecated version="0.24.0">
+
+    `BestOfNSampler` is deprecated and will be removed in version 0.25.
+
+    </Deprecated>
     """
+
+    warnings.warn("`BestOfNSampler` is deprecated and will be removed in TRL 0.25.", FutureWarning, stacklevel=2)
 
     def __init__(
         self,
