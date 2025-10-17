@@ -68,7 +68,7 @@ jobs:
       CUDA_VISIBLE_DEVICES: "0,1"
       TEST_TYPE: "multi_gpu"
     container:
-      image: pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
+      image: pytorch/pytorch:2.8.0-cuda12.8-cudnn9-devel
       options: --gpus all --shm-size "16gb"
     defaults:
       run:
@@ -102,19 +102,10 @@ jobs:
           source .venv/bin/activate
           make slow_tests
 
-      - name: Run end-to-end examples tests on multi GPU
-        if: always()
-        run: |
-          source .venv/bin/activate
-          uv pip install deepspeed
-          make test_examples
-
       - name: Generate Reports
         if: always()
         run: |
           source .venv/bin/activate
           uv pip install slack_sdk tabulate
           python scripts/log_reports.py >> $GITHUB_STEP_SUMMARY
-          python scripts/log_example_reports.py --text_file_name temp_results_sft_tests.txt >> $GITHUB_STEP_SUMMARY
-          python scripts/log_example_reports.py --text_file_name temp_results_dpo_tests.txt >> $GITHUB_STEP_SUMMARY
           rm *.txt

@@ -1,6 +1,6 @@
 # XPO Trainer
 
-[![](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
+[![model badge](https://img.shields.io/badge/All_models-XPO-blue)](https://huggingface.co/models?other=xpo,trl)
 
 ## Overview
 
@@ -57,7 +57,7 @@ To see how the [trained model](https://huggingface.co/trl-lib/Qwen2-0.5B-XPO) pe
 What is the best programming language?
 
 <strong><span style="color: blue;">&lt;trl-lib/Qwen2-0.5B-XPO&gt;:</span></strong>
-The best programming language depends on individual preferences and familiarity with coding concepts. Some popular languages include Python, Java, C++, and JavaScript. 
+The best programming language depends on individual preferences and familiarity with coding concepts. Some popular languages include Python, Java, C++, and JavaScript.
 </code></pre>
 
 ## Expected dataset type
@@ -84,11 +84,8 @@ Instead of a judge, you can chose to use a reward model -- see [Reward Bench](ht
   )
 ```
 
-<Tip warning={true}>
-
-Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
-
-</Tip>
+> [!WARNING]
+> Make sure that the SFT model and reward model use the _same_ chat template and the same tokenizer. Otherwise, you may find the model completions are scored incorrectly during training.
 
 ### Encourage EOS token generation
 
@@ -150,7 +147,6 @@ While training and evaluating we record the following reward metrics:
 * `val/ref_contain_eos_token`: The amount of times the reference's output contains the eos token.
 * `alpha`: The weight of the XPO loss term. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
 * `beta`: The parameter that controls the weight of the loss term representing the deviation from the reference model. Typically fixed, but can be made dynamic by passing a list to [`XPOConfig`].
-
 
 ## XPOTrainer
 

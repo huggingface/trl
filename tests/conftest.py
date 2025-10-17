@@ -12,17 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from huggingface_hub import whoami
+import gc
+
+import pytest
+import torch
 
 
-model_name = "unsloth/Llama-3.2-3B"
-tokenizer_name = "unsloth/Llama-3.2-3B"
-dataset_name = "WillHeld/top_v2"
+@pytest.fixture(autouse=True)
+def cleanup_gpu():
+    """
+    Automatically cleanup GPU memory after each test.
 
-output_root_dir = "./checkpoints/"
-hub_model_id = f"{whoami()['name']}/layerskip-{model_name.split('/')[1]}-{dataset_name.split('/')[1]}"
-output_dir = f"{output_root_dir}/{hub_model_id}"
-
-per_device_train_batch_size = 8
-gradient_accumulation_steps = 1
-learning_rate = 2e-5
+    This fixture helps prevent CUDA out of memory errors when running tests in parallel with pytest-xdist by ensuring
+    models and tensors are properly garbage collected and GPU memory caches are cleared between tests.
+    """
+    yield
+    # Cleanup after test
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()

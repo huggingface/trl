@@ -1,8 +1,7 @@
 # Distributing Training
 
-<Tip warning={true}>
-Section under construction. Feel free to contribute!
-</Tip>
+> [!WARNING]
+> Section under construction. Feel free to contribute!
 
 ## Multi-GPU Training with TRL
 
@@ -27,11 +26,12 @@ accelerate launch --config_file examples/accelerate_configs/multi_gpu.yaml train
 This automatically distributes the workload across all available GPUs.
 
 Under the hood, [🤗 Accelerate](https://github.com/huggingface/accelerate) creates one model per GPU. Each process:
+
 - Processes its own batch of data
 - Computes the loss and gradients for that batch
 - Shares gradient updates across all GPUs
 
-![](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/multi_gpu.png)
+![multi gpu](https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/multi_gpu.png)
 
 The effective batch size is calculated as:
 
@@ -49,11 +49,8 @@ Example, these configurations are equivalent, and should yield the same results:
 | 1 | 4 | 8 | Lower memory usage, slower training |
 | 8 | 4 | 1 | Multi-GPU to get the best of both worlds |
 
-<Tip> 
-
-Having one model per GPU can lead to high memory usage, which may not be feasible for large models or low-memory GPUs. In such cases, you can leverage [DeepSpeed](https://github.com/deepspeedai/DeepSpeed), which provides optimizations like model sharding, Zero Redundancy Optimizer, mixed precision training, and offloading to CPU or NVMe. Check out our [DeepSpeed Integration](deepspeed_integration) guide for more details.
-
-</Tip>
+> [!TIP]
+> Having one model per GPU can lead to high memory usage, which may not be feasible for large models or low-memory GPUs. In such cases, you can leverage [DeepSpeed](https://github.com/deepspeedai/DeepSpeed), which provides optimizations like model sharding, Zero Redundancy Optimizer, mixed precision training, and offloading to CPU or NVMe. Check out our [DeepSpeed Integration](deepspeed_integration) guide for more details.
 
 ## Context Parallelism
 
@@ -176,16 +173,12 @@ These results show that **Context Parallelism (CP) scales effectively with more 
   <img src="https://huggingface.co/datasets/trl-lib/documentation-images/resolve/main/context_parallelism_s_it_plot.png" alt="CP seconds/iteration" width="45%"/>
 </div>
 
-<Tip>
+> [!TIP]
+> Accelerate also supports **N-Dimensional Parallelism (ND-parallelism)**, which enables you to combine different parallelization strategies to efficiently distribute model training across multiple GPUs.  
+>
+> You can learn more and explore configuration examples in the [Accelerate ND-parallelism guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism).
 
-Accelerate also supports **N-Dimensional Parallelism (ND-parallelism)**, which enables you to combine different parallelization strategies to efficiently distribute model training across multiple GPUs.  
-
-You can learn more and explore configuration examples in the [Accelerate ND-parallelism guide](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#nd-parallelism).
-
-</Tip>
-
-
-**Further Reading on Context Parallelism**  
+### Further Reading on Context Parallelism
 
 - [Accelerate: Context Parallelism Guide](https://github.com/huggingface/accelerate/blob/main/docs/source/concept_guides/context_parallelism.md)  
 - [Accelerate Example: 128k Sequence Length](https://github.com/huggingface/accelerate/blob/main/examples/torch_native_parallelism/README.md#context-parallelism-128k-sequence-length)  

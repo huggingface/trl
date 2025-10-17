@@ -15,6 +15,7 @@
 import os
 import random
 import textwrap
+import warnings
 from typing import Any, Callable, Optional, Union
 
 import torch
@@ -30,7 +31,6 @@ from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
     ProcessorMixin,
-    is_wandb_available,
 )
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
@@ -40,20 +40,11 @@ from ..models import prepare_deepspeed
 from ..models.utils import unwrap_model_for_generation
 from .gkd_config import GKDConfig
 from .sft_trainer import SFTTrainer
-from .utils import (
-    DataCollatorForChatML,
-    disable_dropout_in_model,
-    empty_cache,
-    generate_model_card,
-    get_comet_experiment_url,
-)
+from .utils import DataCollatorForChatML, disable_dropout_in_model, empty_cache
 
 
 if is_peft_available():
     from peft import PeftConfig
-
-if is_wandb_available():
-    import wandb
 
 if is_liger_kernel_available():
     from liger_kernel.chunked_loss import LigerFusedLinearJSDLoss
@@ -92,7 +83,7 @@ class GKDTrainer(SFTTrainer):
         preprocess_logits_for_metrics (`Callable`, *optional*):
             Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
             return the logits to be used for metrics computation.
-        peft_config ([`~peft.config.PeftConfig`], *optional*):
+        peft_config ([`~peft.PeftConfig`], *optional*):
             PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
             wrapped with the specified PEFT adapter.
         formatting_func (`Callable`, *optional*):
@@ -100,6 +91,21 @@ class GKDTrainer(SFTTrainer):
     """
 
     _tag_names = ["trl", "gkd"]
+    _name = "GKD"
+    _paper = {
+        "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
+        "id": "2306.13649",
+        # docstyle-ignore
+        "citation": textwrap.dedent("""\
+            @inproceedings{agarwal2024on-policy,
+                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
+                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
+                year         = 2024,
+                booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+                publisher    = {OpenReview.net},
+                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+            }"""),
+    }
 
     def __init__(
         self,
@@ -119,6 +125,13 @@ class GKDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
     ):
+        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
+            warnings.warn(
+                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
+                "it and want it to remain, please share your comments here: "
+                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
+                "TRL_EXPERIMENTAL_SILENCE=1."
+            )
         # Ensure Trainer does not drop non-signature columns used by the collator (e.g., "prompts")
         args.remove_unused_columns = False
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
@@ -424,71 +437,3 @@ class GKDTrainer(SFTTrainer):
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
-
-    def create_model_card(
-        self,
-        model_name: Optional[str] = None,
-        dataset_name: Optional[str] = None,
-        tags: Union[str, list[str], None] = None,
-    ):
-        """
-        Creates a draft of a model card using the information available to the `Trainer`.
-
-        Args:
-            model_name (`str`, *optional*):
-                Name of the model.
-            dataset_name (`str`, *optional*):
-                Name of the dataset used for training.
-            tags (`str`, `list[str]`, *optional*):
-                Tags to be associated with the model card.
-        """
-        if not self.is_world_process_zero():
-            return
-
-        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
-            base_model = self.model.config._name_or_path
-        else:
-            base_model = None
-
-        # normalize `tags` to a mutable set
-        if tags is None:
-            tags = set()
-        elif isinstance(tags, str):
-            tags = {tags}
-        else:
-            tags = set(tags)
-
-        if hasattr(self.model.config, "unsloth_version"):
-            tags.add("unsloth")
-
-        if "JOB_ID" in os.environ:
-            tags.add("hf_jobs")
-
-        tags.update(self._tag_names)
-
-        # docstyle-ignore
-        citation = textwrap.dedent("""\
-        @inproceedings{agarwal2024on-policy,
-            title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-            author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-            year         = 2024,
-            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-            publisher    = {OpenReview.net},
-            url          = {https://openreview.net/forum?id=3zKtaqxLhW},
-        }""")
-
-        model_card = generate_model_card(
-            base_model=base_model,
-            model_name=model_name,
-            hub_model_id=self.hub_model_id,
-            dataset_name=dataset_name,
-            tags=list(tags),
-            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
-            comet_url=get_comet_experiment_url(),
-            trainer_name="GKD",
-            trainer_citation=citation,
-            paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
-            paper_id="2306.13649",
-        )
-
-        model_card.save(os.path.join(self.args.output_dir, "README.md"))

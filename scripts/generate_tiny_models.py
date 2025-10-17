@@ -43,6 +43,7 @@ from transformers import (
     GPT2LMHeadModel,
     GPTNeoXConfig,
     GPTNeoXForCausalLM,
+    GPTNeoXForSequenceClassification,
     GptOssConfig,
     GptOssForCausalLM,
     Idefics2Config,
@@ -73,6 +74,7 @@ from transformers import (
     Qwen3ForSequenceClassification,
     Qwen3MoeConfig,
     Qwen3MoeForCausalLM,
+    Qwen3MoeForSequenceClassification,
     SmolVLMForConditionalGeneration,
     T5ForConditionalGeneration,
 )
@@ -153,7 +155,6 @@ def init_weights_tiny_model(model):
 for model_id, config_class, model_class, suffix in [
     ("bigscience/bloomz-560m", BloomConfig, BloomForCausalLM, None),
     ("CohereForAI/aya-expanse-8b", CohereConfig, CohereForCausalLM, None),
-    ("databricks/dbrx-instruct", DbrxConfig, DbrxForCausalLM, None),
     ("deepseek-ai/DeepSeek-R1", DeepseekV3Config, DeepseekV3ForCausalLM, None),
     # It's important to have R1-0528 as it doesn't have the same chat template
     ("deepseek-ai/DeepSeek-R1-0528", DeepseekV3Config, DeepseekV3ForCausalLM, "0528"),
@@ -207,6 +208,17 @@ for model_id, config_class, model_class, suffix in [
     init_weights_tiny_model(model)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
+# Special case for databricks/dbrx-instruct as it requires specific changes in the config
+model_id = "databricks/dbrx-instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+config = DbrxConfig.from_pretrained(model_id, n_layers=2, n_heads=16, d_model=24)
+# transformers mistakenly ignores ffn_config keys when loading from pretrained. We need to set them manually after
+# loading the config
+config.ffn_config.ffn_hidden_size = 24
+config.ffn_config.hidden_size = 24
+model = DbrxForCausalLM(config).to(dtype=torch.bfloat16)
+init_weights_tiny_model(model)
+push_to_hub(model, tokenizer, "tiny")
 
 # Two slightly bigger models, required for vLLM testing
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-32B-Instruct")
@@ -234,22 +246,46 @@ model = Qwen3ForCausalLM(config)
 push_to_hub(model, tokenizer, "small")
 
 # Reward models
-for model_id, config_class, model_class, suffix in [
-    ("meta-llama/Llama-3.2-1B-Instruct", LlamaConfig, LlamaForSequenceClassification, "3.2"),
-    ("Qwen/Qwen2.5-32B-Instruct", Qwen2Config, Qwen2ForSequenceClassification, "2.5"),
-    ("Qwen/Qwen3-4B", Qwen3Config, Qwen3ForSequenceClassification, None),
+for model_id, model_class, suffix in [
+    ("EleutherAI/pythia-14m", GPTNeoXForSequenceClassification, None),
+    ("meta-llama/Llama-3.2-1B-Instruct", LlamaForSequenceClassification, "3.2"),
+    ("Qwen/Qwen2.5-32B-Instruct", Qwen2ForSequenceClassification, "2.5"),
+    ("Qwen/Qwen3-4B", Qwen3ForSequenceClassification, None),
 ]:
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    config = config_class(
-        vocab_size=len(tokenizer.vocab),
-        hidden_size=8,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        num_hidden_layers=2,
-        intermediate_size=32,
-        num_labels=1,
-    )
-    model = model_class(config)
+    kwargs = {
+        "num_labels": 1,
+        "hidden_size": 16,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "num_hidden_layers": 2,
+        "intermediate_size": 32,
+    }
+    config = AutoConfig.from_pretrained(model_id, **kwargs)
+    # Bug in transformers: it ignores num_hidden_layers to build layer_types
+    if model_id in ("Qwen/Qwen2.5-32B-Instruct", "Qwen/Qwen3-4B"):
+        config.layer_types = config.layer_types[:2]
+    model = model_class(config).to(dtype=torch.bfloat16)
+    init_weights_tiny_model(model)
+    push_to_hub(model, tokenizer, "tiny", suffix)
+
+# MoE Reward models
+for model_id, model_class, suffix in [
+    ("Qwen/Qwen3-30B-A3B", Qwen3MoeForSequenceClassification, None),
+]:
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    kwargs = {
+        "num_labels": 1,
+        "hidden_size": 16,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "num_hidden_layers": 2,
+        "intermediate_size": 32,
+        "num_experts": 4,
+        "num_experts_per_tok": 2,
+    }
+    config = AutoConfig.from_pretrained(model_id, **kwargs)
+    model = model_class(config).to(dtype=torch.bfloat16)
     push_to_hub(model, tokenizer, "tiny", suffix)
 
 
@@ -306,12 +342,14 @@ for model_id, model_class in [
 
     if issubclass(model_class.config_class, Qwen2_5_VLConfig):
         vision_config["out_hidden_size"] = 16
+        # Different dict object at the config root; see GH-4101 and transformers#41020
+        kwargs["num_hidden_layers"] = 2
+        kwargs["hidden_size"] = 16
+        kwargs["num_attention_heads"] = 4
 
     if issubclass(model_class.config_class, Idefics2Config):
         kwargs["perceiver_config"] = {"hidden_size": 16}
 
     config = AutoConfig.from_pretrained(model_id, text_config=text_config, vision_config=vision_config, **kwargs)
-
     model = model_class(config).to(dtype=torch.bfloat16)
-
     push_to_hub(model, processor, "tiny")

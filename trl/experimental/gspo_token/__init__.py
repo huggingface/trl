@@ -12,7 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from setuptools import setup
-
-
-setup()
+from .grpo_trainer import GRPOTrainer
