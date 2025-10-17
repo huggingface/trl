@@ -229,6 +229,14 @@ class GRPOConfig(TrainingArguments):
         vllm_importance_sampling_cap (`float`, *optional*, defaults to `2.0`):
             Truncation parameter C for Truncated Importance Sampling (TIS). This sets an upper bound on the importance
             sampling ratio, improving training stability.
+        humanline (`bool`, *optional*, defaults to `False`):
+            Whether to use the HumanLine variant.
+        humanline_log_eps_P (`float`, *optional*, defaults to `-1.5`):
+            Lower bound for HumanLine clipping.
+        humanline_log_eps_R (`float`, *optional*, defaults to `1.5`):
+            Upper bound for HumanLine clipping.
+        humanline_sync_freq (`int`, *optional*, defaults to `1`):
+            Frequency of HumanLine syncing.
 
         > Parameters that control the logging
 
@@ -615,6 +623,30 @@ class GRPOConfig(TrainingArguments):
             "importance sampling ratio, improving training stability."
         },
     )
+    humanline: bool = field(
+        default=False,
+        metadata={
+            "help": ("Whether to use the humanline variant")
+        },
+    )
+    humanline_log_eps_P: float = field(
+        default=-1.5,
+        metadata={
+            "help": ("lower bound for humanline clipping")
+        },
+    )
+    humanline_log_eps_R: float = field(
+        default=1.5,
+        metadata={
+            "help": ("upper bound for humanline clipping")
+        },
+    )
+    humanline_sync_freq: int = field(
+        default=1,
+        metadata={
+            "help": ("how frequently to do humanline syncing")
+        },
+    )
 
     # Parameters that control the logging
     log_completions: bool = field(
@@ -689,3 +721,7 @@ class GRPOConfig(TrainingArguments):
 
         if self.delta is not None and self.use_liger_loss:
             raise ValueError("Liger loss does not support two-sided GRPO loss yet.")
+
+        if self.sync_ref_model and self.humanline:
+            raise ValueError("Cannot activate both sync_ref_model & humanline")
+        

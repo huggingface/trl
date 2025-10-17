@@ -53,7 +53,7 @@ from ..import_utils import is_liger_kernel_available, is_vllm_available
 from ..models import prepare_deepspeed, prepare_fsdp, prepare_peft_model, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection
 from .base_trainer import BaseTrainer
-from .callbacks import SyncRefModelCallback
+from .callbacks import HumanlineSyncRefModelCallback, SyncRefModelCallback
 from .grpo_config import GRPOConfig
 from .utils import (
     RepeatSampler,
@@ -597,6 +597,9 @@ class GRPOTrainer(BaseTrainer):
         if args.sync_ref_model:
             self.add_callback(SyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
 
+        if self.args.humanline:
+            self.add_callback(HumanlineSyncRefModelCallback(ref_model=self.ref_model, accelerator=self.accelerator))
+        
         for i, reward_func in enumerate(self.reward_funcs):
             if isinstance(reward_func, PreTrainedModel):
                 if self.is_deepspeed_enabled:
@@ -1695,7 +1698,15 @@ class GRPOTrainer(BaseTrainer):
         old_per_token_logps = inputs.get("old_per_token_logps")
         old_per_token_logps = per_token_logps.detach() if old_per_token_logps is None else old_per_token_logps
 
-        log_ratio = per_token_logps - old_per_token_logps
+        if self.args.humanline:
+            log_ratio = per_token_logps - ref_per_token_logps
+        else:
+            log_ratio = per_token_logps - old_per_token_logps
+
+        # humanline clipping
+        if self.args.humanline:
+            log_ratio = log_ratio.clamp(self.args.humanline_log_eps_P, self.args.humanline_log_eps_R)
+
         if self.importance_sampling_level == "token":
             log_importance_weights = log_ratio
         elif self.importance_sampling_level == "sequence":

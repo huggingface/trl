@@ -85,6 +85,15 @@ class KTOConfig(TrainingArguments):
         base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
             Name of the attribute in the model that contains the base model. This is used to get the base model from
             the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
+        humanline (`bool`, *optional*, defaults to `False`):
+            Whether to use the HumanLine variant.
+        humanline_log_eps_P (`float`, *optional*, defaults to `-1.5`):
+            Lower bound for HumanLine clipping.
+        humanline_log_eps_R (`float`, *optional*, defaults to `1.5`):
+            Upper bound for HumanLine clipping.
+        humanline_sync_freq (`int`, *optional*, defaults to `1`):
+            Frequency of HumanLine syncing.
+
     """
 
     _VALID_DICT_FIELDS = TrainingArguments._VALID_DICT_FIELDS + ["model_init_kwargs", "ref_model_init_kwargs"]
@@ -232,6 +241,30 @@ class KTOConfig(TrainingArguments):
             "help": "Name of the attribute in the model that contains the base model. This is used to get the base "
             "model from the model when the model does not have a `get_decoder` method in the case when "
             "`use_liger_loss` is `True`."
+        },
+    )
+    humanline: bool = field(
+        default=False,
+        metadata={
+            "help": ("Whether to use the humanline variant")
+        },
+    )
+    humanline_log_eps_P: float = field(
+        default=-1.5,
+        metadata={
+            "help": ("lower bound for humanline clipping")
+        },
+    )
+    humanline_log_eps_R: float = field(
+        default=1.5,
+        metadata={
+            "help": ("upper bound for humanline clipping")
+        },
+    )
+    humanline_sync_freq: int = field(
+        default=1,
+        metadata={
+            "help": ("how frequently to do humanline syncing")
         },
     )
 
