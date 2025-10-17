@@ -213,30 +213,30 @@ class OffloadActivations(saved_tensors_hooks):
             storage_key = _get_unique_tensor_key(activation)
             if storage_key in self.storage_to_tensor_id:
                 # Storage already offloaded - don't offload again, just track the reference
-                self.tracker[tensor_id] = (activation, False)  # Keep on GPU, don't offload
+                self.tracker[tensor_id] = (activation, False, None, None)  # Keep on GPU, don't offload
                 return tensor_id
 
             # Check if tensor is on CPU (skip offloading)
             if activation.device.type not in ["cuda", "xpu", "npu"]:
-                self.tracker[tensor_id] = (activation, False)
+                self.tracker[tensor_id] = (activation, False, None, None)
                 return tensor_id
 
             # Check if tensor is too small
             if num_bytes < self.min_tensor_size_bytes:
-                self.tracker[tensor_id] = (activation, False)
+                self.tracker[tensor_id] = (activation, False, None, None)
                 return tensor_id
 
             # Check if tensor is a parameter or buffer
             if isinstance(activation, torch.nn.Parameter) or (
                 hasattr(torch.nn, "Buffer") and isinstance(activation, torch.nn.Buffer)
             ):
-                self.tracker[tensor_id] = (activation, False)
+                self.tracker[tensor_id] = (activation, False, None, None)
                 return tensor_id
 
             # Check if tensor is an FP8 tensor (TorchAO) - skip offloading as they're already compressed
             tensor_class_name = type(activation).__name__
             if tensor_class_name in ["Float8TrainingTensor", "ScaledMMConfig", "LinearMMConfig"]:
-                self.tracker[tensor_id] = (activation, False)
+                self.tracker[tensor_id] = (activation, False, None, None)
                 return tensor_id
 
             # Check if tensor storage is a model parameter (for FSDP compatibility)
@@ -247,7 +247,7 @@ class OffloadActivations(saved_tensors_hooks):
                     check_tensor = activation._local_tensor
 
                 if check_tensor.untyped_storage().data_ptr() in self.param_storages:
-                    self.tracker[tensor_id] = (activation, False)
+                    self.tracker[tensor_id] = (activation, False, None, None)
                     return tensor_id
             except (RuntimeError, AttributeError):
                 # If we can't get data_ptr, skip this check
@@ -276,11 +276,19 @@ class OffloadActivations(saved_tensors_hooks):
             else:
                 stream_ctx = torch.cuda.stream(stream)
             with stream_ctx:
+                # Save original stride information to restore during unpack
+                original_stride = activation.stride()
+                original_storage_offset = activation.storage_offset()
+
                 cpu_tensor = torch.empty_like(activation, pin_memory=self.use_pin_memory, device="cpu")
                 cpu_tensor.copy_(activation, non_blocking=True)
+
+                # Store CPU tensor along with original stride information
                 self.tracker[tensor_id] = (
                     cpu_tensor,
                     True,  # True = (in future) modified
+                    original_stride,  # Save original GPU stride
+                    original_storage_offset,  # Save original storage offset
                 )
 
             if self.use_streams:
@@ -308,9 +316,20 @@ class OffloadActivations(saved_tensors_hooks):
             if unpack_tensor_id not in self.tracker:
                 raise ValueError(f"Untracked tensor with id {unpack_tensor_id}")
 
-            maybe_accelerator_tensor, modified = self.tracker[unpack_tensor_id]
+            maybe_accelerator_tensor, modified, original_stride, original_storage_offset = self.tracker[
+                unpack_tensor_id
+            ]
+
             if modified:
                 accelerator_tensor = maybe_accelerator_tensor.to(self.accelerator_type, non_blocking=True)
+                # Restore original stride if we saved it (only for offloaded tensors)
+                if original_stride is not None:
+                    accelerator_tensor = torch.as_strided(
+                        accelerator_tensor,
+                        size=accelerator_tensor.size(),
+                        stride=original_stride,
+                        storage_offset=original_storage_offset,
+                    )
                 maybe_accelerator_tensor = accelerator_tensor
 
             # clear tensor from tracking
@@ -346,7 +365,10 @@ class OffloadActivations(saved_tensors_hooks):
             if unpack_tensor_id not in self.tracker:
                 raise ValueError(f"untracked tensor with id {unpack_tensor_id}")
 
-            maybe_accelerator_tensor, modified = self.tracker[unpack_tensor_id]
+            maybe_accelerator_tensor, modified, original_stride, original_storage_offset = self.tracker[
+                unpack_tensor_id
+            ]
+
             if modified:
                 # Get data on the current autograd node
                 graph_id = torch._C._current_graph_task_id()
@@ -372,6 +394,14 @@ class OffloadActivations(saved_tensors_hooks):
                         stream_ctx = torch.cuda.stream(self.s1)
                     with stream_ctx:
                         accelerator_tensor = maybe_accelerator_tensor.to(self.accelerator_type, non_blocking=True)
+                        # Restore original stride if we saved it
+                        if original_stride is not None:
+                            accelerator_tensor = torch.as_strided(
+                                accelerator_tensor,
+                                size=accelerator_tensor.size(),
+                                stride=original_stride,
+                                storage_offset=original_storage_offset,
+                            )
                         maybe_accelerator_tensor = accelerator_tensor
 
                     # Tell comp stream to wait for the info to be loaded before executing
@@ -420,7 +450,9 @@ class OffloadActivations(saved_tensors_hooks):
                         if unpack_tensor_id in self.bwd_tensor_stash:
                             unpacked_tensor = self.bwd_tensor_stash[unpack_tensor_id]
                             if self.accelerator_type == "npu":
-                                storage_count = torch_npu._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
+                                storage_count = torch_npu._C._storage_Use_Count(
+                                    unpacked_tensor.untyped_storage()._cdata
+                                )
                             else:
                                 storage_count = torch._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
                             if storage_count > storage_refcount:
