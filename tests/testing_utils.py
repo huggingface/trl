@@ -85,8 +85,7 @@ require_torch_gpu_if_bnb_not_multi_backend_enabled = pytest.mark.skipif(
 )
 
 
-# Function ported from transformers.testing_utils
-def require_flash_attn():
+def is_flash_attn_available():
     flash_attn_available = is_flash_attn_2_available()
     kernels_available = is_kernels_available()
     try:
@@ -96,7 +95,11 @@ def require_flash_attn():
     except Exception:
         kernels_available = False
 
-    return pytest.mark.skipif(not (kernels_available or flash_attn_available), reason="test requires Flash Attention")
+    return kernels_available or flash_attn_available
+
+
+# Function ported from transformers.testing_utils
+require_flash_attn = pytest.mark.skipif(not is_flash_attn_available(), reason="test requires Flash Attention")
 
 
 class RandomBinaryJudge(BaseBinaryJudge):
