@@ -168,7 +168,7 @@ trl dpo --model_name_or_path Qwen/Qwen2.5-0.5B-Instruct \
     --output_dir Qwen2.5-0.5B-DPO 
 ```
 
-Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/main/en/clis) or use `--help` for more details.
+Read more about CLI in the [relevant documentation section](https://huggingface.co/docs/trl/clis) or use `--help` for more details.
 
 ## Development
 
@@ -190,7 +190,7 @@ Example:
 from trl.experimental.new_trainer import NewTrainer
 ```
 
-Read more in the [Experimental docs](https://huggingface.co/docs/trl/main/en/experimental).
+Read more in the [Experimental docs](https://huggingface.co/docs/trl/experimental).
 
 ## Citation
 
