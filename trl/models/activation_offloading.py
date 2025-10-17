@@ -328,8 +328,9 @@ class OffloadActivations(saved_tensors_hooks):
 
                 def wait_and_del_remaining_references() -> None:
                     for id in list(self.bwd_tensor_stash.keys()):
-                        event = self.bwd_ev_stash[id]
-                        self.s1.wait_event(event)
+                        if id in self.bwd_ev_stash:
+                            event = self.bwd_ev_stash[id]
+                            self.s1.wait_event(event)
                         del self.bwd_tensor_stash[id]
 
                 # Register a callback to the end of autograd to clean everything up
@@ -415,17 +416,19 @@ class OffloadActivations(saved_tensors_hooks):
                         # compute stream (s0 here). Note that the con here is we introduce
                         # non-deterministic (thus higher) memory usage, but this case
                         # should not happen often.
-                        unpacked_tensor = self.bwd_tensor_stash[unpack_tensor_id]
-                        if self.accelerator_type == "npu":
-                            storage_count = torch_npu._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
-                        else:
-                            storage_count = torch._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
-                        if storage_count > storage_refcount:
-                            unpacked_tensor.record_stream(self.s0)
-                            del self.bwd_tensor_stash[unpack_tensor_id]
-                        else:
-                            event = self.s0.record_event()
-                            self.bwd_ev_stash[unpack_tensor_id] = event
+                        # Check if tensor still exists (might have been cleaned up by a previous node)
+                        if unpack_tensor_id in self.bwd_tensor_stash:
+                            unpacked_tensor = self.bwd_tensor_stash[unpack_tensor_id]
+                            if self.accelerator_type == "npu":
+                                storage_count = torch_npu._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
+                            else:
+                                storage_count = torch._C._storage_Use_Count(unpacked_tensor.untyped_storage()._cdata)
+                            if storage_count > storage_refcount:
+                                unpacked_tensor.record_stream(self.s0)
+                                del self.bwd_tensor_stash[unpack_tensor_id]
+                            else:
+                                event = self.s0.record_event()
+                                self.bwd_ev_stash[unpack_tensor_id] = event
 
                     # if there are still things in the fwd_stash, get rid of them as we're in bwd now
                     for id in list(self.fwd_stash.keys()):
@@ -435,9 +438,13 @@ class OffloadActivations(saved_tensors_hooks):
 
                     # wait on prev node's events and del those
                     for id in prev_node_ids:
-                        event = self.bwd_ev_stash[id]
-                        self.s1.wait_event(event)
-                        del self.bwd_tensor_stash[id]
+                        # Only wait on events that exist (some tensors may have used record_stream instead)
+                        if id in self.bwd_ev_stash:
+                            event = self.bwd_ev_stash[id]
+                            self.s1.wait_event(event)
+                            del self.bwd_ev_stash[id]
+                        if id in self.bwd_tensor_stash:
+                            del self.bwd_tensor_stash[id]
 
                     return outputs
 
