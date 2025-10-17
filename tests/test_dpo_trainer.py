@@ -642,6 +642,7 @@ class TestDPOTrainer(TrlTestCase):
     def test_dpo_lora_bf16_autocast_llama(self):
         # Note this test only works on compute capability > 7 GPU devices
         from peft import LoraConfig
+        from transformers import BitsAndBytesConfig
 
         model_id = "trl-internal-testing/tiny-Qwen2ForCausalLM-2.5"
         tokenizer = AutoTokenizer.from_pretrained(model_id)
@@ -655,7 +656,9 @@ class TestDPOTrainer(TrlTestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(model_id, load_in_4bit=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+        )
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -725,6 +728,7 @@ class TestDPOTrainer(TrlTestCase):
     )
     def test_dpo_lora_bf16_autocast(self, loss_type, pre_compute, gen_during_eval):
         from peft import LoraConfig
+        from transformers import BitsAndBytesConfig
 
         lora_config = LoraConfig(
             r=16,
@@ -735,7 +739,9 @@ class TestDPOTrainer(TrlTestCase):
         )
 
         # lora model
-        model = AutoModelForCausalLM.from_pretrained(self.model_id, load_in_4bit=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            self.model_id, quantization_config=BitsAndBytesConfig(load_in_4bit=True)
+        )
 
         training_args = DPOConfig(
             output_dir=self.tmp_dir,
@@ -1416,6 +1422,7 @@ class TestDPOVisionTrainer(TrlTestCase):
             # ("trl-internal-testing/tiny-PaliGemmaForConditionalGeneration",),
             ("trl-internal-testing/tiny-LlavaForConditionalGeneration",),
             ("trl-internal-testing/tiny-LlavaNextForConditionalGeneration",),
+            ("trl-internal-testing/tiny-Gemma3ForConditionalGeneration",),
         ]
     )
     def test_vdpo_trainer(self, model_id):
