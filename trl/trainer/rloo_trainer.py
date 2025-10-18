@@ -50,7 +50,6 @@ from transformers.utils import is_datasets_available, is_peft_available, is_rich
 from ..data_utils import (
     apply_chat_template,
     is_conversational,
-    maybe_apply_chat_template,
     prepare_multimodal_messages,
     prepare_multimodal_messages_vllm,
 )
@@ -1073,7 +1072,6 @@ class RLOOTrainer(BaseTrainer):
 
     def _generate_single_turn(self, prompts: list):
         device = self.accelerator.device
-
 
         # Generate completions using either vLLM or regular generation
         if self.use_vllm:
