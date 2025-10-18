@@ -30,6 +30,7 @@ DatasetType = TypeVar("DatasetType", Dataset, DatasetDict)
 
 
 def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) -> list[dict[str, Any]]:
+    # docstyle-ignore  # because <Image> is not parsable in the code block
     """
     Convert messages into a structured multimodal format and inject the provided images into the message contents.
 
@@ -63,7 +64,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
 
     # Output, one image provided
     [
-        {"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What's in this image?"}]},
+        {"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]},
         {"role": "assistant", "content": [{"type": "text", "text": "It looks like a cat."}]},
     ]
     ```
@@ -109,6 +110,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
 
 
 def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # docstyle-ignore  # because <Image> is not parsable in the code block
     """
     Convert structured multimodal messages into a format compatible with vLLM. Replaces `"type": "image"` blocks with
     `"type": "image_pil"` blocks, and `"image": Image` with `"image_pil": Image`.
@@ -124,10 +126,10 @@ def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dic
     Example:
     ```python
     # Input
-    [{"role": "user", "content": [{"type": "image", "image": <Image>}, {"type": "text", "text": "What's in this image?"}]}]
+    [{"role": "user", "content": [{"type": "image", "image": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
 
     # Output
-    [{"role": "user", "content": [{"type": "image_pil", "image_pil": <Image>}, {"type": "text", "text": "What's in this image?"}]}]
+    [{"role": "user", "content": [{"type": "image_pil", "image_pil": <PIL.Image.Image>}, {"type": "text", "text": "What's in this image?"}]}]
     ```
     """
     messages = copy.deepcopy(messages)  # avoid modifying the original messages
