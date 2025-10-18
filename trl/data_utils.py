@@ -134,10 +134,11 @@ def prepare_multimodal_messages_vllm(messages: list[dict[str, Any]]) -> list[dic
     """
     messages = copy.deepcopy(messages)  # avoid modifying the original messages
     for message in messages:
-        for part in message["content"]:
-            if part["type"] == "image":
-                part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
-                part["image_pil"] = part.pop("image")
+        if not isinstance(message["content"], list):
+            for part in message["content"]:
+                if part["type"] == "image":
+                    part["type"] = "image_pil"  # vLLM expects 'image_pil' key for images
+                    part["image_pil"] = part.pop("image")
     return messages
 
 
