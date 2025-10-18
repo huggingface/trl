@@ -142,4 +142,4 @@ checklink/cookies.txt
 # wandb files
 nbs/wandb/
 examples/notebooks/wandb/
-wandb/
+wandb/test_mtp.py

@@ -66,6 +66,8 @@ _import_structure = {
     "rloo_trainer": ["RLOOTrainer"],
     "sft_config": ["SFTConfig"],
     "sft_trainer": ["SFTTrainer"],
+    "data_collator": ["DataCollatorForLanguageModeling"],
+    "mtp_data_collator": ["DataCollatorForMTPLanguageModeling"],
     "utils": [
         "RunningMoments",
         "compute_accuracy",
@@ -126,6 +128,8 @@ if TYPE_CHECKING:
     from .rloo_trainer import RLOOTrainer
     from .sft_config import SFTConfig
     from .sft_trainer import SFTTrainer
+    from .data_collator import DataCollatorForLanguageModeling
+    from .mtp_data_collator import DataCollatorForMTPLanguageModeling
     from .utils import (
         RunningMoments,
         compute_accuracy,
