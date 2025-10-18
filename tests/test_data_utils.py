@@ -183,16 +183,16 @@ class TestPrepareMultimodalMessages:
 
         expected = [
             {
-                "role": "system",
-                "content": [{"type": "text", "text": "You are a helpful assistant"}],
-            },
-            {
                 "role": "user",
                 "content": [{"type": "image", "image": image}, {"type": "text", "text": "What color is the sky?"}],
             },
             {
                 "role": "assistant",
                 "content": [{"type": "text", "text": "It is blue."}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "What about the grass?"}],
             },
         ]
 

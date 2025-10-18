@@ -80,7 +80,7 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
                 message["content"] = [{"type": "text", "text": message["content"]}]
         elif message["role"] == "user":
             if isinstance(message["content"], str) and not images_included:
-                image_entries = [{"type": "image"}] * len(images)
+                image_entries = [{"type": "image"} for _ in range(len(images))]
                 message["content"] = [*image_entries, {"type": "text", "text": message["content"]}]
                 images_included = True
             elif isinstance(message["content"], str) and images_included:
