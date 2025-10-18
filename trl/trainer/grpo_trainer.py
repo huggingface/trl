@@ -1236,7 +1236,6 @@ class GRPOTrainer(BaseTrainer):
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
             prompt_ids = generate_inputs["inputs"]
-            # Restore the original attention implementation, training mode
             logprobs = None  # not used in this case
 
         else:
