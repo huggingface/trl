@@ -44,7 +44,7 @@ from transformers import (
     is_wandb_available,
 )
 from transformers.trainer_utils import seed_worker
-from transformers.utils import is_datasets_available, is_flash_attn_2_available, is_peft_available, is_rich_available
+from transformers.utils import is_datasets_available, is_peft_available, is_rich_available
 
 from ..data_utils import (
     apply_chat_template,
@@ -1154,7 +1154,6 @@ class GRPOTrainer(BaseTrainer):
                     "min_p": 0.0 if self.min_p is None else self.min_p,
                     "max_tokens": self.max_completion_length,
                     "truncate_prompt_tokens": self.max_prompt_length,
-                    "truncate_prompt_tokens": self.max_prompt_length,
                     "guided_decoding": guided_decoding,
                     "logprobs": 0,  # only return the logprob of the generated token
                 }
@@ -1203,15 +1202,20 @@ class GRPOTrainer(BaseTrainer):
                     self.llm.sleep(level=1)
 
         elif self.use_transformers_paged:
-            # Re-process inputs for paged generation if needed
-            # Note: images are already validated and preprocessed above
-            paged_prompt_inputs = self.processing_class(text=prompts_text, **kwargs)
-            previous_attn = self.model_wrapped.config._attn_implementation
-
-            if is_flash_attn_2_available():
-                self.model_wrapped.config._attn_implementation = "paged_attention"
+            processor_kwargs = {
+                "max_length": self.max_prompt_length,
+                "truncation": True,
+                "return_dict": True,
+                "add_special_tokens": False,
+            }
+            if is_conversational({"prompt": prompts[0]}):
+                generate_inputs = self.processing_class.apply_chat_template(
+                    conversation=prompts, **processor_kwargs, tokenize=True
+                )
             else:
-                self.model_wrapped.config._attn_implementation = "sdpa_paged"
+                generate_inputs = self.processing_class(text=prompts, **processor_kwargs)
+            generate_inputs["inputs"] = generate_inputs.pop("input_ids")
+
             with (
                 profiling_context(self, "transformers.generate_batch"),
                 unwrap_model_for_generation(
@@ -1227,13 +1231,12 @@ class GRPOTrainer(BaseTrainer):
                     unwrapped_model.to(torch.float16)
                 with torch.inference_mode():
                     all_outputs = unwrapped_model.generate_batch(
-                        paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
+                        **generate_inputs, generation_config=self.generation_config, progress_bar=False
                     )
                     unwrapped_model.train()  # restore training mode, as generate_batch forces eval mode
             completion_ids = [output.generated_tokens for output in all_outputs.values()]
-            prompt_ids = paged_prompt_inputs.input_ids
+            prompt_ids = generate_inputs["inputs"]
             # Restore the original attention implementation, training mode
-            self.model_wrapped.config._attn_implementation = previous_attn
             logprobs = None  # not used in this case
 
         else:
@@ -1265,10 +1268,8 @@ class GRPOTrainer(BaseTrainer):
             ):
                 prompt_completion_ids = unwrapped_model.generate(
                     **generate_inputs, generation_config=self.generation_config, disable_compile=True
-                    **generate_inputs, generation_config=self.generation_config, disable_compile=True
                 )
             # Compute prompt length and extract completion ids
-            prompt_ids, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
             prompt_ids, prompt_mask = generate_inputs["input_ids"], generate_inputs["attention_mask"]
             prompt_length = prompt_ids.size(1)
             completion_ids = prompt_completion_ids[:, prompt_length:]
@@ -1283,7 +1284,6 @@ class GRPOTrainer(BaseTrainer):
             completion_ids = [c[m].tolist() for c, m in zip(completion_ids, completion_mask.bool())]
             logprobs = None  # not used in this case
 
-        return prompt_ids, completion_ids, logprobs
         return prompt_ids, completion_ids, logprobs
 
     def _generate(self, prompts: list[str]):
@@ -1322,7 +1322,6 @@ class GRPOTrainer(BaseTrainer):
         self._metrics[mode]["completions/min_terminated_length"].append(term_completion_lengths.float().min().item())
         self._metrics[mode]["completions/max_terminated_length"].append(term_completion_lengths.float().max().item())
 
-        return prompt_ids, completion_ids, total_completion_tokens, logprobs
         return prompt_ids, completion_ids, total_completion_tokens, logprobs
 
     def _generate_and_score_completions(
@@ -1377,23 +1376,6 @@ class GRPOTrainer(BaseTrainer):
         # Concatenate prompt_mask with completion_mask for logit computation
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)  # (B, P+C)
         attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)  # (B, P+C)
-
-        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
-        batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size
-
-        num_images = [len(img_list) for img_list in images] if images is not None else None
-
-        # Get forward_kwargs for models with multimodal inputs
-        if images is not None:
-            prompts_text = [
-                apply_chat_template({"prompt": prompt}, self.processing_class)["prompt"] for prompt in prompts
-            ]
-            prompt_inputs = self.processing_class(images=images, text=prompts_text, padding=True, return_tensors="pt")
-            prompt_inputs = super()._prepare_inputs(prompt_inputs)
-            forward_kwargs = {k: v for k, v in prompt_inputs.items() if k not in ["input_ids", "attention_mask"]}
-        else:
-            forward_kwargs = {}
-
 
         logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
         batch_size = self.args.per_device_train_batch_size if mode == "train" else self.args.per_device_eval_batch_size

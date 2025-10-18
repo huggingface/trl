@@ -150,7 +150,7 @@ class TestPrepareMultimodalMessages:
 
         image = Image.new("RGB", (32, 32), color="red")
         messages = prepare_multimodal_messages(messages, images=[image])
-        
+
         expected = [
             {
                 "role": "system",

@@ -35,9 +35,9 @@ def prepare_multimodal_messages(messages: list[dict[str, Any]], images: list) ->
 
     Args:
         messages (`list[dict[str, Any]]`):
-            Messages with `"role"` and `"content"`. Content may be a raw string before transformation.
-            List of messages a `"role"` key (`"system"`, `"user"`, or `"assistant"`) and a `"content"` key containing
-            either a string or a list of structured blocks if already prepared.
+            Messages with `"role"` and `"content"`. Content may be a raw string before transformation. List of messages
+            a `"role"` key (`"system"`, `"user"`, or `"assistant"`) and a `"content"` key containing either a string or
+            a list of structured blocks if already prepared.
         images (`list`):
             List of image objects to insert.
 
