@@ -20,7 +20,7 @@ from time import strftime
 from datasets import Dataset, DatasetDict
 from parameterized import parameterized
 from PIL import Image
-from transformers import AutoProcessor, AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer, is_vision_available
 
 from trl.data_utils import (
     apply_chat_template,
@@ -38,9 +38,14 @@ from trl.data_utils import (
     unpair_preference_dataset,
 )
 
-from .testing_utils import TrlTestCase
+from .testing_utils import TrlTestCase, require_vision
 
 
+if is_vision_available():
+    from PIL import Image
+
+
+@require_vision
 class TestPrepareMultimodalMessages:
     def test_basic_user_assistant_conversation(self):
         """Test basic conversation with user and assistant messages."""
@@ -199,6 +204,7 @@ class TestPrepareMultimodalMessages:
         assert messages == expected
 
 
+@require_vision
 class TestPrepareMultimodalMessagesVLLM:
     def test_single_image_conversion(self):
         messages = [
