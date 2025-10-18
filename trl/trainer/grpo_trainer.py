@@ -1262,6 +1262,8 @@ class GRPOTrainer(BaseTrainer):
                     unwrapped_model.to(torch.bfloat16)
                 elif self.args.fp16:
                     unwrapped_model.to(torch.float16)
+                if self.args.cast_lm_head_to_fp32:
+                    unwrapped_model.lm_head.to(torch.float32)
                 with torch.inference_mode():
                     all_outputs = unwrapped_model.generate_batch(
                         paged_prompt_inputs.input_ids, generation_config=self.generation_config, progress_bar=False
