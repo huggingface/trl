@@ -30,16 +30,14 @@ from transformers import (
     PreTrainedTokenizerBase,
     is_vision_available,
 )
-from transformers.testing_utils import (
-    get_device_properties,
-    require_liger_kernel,
-)
+from transformers.testing_utils import get_device_properties
 
 from trl import DPOConfig, DPOTrainer, FDivergenceType
 
 from .testing_utils import (
     TrlTestCase,
     require_bitsandbytes,
+    require_liger_kernel,
     require_no_wandb,
     require_peft,
     require_torch_gpu_if_bnb_not_multi_backend_enabled,

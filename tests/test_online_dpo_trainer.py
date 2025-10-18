@@ -18,7 +18,6 @@ from datasets import Dataset, features, load_dataset
 from packaging.version import Version
 from parameterized import parameterized
 from transformers import AutoModelForCausalLM, AutoModelForSequenceClassification, AutoTokenizer
-from transformers.testing_utils import require_torch_accelerator
 from transformers.utils import is_peft_available, is_vision_available
 
 from trl import OnlineDPOConfig, OnlineDPOTrainer
@@ -28,6 +27,7 @@ from .testing_utils import (
     TrlTestCase,
     require_llm_blender,
     require_peft,
+    require_torch_accelerator,
     require_vision,
     require_vllm,
 )

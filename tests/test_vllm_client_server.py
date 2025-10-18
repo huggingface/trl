@@ -17,12 +17,18 @@ import subprocess
 
 import pytest
 from transformers import AutoModelForCausalLM
-from transformers.testing_utils import require_torch_multi_accelerator, torch_device
+from transformers.testing_utils import torch_device
 
 from trl.extras.vllm_client import VLLMClient
 from trl.scripts.vllm_serve import chunk_list
 
-from .testing_utils import TrlTestCase, kill_process, require_3_accelerators, require_vllm
+from .testing_utils import (
+    TrlTestCase,
+    kill_process,
+    require_3_accelerators,
+    require_torch_multi_accelerator,
+    require_vllm,
+)
 
 
 class TestChunkList(TrlTestCase):
