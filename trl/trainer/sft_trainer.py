@@ -1095,6 +1095,10 @@ class SFTTrainer(BaseTrainer):
 
         # If not set, defaults from model config and may warn since cache isn't compatible with gradient checkpointing
         inputs["use_cache"] = False
+        # Request token accuracy from Liger kernel if used
+        if self.args.use_liger_kernel:
+            inputs["return_token_accuracy"] = True
+
         (loss, outputs) = super().compute_loss(
             model, inputs, return_outputs=True, num_items_in_batch=num_items_in_batch
         )
@@ -1133,8 +1137,12 @@ class SFTTrainer(BaseTrainer):
             self._total_train_tokens += num_tokens_in_batch
         self._metrics[mode]["num_tokens"] = [self._total_train_tokens]
 
-        # Compute token accuracy if we have labels and if the model is not using Liger (no logits)
-        if not self.args.use_liger_kernel:
+        if self.args.use_liger_kernel:
+            if hasattr(outputs, "token_accuracy") and outputs.token_accuracy is not None:
+                token_accuracy = self.accelerator.gather_for_metrics(outputs.token_accuracy).mean().item()
+                self._metrics[mode]["mean_token_accuracy"].append(token_accuracy)
+        else:
+            # Compute accuracy from logits using argmax (traditional method)
             with torch.no_grad():
                 if "shift_labels" in inputs:
                     # When using CP, labels are pre-shifted. We must use these (and cannot manually shift) because:
@@ -1172,10 +1180,12 @@ class SFTTrainer(BaseTrainer):
                 total_sum = total_tokens.sum()
                 accuracy = (correct_tokens.sum() / total_sum).item() if total_sum > 0 else 0.0
                 self._metrics[mode]["mean_token_accuracy"].append(accuracy)
-                if self.aux_loss_enabled:
-                    aux_loss = outputs.aux_loss
-                    aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
-                    self._metrics[mode]["aux_loss"].append(aux_loss)
+
+        # Log auxiliary loss if enabled (applies to both Liger and non-Liger)
+        if self.aux_loss_enabled:
+            aux_loss = outputs.aux_loss
+            aux_loss = self.accelerator.gather_for_metrics(aux_loss).mean().item()
+            self._metrics[mode]["aux_loss"].append(aux_loss)
 
         return (loss, outputs) if return_outputs else loss
 
