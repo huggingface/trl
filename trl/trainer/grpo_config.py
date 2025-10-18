@@ -40,9 +40,11 @@ class GRPOConfig(TrainingArguments):
         disable_dropout (`bool`, *optional*, defaults to `False`):
             Whether to disable dropout in the model. This is useful for training with a reference model, as it prevents
             the model from generating different logprobs for the same input.
+        cast_lm_head_to_fp32 (`bool`, *optional*, defaults to `False`):
+            Whether to cast the Language Modeling Head of the policy and reference models to float32 before computing
+            the loss. As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe.
 
         > Parameters that control the data preprocessing
-
         remove_unused_columns (`bool`, *optional*, defaults to `False`):
             Whether to only keep the column `"prompt"` in the dataset. If you use a custom reward function that
             requires any column other than `"prompts"` and `"completions"`, you should keep this to `False`.
@@ -284,6 +286,13 @@ class GRPOConfig(TrainingArguments):
         metadata={
             "help": "Whether to disable dropout in the model. This is useful for training with a reference model, as "
             "it prevents the model from generating different logprobs for the same input."
+        },
+    )
+    cast_lm_head_to_fp32: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to cast the Language Modeling Head of the policy and reference, models to float32 before computing the loss. "
+            "As recommended by the [ScaleRL](https://huggingface.co/papers/2510.13786) recipe."
         },
     )
 

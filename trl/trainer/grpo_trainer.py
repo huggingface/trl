@@ -436,12 +436,17 @@ class GRPOTrainer(BaseTrainer):
             config = AutoConfig.from_pretrained(model_id)
             architecture = getattr(transformers, config.architectures[0])
             self.ref_model = architecture.from_pretrained(model_id, **model_init_kwargs)
-
         # Disable dropout in the models
         if args.disable_dropout:
             disable_dropout_in_model(model)
             if self.ref_model is not None:
                 disable_dropout_in_model(self.ref_model)
+
+        # Cast LM Head To FP32
+        if args.cast_lm_head_to_fp32:
+            model.lm_head = model.lm_head.float()
+            if self.ref_model is not None:
+                self.ref_model.lm_head = self.ref_model.lm_head.float()
 
         # Liger loss
         if self.use_liger_loss:
@@ -842,7 +847,8 @@ class GRPOTrainer(BaseTrainer):
             # Divide logits by sampling temperature.
             # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
             logits = logits / self.temperature
-
+            if self.cast_logits_to_fp32:
+                logits = logits.float()
             completion_ids = input_ids_batch[:, -logits_to_keep:]
             logps = selective_log_softmax(logits, completion_ids)  # compute logprobs
             all_logps.append(logps)
