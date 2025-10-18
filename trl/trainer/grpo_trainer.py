@@ -15,6 +15,7 @@
 import inspect
 import json
 import os
+import re
 import textwrap
 import traceback
 from collections import defaultdict, deque
@@ -94,7 +95,6 @@ if is_vllm_available():
 if is_wandb_available():
     import wandb
 
-import re
 
 logger = logging.get_logger(__name__)
 
@@ -102,23 +102,24 @@ logger = logging.get_logger(__name__)
 # rewards. When it's a string, it's a model ID, so it's loaded as a pretrained model.
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
+
 def extract_tool_calls(text: str) -> list[dict[str, Any]]:
     """
-    Extract JSON objects from <tool_call>...</tool_call> blocks in `text`
-    and return them in the format:
-        {"type": "function", "function": {...}}
+    Extract JSON objects from <tool_call>...</tool_call> blocks in `text` and return them in the format: `[{"type":
+    "function", "function": {...}}, ...]`
     """
     # Find every block between <tool_call> and </tool_call>
-    blocks = re.findall(r'<tool_call>\s*(\{.*?\})\s*</tool_call>', text, flags=re.DOTALL)
-    
+    blocks = re.findall(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", text, flags=re.DOTALL)
+
     result = []
     for block in blocks:
         try:
             parsed = json.loads(block)
-        except json.JSONDecodeError as e:
+        except json.JSONDecodeError:
             continue
         result.append({"type": "function", "function": parsed})
     return result or None
+
 
 class GRPOTrainer(BaseTrainer):
     """
@@ -228,16 +229,14 @@ class GRPOTrainer(BaseTrainer):
         "title": "DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models",
         "id": "2402.03300",
         # docstyle-ignore
-        "citation": textwrap.dedent(
-            """\
+        "citation": textwrap.dedent("""\
             @article{shao2024deepseekmath,
                 title        = {{DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models}},
                 author       = {Zhihong Shao and Peiyi Wang and Qihao Zhu and Runxin Xu and Junxiao Song and Mingchuan Zhang and Y. K. Li and Y. Wu and Daya Guo},
                 year         = 2024,
                 eprint       = {arXiv:2402.03300},
             }
-            """
-        ),
+            """),
     }
 
     def __init__(
@@ -1354,8 +1353,10 @@ class GRPOTrainer(BaseTrainer):
 
             # Truncate post-tool completion so that pct[len(prompt_ids[idx]) :] + post_tool does not exceed max_completion_length
             for i in range(len(post_tool_ids)):
-                excess_length = len(prompt_completion_tool_ids[i]) + len(post_tool_ids[i]) - (
-                    self.max_prompt_length + self.max_completion_length
+                excess_length = (
+                    len(prompt_completion_tool_ids[i])
+                    + len(post_tool_ids[i])
+                    - (self.max_prompt_length + self.max_completion_length)
                 )
                 if excess_length > 0:
                     post_tool_ids[i] = post_tool_ids[i][:-excess_length]
@@ -1373,7 +1374,7 @@ class GRPOTrainer(BaseTrainer):
             #         parsed_completions.append(None)
             # tool_calls = [completion.get("tool_calls") if completion is not None else None for completion in parsed_completions]
             tool_calls = [extract_tool_calls(content) for content in cc]
-            completion_contents =[None] * len(completion_contents)
+            completion_contents = [None] * len(completion_contents)
             for i, content in zip(idxs_with_tool, cc):
                 completion_contents[i] = content
             idxs_with_tool = [idx for idx, tc in zip(idxs_with_tool, tool_calls) if tc]
